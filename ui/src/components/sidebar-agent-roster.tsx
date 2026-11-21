@@ -28,6 +28,7 @@ import {
   SessionGlyph,
   TeamSessionSlots,
   sessionRunVisibility,
+  renderSessionUnreadBadge,
   type TeamSessionSlotsProps,
 } from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
@@ -43,7 +44,8 @@ function cachedRosterCards(host: RosterHost) {
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
     activeNow: false,
-    lastActiveAt: 0,
+    unread: card.unread ?? false,
+    lastActiveAt: card.lastActiveAt ?? 0,
     preview: undefined,
     assistantPreview: undefined,
     target: sessionNavigationTarget({
@@ -65,10 +67,9 @@ export function SidebarAgentRoster(props: {
   const presented = () => props.active;
   const host = createParkedProjection(() => hostProjection().read(), presented);
   const store = rosterActivityStore(context);
-  const snapshot = createParkedProjection(() => {
-    host();
-    return store.snapshot;
-  }, presented);
+  // Activity can change without a host render (for example, a reply in another chat).
+  const activity = projectOwner(store, (owner) => owner.snapshot);
+  const snapshot = createParkedProjection(() => activity.read(), presented);
   const cached = createMemo(() => cachedRosterCards(host()));
   const cards = createParkedProjection(() => {
     if (cached()) {
@@ -131,7 +132,13 @@ export function SidebarAgentRoster(props: {
     presented,
   );
   const pinnedCards = createMemo(() => cards().filter((card) => pinnedIds().has(card.id)));
-  const unpinnedCards = createMemo(() => cards().filter((card) => !pinnedIds().has(card.id)));
+  const unpinnedCards = createMemo(() => {
+    const unpinned = cards().filter((card) => !pinnedIds().has(card.id));
+    // Keep configured order for ties and other modes; pins retain their own partition.
+    return host().effectiveSessionSortMode() === "updated"
+      ? unpinned.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt)
+      : unpinned;
+  });
   const rosterWindow = createSidebarRosterWindow(
     unpinnedCards,
     () =>
@@ -297,7 +304,11 @@ export function SidebarAgentRoster(props: {
                           class="sidebar-pinned-agent__link"
                           data-agent-id={card().id}
                           href={card().target.href}
-                          aria-label={card().name}
+                          aria-label={
+                            card().unread
+                              ? `${card().name} ${t("sessionsView.unread")}`
+                              : card().name
+                          }
                           aria-current={active() ? "page" : undefined}
                           onClick={(event: MouseEvent) =>
                             handleNavigationClick(event, () => host().openMainSession(card().id))
@@ -309,6 +320,7 @@ export function SidebarAgentRoster(props: {
                               content={<AgentIdentityAvatar agent={card()} />}
                               running={card().activeNow}
                               runVisibility={sessionRunVisibility}
+                              badge={<Show when={card().unread}>{renderSessionUnreadBadge()}</Show>}
                             />
                           </span>
                           <span class="sidebar-pinned-agent__name">{card().name}</span>
@@ -415,6 +427,7 @@ export function SidebarAgentRoster(props: {
                             content={<AgentIdentityAvatar agent={card()} />}
                             running={card().activeNow}
                             runVisibility={sessionRunVisibility}
+                            badge={<Show when={card().unread}>{renderSessionUnreadBadge()}</Show>}
                           />
                         </span>
                         <span class="sidebar-agent-roster__copy">
@@ -423,6 +436,9 @@ export function SidebarAgentRoster(props: {
                             <span class="sidebar-agent-roster__preview">
                               {card().assistantPreview}
                             </span>
+                          </Show>
+                          <Show when={card().unread}>
+                            <span class="sr-only">{t("sessionsView.unread")}</span>
                           </Show>
                           <Show when={card().activeNow}>
                             <span class="sr-only">{t("agentsHome.working")}</span>

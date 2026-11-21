@@ -21,7 +21,7 @@ describe("AppSidebar agent-only roster", () => {
       }),
     ]);
     sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]));
+    await vi.waitFor(() => expect(agentIds(sidebar)).toEqual(["working", "main", "recent"]));
     expect(sessionKeys(sidebar)).toEqual([]);
     expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
     expect(
