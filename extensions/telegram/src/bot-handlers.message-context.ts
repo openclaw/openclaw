@@ -50,7 +50,10 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
 } from "./message-cache.js";
-import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
+import {
+  resolveCompleteTelegramPromptContextProjectionIds,
+  type TelegramPromptContextProjectionMarker,
+} from "./prompt-context-projection.js";
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
@@ -482,6 +485,12 @@ export function createTelegramMessageContextRuntime({
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
+    const transcriptProjections: Record<string, TelegramPromptContextProjectionMarker> = {};
+    for (const { node } of cacheEntries) {
+      if (node.messageId && node.promptContextProjectionMarker) {
+        transcriptProjections[node.messageId] = node.promptContextProjectionMarker;
+      }
+    }
     const messages = cacheEntries.map((entry) => entry.message);
     return messages.length > 0
       ? [
@@ -490,7 +499,12 @@ export function createTelegramMessageContextRuntime({
             source: "telegram",
             type: "chat_window",
             ...(completeProjectionIds.size > 0
-              ? { sessionTranscriptDedupeMessageIds: [...completeProjectionIds] }
+              ? {
+                  sessionTranscriptDedupeMessageIds: [...completeProjectionIds],
+                }
+              : {}),
+            ...(Object.keys(transcriptProjections).length > 0
+              ? { telegramTranscriptProjections: transcriptProjections }
               : {}),
             payload: {
               order: "chronological",

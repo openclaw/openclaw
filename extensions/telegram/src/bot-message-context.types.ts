@@ -12,6 +12,7 @@ import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import type { TelegramGroupConfigResolver } from "./group-config-helpers.js";
 import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
+import type { TelegramPromptContextProjectionMarker } from "./prompt-context-projection.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 export type TelegramMediaRef = {
@@ -51,7 +52,10 @@ export type TelegramMessageContextOptions = {
 
 export type TelegramPromptContextEntry = NonNullable<
   MsgContext["ChannelStructuredContext"]
->[number];
+>[number] & {
+  /** Internal physical projection parts; never included in the model-facing payload. */
+  telegramTranscriptProjections?: Record<string, TelegramPromptContextProjectionMarker>;
+};
 
 export type TelegramAmbientTranscriptWatermark = {
   messageId: string;

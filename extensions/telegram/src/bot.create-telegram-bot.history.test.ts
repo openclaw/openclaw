@@ -227,7 +227,7 @@ it("keeps current discussion alongside stale ancestry and persists edited self t
   const bot = await createBot(false, true, cfg);
   const old = reply("Old deployment answer", {
     chat: group,
-    date: Math.floor(Date.now() / 1000) - 20,
+    date: Math.floor(Date.now() / 1000) - 20 * 60,
   });
   const botReply = message("K", { chat: group, from: bot.botInfo, date: old.date + 1 });
   await receive(bot, { message: old });
@@ -315,6 +315,99 @@ it("keeps transcript context until every physical projection part is recorded, t
     "**Alpha** beta",
   );
 });
+
+it.each([
+  { parts: 2, historyLimit: 2, explicitReply: true, canonical: true, independent: false },
+  { parts: 4, historyLimit: 3, explicitReply: false, canonical: true, independent: false },
+  { parts: 2, historyLimit: 2, explicitReply: true, canonical: false, independent: false },
+  { parts: 2, historyLimit: 2, explicitReply: false, canonical: true, independent: true },
+])(
+  "retains multipart topic context under a saturated history budget ($parts parts, explicit: $explicitReply, canonical: $canonical)",
+  async ({ parts, historyLimit, explicitReply, canonical, independent }) => {
+    const forum = { ...group, type: "supergroup", is_forum: true } as const;
+    const topicMessage = (text: string, overrides: Partial<Message.TextMessage> = {}) =>
+      message(text, { chat: forum, message_thread_id: 25, ...overrides });
+    const sessionKey = `agent:main:telegram:group:${forum.id}:topic:25`;
+    const eventId = "budgeted-topic-answer";
+    const now = Math.floor(Date.now() / 1000);
+    const texts = ["Alpha", "beta", "gamma", "delta"].slice(0, parts);
+    const canonicalText = `**Alpha** ${texts.slice(1).join(" ")}`;
+    const targetMessageId = explicitReply ? message("Earlier question").message_id : 25;
+    const physicalMessageIds: number[] = [];
+    cfg.channels!.telegram!.historyLimit = historyLimit;
+    cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
+    cfg.messages!.groupChat = { unmentionedInbound: "user_request" };
+    const target = { storePath, sessionKey, agentId: "main", sessionId: "budgeted-topic" };
+    const sessionEntry = { sessionId: target.sessionId, updatedAt: now * 1000 };
+    await upsertSessionEntry({ ...target, entry: sessionEntry });
+    await appendSessionTranscriptMessageByIdentity({
+      ...target,
+      eventId: canonical ? eventId : "unrelated-newer-answer",
+      message: {
+        role: "assistant",
+        content: canonical ? canonicalText : "Newer unrelated discussion",
+        timestamp: (now - (canonical ? 6 : 1)) * 1000,
+      },
+    });
+    const bot = await createBot(false, true, cfg);
+    for (const [partIndex, text] of texts.entries()) {
+      const sent = topicMessage(text, { from: bot.botInfo, date: now - 5 + partIndex });
+      physicalMessageIds.push(sent.message_id);
+      await recordOutbound(sent, {
+        transcriptMessageId: eventId,
+        partIndex,
+        finalPart: partIndex === parts - 1,
+      });
+    }
+    if (independent) {
+      await recordOutbound(
+        topicMessage("Independent notification", { from: bot.botInfo, date: now - 1 }),
+      );
+    }
+    if (parts === 4) {
+      await receive(bot, { message: topicMessage("Newer room discussion", { date: now - 1 }) });
+    }
+    await receive(bot, {
+      message: topicMessage("Please continue", {
+        date: now,
+        reply_to_message: reply(explicitReply ? "Earlier question" : "Topic root", {
+          chat: forum,
+          message_id: targetMessageId,
+          message_thread_id: 25,
+          date: now - 3600,
+          ...(explicitReply
+            ? {}
+            : { forum_topic_created: { name: "Checks", icon_color: 0x6fb9f0 } }),
+        }),
+      }),
+    });
+    const messages = contextMessages();
+    expect(messages.length).toBeLessThanOrEqual(historyLimit);
+    expect(lastInput().ReplyToId).toBe(String(targetMessageId));
+    if (explicitReply) {
+      expectContextMessages({
+        message_id: String(targetMessageId),
+        body: "Earlier question",
+        is_reply_target: true,
+      });
+    }
+    if (independent) {
+      expectContextMessages({ body: "Independent notification" });
+      expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);
+    } else if (canonical) {
+      expectContextMessages({ message_id: `session:${eventId}`, body: canonicalText });
+      expect(messages.some((entry) => physicalMessageIds.includes(Number(entry.message_id)))).toBe(
+        false,
+      );
+      if (parts === 4) {
+        expectContextMessages({ body: "Newer room discussion" });
+      }
+    } else {
+      expectContextMessages({ message_id: String(physicalMessageIds.at(-1)), body: "beta" });
+      expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);
+    }
+  },
+);
 
 async function replyInput(text: string, overrides: Partial<Message>, bot?: Bot) {
   await receive(bot ?? (await createBot(false, true, cfg)), {

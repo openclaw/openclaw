@@ -135,6 +135,7 @@ export async function resolveDispatchTelegramContext(params: {
           promptContext,
           historyLimit: 0,
           includeBeforeSelf: false,
+          currentTimestampMs: params.context.ctxPayload.Timestamp,
         });
   if (params.context.isGroup && params.context.historyLimit > 0) {
     const telegramCfg = resolveTelegramAccount({
@@ -178,6 +179,7 @@ export async function resolveDispatchTelegramContext(params: {
       historyLimit: params.context.historyLimit,
       ambientWatermark,
       includeBeforeSelf: params.context.ctxPayload.InboundEventKind === "room_event",
+      currentTimestampMs: params.context.ctxPayload.Timestamp,
     });
   }
   const recoveredHistory = telegramPromptContextHistory(recoveredPromptContext);

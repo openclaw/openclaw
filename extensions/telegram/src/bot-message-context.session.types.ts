@@ -1,3 +1,4 @@
+import type { BuiltChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
   TelegramDirectConfig,
@@ -13,9 +14,21 @@ import type {
   TelegramMessageContextSessionRuntime,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramReplyTarget, TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
+
+export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
+  From: string;
+  To: string;
+  ChatType: string;
+  RawBody: string;
+  ReplyToIsExternal?: boolean;
+  ReplyToQuotePosition?: number;
+  ReplyToQuoteEntities?: TelegramReplyTarget["quoteEntities"];
+  ReplyToQuoteSourceText?: string;
+  ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
+};
 
 export type BuildTelegramInboundContextPayloadParams = {
   conversationAvatar?: string;
