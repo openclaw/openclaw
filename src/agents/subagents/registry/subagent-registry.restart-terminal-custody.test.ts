@@ -32,6 +32,7 @@
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -867,7 +868,9 @@ it.each(UNBOUND)(
       sessionKey: parent,
       sessionId: "sess-parent",
     });
-    expect(transcript.filter((event) => event.type === "custom_message")).toEqual(
+    expect(
+      transcript.filter((event) => isRecord(event) && event.type === "custom_message"),
+    ).toEqual(
       writesParent
         ? [expect.objectContaining({ customType: "run-failed-before-reply", display: true })]
         : [],
