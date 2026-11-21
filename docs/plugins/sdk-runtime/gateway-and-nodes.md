@@ -165,6 +165,43 @@ observation means that owner is no longer current. Once `executionStarted` is
 true, the start watch is complete. See the
 [migration details](/plugins/sdk-migration#agent-turn-start-observation).
 
+### Notify a person's browsers
+
+An authenticated plugin handler with the same `gatewayMethodDispatch`
+declaration can send a browser notification to one person through
+`push.web.send` (`operator.write`):
+
+```typescript
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+
+const response = await dispatchGatewayMethod("push.web.send", {
+  profileId: "profile-id",
+  category: "agent-question",
+  tag: "ticket-42",
+  path: "chat/research/main",
+  title: "Ticket assigned",
+  body: "Review ticket 42",
+});
+// response.payload: { sent, failed, skipped, pruned }
+```
+
+The Gateway chooses the devices, never the caller. It resolves merged profiles,
+rechecks each browser's pairing, current role, OpenClaw ID binding and scopes,
+then applies that person's category toggles, quiet hours, and agent filter
+(`agentId`). `category` must be `agent-finished`, `agent-question`,
+`human-mentioned`, or `scheduled-task-failed`; approval requests keep their own
+delivery path. A **Private** device always shows the category's generic text;
+other detail levels show the sanitized `title` (80 characters) and `body` (240
+characters) when given. `path` is a Control UI path opened on click, relative to
+the Control UI base path. `tag` collapses repeated notifications. `urgency` and
+`ttlSeconds` (default 300) pass to the push service.
+
+`skipped` counts that person's devices suppressed by their preferences.
+`pruned` counts failed deliveries whose endpoint the push service reported as
+gone; the Gateway removes those subscriptions. A person with no current
+subscription returns zero counts rather than an error. Quiet hours suppress the
+send; nothing is queued for later.
+
 ### Session resource methods
 
 A plugin can declare `sessionAccess` when registering an additive Gateway method:

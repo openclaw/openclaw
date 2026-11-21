@@ -87,6 +87,14 @@ Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not de
 
 To check targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Test all browsers** only checks browser push transport and can reach every registered subscription. It does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
 
+### Notifications sent by plugins
+
+Plugins and operator clients can notify one person's browsers through the
+[`push.web.send`](/plugins/sdk-runtime/gateway-and-nodes#notify-a-persons-browsers)
+Gateway method. These sends reuse an existing category, so your category
+toggles, quiet hours, agent filter, and **Private** lock-screen text apply to
+them as well. Only browsers bound to that person's profile can receive them.
+
 ### Use more than one Gateway on one phone
 
 The recommended self-hosted setup is one Control UI service-worker scope per Gateway. Open or install each Gateway's PWA from its own HTTPS origin or base path. Enable notifications there. Reconnect once after upgrades. Each scope then owns an independent browser subscription, and approval links return to the Gateway that created them.
