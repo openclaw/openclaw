@@ -1,0 +1,132 @@
+name: Deploy fresh OpenClaw to Railway
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: SHA-256 digest of the published hillstreet/open-claw image
+        required: true
+        type: string
+      deploy:
+        description: Apply the image after verifying the destination
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+concurrency:
+  group: openclaw-fresh-railway-production
+  cancel-in-progress: false
+
+jobs:
+  railway:
+    if: github.repository == 'hillstreet-ph/open-claw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: openclaw-fresh-production
+    env:
+      RAILWAY_TOKEN: ${{ secrets.OPENCLAW_DESTINATION_RAILWAY_TOKEN }}
+      SERVICE_ID: ${{ vars.OPENCLAW_FRESH_SERVICE_ID }}
+      DIRECT_HEALTH_URL: ${{ vars.OPENCLAW_FRESH_HEALTH_URL }}
+      IMAGE_DIGEST: ${{ inputs.digest }}
+      APPLY_DEPLOYMENT: ${{ inputs.deploy }}
+    steps:
+      - name: Verify destination and deploy the published image
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          from urllib.error import URLError
+          from urllib.parse import urlsplit
+          from urllib.request import Request, urlopen
+
+          project = "d42d3394-bffe-442b-ba37-e1d2bf55edce"
+          environment = "bd2a440d-a5ea-46d9-bec1-ecea16ed94af"
+          previous_service = "8e114887-ed50-457c-8235-42bc626071d8"
+          service = os.environ["SERVICE_ID"]
+          token = os.environ["RAILWAY_TOKEN"]
+          digest = os.environ["IMAGE_DIGEST"]
+          health_url = urlsplit(os.environ["DIRECT_HEALTH_URL"])
+          if not token:
+              raise SystemExit("Missing OPENCLAW_DESTINATION_RAILWAY_TOKEN")
+          if not re.fullmatch(r"[0-9a-f-]{36}", service) or service == previous_service:
+              raise SystemExit("Configure the new Railway service ID; the previous service is excluded")
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("Provide a complete SHA-256 image digest")
+          if (health_url.scheme != "https"
+              or not (health_url.hostname or "").endswith(".up.railway.app")
+              or health_url.netloc != health_url.hostname
+              or health_url.path != "/healthz"
+              or health_url.query or health_url.fragment):
+              raise SystemExit("Provide the fresh service's direct Railway HTTPS /healthz URL")
+
+          def query(operation, statement, variables=None):
+              body = json.dumps({"query": statement, "variables": variables or {}}).encode()
+              request = Request("https://backboard.railway.com/graphql/v2", body, {
+                  "Content-Type": "application/json",
+                  "Project-Access-Token": token,
+              })
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      result = json.load(response)
+              except (URLError, TimeoutError, ValueError):
+                  raise SystemExit(f"Railway {operation} failed") from None
+              if result.get("errors") or not result.get("data"):
+                  raise SystemExit(f"Railway rejected {operation}; check credential scope and IDs")
+              return result["data"]
+
+          scope = query("token scope verification", "{projectToken{projectId environmentId}}").get("projectToken") or {}
+          if (scope.get("projectId"), scope.get("environmentId")) != (project, environment):
+              raise SystemExit("Railway token is not scoped to the destination production environment")
+          target = {"s": service, "e": environment}
+          details = query("service verification", "query($s:String!){service(id:$s){projectId name}}", target).get("service") or {}
+          if details.get("projectId") != project or details.get("name") != "open-claw-fresh":
+              raise SystemExit("The selected service must be named open-claw-fresh in the destination project")
+          instance = query(
+              "service instance verification",
+              "query($s:String!,$e:String!){serviceInstance(serviceId:$s,environmentId:$e){source{image}}}",
+              target,
+          ).get("serviceInstance")
+          if instance is None:
+              raise SystemExit("Fresh service instance was not found in the destination environment")
+          image = f"docker.io/hillstreet/open-claw@{digest}"
+          print(f"Destination verified. Requested image: {image}", flush=True)
+          if os.environ["APPLY_DEPLOYMENT"] != "true":
+              raise SystemExit(0)
+
+          query(
+              "image update",
+              "mutation($s:String!,$e:String!,$i:String!){serviceInstanceUpdate(serviceId:$s,environmentId:$e,input:{source:{image:$i}})}",
+              {**target, "i": image},
+          )
+          deployment = query(
+              "deployment request",
+              "mutation($s:String!,$e:String!){serviceInstanceDeployV2(serviceId:$s,environmentId:$e)}",
+              target,
+          ).get("serviceInstanceDeployV2")
+          if not isinstance(deployment, str) or not re.fullmatch(r"[0-9a-f-]{36}", deployment):
+              raise SystemExit("Railway did not return a deployment ID")
+          print(f"Railway deployment: {deployment}", flush=True)
+
+          for _ in range(45):
+              status = (query(
+                  "deployment status",
+                  "query($id:String!){deployment(id:$id){status}}",
+                  {"id": deployment},
+              ).get("deployment") or {}).get("status")
+              if status in {"FAILED", "CRASHED", "REMOVED", "CANCELED", "SKIPPED"}:
+                  raise SystemExit(f"Railway deployment ended in {status}")
+              if status == "SUCCESS":
+                  try:
+                      with urlopen(health_url.geturl(), timeout=8) as response:
+                          if response.geturl() == health_url.geturl() and response.status == 200:
+                              print("Railway deployment succeeded and direct gateway health returned HTTP 200")
+                              break
+                  except (URLError, TimeoutError):
+                      pass
+              time.sleep(10)
+          else:
+              raise SystemExit("The new deployment did not become healthy before the deadline")
+          PY
