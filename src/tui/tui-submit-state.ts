@@ -12,14 +12,14 @@ export type TuiSessionActionAdmission =
 export type TuiChatSubmitAdmission =
   | TuiSessionActionAdmission
   | { status: "blocked"; reason: "pending" }
-  | { status: "blocked"; reason: "session-transition"; command: "new" | "reset" };
+  | { status: "blocked"; reason: "session-transition"; command: "new" | "reset" | "delete" };
 
 export type TuiChatSubmitBlock = Exclude<TuiChatSubmitAdmission, { status: "allowed" }>;
 
 /** Session-transition state captured when Enter reached the submit coalescer. */
 export type TuiChatSubmitSnapshot = {
   historyLoaded: boolean;
-  sessionTransition: "new" | "reset" | null;
+  sessionTransition: "new" | "reset" | "delete" | null;
   sessionTransitionEpoch: number;
 };
 
@@ -128,8 +128,8 @@ export function resolveTuiChatSubmitAdmission(params: {
   pendingSubmit: TuiPendingSubmit | null;
   message: string;
   transition: {
-    active: "new" | "reset" | null;
-    boundary: "new" | "reset" | null;
+    active: "new" | "reset" | "delete" | null;
+    boundary: "new" | "reset" | "delete" | null;
     epoch: number;
   };
   snapshot?: TuiChatSubmitSnapshot;
