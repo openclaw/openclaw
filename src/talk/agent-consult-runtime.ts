@@ -20,6 +20,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import {
+  GatewayDrainingError,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
 import type { ReplyToolAuthorityOverlay } from "../sessions/session-controller.contracts.js";
@@ -199,7 +203,7 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
-export async function consultRealtimeVoiceAgent(params: {
+export type RealtimeVoiceAgentConsultParams = {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
@@ -260,7 +264,11 @@ export async function consultRealtimeVoiceAgent(params: {
     | RealtimeVoiceAgentConsultRunRegistration
     | void
     | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
-}): Promise<RealtimeVoiceAgentConsultResult> {
+};
+
+async function runRealtimeVoiceAgentConsult(
+  params: RealtimeVoiceAgentConsultParams,
+): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionEffect }, { resolveSessionWorkStartError }] = await Promise.all([
     import("../sessions/session-controller.lifecycle.js"),
@@ -620,5 +628,32 @@ export async function consultRealtimeVoiceAgent(params: {
   } finally {
     params.abortSignal?.removeEventListener("abort", abortFromCaller);
     sessionWorkAdmission.release();
+  }
+}
+
+/**
+ * Runs a realtime voice agent consult on a voice bridge (FaceTime, phone calls,
+ * meeting bots, browser Talk) and returns its speakable answer.
+ *
+ * Voice bridges issue consults from callbacks (tool calls, spoken questions) that
+ * were created while an earlier request root was still live; by consult time that
+ * root is often released, which the session-effect admission correctly refuses.
+ * The consult therefore owns its root admission here, before any session effect:
+ * under a live caller root it nests and counts once (the browser Talk contract),
+ * under a released or absent root it opens a fresh independent root, and during a
+ * genuine gateway restart drain or suspension it still refuses the consult.
+ */
+export async function consultRealtimeVoiceAgent(
+  params: RealtimeVoiceAgentConsultParams,
+): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
+  const admission = tryBeginGatewayRootWorkAdmission("realtime-voice-agent-consult");
+  if (!admission) {
+    throw new GatewayDrainingError();
+  }
+  try {
+    return await admission.run(() => runRealtimeVoiceAgentConsult(params));
+  } finally {
+    admission.release();
   }
 }
