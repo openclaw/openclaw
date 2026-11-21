@@ -96,6 +96,20 @@ function rotatingSend() {
 }
 
 describe("createSlackDraftStream", () => {
+  it("reports only confirmed text and clears it with the current message", async () => {
+    const { stream, edit } = createDraftStreamHarness();
+    expect(stream.lastDeliveredText()).toBe("");
+    await publish(stream, "Confirmed progress");
+    expect(stream.lastDeliveredText()).toBe("Confirmed progress");
+    edit.mockRejectedValueOnce(new Error("edit failed"));
+    await publish(stream, "Unconfirmed progress");
+    expect(stream.lastDeliveredText()).toBe("Confirmed progress");
+    stream.forceNewMessage();
+    expect(stream.lastDeliveredText()).toBe("");
+    await stream.clear();
+    await stream.dropDetachedMessages();
+  });
+
   it("waits for a complete preamble when a human reply rotates the draft", async () => {
     const { stream, send, edit } = createDraftStreamHarness({ threadTs: "100.000" });
     await publish(stream, "_I’ll check the report._");

@@ -398,7 +398,12 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (options?.flush) {
         await draftStream.flush();
       }
-      return Boolean(draftStream.messageId() && draftStream.channelId());
+      const deliveredText = cardBlocks ? progressCard.resolveCardText(cardBlocks) : previewText;
+      return Boolean(
+        draftStream.messageId() &&
+        draftStream.channelId() &&
+        draftStream.lastDeliveredText() === deliveredText.trimEnd(),
+      );
     },
     deleteCurrent: async () => {
       if (useNativeProgressStreaming && !delivery.streamFailed) {
@@ -682,6 +687,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     preambleOnlyProgress,
     suppressDefaultToolProgressMessages,
     progressDraft,
+    async getVisibleProgressText() {
+      await nativeUpdates.waitForInFlight();
+      return await progressDraft.getVisibleAuthoredText();
+    },
     progressWorkCounter,
     commentaryProgressEnabled,
     async cancel() {

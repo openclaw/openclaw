@@ -59,6 +59,7 @@ export function createSlackDraftStream(params: {
   let streamMessage: SlackDraftMessage | undefined;
   let untrackConversationBoundary: (() => void) | undefined;
   let lastSentKey = "";
+  let lastDeliveredText = "";
   let preserveHumanReplies = false;
   const streamState = { stopped: false, final: false };
 
@@ -67,6 +68,7 @@ export function createSlackDraftStream(params: {
   const clearMessageId = () => {
     streamMessage = undefined;
     lastSentKey = "";
+    lastDeliveredText = "";
   };
   const editPreview = (message: SlackDraftMessage, update: SlackVisibleDraftUpdate) =>
     (update.textIsSlackMrkdwn ? editSlackRenderedMessage : editSlackMessage)(
@@ -120,6 +122,7 @@ export function createSlackDraftStream(params: {
     try {
       if (streamMessage) {
         await editPreview(streamMessage, visibleUpdate);
+        lastDeliveredText = trimmed;
         return;
       }
       const threadTs = params.resolveThreadTs?.();
@@ -158,6 +161,7 @@ export function createSlackDraftStream(params: {
           }
           const { channelId, messageId } = sentMessage;
           streamMessage = sentMessage;
+          lastDeliveredText = trimmed;
           stopTrackingConversationBoundary();
           untrackConversationBoundary = trackMessage(channelId, messageId).stop;
           return true;
@@ -261,6 +265,7 @@ export function createSlackDraftStream(params: {
     forceNewMessage,
     dropDetachedMessages,
     finalizeMessage,
+    lastDeliveredText: () => lastDeliveredText,
     messageId: () => streamMessage?.messageId,
     channelId: () => streamMessage?.channelId,
   };

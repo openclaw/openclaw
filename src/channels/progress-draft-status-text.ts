@@ -106,6 +106,12 @@ export function sanitizeProgressStatusText(text: string): string {
   return stripInlineDirectiveTagsForDelivery(text).text.trim();
 }
 
+export const stripProgressLaneItalics = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => line.replace(/^_(.*)_$/su, "$1"))
+    .join("\n");
+
 export function normalizeCommentaryProgressText(text: string): string {
   const cleaned = sanitizeProgressStatusText(text);
   if (!cleaned) {

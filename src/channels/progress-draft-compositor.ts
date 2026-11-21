@@ -16,12 +16,15 @@ import { createChannelProgressDraftGate } from "./progress-draft-gate.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
+  formatProgressDraftSnapshot,
+  resolveProgressDraftAuthoredText,
   snapshotProgressDraftState,
 } from "./progress-draft-snapshot.js";
 import {
   formatReasoningProgressDisplayLine,
   createReasoningProgressAccumulator,
   normalizeCommentaryProgressText,
+  stripProgressLaneItalics,
   resolveCommentaryLineId,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
@@ -31,7 +34,6 @@ import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js
 import {
   type AgentPlanStep,
   type ChannelProgressDraftLine,
-  formatChannelProgressDraftTextForStreaming,
   isChannelProgressAttentionLine,
   isChannelProgressPriorityLine,
   isChannelProgressDraftWorkToolName,
@@ -66,11 +68,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
   const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
   const commentaryItalics = params.commentaryItalics ?? true;
-  const stripLaneItalics = (text: string): string =>
-    text
-      .split("\n")
-      .map((line) => line.replace(/^_(.*)_$/su, "$1"))
-      .join("\n");
   const previewToolProgressEnabled =
     params.active &&
     resolveChannelStreamingPreviewToolProgress(
@@ -101,6 +98,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   } = createProgressDraftSnapshotState(params);
   let progressSuppressed = false;
   let lastRenderedText = "";
+  let lastRenderedAuthoredText: string | undefined;
   let lastRenderedStatusFormat: "plain" | undefined;
   let lastRenderedLines = lines;
   let lastRenderedDiffStat: ChannelProgressDraftCompositorSnapshot["diffStat"] | null = null;
@@ -171,27 +169,12 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       formatted?: boolean;
       onPreparedBlocks?: (blocks: Array<{ text: string; format: "plain" | "markdown" }>) => void;
     },
-  ) => {
-    const status = resolveStatusText();
-    const narration = status.text || undefined;
-    // Channels that render the rolling lines themselves (from `update`'s
-    // `lines`) would print them twice if they also appeared in this text.
-    const linesRenderedByChannel =
-      params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
-    return formatChannelProgressDraftTextForStreaming({
-      presentation: params.presentation,
+  ) =>
+    formatProgressDraftSnapshot(params, {
       entry: displayEntry,
-      lines: linesRenderedByChannel ? [] : draftLines,
-      seed: params.seed,
-      formatLine: options?.formatted === false ? undefined : params.formatLine,
-      formatPlainText: options?.formatted === false ? (text) => text : params.formatPlainText,
-      onPreparedBlocks: options?.onPreparedBlocks,
-      narration,
-      narrationFormat: status.format,
-      plan: planSteps,
-      diffStat: resolveDiffStat(),
+      snapshot: { ...getSnapshot(), lines: draftLines },
+      ...options,
     });
-  };
 
   const resolveDiffStat = () => transferredDiffStat ?? diffStatTracker.resolve();
 
@@ -224,6 +207,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     lastIdLessCommentaryId = undefined;
     lastIdLessCommentaryBare = "";
     preambleText = "";
+    lastRenderedAuthoredText = undefined;
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
@@ -249,6 +233,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       },
     });
     const statusFormat = resolveStatusText().format;
+    const snapshot = getSnapshot();
+    const authoredText = resolveProgressDraftAuthoredText(snapshot, preambleText);
     const diffStat = resolveDiffStat();
     const structuredStateChanged =
       params.updateOnLineChange === true &&
@@ -272,13 +258,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         ...options,
         lines,
         snapshot: {
-          ...getSnapshot(),
+          ...snapshot,
           ...(blocks.some((block) => block.format === "plain") ? { preparedBlocks: blocks } : {}),
         },
       }),
     );
     if (observed.visible) {
       lastRenderedText = text;
+      lastRenderedAuthoredText = authoredText;
       lastRenderedStatusFormat = statusFormat;
       lastRenderedLines = lines;
       lastRenderedDiffStat = renderedDiffStat;
@@ -365,6 +352,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     }
     // Release the retiring baseline before an identical replacement can publish.
     lastRenderedText = "";
+    lastRenderedAuthoredText = undefined;
     await params.deleteCurrent();
     return true;
   };
@@ -477,6 +465,16 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     get isVisible() {
       return Boolean(lastRenderedText) && !finalReplyStarted;
+    },
+    async getVisibleAuthoredText() {
+      if (!isTurnActive() || progressSuppressed) {
+        return undefined;
+      }
+      if (gate?.hasStarted) {
+        await gate.startNow();
+        await render({ flush: true });
+      }
+      return lastRenderedAuthoredText;
     },
     get hasStatusHeadline() {
       return Boolean(resolveStatusText().text);
@@ -714,7 +712,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         lines = mergeLine({
           id: "reasoning",
           kind: "item",
-          text: stripLaneItalics(compactLine),
+          text: stripProgressLaneItalics(compactLine),
           label: "Reasoning",
           prefix: false,
         });
@@ -742,7 +740,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       const normalized = normalizeCommentaryProgressText(text ?? "");
       // Compare bare (de-italicized) text so cumulative snapshots still match
       // after normalizeCommentaryProgressText wraps each line in _…_.
-      const bareNormalized = stripLaneItalics(normalized);
+      const bareNormalized = stripProgressLaneItalics(normalized);
       const lineId = resolveCommentaryLineId({
         itemId,
         normalized,

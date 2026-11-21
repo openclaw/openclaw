@@ -255,7 +255,9 @@ export async function prepareReplyAgentPayloads(state: {
           yielded: runResult.meta?.yielded === true,
           continuationPending: implicitContinuation,
           mediaContinuation: implicitContinuation && !continuationOwner,
-          yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
+          yieldAcknowledgment:
+            runResult.meta?.yieldAcknowledgment ??
+            (runResult.meta?.yielded ? await opts?.getVisibleProgressText?.() : undefined),
           // Child spawns do not suppress a model-authored acknowledgment.
           hasVisibleMessageDelivery:
             successfulSourceReplyDelivery ||

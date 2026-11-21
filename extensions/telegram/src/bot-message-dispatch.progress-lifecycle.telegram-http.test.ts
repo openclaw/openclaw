@@ -108,6 +108,53 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     };
   }
 
+  it.each([
+    "Checking the implementation with delegated reviewers.",
+    "Checking **bold** labels & inline `code` with delegated reviewers.",
+  ])(
+    "retains a confirmed authored preamble when yield supplies no acknowledgment: %s",
+    async (text) => {
+      let retained: ProgressDraft | undefined;
+      const reply = continuation({}, (draft) => {
+        retained = draft;
+        return true;
+      });
+      await dispatch(
+        async (options) => {
+          await preamble(options, "yield-ack", text);
+          await startTool(options, "delegate");
+          reply.text = await options?.getVisibleProgressText?.();
+          expect(reply.text).toBe(text);
+        },
+        { finalReply: reply },
+      );
+      expect(texts()).toHaveLength(1);
+      expect(texts()[0]).toContain("Checking");
+      expect(callsFor("deleteMessage")).toEqual([]);
+      assert(retained);
+      retained.retire();
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
+
+  it.each([undefined, "Checking the report with delegated reviewers."])(
+    "offers only authored text from a partial draft after tool progress (%s)",
+    async (authoredText) => {
+      await dispatch(
+        async (options) => {
+          await startTool(options, "delegate");
+          expect(texts()).not.toHaveLength(0);
+          if (authoredText) {
+            await options?.onPartialReply?.({ text: authoredText });
+          }
+          expect(await options?.getVisibleProgressText?.()).toBe(authoredText);
+        },
+        { mode: "partial", finalReply: { text: "Finished checking the report." } },
+      );
+      expect(texts()).toEqual(["Finished checking the report."]);
+    },
+  );
+
   it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatch(async () => {}, {
       mode: "off",

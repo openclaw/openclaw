@@ -5,9 +5,57 @@ import type {
 } from "./progress-draft-compositor.types.js";
 import {
   resolveChannelProgressDraftConfig,
+  formatChannelProgressDraftTextForStreaming,
   resolveChannelProgressDraftLabel,
   type AgentPlanStep,
 } from "./streaming.js";
+
+export function formatProgressDraftSnapshot(
+  params: ChannelProgressDraftCompositorParams,
+  state: {
+    entry: ChannelProgressDraftCompositorParams["entry"];
+    snapshot: ChannelProgressDraftCompositorSnapshot;
+    formatted?: boolean;
+    onPreparedBlocks?: (blocks: Array<{ text: string; format: "plain" | "markdown" }>) => void;
+  },
+) {
+  const snapshot = state.snapshot;
+  const narration = snapshot.statusHeadline;
+  const linesRenderedByChannel =
+    params.rendersRollingLinesNatively === true && Boolean(narration || snapshot.plan?.length);
+  return formatChannelProgressDraftTextForStreaming({
+    presentation: params.presentation,
+    entry: state.entry,
+    lines: linesRenderedByChannel ? [] : [...snapshot.lines],
+    seed: params.seed,
+    formatLine: state.formatted === false ? undefined : params.formatLine,
+    formatPlainText: state.formatted === false ? (text) => text : params.formatPlainText,
+    onPreparedBlocks: state.onPreparedBlocks,
+    narration,
+    narrationFormat: snapshot.statusHeadlineFormat,
+    plan: snapshot.plan,
+    diffStat: snapshot.diffStat,
+  });
+}
+
+/** Authorship follows the snapshot accepted by the transport, not its encoding. */
+export function resolveProgressDraftAuthoredText(
+  snapshot: ChannelProgressDraftCompositorSnapshot,
+  preamble: string,
+): string | undefined {
+  return (
+    [
+      snapshot.statusHeadline === preamble ? preamble : "",
+      ...snapshot.lines.flatMap((line) =>
+        typeof line === "object" && line.kind === "item" && line.label === "Commentary"
+          ? [line.text]
+          : [],
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n\n") || undefined
+  );
+}
 
 export function createProgressDraftSnapshotState(
   params: Pick<ChannelProgressDraftCompositorParams, "entry" | "initialSnapshot">,

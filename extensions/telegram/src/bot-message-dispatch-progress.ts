@@ -100,18 +100,20 @@ export function createProgressState(
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
-      draftState.answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(options.snapshot, {
-          toolProgress: progressCompositor.previewToolProgressEnabled,
-          richMessages: config.richMessages,
-          maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
-          maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
-        }),
-      );
+      const preview = renderTelegramProgressDraftPreview(options.snapshot, {
+        toolProgress: progressCompositor.previewToolProgressEnabled,
+        richMessages: config.richMessages,
+        maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
+        maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
+      });
+      draftState.answerLane.stream?.updatePreview(preview);
       if (options.flush) {
         await draftState.answerLane.stream?.flush();
       }
-      return undefined;
+      return Boolean(
+        draftState.answerLane.stream?.messageId() &&
+        draftState.answerLane.stream.lastDeliveredText() === preview.text.trimEnd(),
+      );
     },
     deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });

@@ -270,8 +270,12 @@ export function expectCalls(count: number, ...mocks: unknown[]) {
 const noop = () => {};
 export const noopAsync = async () => {};
 export function createDraftStreamStub() {
+  let deliveredText = "";
   return {
-    update: vi.fn(),
+    update: vi.fn((update: string | { text: string }) => {
+      deliveredText = typeof update === "string" ? update : update.text;
+    }),
+    lastDeliveredText: () => deliveredText,
     flush: vi.fn(noopAsync),
     clear: vi.fn(noopAsync),
     discardPending: vi.fn(noopAsync),

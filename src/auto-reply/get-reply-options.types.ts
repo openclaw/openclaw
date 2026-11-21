@@ -391,6 +391,8 @@ export type GetReplyOptions = {
   }) => void;
   /** False while utility-model narration has no visible progress draft. */
   isProgressDraftVisible?: () => boolean;
+  /** Channel-owned, already-visible authored text eligible for a yielded waiting reply. */
+  getVisibleProgressText?: () => string | undefined | Promise<string | undefined>;
   /**
    * Omit exec/bash command text from narration model input, mirroring the
    * channel's `streaming.progress.commandText: "status"` display policy so

@@ -313,9 +313,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onProgressNarratorLifecycle: draftPreview.narrationProgressEnabled
       ? (progressLifecycle) => draftPreview.setProgressNarratorLifecycle(progressLifecycle)
       : undefined,
-    isProgressDraftVisible: draftPreview.narrationProgressEnabled
-      ? () => draftPreview.isProgressDraftVisible
-      : undefined,
+    isProgressDraftVisible: () => draftPreview.isProgressDraftVisible,
+    getVisibleProgressText: () => draftPreview.getVisibleProgressText(),
     narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
     onReasoningStream: async (payload) => {
       if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
