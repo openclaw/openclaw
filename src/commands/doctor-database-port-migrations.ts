@@ -135,18 +135,32 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
   await withArtifactPreservingStateReads(
     async () => {
       let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
+      const unavailable: string[] = [];
       try {
         await preparePluginDoctorContractModules({
           ...params,
           includeDisabled: true,
           surfaces: ["stateMigrations"],
         });
-        entries = listPluginDoctorStateMigrationEntries({ ...params, includeDisabled: true });
+        entries = listPluginDoctorStateMigrationEntries({
+          ...params,
+          includeDisabled: true,
+          onUnavailablePlugin: (pluginId, reason) => {
+            unavailable.push(
+              `Could not load the Doctor migration contract for plugin "${pluginId}": ${reason}`,
+            );
+          },
+        });
       } catch (error) {
         const detail =
           error instanceof PluginDoctorStateMigrationDeclarationError ? ` ${error.message}` : "";
         throw new DatabasePortError(
           `Database port could not inspect registered plugin migrations.${detail} Run openclaw doctor --fix first, then retry port.`,
+        );
+      }
+      if (unavailable.length > 0) {
+        throw new DatabasePortError(
+          `Database port could not inspect registered plugin migrations.\n${unavailable.join("\n")}\nFix or remove each named plugin, then retry the port.`,
         );
       }
       const pending: string[] = [];

@@ -73,7 +73,15 @@ function validateGatewayPublicOrigin(value: string): boolean {
 
 export const GatewayConfigSchema = z
   .strictObject({
-    sessionControl: z.strictObject({ publicationReadEnabled: z.boolean().optional() }).optional(),
+    resources: z
+      .strictObject({ profile: z.enum(["auto", "standard", "lean"]).optional() })
+      .optional(),
+    sessionControl: z
+      .strictObject({
+        publicationReadEnabled: z.boolean().optional(),
+        steeringEnabled: z.boolean().optional(),
+      })
+      .optional(),
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
     port: z.number().int().min(1).max(65_535).optional(),
     /**

@@ -7,6 +7,7 @@ import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
@@ -16,6 +17,7 @@ import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -27,6 +29,7 @@ import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
@@ -472,6 +475,25 @@ export async function executeFollowupTurn(params: {
       throw error;
     }
     turn.queued.operatorAuthority?.assertCurrent();
+    if (
+      turn.queued.controllerInput?.retirementRequested === true &&
+      (turn.queued.controllerClaim?.custody ?? turn.queued.controllerInput.custody).failure ===
+        error
+    ) {
+      createAgentLifecycleTerminalBackstop({
+        runId: turn.runId,
+        sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+        startedAt: runStartedAt,
+        getLifecycleGeneration: () =>
+          turn.operation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+        resolveTerminationFields: (failure) =>
+          resolveReplyOperationTerminationFields(
+            failure,
+            turn.operation.abortSignal,
+            turn.operation,
+          ),
+      }).emit("error", error);
+    }
     // Input is already accepted. A setup failure must surface without replaying it.
     turn.operation.fail("run_failed", error);
     execution = {

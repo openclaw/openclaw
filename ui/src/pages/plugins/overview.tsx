@@ -19,6 +19,7 @@ import type {
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
+import { MiddleTruncated, splitTail } from "./middle-truncated.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 
@@ -38,14 +39,7 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
 }
 
 function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
-  const tone = securityTone(status);
-  const bars = { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone];
-  const verdict =
-    tone === "pass"
-      ? t("pluginsPage.auditClean")
-      : tone === "warning"
-        ? t("pluginsPage.auditReview")
-        : status;
+  const { tone, bars, verdict } = securityVerdict(status);
   return (
     <section
       class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`]}
@@ -168,17 +162,21 @@ export function renderPublisherIdentity(options: {
   name?: string;
   handle?: string;
   official?: boolean;
+  catalogOfficial?: boolean;
 }): JSX.Element | undefined {
-  const { name, handle, official } = options;
-  if (!name && !handle) {
+  const { name, handle, official, catalogOfficial } = options;
+  if (!name && !handle && !catalogOfficial) {
     return undefined;
   }
   return (
     <div class="plugin-catalog-detail__publisher">
-      <span class="plugin-catalog-detail__publisher-name">
-        {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
-        {official ? renderPluginOfficialBadge() : undefined}
-      </span>
+      {catalogOfficial ? renderPluginOfficialBadge() : undefined}
+      {name || handle ? (
+        <span class="plugin-catalog-detail__publisher-name">
+          {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
+          {official ? renderPluginOfficialBadge() : undefined}
+        </span>
+      ) : undefined}
       {name ? renderPluginAuthor(handle) : undefined}
     </div>
   );
@@ -196,6 +194,127 @@ export function renderPluginPublisher(
   });
 }
 
+function securityVerdict(status: string) {
+  const tone = securityTone(status);
+  return {
+    tone,
+    bars: { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone],
+    verdict:
+      tone === "pass"
+        ? t("pluginsPage.auditClean")
+        : tone === "warning"
+          ? t("pluginsPage.auditReview")
+          : status,
+  };
+}
+
+function renderPackageRail(
+  options: Parameters<typeof renderPackageMetadata>[0],
+  date: (value: number | undefined) => string | undefined,
+  links: JSX.Element,
+): JSX.Element {
+  const placeholder = () => (
+    <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
+  );
+  const values: Array<[string, string | undefined]> = [
+    [
+      t(options.installed ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
+      options.version,
+    ],
+    [t("pluginsPage.detailUpdated"), date(options.updatedAt)],
+    [t("pluginsPage.detailPublished"), date(options.createdAt)],
+    [
+      t("pluginsPage.catalogDownloadsColumn"),
+      options.downloads === undefined ? undefined : formatCompactCount(options.downloads),
+    ],
+  ];
+  const security = () => {
+    const value = options.security;
+    return value ? { ...securityVerdict(value.verdict ?? "unknown"), url: value.auditUrl } : null;
+  };
+  const categories = options.categories ?? [];
+  return (
+    <>
+      {options.loading ? (
+        <section
+          class="plugin-metadata__loading"
+          role="status"
+          aria-label={t("pluginsPage.detailLoading")}
+        >
+          {placeholder()}
+        </section>
+      ) : undefined}
+      <dl class="plugin-metadata__facts plugin-metadata__facts--rail">
+        {security() ? (
+          <div
+            class={[
+              "plugin-catalog-detail__security",
+              `plugin-catalog-detail__security--${security()!.tone}`,
+            ]}
+          >
+            <dt>
+              {t("pluginsPage.detailSecurity")}
+              <openclaw-tooltip
+                prop:content={t("pluginsPage.detailSecurityInfo")}
+                prop:describe={false}
+                open-on-click
+              >
+                <button
+                  type="button"
+                  class="oc-icon-button oc-icon-button--28"
+                  aria-label={t("pluginsPage.detailSecurityInfo")}
+                >
+                  <Icon name="info" />
+                </button>
+              </openclaw-tooltip>
+            </dt>
+            <dd>
+              <span class="plugin-catalog-detail__security-score">
+                <span class="plugin-catalog-detail__security-verdict">{security()!.verdict}</span>
+                <span class="plugin-catalog-detail__security-bars" aria-hidden="true">
+                  <For each={[0, 1, 2]}>
+                    {(index) => <span class={{ "is-filled": index < security()!.bars }} />}
+                  </For>
+                </span>
+              </span>
+              {security()!.url ? (
+                <a
+                  class="plugin-metadata__audit-link"
+                  href={security()!.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={t("pluginsPage.detailSecurityAudit")}
+                  title={t("pluginsPage.detailSecurityAudit")}
+                >
+                  <span>{t("pluginsPage.detailSecurityAuditLink")}</span>
+                  <Icon name="arrowUpRight" />
+                </a>
+              ) : undefined}
+            </dd>
+          </div>
+        ) : undefined}
+        <For each={values.filter(([, value]) => options.loading || value !== undefined)}>
+          {([label, value]) => (
+            <div>
+              <dt>{label}</dt>
+              <dd>{value ?? placeholder()}</dd>
+            </div>
+          )}
+        </For>
+        {categories.length ? (
+          <div class="plugin-metadata__section">
+            <dt>{t("pluginsPage.detailCategories")}</dt>
+            <dd class="plugin-metadata__categories">
+              <For each={categories}>{(category) => <span class="chip">{category}</span>}</For>
+            </dd>
+          </div>
+        ) : undefined}
+        {links}
+      </dl>
+    </>
+  );
+}
+
 /** The detail rail shared by plugin and Template pages: audit, release facts, then categories. */
 export function renderPackageMetadata(options: {
   loading?: boolean;
@@ -206,9 +325,14 @@ export function renderPackageMetadata(options: {
   createdAt?: number;
   downloads?: number;
   categories?: readonly string[];
+  /** Plugin pages: every fact is a label above its value in one list, links included. */
+  rail?: { links: JSX.Element };
 }): JSX.Element {
   const date = (value: number | undefined) =>
     value === undefined ? undefined : formatDateMs(value, { dateStyle: "medium" });
+  if (options.rail) {
+    return renderPackageRail(options, date, options.rail.links);
+  }
   const values: Array<[string, string | undefined]> = [
     [
       t(options.installed ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
@@ -281,46 +405,58 @@ export function renderPluginMetadata(
     local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
   );
   const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
-  return (
-    <>
-      {renderPackageMetadata({
-        loading,
-        security: detail?.security,
-        version: installedVersion ?? catalog?.latestVersion,
-        installed: Boolean(installedVersion),
-        updatedAt: detail?.updatedAt,
-        createdAt: detail?.createdAt,
-        downloads: catalog?.downloads,
-        categories: catalog?.categories,
-      })}
-      {repository || documentation ? (
-        <ul class="plugin-metadata__links">
+  const documentationText = documentation
+    ? `${documentation.hostname}${documentation.pathname.replace(/\/$/u, "")}`
+    : "";
+  return renderPackageMetadata({
+    loading,
+    security: detail?.security,
+    version: installedVersion ?? catalog?.latestVersion,
+    installed: Boolean(installedVersion),
+    updatedAt: detail?.updatedAt,
+    createdAt: detail?.createdAt,
+    downloads: catalog?.downloads,
+    categories: catalog?.categories,
+    rail: {
+      links: (
+        <>
           {repository ? (
-            <li>
-              <a
-                class="plugin-metadata__repository"
-                href={repository.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={t("pluginsPage.detailRepository")}
-              >
-                {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
-                <span>{repository.name}</span>
-              </a>
-            </li>
+            <div>
+              <dt>{t("pluginsPage.detailRepository")}</dt>
+              <dd class="plugin-metadata__link-value">
+                <a
+                  class="plugin-metadata__link plugin-metadata__repository"
+                  href={repository.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {repository.github ? <Icon name="github" /> : undefined}
+                  <MiddleTruncated {...splitTail(repository.name)} />
+                  <Icon name="arrowUpRight" />
+                </a>
+              </dd>
+            </div>
           ) : undefined}
           {documentation ? (
-            <li>
-              <a href={documentation.href} target="_blank" rel="noopener noreferrer">
-                <span>{t("pluginsPage.detailDocumentation")}</span>
-                <Icon name="arrowUpRight" />
-              </a>
-            </li>
+            <div>
+              <dt>{t("pluginsPage.detailDocumentation")}</dt>
+              <dd class="plugin-metadata__link-value">
+                <a
+                  class="plugin-metadata__link"
+                  href={documentation.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <MiddleTruncated {...splitTail(documentationText)} />
+                  <Icon name="arrowUpRight" />
+                </a>
+              </dd>
+            </div>
           ) : undefined}
-        </ul>
-      ) : undefined}
-    </>
-  );
+        </>
+      ),
+    },
+  });
 }
 
 type PluginCapabilityRow = {

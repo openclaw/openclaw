@@ -11,6 +11,7 @@ import type { WorkerMemorySample } from "./diagnostic-process-types.js";
 import {
   getTrackedWorkerCpuSources,
   getTrackedWorkerLifecycleSnapshot,
+  getTrackedWorkerPoolSnapshot,
   createCpuTrackedWorker,
   markWorkerRetirement,
   trackNativeWorkerForCpu,
@@ -701,4 +702,60 @@ describe("worker CPU lifecycle", () => {
     await pending;
     expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
   });
+});
+
+it("censuses native lifetimes, actual pool policies and only fresh heap samples", async () => {
+  const first = registerWorker(9001, "git-operation.worker.ts");
+  const second = registerWorker(9002, "git-operation.worker.ts");
+  const external = registerWorker(9003, "external.js");
+  const pool = {};
+  const policy = { floor: 1, cap: 2, pointReadCap: 3, idleTimeoutMs: 60_000 };
+  try {
+    attributeWorkerToPool(first, pool, "reader", policy);
+    attributeWorkerToPool(second, pool, "reader", policy);
+    const initial = getTrackedWorkerPoolSnapshot();
+    expect(initial.workerCensus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "git-operation.worker.js",
+          count: 2,
+          floor: 1,
+          cap: 2,
+          pointReadCap: 3,
+          idlePolicy: "retain-one",
+          heapUsedBytes: null,
+          heapSampledCount: 0,
+        }),
+        expect.objectContaining({
+          kind: "other",
+          count: 1,
+          floor: null,
+          cap: null,
+          idlePolicy: "unknown",
+          heapUsedBytes: null,
+        }),
+      ]),
+    );
+    await sampledMemory();
+    const memory = getTrackedWorkerPoolSnapshot();
+    expect(memory.workerCensus.find((row) => row.kind === "git-operation.worker.js")).toMatchObject(
+      {
+        heapSampledCount: 2,
+        heapUsedBytes: expect.any(Number),
+      },
+    );
+    markWorkerRetirement(first, "closed");
+    expect(getTrackedWorkerPoolSnapshot().workerCount).toBe(3);
+    first.emit("exit");
+    expect(
+      getTrackedWorkerPoolSnapshot().workerCensus.find(
+        (row) => row.kind === "git-operation.worker.js",
+      )?.count,
+    ).toBe(1);
+  } finally {
+    first.emit("exit");
+    second.emit("exit");
+    external.emit("exit");
+  }
+  expect(getTrackedWorkerPoolSnapshot().workerCensus).toEqual([]);
 });

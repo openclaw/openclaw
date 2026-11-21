@@ -11,7 +11,7 @@ read_when:
 
 Q (default C) tests C. Admitted P supplies `full-release-validation-state.mjs`
 for Release Decision, Diagnostic Drain, manifests, and final validation, applying
-[P-owned waivers](/reference/full-release-validation/evidence#release-tooling-waivers).
+[Q-owned grants](/reference/full-release-validation/evidence#release-tooling-waivers).
 Publication requires successful FRV, including package qualification and Docker
 preparation—not just a passing product decision.
 
@@ -36,7 +36,8 @@ and attempt checks. At most seven independent children are read concurrently;
 per-child attempts/pagination remain sequential, job data is retained, and all reads
 finish before a verdict. Resolution/reuse checkouts need only tooling and release metadata.
 
-**Child reuse.** A green sealed child can outlive a failed, cancelled, or active parent:
+**Child reuse.** A sealed raw successful child, or a failed child accepted under the
+current Q grants, can outlive a failed, cancelled, or active parent:
 
 - Search bounds: 100 recent dispatch runs, 40 target receipt inventories, five matching
   receipts per role, two minutes. Nonmatching receipts do not consume the five.
@@ -44,13 +45,16 @@ finish before a verdict. Resolution/reuse checkouts need only tooling and releas
   inputs equal absent inputs (`github.event.inputs` omits them).
 - Require equal Q or authenticated identical workload closure: owning/reusable workflows,
   local actions, complete scripts tree, root configuration/dependencies. Different Q
-  requires verified main ancestry; missing, unsupported, or changed closure blocks reuse.
-  Control-only intent is insufficient.
+  requires authenticated tooling lineage; missing, unsupported, or changed closure blocks reuse.
+  Only `scripts/lib/release-validation-waivers.json` is excluded from workload identity:
+  a ledger-only Q change permits reevaluation under new Q grants. Control-only intent
+  for other paths is insufficient.
 - Normal CI additionally retains complete `config`, `packages`, `src`, and `test` trees
   imported by its Q harness; even unrelated changes there invalidate reuse. Other product
   directories come from C and are excluded. Unrelated parent workflow changes alone do
   not invalidate normal CI. Other roles retain all workflows and the full root tree;
-  shared-script changes invalidate every child.
+  executable shared-script changes invalidate every child; the grant-ledger-only
+  exception does not exclude other scripts or root files.
 - Dispatch logs explain evaluated rejections, reused children, skipped runs, and fresh
   dispatches. Sealing, collectors, and final verification repeat tooling/receipt checks.
 

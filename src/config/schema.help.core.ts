@@ -103,6 +103,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
+  "gateway.resources": "Gateway resource profile selection. Changes require a Gateway restart.",
+  "gateway.resources.profile":
+    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Both profiles currently use identical worker behavior.",
   "gateway.port":
     "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
@@ -138,9 +141,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.openclawId.memberDeviceInactivityDays":
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.sessionControl":
-    "Explicit opt-ins for restricted session publication. Authentication and saved device grants do not enable publication.",
+    "Explicit opt-ins for session control surfaces. Authentication and saved device grants do not enable publication or active steering.",
   "gateway.sessionControl.publicationReadEnabled":
     "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
+  "gateway.sessionControl.steeringEnabled":
+    "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
     "Web app discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
