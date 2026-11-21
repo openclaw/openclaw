@@ -67,6 +67,7 @@ import {
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+import { createUnlinkOperations } from "./unlink-operations.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
 export type LinkPreparation = {
@@ -424,8 +425,10 @@ export function createOpenClawIdAuthority(
           return binding;
         }
         // The caller's live ceremony authority is checked at the durable write itself.
+        // No registration has been sent for this claw yet (unlink-operations.ts).
+        const discovery = { ...current.discovery, registration_unsent: true };
         await commit(
-          { ...current, authority: added.state, binding: binding.statement },
+          { ...current, authority: added.state, binding: binding.statement, discovery },
           expected.guard,
         );
         return {
@@ -550,6 +553,7 @@ export function createOpenClawIdAuthority(
     ...createNodeInviteOperations({ serialize, load, commit }),
 
     ...createRebindOperations({ serialize, load, commit }),
+    ...createUnlinkOperations({ serialize, load, commit, emptyRecord }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
@@ -806,8 +810,11 @@ export function createOpenClawIdAuthority(
       return [...expired].filter((key) => !isAdmitted(state, key, now)).toSorted();
     },
 
-    /** Records mirror progress; recovery may require the same committed binding through settlement. */
-    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
+    /**
+     * Records mirror progress; recovery may require the same committed binding through settlement.
+     * With a claw id as `expected`, progress for another claw (one unlinked meanwhile) is dropped.
+     */
+    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw | string) {
       return serialize(async () => {
         for (const field of ["owner_account_id", "mailbox_cursor"] as const) {
           if (Object.hasOwn(update, field)) {
@@ -815,7 +822,10 @@ export function createOpenClawIdAuthority(
           }
         }
         const current = await load();
-        if (expected) {
+        if (typeof expected === "string" ? current?.claw_id !== expected : false) {
+          return;
+        }
+        if (expected && typeof expected !== "string") {
           assertSameClawIdentity(current, expected);
         }
         if (current) {
