@@ -6,6 +6,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { captureUiProofEnabled } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -257,9 +258,23 @@ suite.define(() => {
   });
 
   it("stages a pasted clipboard image and keeps text pastes native", async () => {
+    const viewport = { width: 1440, height: 900 };
     await suite.withPage(
-      { serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
-      async ({ page }) => {
+      {
+        serviceWorkers: "block",
+        viewport,
+        permissions: ["clipboard-read", "clipboard-write"],
+        // Opt-in recording so a reviewer can watch the real paste, not only read assertions.
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: suite.artifactDir, size: viewport } }
+          : {}),
+      },
+      async ({ context, page }) => {
+        // Real OS-level clipboard, not a constructed ClipboardEvent: write through
+        // navigator.clipboard and deliver with an actual Ctrl+V keystroke.
+        await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+          origin: new URL(suite.server.baseUrl).origin,
+        });
         const sessionKey = "agent:main:terminal-paste-e2e";
         const stagedPath = "/tmp/openclaw-terminal-upload/pasted.png";
         const gateway = await installMockGateway(page, {
@@ -289,45 +304,55 @@ suite.define(() => {
         await composer.waitFor({ state: "visible" });
 
         // A text-only clipboard paste stays with the input, not the upload owner.
-        await composer.evaluate((element) => {
-          element.dispatchEvent(
-            new ClipboardEvent("paste", {
-              bubbles: true,
-              cancelable: true,
-              clipboardData: new DataTransfer(),
-            }),
-          );
-        });
+        await page.evaluate(() => navigator.clipboard.writeText("plain text paste"));
+        await composer.click();
+        await page.keyboard.press("Control+V");
+        await expect.poll(async () => await composer.inputValue()).toContain("plain text paste");
         expect((await gateway.getRequests("terminal.upload")).length).toBe(0);
 
+        // Now put a real PNG on the clipboard and paste it with a real keystroke.
         await gateway.deferNext("terminal.upload");
-        await composer.evaluate((element) => {
-          const clipboard = new DataTransfer();
-          clipboard.items.add(
-            new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "pasted.png", {
-              type: "image/png",
-            }),
-          );
-          element.dispatchEvent(
-            new ClipboardEvent("paste", {
-              bubbles: true,
-              cancelable: true,
-              clipboardData: clipboard,
-            }),
-          );
+        await page.evaluate(async () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 2;
+          canvas.height = 2;
+          const context2d = canvas.getContext("2d");
+          if (!context2d) {
+            throw new Error("no 2d context for clipboard image");
+          }
+          context2d.fillStyle = "#ff0000";
+          context2d.fillRect(0, 0, 2, 2);
+          const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((value) => resolve(value), "image/png");
+          });
+          if (!blob) {
+            throw new Error("canvas produced no PNG blob");
+          }
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         });
+        await composer.click();
+        await page.keyboard.press("Control+V");
 
         const upload = await gateway.waitForRequest("terminal.upload");
-        expect(upload.params).toMatchObject({
-          sessionId: expect.stringMatching(/^control-ui-mock-terminal-/u),
-          name: "pasted.png",
-          contentBase64: "iVBORw==",
-        });
+        const uploaded = upload.params as {
+          sessionId: string;
+          name: string;
+          contentBase64: string;
+        };
+        expect(uploaded.sessionId).toMatch(/^control-ui-mock-terminal-/u);
+        // The browser names a clipboard PNG itself; assert a PNG payload, not a fixed name.
+        expect(uploaded.name).toMatch(/\.png$/u);
+        expect(uploaded.contentBase64.startsWith("iVBOR")).toBe(true);
         await gateway.resolveDeferred("terminal.upload", { path: stagedPath, size: 4 });
 
         await expect
           .poll(async () => (await embedded.locator(".tp-attachment").textContent()) ?? "")
-          .toContain("pasted.png");
+          .toMatch(/\.png/u);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: `${suite.artifactDir}/terminal-composer-pasted-image.png`,
+          });
+        }
         // Staging is not submission: no PTY input before an explicit Send.
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);
       },

@@ -131,28 +131,6 @@ it.each([
   expect(terminal.terminal.paste).not.toHaveBeenCalled();
 });
 
-it("stages a pasted image through the same upload owner as dropped files", async () => {
-  const { upload, terminal, request } = createUpload("/tmp/pasted-image.png", "/bin/zsh");
-  const file = new File(["png!"], "pasted-image.png", { type: "image/png" });
-  Object.defineProperty(file, "arrayBuffer", {
-    value: async () => new TextEncoder().encode("png!").buffer,
-  });
-  const paste = new Event("paste", { cancelable: true });
-  Object.defineProperty(paste, "clipboardData", { value: { files: [file] } });
-
-  upload.handlePaste(paste as ClipboardEvent);
-
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith(
-      "terminal.upload",
-      { sessionId: "session-1", name: "pasted-image.png", contentBase64: "cG5nIQ==" },
-      { signal: expect.any(AbortSignal) },
-    ),
-  );
-  expect(paste.defaultPrevented).toBe(true);
-  expect(terminal.terminal.input).not.toHaveBeenCalled();
-});
-
 it("leaves a text-only paste to the input's own handling", () => {
   const { upload, request } = createUpload("/tmp/report.pdf", "/bin/zsh");
   const paste = new Event("paste", { cancelable: true });
