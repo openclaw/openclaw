@@ -144,6 +144,9 @@ the original startup deadline. This also bounds refusal traffic when an
 agent-launched test inherits the secret egress proxy environment; it does not
 bypass the proxy's loopback traffic policy.
 
+- Place configuration tests that need the private-QA runtime in
+  `src/config/private-qa/`. The test runner and CI derive the pre-test build
+  from the suites selected in that directory.
 - Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
   at collection. The first such load in a Vitest invocation prepares the whole
   compiled worker generation (tens of seconds warm, minutes cold), so an

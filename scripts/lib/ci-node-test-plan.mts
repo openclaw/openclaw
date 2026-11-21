@@ -4646,6 +4646,7 @@ export function createSelectedNodeTestShardBundles(
         ...group,
         configs: selectedConfigs,
         includePatterns,
+        pretestBuildMode: resolveTestFilesBuildMode(includePatterns),
         timing_key: timingKeys[0]!,
       };
       groupSeconds.set(projectedGroup, selectedSeconds);

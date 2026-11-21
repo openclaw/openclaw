@@ -118,8 +118,11 @@ const planFiles = (
   ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
 ];
 
-it("omits build preparation when the selected tests have no runtime consumers", () => {
-  const target = "src/commands/doctor-auth-canonical-api-key-alias.test.ts";
+it.each([
+  ["src/commands/doctor-auth-canonical-api-key-alias.test.ts", undefined],
+  ["src/config/config-startup-corpus.test.ts", "runtime"],
+  ["src/config/private-qa/session-transcript-reconcile.lifecycle-phases.test.ts", "private-qa"],
+] as const)("plans the build required by the selected suite %s", (target, mode) => {
   const jobs = expectDefined(
     createSelectedNodeTestShardBundles([target], {
       runnerBackend: "github",
@@ -131,7 +134,7 @@ it("omits build preparation when the selected tests have no runtime consumers", 
 
   expect(jobs).toHaveLength(1);
   expect(jobs.flatMap(planFiles)).toEqual([target]);
-  expect(jobs[0]?.pretestBuildMode).toBeUndefined();
+  expect(jobs[0]?.pretestBuildMode).toBe(mode);
 });
 
 it("retains canonical capacity and exact scope for a compact selection", () => {

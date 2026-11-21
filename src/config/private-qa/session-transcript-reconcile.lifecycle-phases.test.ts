@@ -5,9 +5,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import {
@@ -26,29 +25,34 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { withSqliteWorkerLifecycleCoordination } from "./session-accessor.sqlite-worker-coordination.js";
-import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
+import { withSqliteWorkerLifecycleCoordination } from "../sessions/session-accessor.sqlite-worker-coordination.js";
+import { observeReconcileHostSqlite } from "../sessions/session-transcript-reconcile.sql-observer.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerTask,
   SessionTranscriptReconcileWorkerMessage,
-} from "./session-transcript-reconcile.worker.js";
+} from "../sessions/session-transcript-reconcile.worker.js";
 
 type Pool = WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>;
 function createPool(failNativeCloseAt?: string): Pool {
+  const workerUrl = new URL(
+    `../../../dist/${runtimeProcessEntrypoints.sessionTranscriptReconcile.distWorkerPath}`,
+    import.meta.url,
+  );
   return new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
-    workerUrl: failNativeCloseAt
-      ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
-      : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
     ...(failNativeCloseAt
       ? {
+          workerUrl: new URL(
+            "../sessions/session-transcript-reconcile.close-failure.test-support.mjs",
+            import.meta.url,
+          ),
           workerOptions: {
             workerData: {
-              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-              databasePath: failNativeCloseAt,
+              workerUrl: workerUrl.href,
+              databasePath: resolveNodeSqliteLocation(failNativeCloseAt),
             },
           },
         }
-      : {}),
+      : { workerUrl }),
     maxWorkers: 1,
     maxPendingTasks: 4,
   });
