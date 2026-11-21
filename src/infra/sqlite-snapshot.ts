@@ -66,6 +66,12 @@ export function configureSqliteSnapshotReadCache(database: DatabaseSync): void {
   database.exec("PRAGMA cache_size = -16384; PRAGMA mmap_size = 268435456;");
 }
 
+/** Bound the page growth of a new private export while its source remains live. */
+export function limitSqliteSnapshotBytes(database: DatabaseSync, bytes: number): void {
+  const pageSize = Number(database.prepare("PRAGMA page_size").get()!.page_size);
+  database.exec(`PRAGMA max_page_count = ${Math.floor(bytes / pageSize)}`);
+}
+
 export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;
   identity: FileIdentityStat;

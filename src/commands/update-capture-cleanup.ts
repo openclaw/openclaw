@@ -204,6 +204,7 @@ function collectCaptureRootInventory(params: {
     return { artifacts, identities };
   }
   const history = params.readHistory === false ? undefined : readCompletedUpdateHistory(params.env);
+  const runs = new Map(history?.runs.map((run) => [run.runId, run]));
   // Standalone retention reads every manifest; status first qualifies their total metadata cost.
   const rootEntries = params.scan
     ? [...params.scan.directory(root)]
@@ -251,41 +252,13 @@ function collectCaptureRootInventory(params: {
           ? params.scan.logicalBytes(directory)
           : logicalBytes(directory);
     const onlineId = ONLINE_UPDATE_CAPTURE_NAME.exec(entry.name)?.[1];
-    if (onlineId) {
-      // Older online captures lack the privacy marker. Their exact UUID and run history
-      // identify them. Keep unknown runs and any capture that could have reached activation.
-      try {
-        const run =
-          history?.runs.find((candidate) => candidate.runId === onlineId) ??
-          (history ? getUpdateRun(onlineId, { env: params.env }) : undefined);
-        item.runs = run ? [onlineId] : [];
-        item.captureSource = "update";
-        if (
-          !run ||
-          history?.hasPendingRecovery ||
-          needsPostCoreRepair(run) ||
-          !run.steps.some(({ step }) => step === "requested") ||
-          !(run.status === "failed" || inspectUpdateRunAbandonment(run))
-        ) {
-          continue;
-        }
-        item.outcome = "candidate";
-        item.reason = "never-activated-update-capture";
-        item.consequence = "Permanently deletes this abandoned capture and its PostgreSQL copies.";
-        const stat = fs.lstatSync(directory, { bigint: true });
-        identities.set(directory, { dev: stat.dev, ino: stat.ino });
-      } catch (error) {
-        item.reason = "unreadable-update-history";
-        item.detail = String(error);
-      }
-      continue;
-    }
     // The producer names each capture by run id and marks it before staging any payload.
     if (
-      !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
-      !fs
-        .lstatSync(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), { throwIfNoEntry: false })
-        ?.isFile()
+      !onlineId &&
+      (!/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
+        !fs
+          .lstatSync(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), { throwIfNoEntry: false })
+          ?.isFile())
     ) {
       continue;
     }
@@ -295,9 +268,30 @@ function collectCaptureRootInventory(params: {
       continue;
     }
     try {
-      const run =
-        history.runs.find((candidate) => candidate.runId === entry.name) ??
-        getUpdateRun(entry.name, { env: params.env });
+      const runId = onlineId ?? entry.name;
+      const run = runs.get(runId) ?? getUpdateRun(runId, { env: params.env });
+      if (onlineId) {
+        // Older online captures lack the marker. Their UUID and pre-activation run history
+        // identify them. Keep captures of unknown, live, or potentially activated updates.
+        if (run) {
+          item.runs = [runId];
+        }
+        if (
+          run &&
+          !history.hasPendingRecovery &&
+          !needsPostCoreRepair(run) &&
+          run.steps.some(({ step }) => step === "requested") &&
+          (run.status === "failed" || inspectUpdateRunAbandonment(run))
+        ) {
+          const stat = fs.lstatSync(directory, { bigint: true });
+          identities.set(directory, { dev: stat.dev, ino: stat.ino });
+          item.outcome = "candidate";
+          item.reason = "never-activated-update-capture";
+          item.consequence =
+            "Permanently deletes this abandoned capture and its PostgreSQL copies.";
+        }
+        continue;
+      }
       const doctor = standalone.get(directory);
       if (!run && !doctor) {
         const incomplete =

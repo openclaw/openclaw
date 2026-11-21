@@ -78,8 +78,8 @@ export async function exportPostgresBackup(params: {
     await fs.writeFile(raw, "", { flag: "wx", mode: 0o600 });
     using db = openNodeSqliteDatabase(raw, { readBigInts: true });
     if (params.onlineExportByteLimit !== undefined) {
-      const pageSize = Number(db.prepare("PRAGMA page_size").get()!.page_size);
-      db.exec(`PRAGMA max_page_count = ${Math.floor(params.onlineExportByteLimit / pageSize)}`);
+      const { limitSqliteSnapshotBytes } = await import("../infra/sqlite-snapshot.js");
+      limitSqliteSnapshotBytes(db, params.onlineExportByteLimit);
     }
     const source = { engine: "postgres" as const, db: client, namespace: anchor.namespace };
     // Allocations are read inside the export snapshot so they cover every captured row ID.

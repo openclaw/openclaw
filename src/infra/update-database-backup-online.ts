@@ -9,13 +9,12 @@ import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { markPrivateCapture, ONLINE_UPDATE_CAPTURE_NAME } from "./update-capture-paths.js";
 import { findUpdateCaptureSpaceError } from "./update-capture-space.js";
+import type { UpdateDatabaseBackupEntry as CaptureEntry } from "./update-database-backup-files.js";
 import {
   checkOnlinePostgresExportSpace,
   checkUpdateDatabaseBackupSpace,
 } from "./update-database-backup-space.js";
-import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 
-type CaptureEntry = UpdateDatabaseBackup["databases"][number];
 type OnlineCapture = {
   directory: string;
   databases: CaptureEntry[];

@@ -1,10 +1,24 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { z } from "zod";
 import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+
+export const UpdateDatabaseBackupEntrySchema = z.object({
+  path: z.string(),
+  snapshotPath: z.string(),
+  userVersion: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  sizeBytes: z.number().int().nonnegative(),
+  engine: z.literal("postgres").optional(),
+  storeId: z.string().uuid().optional(),
+  namespace: z.string().optional(),
+  exportDirectory: z.string().optional(),
+});
+export type UpdateDatabaseBackupEntry = z.infer<typeof UpdateDatabaseBackupEntrySchema>;
 
 export async function prepareRestorableDatabaseFiles(
   databases: readonly string[],

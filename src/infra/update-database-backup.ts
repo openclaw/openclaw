@@ -48,6 +48,7 @@ import {
 import {
   inspectRestorableDatabaseFiles,
   prepareRestorableDatabaseFiles,
+  UpdateDatabaseBackupEntrySchema,
 } from "./update-database-backup-files.js";
 import {
   planUpdateCaptureStores,
@@ -66,19 +67,7 @@ import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture
 
 export const UpdateDatabaseBackupSchema = z.object({
   directory: z.string(),
-  databases: z.array(
-    z.object({
-      path: z.string(),
-      snapshotPath: z.string(),
-      userVersion: z.number().int().nonnegative(),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-      sizeBytes: z.number().int().nonnegative(),
-      engine: z.literal("postgres").optional(),
-      storeId: z.string().uuid().optional(),
-      namespace: z.string().optional(),
-      exportDirectory: z.string().optional(),
-    }),
-  ),
+  databases: z.array(UpdateDatabaseBackupEntrySchema),
   pluginOwners: z
     .record(
       z.string(),
