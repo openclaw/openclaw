@@ -167,6 +167,7 @@ function extractStrictJsonFragments(
   const validEnds = indexOriginalJsonContainers(source);
   const roots: JsonContainer[] = [];
   const stack: JsonContainer[] = [];
+  const indexedClosures = new Map<number, JsonContainer>();
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
   let selectedDepth = 0;
   const rootQuote: QuoteState = { quoted: false, escaped: false, damaged: false };
@@ -176,6 +177,7 @@ function extractStrictJsonFragments(
   let spanOpaque = false;
   const pop = () => {
     const node = stack.pop()!;
+    if (node.end >= 0) indexedClosures.delete(node.end);
     activeOpeners[node.opener] -= 1;
     selectedDepth -= Number(openers.includes(node.opener));
     return node;
@@ -201,7 +203,19 @@ function extractStrictJsonFragments(
       char === "\n" ||
       (opts.recoverAtLineStart === true && char === "\r") ||
       (lineStart && (opaque || char === " " || char === "\t" || char === "\r"));
-    if (opaque) continue;
+    if (opaque) {
+      indexedClosures.delete(index);
+      continue;
+    }
+    // Original admission owns both endpoints. Framing can expose artificial
+    // descendants or quotes; none may retire this owner early or hide its end.
+    const indexed = indexedClosures.get(index);
+    if (indexed) {
+      while (stack.at(-1) !== indexed) pop();
+      pop();
+      indexed.valid = true;
+      continue;
+    }
     const discovery = inSpan ? char : raw[index];
     // Except for declared framing, original text owns structure and strings.
     // Hidden discovery quotes must not turn string interiors into child records.
@@ -223,13 +237,14 @@ function extractStrictJsonFragments(
       const node: JsonContainer = {
         opener: char,
         start: index,
-        end: -1,
+        end: validEnds.get(index) ?? -1,
         children: [],
         eligible: selected && (selectedDepth === 0 || (!!opts.recoverAtLineStart && atLineStart)),
         valid: false,
       };
       (parent ? parent.children : roots).push(node);
       stack.push(node);
+      if (node.end >= 0) indexedClosures.set(node.end, node);
       activeOpeners[char] += 1;
       // Discovery controls emission, not ownership by original selected kinds.
       selectedDepth += Number(openers.includes(char));
@@ -240,14 +255,14 @@ function extractStrictJsonFragments(
       if (activeOpeners[opener] === 0) {
         continue;
       }
-      while (stack.at(-1)!.opener !== opener) {
+      while (stack.at(-1)!.opener !== opener && stack.at(-1)!.end < index) {
         pop();
       }
+      // Protect an indexed owner only until its original endpoint. A hidden
+      // endpoint cannot admit it or prevent subsequent visible recovery.
+      if (stack.at(-1)!.end >= index) continue;
       const closed = pop();
       closed.end = index;
-      // Framing can expose string-interior closers. Once boundaries match,
-      // original syntax alone admits the record, including valid parents.
-      closed.valid = validEnds.get(closed.start) === index;
     }
   }
   const fragments: BalancedJsonFragment[] = [];
