@@ -1026,6 +1026,12 @@ schema, or protocol change is involved.
 
 ### Migration integrity checks
 
+Cold update-history bookkeeping verifies shared-state integrity before acquiring
+the SQLite writer. The full check still runs, but a serving Gateway can continue
+writing while it scans. Ledger changes and current ownership/schema checks remain
+transactional; explicit maintenance and orphan recovery retain their existing
+transaction-local verification.
+
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
