@@ -50,6 +50,20 @@ describe("replaceOversizedChatHistoryMessages", () => {
     });
     expect(messages[0]).not.toHaveProperty("__openclaw");
   });
+
+  it("retains a channel message reference on an oversized history entry", () => {
+    const transport = { channel: "a2a", messageId: "channel-message" };
+    const [message] = replace([
+      {
+        role: "user",
+        content: [{ type: "text", text: "x".repeat(4_000) }],
+        __openclaw: { transport: { ...transport, conversationRef: "conversation" } },
+      },
+    ]);
+    expect(message).toHaveProperty("__openclaw.transport", transport);
+    expect(message).toHaveProperty("__openclaw.truncated", true);
+    expect(message).not.toHaveProperty("__openclaw.transport.conversationRef");
+  });
 });
 
 it("keeps oversized tool results recoverable with identity, error, and provenance", () => {
