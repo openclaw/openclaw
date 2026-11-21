@@ -124,18 +124,18 @@ Rules that hold on every row:
 
 ## The update, step by step
 
-| Step                                                                                                                                | Runs in                             | Old Gateway                     | Fails or crashes here                                                               | Left on disk                           |
-| ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------- |
-| 1. Resolve the target (channel, tag, commit)                                                                                        | Driver                              | Serving                         | Nothing changed                                                                     | Nothing                                |
-| 2. Admit: free space for one release, Node floor, one update at a time (a lock file in `releases/`)                                 | Driver                              | Serving                         | Nothing changed                                                                     | Nothing                                |
-| 3. Stage `releases/<id>`: package install with integrity check, or worktree plus build                                              | Driver                              | Serving                         | Old release keeps serving                                                           | An unselected release, later collected |
-| 4. Verify: run the release's `--version` and contract check with the service's Node                                                 | Driver                              | Serving                         | Old release keeps serving                                                           | Same                                   |
-| 5. Write `.trial` (target, previous, build), then rename the link                                                                   | Driver                              | Serving, from its own real path | Before the rename: old link. After: new link with a trial                           | A trial record                         |
-| 6. Ask the Gateway to drain and restart                                                                                             | Driver to Gateway                   | Draining                        | The link has moved, so the next start by anyone runs the trial                      | Same                                   |
-| 7. Start                                                                                                                            | Launcher                            | **Down**                        | Counted. A second failed start goes to step 9                                       | An attempt count                       |
-| 8. Upgrade state when a database is older than the build: copy, migrate the copy, validate, write the plan, rename                  | New Gateway, under the Gateway lock | **Down**                        | Before the plan is durable: live state untouched. After: the next start finishes it | `.upgrade-*` or `.pre-<build>` files   |
-| 9. Ready: delete `.trial`. Or two failed starts: rename `.pre-<build>` files back, remove what the plan added, rename the link back | New Gateway, or launcher            | Up again                        | Both are reruns of the same idempotent step                                         | Nothing, or the old release serving    |
-| 10. Report, converge plugins, collect releases, settle owed steps                                                                   | Driver, or the next update          | Serving                         | Recorded as owed. Never undoes the update                                           | The run record                         |
+| Step                                                                                                                                | Runs in                                              | Old Gateway                     | Fails or crashes here                                                               | Left on disk                           |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------- |
+| 1. Resolve the target (channel, tag, commit)                                                                                        | Driver                                               | Serving                         | Nothing changed                                                                     | Nothing                                |
+| 2. Admit: free space for one release, Node floor, one update at a time (a lock file in `releases/`)                                 | Driver                                               | Serving                         | Nothing changed                                                                     | Nothing                                |
+| 3. Stage `releases/<id>`: package install with integrity check, or worktree plus build                                              | Driver                                               | Serving                         | Old release keeps serving                                                           | An unselected release, later collected |
+| 4. Verify: run the release's `--version` and contract check with the service's Node                                                 | Driver                                               | Serving                         | Old release keeps serving                                                           | Same                                   |
+| 5. Write `.trial` (target, previous, build), then rename the link                                                                   | Driver                                               | Serving, from its own real path | Before the rename: old link. After: new link with a trial                           | A trial record                         |
+| 6. Ask the Gateway to drain and restart                                                                                             | Driver to Gateway                                    | Draining                        | The link has moved, so the next start by anyone runs the trial                      | Same                                   |
+| 7. Start                                                                                                                            | Launcher                                             | **Down**                        | Counted. A second failed start goes to step 9                                       | An attempt count                       |
+| 8. Upgrade state when a database is older than the build: copy, migrate the copy, validate, write the plan, rename                  | New Gateway, under the Gateway lock                  | **Down**                        | Before the plan is durable: live state untouched. After: the next start finishes it | `.upgrade-*` or `.pre-<build>` files   |
+| 9. Ready: delete `.trial`. Or two failed starts: rename `.pre-<build>` files back, remove what the plan added, rename the link back | New Gateway, or launcher                             | Up again                        | Both are reruns of the same idempotent step                                         | Nothing, or the old release serving    |
+| 10. Report, converge plugins, collect releases, settle owed steps                                                                   | New Gateway once ready; a terminal driver reports it | Serving                         | Recorded as owed. Never undoes the update                                           | The run record                         |
 
 **Commit points.** There are two, both one rename, both owned by the code that
 performs them. The link rename (step 5) commits the code. The plan file (step 8)
@@ -155,11 +155,17 @@ The driver adds nothing to recovery: if it dies after step 5, the Gateway's own
 restart check sees the link move, and the Gateway or the launcher settles the
 trial without it.
 
-**Entry points.** The driver never stops the service and holds nothing a
-restart would kill, so it can run inside the service's own process group. The
-Control UI, automatic updates, and the Gateway tool start the same command as a
-child and read its run record. The managed-service handoff exists because the
-current updater must outlive a service it stops. It has no job here.
+**Entry points.** The driver never stops the service. Started from a terminal
+it outlives the restart, waits for the trial to settle, and reports. Started by
+the Gateway (Control UI, automatic updates, the Gateway tool) it is a child in
+the service's control group, and the managed systemd unit uses
+`KillMode=mixed`, so the restart ends it. That is why step 10 belongs to the
+new Gateway and not to the driver: before it asks for the restart, the driver
+writes the run record with the target and what is still owed, and the new
+Gateway finishes that record when it becomes ready. The managed-service handoff
+exists because the current updater must stop the service and survive it, which
+takes a transient unit outside the Gateway's control group. With nothing left
+for the driver to do after the restart, it has no job here.
 
 **Accepted edge cases.**
 
@@ -183,12 +189,13 @@ old Gateway has exited before the new one starts, so the copy is taken with no
 writer and needs no second pass. This is why the copy sits in downtime: a copy
 taken while the old Gateway serves cannot be adopted.
 
-**What is copied.** The shared database and each agent database that is older
-than the build, the config file, and the credentials, identity, devices, and
-small JSON stores Doctor migrates. Not copied: workspaces, managed worktrees,
-media payloads, Knowledge stores, browser profiles, backups, caches, and
-`git-install`. A database above 64 MiB is copied only when its schema needs the
-upgrade.
+**What is copied.** Once any database is older than the build: the shared
+database, always, whatever its size or version; each outdated agent database;
+other SQLite files up to 64 MiB including their WAL and journal; and every
+other file in the state directory that is not excluded, which covers the
+config, credentials, identity, devices, and the JSON stores Doctor migrates.
+Excluded: workspaces, managed worktrees, media payloads, Knowledge stores,
+browser profiles, backups, caches, locks, temporary files, and `git-install`.
 
 **Where.** `<state dir>/.upgrade-<build>-<pid>-<time>/`, so the swap is a rename
 on one filesystem. A config file outside the state directory is staged beside
@@ -202,7 +209,8 @@ will read it. A refused config publishes nothing.
 `<file>.pre-<build>`. A crash after the plan is finished by the next start. A
 failed trial renames the files back.
 
-**Disk.** Peak is the migrated databases twice, plus an equal scratch margin of
+**Disk.** Peak is everything in the copy scope above twice (on the host that
+motivated this work, the shared database plus a 9 GiB agent database), plus an equal scratch margin of
 at least 256 MiB, checked before the copy with exact byte counts in the refusal.
 A refusal changes nothing, and the launcher's second failed start switches back
 to the old release. Steady state today is also twice, because one `.pre-`
@@ -263,9 +271,12 @@ update-time adapter beyond "restart".
 - **Windows Scheduled Task:** the same command line. Not built.
 - **The CLI** finds the selected release through the `bin` launcher, whose text
   is the same in every release and resolves through the link.
-- **A running Gateway** finds the selected release by reading the link and
-  comparing it with its own real path. That check is what restarts it after a
-  switch.
+- **A running Gateway** finds the selected release by reading
+  `dist/build-info.json` through the link and comparing its version and build
+  with its own (`src/gateway/stale-install.ts`). A different build restarts
+  it. The check is skipped for a build without a build ID and while an update
+  run holds the installation, so the driver must release its lock before it
+  expects the restart.
 - **Node itself** is outside the release. A release that needs a newer Node is
   refused at admission, as today.
 
@@ -402,16 +413,16 @@ does not need to be rewritten for a downgrade.
 
 ### Config keys and flags
 
-| Surface                                                                                                                | Change                                                                                           |
-| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `update.channel`, `update.checkOnStart`, `update.auto.*`                                                               | Unchanged. No config migration.                                                                  |
-| `--channel`, `--tag`, `--dry-run`, `--json`, `--yes`, `--no-restart`, `--timeout`                                      | Unchanged. `--no-restart` leaves a pending trial for the next service start, as Git releases do. |
-| `--full-integrity-check`, `--accept-capabilities`, `--source-root`                                                     | Retired with the paths that read them, after the bridge.                                         |
-| `update repair`, `update recover`, `update migrate`, `update finish`, `update restore`, hidden `admit` and `preflight` | Retired after the bridge. `update repair` becomes "settle owed steps".                           |
-| `update cleanup`                                                                                                       | Kept. It lists and removes old-system artifacts and unselected releases.                         |
-| `update adopt-immutable`                                                                                               | [Decision 8](#decisions-needed).                                                                 |
-| `update status`                                                                                                        | Kept. Reports the link, the releases, the trial, and owed steps.                                 |
-| New config keys                                                                                                        | None proposed.                                                                                   |
+| Surface                                                                                                                | Change                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `update.channel`, `update.checkOnStart`, `update.auto.*`                                                               | Unchanged. No config migration.                                                                                                                            |
+| `--channel`, `--tag`, `--dry-run`, `--json`, `--yes`, `--no-restart`, `--timeout`                                      | Unchanged. `--no-restart` defers the switch to the next service start, which selects the release without the two-start fallback, as Git releases do today. |
+| `--full-integrity-check`, `--accept-capabilities`, `--source-root`                                                     | Retired with the paths that read them, after the bridge.                                                                                                   |
+| `update repair`, `update recover`, `update migrate`, `update finish`, `update restore`, hidden `admit` and `preflight` | Retired after the bridge. `update repair` becomes "settle owed steps".                                                                                     |
+| `update cleanup`                                                                                                       | Kept. It lists and removes old-system artifacts and unselected releases.                                                                                   |
+| `update adopt-immutable`                                                                                               | [Decision 8](#decisions-needed).                                                                                                                           |
+| `update status`                                                                                                        | Kept. Reports the link, the releases, the trial, and owed steps.                                                                                           |
+| New config keys                                                                                                        | None proposed.                                                                                                                                             |
 
 ### Docs to rewrite
 
@@ -445,7 +456,7 @@ past the bridge.
 The local branch name is fixed (`DEV_BRANCH = "main"` in
 `src/infra/update-channels.ts`), but the source is read from that branch's Git
 tracking configuration (`readGitUpdateFetchTarget` in
-`update-runner-git-target.ts`), and complete tracking configuration takes
+`update-git-metadata.ts`, called from `update-runner-git-target.ts`), and complete tracking configuration takes
 precedence over `origin/main`. A test installation therefore runs:
 
 ```bash
