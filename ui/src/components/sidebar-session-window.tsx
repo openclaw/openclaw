@@ -6,7 +6,7 @@ import { visibleSessionChildren, type SidebarRecentSession } from "./app-sidebar
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
 
 type WindowItem = { row: SidebarRecentSession; index: number; top: number; height: number };
-type GeometrySignature = [boolean] | [boolean, GeometrySignature[], boolean, string[]];
+type GeometrySignature = [boolean] | [boolean, GeometrySignature[], string[]];
 
 /** Bounded sidebar pages need only a prefix-height pass. The transcript's
  * general virtualizer stays out of the eager sidebar/New Session graph. */
@@ -41,7 +41,6 @@ export function createSidebarSessionWindow(
       session: row,
       fullyShown: host().isSessionChildrenFullyShown(row.key),
     }).map(describe);
-    const loading = row.loadingChildren && children.length === 0;
     const errors = (row.childLoadParentKeys ?? [row.key]).map(
       (key) => host().sessionData.childSessionErrorsByParent.get(key) ?? "",
     );
@@ -49,9 +48,8 @@ export function createSidebarSessionWindow(
       height:
         ownHeight +
         children.reduce((height, child) => height + child.height, 0) +
-        (children.length < row.children.length ? 28 : 0) +
-        (loading ? 32 : 0),
-      signature: [preview, children.map((child) => child.signature), loading, errors],
+        (children.length < row.children.length ? 28 : 0),
+      signature: [preview, children.map((child) => child.signature), errors],
     };
   };
   const inputs = createMemo(() => {
