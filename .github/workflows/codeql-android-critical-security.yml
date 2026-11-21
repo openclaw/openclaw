@@ -24,7 +24,8 @@ jobs:
     runs-on: >-
       ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && github.event_name == 'schedule' &&
           github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
-          'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404' }}
+          'boat-xlarge' || github.event_name == 'workflow_dispatch' &&
+          'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - name: Checkout
