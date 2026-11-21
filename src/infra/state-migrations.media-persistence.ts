@@ -12,13 +12,9 @@ import {
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   renewAgentDatabaseMaintenanceAuthorityIfPresent,
 } from "../state/openclaw-agent-db-lease.js";
-import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import {
-  assertOpenClawAgentDatabaseForMaintenance,
-  assertOpenClawAgentDatabaseOwner,
-} from "../state/openclaw-agent-db-maintenance.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps } from "../state/openclaw-agent-db-media-migration.js";
 import {
   registerOpenClawAgentDatabase,
@@ -29,7 +25,6 @@ import {
   assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   getOpenClawAgentMigrationSchema,
-  hasPendingCurrentVersionAgentDatabaseMigration,
 } from "../state/openclaw-agent-db-schema-helpers.js";
 import {
   ensureOpenClawAgentDatabaseSchemaSteps,
@@ -42,12 +37,10 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../state/openclaw-agent-db.js";
 import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
-import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { VERSION } from "../version.js";
-import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
@@ -81,6 +74,10 @@ import {
   hasMediaRowsMigrationReceipt,
   inspectPostgresMediaPersistence,
 } from "./state-migrations.media-persistence-inspection.js";
+import {
+  shouldClearAgentDatabaseOpenFailure,
+  shouldDeferUnchangedAgentDatabase,
+} from "./state-migrations.media-persistence-quarantine.js";
 import {
   listTranscriptArchives,
   prepareAgentDatabaseMigrationDiscovery,
@@ -147,18 +144,12 @@ async function migrateAgentDatabase(params: {
       assertSupportedAgentMigrationSchemas(database, params.pathname, userVersion);
     }
     if (
-      isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS) &&
-      userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-      !hasPendingCurrentVersionAgentDatabaseMigration(database) &&
-      !agentDatabaseLifecycle.terminal.peek(params.pathname) &&
-      !readOpenClawDatabaseQuarantineFailure("agent", params.pathname, {
-        env: params.env,
-        fresh: true,
-      }) &&
-      !assertOpenClawAgentDatabaseForMaintenance(database, {
+      shouldDeferUnchangedAgentDatabase({
         agentId: params.agentId,
+        database,
+        env: params.env,
         pathname: params.pathname,
-        allowStartupIndexRepair: true,
+        userVersion,
       })
     ) {
       // Unchanged stores keep their clean-close proof. Explicit Doctor owns
@@ -250,11 +241,10 @@ async function migrateAgentDatabase(params: {
       await prepareSchema();
     }
     if (
-      integrityChanges.length > 0 ||
-      agentDatabaseLifecycle.terminal.peek(params.pathname) ||
-      readOpenClawDatabaseQuarantineFailure("agent", params.pathname, {
+      shouldClearAgentDatabaseOpenFailure({
         env: params.env,
-        fresh: true,
+        hasIntegrityChanges: integrityChanges.length > 0,
+        pathname: params.pathname,
       })
     ) {
       runSqliteImmediateTransactionSync(
