@@ -206,27 +206,29 @@ export function enqueueSessionEventForHost(
       generationLease?.assertCurrent();
     }
   };
+  const captureSources = () =>
+    composeSessionSourceAssertion(
+      [
+        operatorAuthority?.assertCurrent,
+        accepted ? undefined : acceptanceAssertion,
+        options.assertCurrent,
+        options.expectedTarget?.assertCurrent,
+        options.scheduledAutomation?.assertCurrent,
+        createDynamicSessionSourceAssertion(
+          () => generationLease?.assertCurrent,
+          () => {
+            throw new Error("Session event destination authority changed");
+          },
+        ),
+      ],
+      (assertSources) => {
+        assertSources();
+        assertCurrent();
+      },
+    );
   Object.assign(assertCurrent, {
-    prepareSessionSourceEffect: () =>
-      composeSessionSourceAssertion(
-        [
-          operatorAuthority?.assertCurrent,
-          accepted ? undefined : acceptanceAssertion,
-          options.assertCurrent,
-          options.expectedTarget?.assertCurrent,
-          options.scheduledAutomation?.assertCurrent,
-          createDynamicSessionSourceAssertion(
-            () => generationLease?.assertCurrent,
-            () => {
-              throw new Error("Session event destination authority changed");
-            },
-          ),
-        ],
-        (assertSources) => {
-          assertSources();
-          assertCurrent();
-        },
-      ).prepareSessionSourceEffect(),
+    prepareSessionSourceEffect: () => captureSources().prepareSessionSourceEffect(),
+    prepareSessionSourceStorageEffect: () => captureSources().prepareSessionSourceStorageEffect(),
   });
   const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
     assertSource();

@@ -15,6 +15,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -56,6 +57,7 @@ import {
   runWorkflowShellScript,
   testNodeExecPath,
 } from "./ci-workflow.test-support.js";
+import { gitPathShimGuard } from "./git-path-shim.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -260,7 +262,7 @@ function configuredFixtureGit() {
   const lookupPath = process.env.PATH ?? "";
   let gitPath = fixtureGitPaths.get(lookupPath);
   if (!gitPath) {
-    gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    gitPath = realpathSync(execFileSync("which", ["git"], { encoding: "utf8" }).trim());
     fixtureGitPaths.set(lookupPath, gitPath);
   }
   return { gitPath, lookupPath };
@@ -479,7 +481,7 @@ function frozenWorkflowFixture(
   // forwarder during delegation, retaining the forbidden-command directory.
   writeExecutable(
     join(gitBin, "git"),
-    `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexport PATH=${shellEscape(`${bin}:${lookupPath}`)}\nexec ${shellEscape(gitPath)} "$@"\n`,
+    `#!/bin/sh\n${gitPathShimGuard}\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexport PATH=${shellEscape(`${bin}:${lookupPath}`)}\nexec ${shellEscape(gitPath)} "$@"\n`,
   );
   env.PATH = `${gitBin}:${bin}:${lookupPath}`;
   function admit(extra: Record<string, string> = {}, stepName = "Admit frozen source contracts") {
@@ -552,7 +554,7 @@ function traceContractAcquisition(
   // observation wrapper from the configured Git's backend lookup context.
   writeExecutable(
     join(bin, "git"),
-    `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]${oid ? ` && [ "$5" = '${oid}' ]` : ""}; then printf '%s\\n' "$5" >> '${requested}'; fi\nexport PATH=${shellEscape(lookupPath)}\nexec ${shellEscape(gitPath)} "$@"\n`,
+    `#!/bin/sh\n${gitPathShimGuard}\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]${oid ? ` && [ "$5" = '${oid}' ]` : ""}; then printf '%s\\n' "$5" >> '${requested}'; fi\nexport PATH=${shellEscape(lookupPath)}\nexec ${shellEscape(gitPath)} "$@"\n`,
   );
   const result = fixture.run(step, { PATH: `${bin}:${process.env.PATH}` });
   expect(result.status, result.stderr).toBe(0);
@@ -9155,6 +9157,7 @@ test "$package_manager" = "pnpm@12.1.0"
       'node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/lib/release-publish-gates.mts"',
       '--consumer publisher --manifest "$manifest"',
     ]);
+    expect(npmValidationStep.env?.GH_TOKEN).toBe("${{ github.token }}");
     expectTextToIncludeAll(npmValidationStep.run, [
       "node trusted-workflow/scripts/lib/release-publish-gates.mts",
       '--consumer core-npm --manifest "$MANIFEST_FILE"',
@@ -9506,7 +9509,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "release_execution_plan",
     ];
     expect(decision.uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85",
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36",
     );
     expect(drain.uses).toBe(decision.uses);
     expect(decision.with?.mode).toBe("decision");
@@ -15135,6 +15138,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       'node trusted-workflow/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}"',
     );
     for (const acquisition of [releaseManifest, npmManifest]) {
+      expect(acquisition.env?.GH_TOKEN).toBe("${{ github.token }}");
       expect(acquisition.run).toContain('--repo "${GITHUB_REPOSITORY}"');
       expect(acquisition.run).toContain("--expected-run-attempts-json");
       expect(acquisition.run).toContain('"${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"');
@@ -16193,7 +16197,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ) =>
       timeoutForProfile(
         workflow.jobs?.[job]?.uses ===
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85"
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36"
           ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
           : workflow.jobs?.[job]?.["timeout-minutes"],
         profile,

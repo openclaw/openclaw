@@ -11,7 +11,8 @@ title: "Managed worktrees"
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) also preserves the checkout if its recovery snapshot cannot be completed.
 
 Projects cloned by OpenClaw always start new sessions in managed worktrees,
-including requests that omit `worktree` or set it to `false`. The shared clone is
+including when a saved folder points to the clone root. Omitting `worktree` or
+setting it to `false` does not opt out. The shared clone is
 the maintenance-owned source for refreshes, Git objects, and templates. The
 project picker offers **New worktree** for these clones; explicitly registered
 folders and agent workspaces can still use **Current checkout**. Opening a
@@ -931,13 +932,18 @@ Retired-tree deletion pauses for 100 ms between batches of at most 128 entries
 or 8 MiB of apparent file bytes. An individual larger file occupies its own batch;
 file sizes do not measure physical space reclaimed from shared extents. Between
 batches, the existing host pressure probe checks sustained I/O stalls and current
-or recent slow btrfs commits. Deletion waits in five-second intervals while that
-signal persists, even when PSI is low. On Linux, deletion also checks the retired
+or recent slow btrfs commits. On Linux, a current or newly observed commit taking
+at least 500 ms yields the pass even when PSI is low. Deletion also checks the retired
 root's btrfs metadata reservation counter: it pauses at 40 GiB and resumes below
 20 GiB, allowing delayed-reference work to drain even when commits remain fast.
-Missing or inaccessible counters leave ordinary pacing in place. Background deletion has a separate
-30-minute timeout, including pressure waits. Pacing bounds unlink bursts, but does not
-guarantee the latency of a filesystem transaction shared with other writers.
+Missing or inaccessible counters leave ordinary pacing in place. Linux removal
+passes yield after 30 seconds or observed pressure. The serialized deletion owner
+then leaves the queue quiet for 30 seconds and resumes the remaining files behind
+already queued siblings. Resumed passes wait below the 20 GiB reservation watermark;
+completed historical commit samples do not repeatedly block them. Pending ownership
+protects unfinished trees from orphan GC across passes. Each child retains a separate
+30-minute timeout for stalled operations; a single filesystem call can exceed the
+pass budget. Pacing bounds unlink bursts, but does not guarantee the latency of a filesystem transaction shared with other writers.
 
 Orphan cleanup shares the serialized, paced deletion worker and leaves queued or active background deletions with their owner. Interrupted deletion can be reclaimed by a later orphan sweep. Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
 

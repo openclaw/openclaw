@@ -53,6 +53,50 @@ it("omits native progress for OCM-managed runs", () => {
   expect(view.headline).toContain("managed by OCM");
 });
 
+it("identifies a serving target without treating a different build or rollback as recovery", () => {
+  const version = "1.0.0";
+  const attempt = run({
+    status: "failed",
+    reason: "post-update-failed",
+    target: { kind: "git", sha: "target" },
+    before: { version, buildId: "previous" },
+    after: { version, sha: "target", buildId: "candidate" },
+    verification: { serviceRunning: true, runningVersion: version, runningBuildId: "previous" },
+  });
+  const serving = { version, buildId: "candidate" };
+  const report = (patch: Partial<Run> = {}, gateway = serving) =>
+    projectUpdateRun({ ...attempt, ...patch }, true, gateway).report;
+  expect(report().headline).toContain("Last update run failed (post-update-failed)");
+  expect(report().lines).toContain("The Gateway is now serving the update target.");
+  expect(report({}, { version, buildId: "unrelated" }).lines).toEqual([]);
+  expect(report({ target: { kind: "git", sha: "different" } }).lines).toEqual([]);
+  expect(report({ before: { version, buildId: "candidate" } }).lines).toEqual([]);
+  for (const receipt of [
+    { rollbackOutcome: { status: "failed", reason: "restore" } },
+    { rollbackOutcome: { status: "succeeded", reason: "restore" } },
+    { recovery: { serviceRestartSafe: true, version, packageRollbackVerified: true } },
+  ] as const) {
+    expect(report({ verification: { ...attempt.verification, ...receipt } }).lines).toEqual([]);
+  }
+});
+
+it("accepts an exact package target version only when a build was not required", () => {
+  const version = "2.0.0";
+  const attempt = run({
+    status: "failed",
+    reason: "version-mismatch",
+    target: { kind: "package", version },
+    after: { version },
+    verification: { serviceRunning: true, runningVersion: "1.0.0" },
+  });
+  const lines = (patch: Partial<Run> = {}) =>
+    projectUpdateRun({ ...attempt, ...patch }, true, { version }).report.lines;
+  expect(lines()).toContain("The Gateway is now serving the update target.");
+  expect(lines({ reason: "build-id-mismatch" })).toEqual([]);
+  expect(lines({ after: { version, buildId: "expected" } })).toEqual([]);
+  expect(lines({ target: { kind: "git" } })).toEqual([]);
+});
+
 it("retains a recorded repair phase after the run has finished", () => {
   const view = project({
     phase: "finished",

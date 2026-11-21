@@ -425,14 +425,8 @@ export async function executeCliProcess(params: {
         );
         const managedRun = await withChildProcessOperation("agent.cli", () =>
           supervisor.spawn({
-            prepareSpawn: params.argsPrompt ? context.cliHistoryWriter?.assertReadable : undefined,
             prepareTargetSpawn: context.preparedBackend.prepareCredentialUse,
-            prepareInput: params.stdin
-              ? async () => {
-                  await context.cliHistoryWriter?.assertReadable();
-                  await context.preparedBackend.prepareCredentialUse?.();
-                }
-              : undefined,
+            prepareInput: params.stdin ? context.preparedBackend.prepareCredentialUse : undefined,
             runId: runParams.runId,
             scopeKey,
             replaceExistingScope: Boolean(params.useResume && scopeKey),
