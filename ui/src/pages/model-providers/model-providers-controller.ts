@@ -635,7 +635,7 @@ export function createModelProviders(
     const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
-      onConnectProvider: () => void login.connectProvider(values.configuredModels),
+      onConnectProvider: () => void login.open(),
       accountUsage:
         !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
           ? {

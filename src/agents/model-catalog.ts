@@ -21,7 +21,7 @@ import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-ca
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
-import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-selection-normalize.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { AuthStorageData } from "./sessions/index.js";
