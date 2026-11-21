@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
-import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
+import { loadProxyline } from "../infra/net/proxyline-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
@@ -222,6 +222,8 @@ export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
   protocol?: "http" | "https";
 }): Promise<TAgent | undefined> {
   const protocol = params?.protocol ?? "https";
+  // Generic SDK helpers must not initialize proxy transport at module load.
+  const { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } = loadProxyline();
   if (!hasAmbientNodeProxyConfigured({ protocol })) {
     return undefined;
   }
