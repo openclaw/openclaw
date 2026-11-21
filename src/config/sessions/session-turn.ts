@@ -8,11 +8,6 @@ import {
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
-  answerCliHistoryOwnerProbe,
-  cliHistoryWriterFacts,
-  getCliHistoryWriter,
-} from "./cli-history-boundary.js";
-import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
@@ -90,7 +85,6 @@ export async function appendSessionTurnInWorker(
   const execution = inputActor ? undefined : captureOpenClawAgentDatabaseExecution(database);
   const ownerSource = options.ownerSource;
   const custody = captureSessionPendingInputWorkerCustody();
-  const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
   const mentionCommitGuards: Array<(() => void) | undefined> = [];
@@ -106,7 +100,6 @@ export async function appendSessionTurnInWorker(
     if (options.sessionTurnMutation) {
       assertSessionGoalOperationTime(options.sessionTurnMutation.operation, Date.now());
     }
-    cliWriter?.assertCurrent();
     for (const guard of freshCommitGuards) {
       guard();
     }
@@ -139,8 +132,6 @@ export async function appendSessionTurnInWorker(
           }
         : undefined,
     },
-    // The worker asks the host to confirm the owner inside its commit transaction.
-    cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     ownerSources: ownerSource?.checks.map(({ predicate }) => predicate),
     custody: custody?.facts,
     relocation: custody?.relocation,
@@ -170,7 +161,6 @@ export async function appendSessionTurnInWorker(
     !actor &&
     !memory &&
     !custody &&
-    !cliWriter &&
     !options.sessionTurnMutation &&
     !options.sessionLifecyclePatch &&
     !options.initialSessionEntry &&
@@ -245,9 +235,6 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(this: void, facts) {
-        if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
-          return true;
-        }
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
           if (!ownerSource) {
             throw new Error("Session turn omitted its owner source authority");

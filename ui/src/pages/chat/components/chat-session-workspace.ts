@@ -56,8 +56,8 @@ export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    sessionWorkspaceForHost(state).publish();
   }
+  sessionWorkspaceForHost(state).publish();
 }
 
 async function readWorkspaceContent<T>(
@@ -67,6 +67,7 @@ async function readWorkspaceContent<T>(
 ): Promise<T | null> {
   const client = state.client;
   const {
+    checkFileLinkAvailability,
     downloadSessionFile,
     loadSessionWorkspaceArtifactContent,
     loadSessionWorkspaceFileContent,
@@ -74,6 +75,7 @@ async function readWorkspaceContent<T>(
   // Loading code cannot transfer an admitted preview to a replacement connection or checkout.
   return state.connected && state.client === client && isCurrentSessionWorkspace(state, workspace)
     ? read({
+        checkFileLinkAvailability,
         downloadSessionFile,
         loadSessionWorkspaceArtifactContent,
         loadSessionWorkspaceFileContent,
@@ -196,6 +198,21 @@ export function openSessionWorkspaceFile(
     disposition,
     messageEntryId: source?.messageEntryId ?? target.messageEntryId,
     relativeTo: document,
+  });
+}
+
+/** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
+export function checkSessionWorkspaceFileLinks(
+  state: SessionWorkspaceHost,
+  links: HTMLElement[],
+  scope: string,
+) {
+  const workspace = getSessionWorkspace(state);
+  readWorkspaceContent(state, workspace, (runtime) =>
+    runtime.checkFileLinkAvailability(state, workspace, links, scope),
+  ).catch(() => {
+    // Links stay usable when the check cannot load. main.ts owns lazy-chunk fetch
+    // recovery through the Vite preload-error listener.
   });
 }
 
@@ -656,4 +673,25 @@ export function resolveSessionDiffSidebarContent(
       }
     },
   );
+}
+
+/** One permission scope drives both retained Markdown restoration and availability answers. */
+export function sessionWorkspaceFileLinkProps(
+  state: SessionWorkspaceHost,
+  session: { permissionMode?: string | null } | null | undefined,
+  picker: { defaultMode?: string | null } | undefined,
+) {
+  const scope = JSON.stringify([
+    session?.permissionMode,
+    picker?.defaultMode,
+    state.sessionWorkspaceState?.fileLinksRevision ?? 0,
+  ]);
+  return {
+    workspaceFileLinkScope: scope,
+    onWorkspaceFileLinks: (links: HTMLElement[]) =>
+      checkSessionWorkspaceFileLinks(state, links, scope),
+    onOpenWorkspaceFile: (target: WorkspaceFileLinkTarget) =>
+      void openSessionWorkspaceFile(state, target),
+    onOpenManagedArtifact: (href: string) => openSessionWorkspaceManagedArtifact(state, href),
+  };
 }

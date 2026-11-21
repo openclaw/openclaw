@@ -42,7 +42,11 @@ import {
   compactCronAttentionJob,
 } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
-import { retainedDismissals, resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import {
+  resolveSidebarHistoricalUpdateAttention,
+  resolveSidebarUpdateAttention,
+  retainedDismissals,
+} from "./sidebar-attention-update.ts";
 
 type SidebarAttentionOwner = {
   connectionRevision: number;
@@ -298,6 +302,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
+    const historicalUpdate = resolveSidebarHistoricalUpdateAttention(this.sources);
     // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
     const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
       ? null
@@ -315,7 +320,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
-      attention: [...attention, ...(this.#openClawIdAttention?.items(now) ?? [])],
+      attention: [
+        ...attention,
+        ...(historicalUpdate ? [historicalUpdate] : []),
+        ...(this.#openClawIdAttention?.items(now) ?? []),
+      ],
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,

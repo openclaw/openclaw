@@ -451,7 +451,10 @@ Deferred names are catalog entries, not directly callable functions in this
 mode. Put the result ID or name in `dispatch_action.id` and all target parameters in
 `dispatch_action.args`, including when other instructions refer to the deferred tool
 by name. A compact search signature may be enough to call it; use
-`tool_describe` when the full schema is needed.
+`tool_describe` when the full schema is needed. In the embedded harness, a direct
+call to a unique deferred catalog name returns guidance to use `dispatch_action`
+without executing or exposing the tool directly. Unknown names, names removed by
+policy, and names requiring an exact ID still return not-found errors.
 
 ### Batch search
 

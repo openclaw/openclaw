@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { vi, type TestContext } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
@@ -7,11 +9,13 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
@@ -22,6 +26,28 @@ import {
   bindWebSocketRequestMutationAuthority,
 } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
+
+export async function createApprovalSessionFixture(
+  test: TestContext,
+  sessionKey = "agent:main:approval-fixture",
+  creatorProfileId = "session-creator",
+) {
+  const state = await createOpenClawTestState({
+    label: "approval-session",
+    prepareProfileCatalog: true,
+  });
+  test.onTestFinished(() => state.cleanup());
+  setRuntimeConfigSnapshot({});
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: "approval-session",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: creatorProfileId },
+    },
+  );
+  return { ...state, sessionKey };
+}
 
 export function getOperatorApproval(
   params: Parameters<typeof getOperatorApprovalDetailedInDatabase>[0],
@@ -60,6 +86,7 @@ export function corruptDurableApprovalPresentation(
 export function createClient(params: {
   scopes?: string[];
   deviceId?: string;
+  profileId?: string;
   internal?: boolean;
   connId?: string;
 }): GatewayWsClient {
@@ -69,6 +96,9 @@ export function createClient(params: {
     clientInfo: { id: "approval-test", mode: "backend" },
   });
   client.connect.client.displayName = "Approval Test";
+  if (params.profileId) {
+    client.authenticatedUserProfile = dispatchProfile(params.profileId);
+  }
   if (params.deviceId) {
     client.connect.device = {
       id: params.deviceId,

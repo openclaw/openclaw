@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { receiveMessageOnPort, threadId } from "node:worker_threads";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
+import { POSTGRES_STATEMENT_TIMEOUT_MS } from "../database-engine/policy.js";
 import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
 import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
@@ -183,7 +184,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (id > 2_147_483_647) {
       throw this.loseConnection();
     }
-    const deadline = performance.now() + 120_000;
+    // 120s with the runtime statement timeout; the worker retires a silent
+    // connection before this deadline resets its whole service.
+    const deadlineMs =
+      (this.bridgeParameters.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS) + 30_000;
+    const deadline = performance.now() + deadlineMs;
     const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
       (this.idleCheckout !== undefined || retainedIdle) &&
@@ -202,6 +207,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         ...(reconnectIfIdle ? { reconnectIfIdle } : {}),
         ...(validateIfIdle ? { validateIfIdle } : {}),
         id,
+        deadlineMs,
       },
       [],
     );

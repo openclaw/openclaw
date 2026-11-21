@@ -67,10 +67,11 @@ async function createOwner(
   context.effectiveAuthProfileId = options.authProfileId;
   context.preparedBackend.mcpConfigHash = options.mcpConfigHash;
   if (options.nativeLogin) {
-    context.cliHistoryWriter = {
-      authFingerprint: options.nativeLogin,
+    context.cliHistoryAdmission = {
+      replaysHistory: true,
+      accountFingerprint: options.nativeLogin,
       bindsNativeLogin: true,
-    } as NonNullable<typeof context.cliHistoryWriter>;
+    };
   }
   admissions.push(admission);
   context.params.admittedRunContext = await admission.admit("plugin-harness");

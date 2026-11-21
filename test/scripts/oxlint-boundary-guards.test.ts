@@ -15,6 +15,8 @@ const cases = [
   ],
   [forcedExit, "forced-process-exit-violation.cjs", 6, [3, 4, 5, 6, 7, 9]],
   [forcedExit, "forced-process-exit-violation.mjs", 2, [2, 4]],
+  [forcedExit, "forced-process-escaped.ts", 5, [2, 4, 5, 6, 8]],
+  [forcedExit, "forced-process-uppercase.ts", 1, [1]],
   [forcedExit, "../forced-process-exit.test-support.cjs", 0],
   ["no-register-http-handler-call", "register-http-handler-violation.ts", 3],
   ["no-raw-window-open-call", "raw-window-open-violation.ts", 5],
@@ -60,6 +62,7 @@ it.each([
   const listeners = noForcedProcessExit.create({
     cwd: process.cwd(),
     physicalFilename: `${process.cwd()}/${file}`,
+    sourceCode: { text: "process.exit(1);", scopeManager: { scopes: [] } },
     report() {
       reported = true;
     },
@@ -73,6 +76,36 @@ it.each([
   });
   expect(reported).toBe(expected);
 });
+
+it("does not analyze scopes for unrelated destructuring", () => {
+  let scopeReads = 0;
+  const listeners = noForcedProcessExit.create({
+    cwd: process.cwd(),
+    physicalFilename: `${process.cwd()}/src/runtime.ts`,
+    sourceCode: {
+      text: 'const { pid } = process; process.on("exit", cleanup);',
+      scopeManager: {
+        get scopes() {
+          scopeReads += 1;
+          return [];
+        },
+      },
+    },
+    report() {
+      throw new Error("Unrelated destructuring must not be reported");
+    },
+  });
+  expect(typeof listeners.VariableDeclarator).toBe("function");
+  listeners.VariableDeclarator?.({
+    init: { type: "Identifier", name: "process", start: 16 },
+    id: {
+      type: "ObjectPattern",
+      properties: [{ type: "Property", key: { type: "Identifier", name: "pid" }, computed: false }],
+    },
+  });
+  expect(scopeReads).toBe(0);
+});
+
 let diagnostics: Array<{
   filename: string;
   code: string;

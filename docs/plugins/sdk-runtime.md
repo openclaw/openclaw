@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
+policy as `ResourceProfile` (`"standard" | "lean"`):
+
+```typescript
+import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+
+const profile = getResourceProfile();
+const unsubscribe = onResourceProfileChange((nextProfile) => {
+  // Update plugin-owned resource policy; let admitted work settle first.
+  applyResourcePolicy(nextProfile);
+});
+api.lifecycle.onDispose(unsubscribe);
+```
+
+Reads return the Gateway owner's resolved decision, without inspecting config,
+memory or CPUs again. Before Gateway initialization and in standalone commands,
+the default is `standard`. The subscription observes future changes only; it
+does not immediately call the listener. Listeners run synchronously after the
+new value is visible, and one listener throwing does not stop the others.
+Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+
+`gateway.resources.profile` still requires a Gateway restart. This signal does
+not enable hot configuration changes or grant execution authority. Plugins own
+their policy: lean can defer optional startup and retire idle resources, but
+must preserve watches, accepted operations and durable maintenance obligations.
+
 ## Settled agent lifecycle events
 
 Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
@@ -1104,7 +1132,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
