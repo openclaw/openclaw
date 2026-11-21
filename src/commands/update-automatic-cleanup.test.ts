@@ -291,7 +291,7 @@ it("retires remounted recovery after its Gateway writes the destination", async 
   expect(fs.existsSync(firstCapture)).toBe(false);
   expect(fs.existsSync(backup)).toBe(false);
   expect([secondCapture, failedCapture, orphan].map(fs.existsSync)).toEqual([true, true, true]);
-  expect(doctors.map(fs.existsSync)).toEqual([false, false, true, true, true]);
+  expect(doctors.map(fs.existsSync)).toEqual([false, false, false, true, true]);
 });
 
 it.each(["archive", "interrupted claim"] as const)(

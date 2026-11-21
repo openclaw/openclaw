@@ -69,7 +69,7 @@ it("retains an original capture that completes after the former ten-minute deadl
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let elapsed = 0;
     vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(retention, "retireExpiredStandaloneDoctorCaptures").mockResolvedValue({
+    vi.spyOn(retention, "retireSupersededStandaloneDoctorCaptures").mockResolvedValue({
       retired: [],
       warnings: [],
     });
@@ -232,7 +232,7 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         return captured(directory);
       });
     const retire = vi
-      .spyOn(retention, "retireExpiredStandaloneDoctorCaptures")
+      .spyOn(retention, "retireSupersededStandaloneDoctorCaptures")
       .mockResolvedValue({ retired: [], warnings: [] });
     await captureOriginal(process.cwd());
     expect(capture).toHaveBeenCalledOnce();
@@ -243,7 +243,7 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
     await captureOriginal(process.cwd());
     expect(capture).toHaveBeenCalledOnce();
     expect(log).not.toHaveBeenCalled();
-    // Repeat starts keep the container's capture while older ones still age out.
+    // Repeat starts keep the container's capture while older ones are still retired.
     expect(retire).toHaveBeenCalledTimes(2);
     expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
 
