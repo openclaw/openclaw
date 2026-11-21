@@ -1,5 +1,37 @@
 # Team-shaped synthetic state
 
+## Installed plugin-prefetch update pairs
+
+Run the existing update-generation entrypoint in `plugin-prefetch` mode with three
+canonical self-contained package artifacts (released driver, baseline, candidate):
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/update-doctor-generation-measure.ts \
+  prefetch-v1 plugin-prefetch 5 . \
+  /path/to/released-driver.tgz /path/to/baseline.tgz /path/to/candidate.tgz
+```
+
+Use a new label: the workload refuses existing output directories. It creates ten
+private installations and synthetic state under `.artifacts/update-plugin-prefetch-<label>`,
+runs serial AB pairs, and retains logs, exact inputs, per-case verification and a summary.
+It never targets an existing Gateway. Linux is currently required for process ownership
+verification. Setup and preservation checks are excluded from native run timing.
+
+The fixed shape is four npm plugins (128 × 8-KiB files each), 192 MiB synthetic
+SQLite payload and 4,096 ordinary 1-KiB files. Selected plugin archives start cold
+and each receives a three-second transport delay. Artifact hashes, actual load,
+visible cgroup counters and harness resource usage accompany every sample; the
+counters do not prove exclusive host access or provide per-descendant profiling.
+
+Declare acceptance in the PR before running. Counts and unchanged final content
+come first: four selected archive GETs, candidate zero after readiness loss, exact
+versions/integrities and preserved databases/files. Report native total-update and
+observed readiness downtime separately, with five paired samples, median, p95 and
+spread. Readiness is sampled every 200 ms with a 500-ms deadline. The initial rule
+requires at least 8.4 seconds median downtime reduction without total median/p95
+regression; any worse metric needs explicit owner acceptance. This is an opt-in
+workload, not a CI performance gate or an automatic rollback test.
+
 ## Audit retention page reads
 
 `audit-retention-fixture.mjs` expands a small database created by the real audit

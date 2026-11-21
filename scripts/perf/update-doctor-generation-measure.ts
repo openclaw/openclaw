@@ -15,6 +15,16 @@ const generationOnly = process.argv[3] === "generations-only";
 const samples = Number(process.argv[4] ?? 5);
 assert.ok(Number.isSafeInteger(samples) && samples > 0);
 const sourceRoot = path.resolve(process.argv[5] ?? ".");
+if (process.argv[3] === "plugin-prefetch") {
+  const { measurePluginPrefetch } = await import("./update-plugin-prefetch-measure.ts");
+  const [driver, baseline, candidate] = process.argv.slice(6);
+  assert.ok(
+    driver && baseline && candidate,
+    "Provide released driver, baseline and candidate tarballs",
+  );
+  await measurePluginPrefetch({ label, samples, sourceRoot, driver, baseline, candidate });
+  process.exit(0);
+}
 if (process.argv[3] === "stopped-backup-phases") {
   const { measureStoppedBackupPhases } = await import("./stopped-backup-measure.ts");
   await measureStoppedBackupPhases({

@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredNpmPluginTargets } from "../../commands/doctor/shared/missing-configured-plugin-install.targets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
+import {
+  packNpmSpecToArchive,
+  resolveNpmSpecMetadata,
+  withInstallWorkspace,
+} from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -42,6 +46,8 @@ export async function preflightConfiguredNpmPluginTargets(
   params: Omit<Parameters<typeof collectConfiguredNpmPluginTargets>[0], "targetVersion"> & {
     targetVersion: string | null;
     timeoutMs: number;
+    /** Download only; normal post-core installation still owns every activation decision. */
+    prefetch?: boolean;
   },
 ): Promise<PluginUpdateWarning[]> {
   return await withCommandProcessScope(async () => {
@@ -51,6 +57,9 @@ export async function preflightConfiguredNpmPluginTargets(
     }
     return await withOwnedManagedUpdateEnv(params.env, async () => {
       const warnings: PluginUpdateWarning[] = [];
+      // A configured operator policy owns admission before package side effects. Leave its
+      // download with the installer rather than running policy commands during preflight.
+      const prefetch = params.prefetch && params.config.security?.installPolicy?.enabled !== true;
       const installRecords =
         params.installRecords ??
         (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
@@ -68,9 +77,11 @@ export async function preflightConfiguredNpmPluginTargets(
         const manifest = record?.installPath
           ? readInstalledPackageManifest(record.installPath)
           : undefined;
+        const installedVersion =
+          typeof manifest?.version === "string" ? manifest.version : undefined;
         const requirement = incompatibleRequirement(manifest?.openclaw, targetVersion, true);
-        // Availability and retention belong to post-core sync; a healthy plugin needs no network gate.
-        if (!requirement || typeof manifest?.version !== "string") {
+        // Preview keeps its metadata-only contract. Downloads are best-effort preparation, not admission.
+        if (!prefetch && (!requirement || !installedVersion)) {
           continue;
         }
         let requiredSpec = target.spec;
@@ -95,9 +106,47 @@ export async function preflightConfiguredNpmPluginTargets(
               targetVersion,
             );
             if (!candidateRequirement) {
-              continue;
+              const metadata = resolution.metadata;
+              if (
+                !prefetch ||
+                !metadata.resolvedSpec ||
+                !metadata.integrity ||
+                metadata.version === installedVersion
+              ) {
+                continue;
+              }
+              const pinnedSpec = metadata.resolvedSpec;
+              // npm owns the integrity-addressed transport cache across the fresh post-core
+              // process. The private pack output is disposable; no install, extraction or hooks
+              // run here. A changed plan or evicted cache uses the normal download path.
+              try {
+                const packed = await withInstallWorkspace("openclaw-plugin-prefetch-", (cwd) =>
+                  packNpmSpecToArchive({
+                    spec: pinnedSpec,
+                    timeoutMs: params.timeoutMs,
+                    workTimeoutMs: params.timeoutMs,
+                    cwd,
+                  }),
+                );
+                if (
+                  packed.ok &&
+                  packed.metadata.resolvedSpec === pinnedSpec &&
+                  packed.metadata.integrity === metadata.integrity
+                ) {
+                  continue;
+                }
+                failure = packed.ok
+                  ? "Downloaded archive does not match the selected version and integrity"
+                  : packed.error;
+              } catch (error) {
+                if (hasCommandProcessCleanupError(error)) {
+                  throw error;
+                }
+                failure = `download preparation failed: ${formatErrorMessage(error)}`;
+              }
+            } else {
+              failure = `resolved plugin requires ${candidateRequirement}`;
             }
-            failure = `resolved plugin requires ${candidateRequirement}`;
           }
         } catch (error) {
           if (
@@ -110,8 +159,8 @@ export async function preflightConfiguredNpmPluginTargets(
         }
         warnings.push({
           pluginId: target.pluginId,
-          reason: `Installed ${manifest.version} requires ${requirement}; ${requiredSpec}: ${failure}`,
-          message: `Plugin "${target.pluginId}" update availability could not be confirmed; the core update can continue.`,
+          reason: `${requirement && installedVersion ? `Installed ${installedVersion} requires ${requirement}; ` : ""}${requiredSpec}: ${failure}`,
+          message: `Plugin "${target.pluginId}" update ${prefetch ? "download" : "availability"} could not be confirmed; the core update can continue.`,
           guidance: [],
         });
       }

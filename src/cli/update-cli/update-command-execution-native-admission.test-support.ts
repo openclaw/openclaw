@@ -37,8 +37,9 @@ async function executeOwned(
   const control = path.join(dir, "leases");
   await fs.mkdir(control);
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-  params.opts.run = { runId, env };
+  const ownedEnv = { ...env, XDG_CACHE_HOME: path.join(dir, "cache") };
+  const runId = createUpdateRun({ trigger: "cli" }, { env: ownedEnv }).runId;
+  params.opts.run = { runId, env: ownedEnv };
   return withUpdateCommandExecutor(runId, async (executor) => {
     mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
       admitExecutor(await executor.enter(params.root));
