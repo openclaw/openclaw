@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.MainViewModel.GatewayAdditionRequest
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
@@ -86,13 +87,18 @@ internal fun GatewayAdditionDialog(
   }
   val scanner = remember(request) { createSetupBarcodeScanner() }
   val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
+  val proxySaveFailure by request.proxySaveFailure.collectAsState()
+  val savingProxy = handoff.pending && proxySaveFailure == null
   val gateways by viewModel.pairedGateways.collectAsState()
 
   fun isCurrent() = active.get() && viewModel.gatewayAdditionRequest.value === request
 
-  fun cancel() = viewModel.dismissGatewayAddition(request)
+  fun cancel() {
+    if (!savingProxy) viewModel.dismissGatewayAddition(request)
+  }
 
   fun back() {
+    if (savingProxy) return
     step =
       when (val current = step) {
         is GatewayAdditionStep.Review -> {
@@ -138,7 +144,12 @@ internal fun GatewayAdditionDialog(
         GatewayAdditionStep.Review(config, previous)
       } else {
         val source = if (previous is GatewayAdditionStep.Code) GatewayEndpointInputSource.SETUP_CODE else GatewayEndpointInputSource.QR_SCAN
-        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
+        val expired =
+          decoded.setupCode
+            ?.let(::decodeGatewaySetupCode)
+            ?.expiresAtMs
+            ?.let { it <= System.currentTimeMillis() } == true
+        val message = if (expired) nativeString("Setup code expired. Generate a fresh code with openclaw qr.") else gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
         if (previous is GatewayAdditionStep.Code) GatewayAdditionStep.Code(message) else GatewayAdditionStep.ScanError(message)
       }
   }
@@ -199,7 +210,7 @@ internal fun GatewayAdditionDialog(
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-          IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, nativeString("Back")) }
+          IconButton(onClick = ::back, enabled = !savingProxy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, nativeString("Back")) }
           Text(nativeString("Add Gateway"), style = ClawTheme.type.title)
         }
         when (val current = step) {
@@ -282,21 +293,30 @@ internal fun GatewayAdditionDialog(
           is GatewayAdditionStep.Review -> {
             val config = current.config
             val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
+            var proxyAction by remember(config) { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
+            GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), proxyAction, { proxyAction = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId), enabled = !handoff.pending)
             Text(nativeString("Connect to this gateway?"), style = ClawTheme.type.section)
             Text((if (config.tls) "wss://" else "ws://") + formatGatewayAuthority(config.host, config.port) + config.contextPath, modifier = Modifier.testTag("gateway-add-preview"))
             Text(nativeString("Your current connection stays unchanged until you choose Connect."), style = ClawTheme.type.body)
             if (gateways.any { it.stableId == endpoint.stableId }) {
               Text(nativeString("Already saved. Your saved connection settings will be used."), style = ClawTheme.type.caption)
             }
+            proxySaveFailure?.let { failure ->
+              Text(
+                if (failure == GatewayProxySaveResult.ACCOUNT_LOCKED) gatewayProxyAccountLockedMessage() else nativeString("Could not save proxy login. Try again."),
+                color = ClawTheme.colors.warning,
+                modifier = Modifier.testTag("gateway-add-proxy-error"),
+              )
+            }
             ClawPrimaryButton(
-              text = nativeString("Connect"),
+              text = if (proxySaveFailure == null) nativeString("Connect") else nativeString("Retry connection"),
               enabled = !handoff.pending,
-              onClick = { if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP), request) },
+              onClick = { if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP, proxyAction), request) },
               modifier = Modifier.fillMaxWidth().testTag("gateway-add-connect"),
             )
           }
         }
-        TextButton(onClick = ::cancel, modifier = Modifier.fillMaxWidth()) { Text(nativeString("Cancel")) }
+        TextButton(onClick = ::cancel, enabled = !savingProxy, modifier = Modifier.fillMaxWidth()) { Text(nativeString("Cancel")) }
       }
     }
   }

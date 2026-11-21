@@ -11,6 +11,8 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayHelloSummary
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -1842,6 +1844,26 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun proxyAccountCannotChangeUntilForgetClearsLocalChat() = runBlocking {
+    val app = RuntimeEnvironment.getApplication()
+    val prefs = testPrefs(app)
+    val cache = RecordingTranscriptCache().apply { failClear = true }
+    val runtime = trackRuntime(NodeRuntime(app, prefs, cache))
+    val endpoint = GatewayEndpoint.manual("gateway.example", 443, true)
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+    val device = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+    assertTrue(DeviceAuthStore(prefs).saveToken(endpoint.stableId, device, "operator", "paired-token"))
+    assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "secret")))
+    assertFalse(runtime.forgetGateway(endpoint.stableId))
+    assertNull(prefs.loadGatewayProxyCredentials(endpoint))
+    assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("bob", "other")))
+    cache.failClear = false
+    assertTrue(runtime.forgetGateway(endpoint.stableId))
+    assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
+    assertEquals(listOf(endpoint.stableId), cache.clearedGatewayIds)
+  }
+
+  @Test
   fun switchToUndiscoveredGatewayKeepsCurrentConnectionAndActiveGateway() {
     val (_, prefs, runtime) = gatewayFixture()
     neutralizeColdStartAutoConnect(runtime)
@@ -2972,6 +2994,7 @@ class GatewayBootstrapAuthTest {
 
   private class RecordingTranscriptCache : ChatTranscriptCache {
     val clearedGatewayIds = mutableListOf<String>()
+    var failClear = false
 
     override suspend fun loadLastDefaultAgentId(gatewayId: String): String? = null
 
@@ -3013,6 +3036,7 @@ class GatewayBootstrapAuthTest {
     ) = Unit
 
     override suspend fun clearGateway(gatewayId: String) {
+      check(!failClear) { "synthetic transcript clear failure" }
       clearedGatewayIds += gatewayId
     }
   }

@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup disableIfNoEncryptionCapabilities="true">
         <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="openclaw.node.secure.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="openclaw.node.secure.xml" />
     </device-transfer>
 </data-extraction-rules>

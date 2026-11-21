@@ -378,6 +378,9 @@ fun OnboardingFlow(
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
+    var pendingProxyReview by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+    var pendingProxyInputSource by remember { mutableStateOf(OnboardingGatewayInputSource.Manual) }
+    var pendingProxyName by remember { mutableStateOf<String?>(null) }
     var setupCode by rememberSaveable { mutableStateOf("") }
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
@@ -565,12 +568,27 @@ fun OnboardingFlow(
       inputSource: OnboardingGatewayInputSource,
       attemptedName: String? = null,
     ) {
-      setupErrorCode = OnboardingErrorCode.None
-      setupScanErrorCode = OnboardingErrorCode.None
-      attemptedGatewayName = attemptedName
-      lastGatewayInputSource = inputSource
-      viewModel.saveGatewayConfigAndConnect(plan)
-      step = OnboardingStep.Recovery
+      inlineQrScannerActive = false
+      pendingProxyReview = plan
+      pendingProxyInputSource = inputSource
+      pendingProxyName = attemptedName
+    }
+
+    pendingProxyReview?.let { plan ->
+      GatewayProxyConnectionReview(
+        viewModel = viewModel,
+        plan = plan,
+        onCancel = { pendingProxyReview = null },
+        onConnect = { confirmed ->
+          pendingProxyReview = null
+          setupErrorCode = OnboardingErrorCode.None
+          setupScanErrorCode = OnboardingErrorCode.None
+          attemptedGatewayName = pendingProxyName
+          lastGatewayInputSource = pendingProxyInputSource
+          viewModel.saveGatewayConfigAndConnect(confirmed)
+          step = OnboardingStep.Recovery
+        },
+      )
     }
 
     fun continueFromGatewayPairing() {
@@ -891,7 +909,8 @@ fun OnboardingFlow(
           statusText = statusText,
           serverName = serverName,
           attemptedGatewayName = attemptedGatewayName,
-          gatewayPaired = isConnected,
+          operatorConnected = isConnected,
+          nodeConnected = isNodeConnected,
           gatewayPairingCanContinue =
             isConnected &&
               gatewayPairingContinueDestination(
@@ -901,6 +920,46 @@ fun OnboardingFlow(
           gatewayConnectionProblem = gatewayConnectionProblem,
           onBack = ::goBack,
           onRetry = viewModel::refreshGatewayConnection,
+          onUseAuthenticatedSetup = {
+            // Never move a credential-bearing LAN code to an unconfirmed proxy destination.
+            setupCode = ""
+            token = ""
+            password = ""
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            inlineQrScannerActive = false
+            setupCodeEntryOpenedFromScanner = false
+            step = OnboardingStep.EnterSetupCode
+          },
+          onConfigureProxy = {
+            // Connection admission persists the target before connecting. Read its non-secret
+            // endpoint after recreation rather than retaining the credential-bearing setup plan.
+            val target = viewModel.pairedGateways.value.firstOrNull { it.stableId == viewModel.activeGatewayStableId.value }
+            val host = target?.host
+            val port = target?.port
+            if (target == null || host == null || port == null) {
+              step = OnboardingStep.Gateway
+            } else {
+              connectGateway(
+                plan =
+                  GatewayConnectPlan(
+                    config =
+                      GatewayConnectConfig(
+                        host = host,
+                        port = port,
+                        tls = target.tls,
+                        contextPath = target.contextPath,
+                        bootstrapToken = "",
+                        token = "",
+                        password = "",
+                      ),
+                    savedAuthAction = GatewaySavedAuthAction.PRESERVE,
+                  ),
+                inputSource = lastGatewayInputSource,
+                attemptedName = attemptedGatewayName,
+              )
+            }
+          },
           onEnterFingerprint = viewModel::enterGatewayFingerprintManually,
           onContinue = ::continueFromGatewayPairing,
         )
@@ -1803,11 +1862,14 @@ private fun GatewayRecoveryScreen(
   statusText: String,
   serverName: String?,
   attemptedGatewayName: String?,
-  gatewayPaired: Boolean,
+  operatorConnected: Boolean,
+  nodeConnected: Boolean,
   gatewayPairingCanContinue: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem?,
   onBack: () -> Unit,
   onRetry: () -> Unit,
+  onUseAuthenticatedSetup: () -> Unit,
+  onConfigureProxy: () -> Unit,
   onEnterFingerprint: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1826,6 +1888,10 @@ private fun GatewayRecoveryScreen(
     when {
       recoveryState == GatewayRecoveryUiState.Connected -> {
         nativeText("Gateway paired")
+      }
+
+      gatewayConnectionProblem?.requiresVerifiedSignIn == true -> {
+        nativeText("Verified sign-in required")
       }
 
       gatewayConnectionProblem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" -> {
@@ -1869,14 +1935,16 @@ private fun GatewayRecoveryScreen(
       statusText,
       serverName,
       attemptedGatewayName,
-      gatewayPaired,
+      operatorConnected,
+      nodeConnected,
       gatewayPairingCanContinue,
       gatewayConnectionProblem,
     ) {
       gatewayRecoveryDiagnosticText(
         statusText = statusText,
         gatewayName = recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName),
-        gatewayPaired = gatewayPaired,
+        operatorConnected = operatorConnected,
+        nodeConnected = nodeConnected,
         gatewayPairingCanContinue = gatewayPairingCanContinue,
         gatewayConnectionProblem = gatewayConnectionProblem,
       )
@@ -1899,6 +1967,13 @@ private fun GatewayRecoveryScreen(
     headline = recoveryTitle.resolveNativeTextResource(),
     message = recoveryMessage.resolveNativeTextResource(),
     actions = {
+      if (gatewayConnectionProblem?.code in setOf("PROXY_AUTH_REQUIRED", "PROXY_AUTH_CONFIGURATION")) {
+        ClawSecondaryButton(
+          text = nativeString("Configure proxy login"),
+          onClick = onConfigureProxy,
+          modifier = Modifier.onboardingActionButton(),
+        )
+      }
       primaryAction?.let { action ->
         OnboardingActions {
           ClawPrimaryButton(
@@ -1909,6 +1984,7 @@ private fun GatewayRecoveryScreen(
                 GatewayRecoveryPrimaryAction.Finish -> onContinue
                 GatewayRecoveryPrimaryAction.Retry -> onRetry
                 GatewayRecoveryPrimaryAction.Back -> onBack
+                GatewayRecoveryPrimaryAction.UseAuthenticatedSetup -> onUseAuthenticatedSetup
               },
             modifier = Modifier.onboardingActionButton(),
           )
@@ -2523,6 +2599,7 @@ internal enum class GatewayRecoveryPrimaryAction(
   Finish(text = nativeText("Continue")),
   Retry(text = nativeText("Retry connection"), icon = Icons.Default.WifiTethering),
   Back(text = nativeText("Go back"), icon = Icons.AutoMirrored.Filled.ArrowBack),
+  UseAuthenticatedSetup(text = nativeText("Use authenticated setup code"), icon = Icons.Default.QrCode2),
 }
 
 internal enum class GatewayRecoveryProgressStatus {
@@ -2541,15 +2618,27 @@ internal fun gatewayRecoveryPrimaryAction(
   problem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryPrimaryAction? =
   when (state) {
-    GatewayRecoveryUiState.Connected -> GatewayRecoveryPrimaryAction.Finish
+    GatewayRecoveryUiState.Connected -> {
+      GatewayRecoveryPrimaryAction.Finish
+    }
 
-    GatewayRecoveryUiState.Failed -> if (problem?.isNetworkFailure == true) GatewayRecoveryPrimaryAction.Retry else GatewayRecoveryPrimaryAction.Back
+    GatewayRecoveryUiState.Failed -> {
+      when {
+        problem?.requiresVerifiedSignIn == true -> GatewayRecoveryPrimaryAction.UseAuthenticatedSetup
+        problem?.isNetworkFailure == true -> GatewayRecoveryPrimaryAction.Retry
+        else -> GatewayRecoveryPrimaryAction.Back
+      }
+    }
 
-    GatewayRecoveryUiState.ApprovalRequired -> GatewayRecoveryPrimaryAction.Retry
+    GatewayRecoveryUiState.ApprovalRequired -> {
+      GatewayRecoveryPrimaryAction.Retry
+    }
 
     GatewayRecoveryUiState.Pairing,
     GatewayRecoveryUiState.Finishing,
-    -> null
+    -> {
+      null
+    }
   }
 
 internal fun gatewayRecoveryShowsDiagnosticAction(
@@ -2562,7 +2651,8 @@ internal fun gatewayRecoveryShowsDiagnosticAction(
 internal fun gatewayRecoveryDiagnosticText(
   statusText: String,
   gatewayName: String,
-  gatewayPaired: Boolean,
+  operatorConnected: Boolean,
+  nodeConnected: Boolean,
   gatewayPairingCanContinue: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem?,
   localizeLabel: (String) -> String = { label -> nativeString(label) },
@@ -2572,7 +2662,8 @@ internal fun gatewayRecoveryDiagnosticText(
     localizeLabel("OpenClaw Android gateway diagnostic"),
     "${localizeLabel("Gateway")}: $gatewayName",
     "${localizeLabel("Status")}: $statusText",
-    "${localizeLabel("Gateway paired")}: $gatewayPaired",
+    "${localizeLabel("Chat/operator connected")}: $operatorConnected",
+    "${localizeLabel("Node connected")}: $nodeConnected",
     "${localizeLabel("Ready to continue")}: $gatewayPairingCanContinue",
     "${localizeLabel("Error code")}: ${gatewayConnectionProblem?.code ?: "n/a"}",
     "${localizeLabel("Reason")}: ${gatewayConnectionProblem?.reason ?: "n/a"}",
@@ -2680,8 +2771,11 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
-  when (gatewayConnectionProblem.code) {
+internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
+  if (gatewayConnectionProblem.requiresVerifiedSignIn) {
+    return nativeString("Sign in through the HTTPS proxy that verifies your account. A node connection or direct-LAN setup code is not a user login. Ask for a setup code generated with openclaw qr --url and that proxy's wss:// address. The proxy must forward identity on WebSocket upgrades; browser-only SSO cannot sign in this app.")
+  }
+  return when (gatewayConnectionProblem.code) {
     "NETWORK_UNREACHABLE" -> {
       if (gatewayConnectionProblem.isTailscaleRoute && gatewayConnectionProblem.reason != "transport-cleanup") {
         nativeString("This address may use Tailscale. Open Tailscale and connect to the Gateway's tailnet, then retry. Check that the Gateway computer is online and OpenClaw is running.")
@@ -2731,6 +2825,7 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
       }
     }
   }
+}
 
 internal fun gatewayNetworkRecoveryHelpUrl(problem: GatewayConnectionProblem?): String? =
   "https://tailscale.com/docs/install/android".takeIf {
