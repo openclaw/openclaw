@@ -786,12 +786,21 @@ the writer queue and rechecks the current session and permissions before committ
 
 Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
 
-If an unarchived session's worktree was removed by cleanup or deletion, a new chat
-turn reports the removal before sandbox preparation. Use **Restore** on
-**Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
-another message does not automatically restore a removed checkout.
-Opening Review (`sessions.diff`) for a removed or missing worktree reports the
-same Restore guidance instead of an ownership-change error.
+If a session's worktree was removed by cleanup or deletion and its snapshot is
+still available, the next authorized turn restores the saved checkout before
+preparing the sandbox or starting the agent. This includes task and subagent
+sessions, and manually deleted checkout directories. Concurrent turns wait for
+the same checkout restoration. The chat shows workspace preparation while it
+waits; automatic restoration has a five-minute budget, including lease waits,
+and joins any started Git cleanup before returning.
+
+Restoration uses the same lifecycle as **Restore** in **Settings > Worktrees**
+(`worktrees.restore`). It records success or a typed failure reason in the
+`agents/worktrees` log. A failed turn explains the recovery step; missing or
+invalid snapshots never become empty workspaces, and occupied destinations or
+changed branches remain untouched. Deletion without a snapshot keeps the Restore
+or new-session guidance. Opening Review (`sessions.diff`) is read-only and shows
+that guidance until a turn or explicit Restore recovers the checkout.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
