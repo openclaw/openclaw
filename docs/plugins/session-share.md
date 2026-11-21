@@ -73,11 +73,11 @@ person; it does not become that person. Requests cannot change these filters.
 Merged profile IDs remain supported; unknown or removed people publish nothing.
 
 The host switch is off unless it is exactly `true`. Plugin installation,
-authentication and stored grants do not turn it on. Disabling it retires current
-reader connections and pending disclosures, including when it is turned back on
-before their next check. Start a new connection after re-enabling. Unrelated
-configuration changes do not retire the host reader admission. Ordinary clients
-and node-based sharing are unchanged. An explicitly enabled reader connection
+authentication and stored grants do not turn it on. Each connection and read
+request checks it at admission. Disabling denies new reads without revoking an
+already admitted request, which may finish. Existing connections can read again
+after re-enabling. Source permissions and device grants remain independently
+enforced. Ordinary clients and node-based sharing are unchanged. An explicitly enabled reader connection
 may remain inert when no source plugin methods are available.
 
 On the receiver, configure a source under `gateways`:

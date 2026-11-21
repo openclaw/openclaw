@@ -175,3 +175,38 @@ it("leaves node-placed Claude turns on their unmediated native surface", async (
     undefined,
   );
 });
+
+// A bounded mode is enforced by the Gateway, so a backend that keeps native tools (Gemini CLI,
+// node-placed Claude) is mediated, or refused with a next step when it cannot be.
+const bounded = { ...session, permissionMode: "workspace" as const };
+it("mediates a native-tool CLI turn when the session has a bounded mode", async () => {
+  await expectPolicy(
+    makeInput({ backendId: "google-gemini-cli", params: { sessionEntry: bounded } }, ordinary),
+    emptyTools,
+    ["*"],
+  );
+});
+
+it("refuses a node-placed Claude turn that cannot keep a bounded mode", async () => {
+  await expect(
+    resolveCliRuntimeToolPolicy(
+      makeInput({ params: { sessionEntry: { ...bounded, execHost: "node" } } }, ordinary),
+    ),
+  ).rejects.toThrow("Change this chat to Full access, or choose another runtime.");
+});
+
+it.each(["full", undefined] as const)(
+  "leaves native tools alone in mode %s",
+  async (permissionMode) => {
+    await expectPolicy(
+      makeInput(
+        {
+          backendId: "google-gemini-cli",
+          params: { sessionEntry: { ...session, permissionMode } },
+        },
+        ordinary,
+      ),
+      undefined,
+    );
+  },
+);

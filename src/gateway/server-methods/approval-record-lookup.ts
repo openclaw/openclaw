@@ -9,7 +9,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
-import { operatorSessionCap } from "../operator-role-policy.js";
+import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { prepareSessionCreatorProfile } from "../session-creator.js";
+import { resolveSessionEventAgentScope } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type {
   PreparedSessionMutationFacts,
   SessionSharingTarget,
@@ -18,6 +22,7 @@ import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
+import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
 import { createSessionListEntryFilter, type prepareSessionSharing } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
@@ -36,17 +41,31 @@ export type ApprovalRecordLookupResult<TPayload> =
   | { ok: true; approvalId: string; snapshot: ExecApprovalRecord<TPayload> }
   | { ok: false; response: PendingApprovalLookupError };
 
-export function canAccessApprovalSession(params: {
+type ApprovalSessionAccessParams = {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   sessionKey?: string | null;
   agentId?: string | null;
+  requestedByProfileId?: string | null;
   prepared?: {
     sharing: ReturnType<typeof prepareSessionSharing>;
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
   readFacts?: (sessionKey: string, agentId?: string) => PreparedSessionMutationFacts | undefined;
-}): boolean {
+};
+
+/** Display-profile readers retain their policy; delegated invitees carry the same deny filter. */
+export function approvalReaderSessionPolicy(
+  client: GatewayClient | null,
+  getCfg: () => OpenClawConfig,
+): { getCfg?: () => OpenClawConfig } {
+  return client?.authenticatedUserProfile || operatorSessionCap(client, getCfg()) === "invited"
+    ? { getCfg }
+    : {};
+}
+
+/** Existing session visibility remains independent of approval requester ownership. */
+function canReadApprovalSession(params: ApprovalSessionAccessParams): boolean {
   const cap = operatorSessionCap(params.client, params.cfg);
   if (cap !== "none" && cap !== "invited") {
     return true;
@@ -76,7 +95,84 @@ export function canAccessApprovalSession(params: {
   );
 }
 
-type ApprovalSessionSource = { sessionKey?: string | null; agentId?: string | null };
+/** Invitation access adds a requester restriction; it never replaces reviewer binding. */
+export function canAccessApprovalSession(params: ApprovalSessionAccessParams): boolean {
+  if (!canReadApprovalSession(params)) {
+    return false;
+  }
+  if (
+    operatorSessionCap(params.client, params.cfg) !== "invited" ||
+    params.client?.connect.scopes?.includes(ADMIN_SCOPE)
+  ) {
+    return true;
+  }
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  const profileId =
+    params.client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const agentId = normalizeOptionalString(params.agentId);
+  const facts = sessionKey ? params.readFacts?.(sessionKey, agentId) : undefined;
+  const target =
+    sessionKey && (params.prepared ? params.prepared.target(sessionKey, agentId) : facts?.target);
+  if (!target || !profileId) {
+    return false;
+  }
+  const isProfile = prepareSessionCreatorProfile(
+    profileId,
+    params.client?.preparedSessionProfile?.aliases,
+  );
+  if (isProfile(target.entry.createdActor)) {
+    return true;
+  }
+  const isMember = params.prepared
+    ? params.prepared.sharing.roleForTarget(target) === "member"
+    : facts?.membership.has(profileId) === true;
+  return (
+    !isMember ||
+    Boolean(
+      params.requestedByProfileId &&
+      isProfile({ type: "human", source: "profile", id: params.requestedByProfileId }),
+    )
+  );
+}
+
+/** New event filtering applies only to invitation access; other audiences retain their owners. */
+export function canAccessInvitedApprovalSession(params: ApprovalSessionAccessParams): boolean {
+  return (
+    operatorSessionCap(params.client, params.cfg) !== "invited" || canAccessApprovalSession(params)
+  );
+}
+
+/** Synchronous event audiences consume the resident sharing owner, never fresh SQL. */
+export function prepareProjectedApprovalSessionAccess(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  projection?: SessionRowProjection;
+}): Parameters<typeof canAccessApprovalSession>[0]["prepared"] {
+  const { cfg, client, projection } = params;
+  if (!projection) {
+    return undefined;
+  }
+  return {
+    sharing: prepareProjectedSessionSharing({
+      cfg: projection.getPolicyConfig() ?? cfg,
+      client,
+      isMember: (target, identity) =>
+        projection.hasMembership(target.storePath, target.storeKey, identity),
+    }),
+    target: (key, owner) => {
+      const scope = resolveSessionEventAgentScope(cfg, key, owner);
+      return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;
+    },
+  };
+}
+
+type ApprovalSessionSource = {
+  sessionKey?: string | null;
+  agentId?: string | null;
+  requestedByProfileId?: string | null;
+};
 
 /** Retain receipt-updated sharing facts while approval I/O yields. */
 export async function prepareApprovalSessionAccess(params: {
@@ -113,20 +209,30 @@ export async function prepareApprovalSessionAccess(params: {
         );
       }
     }
+    const check = (
+      source: ApprovalSessionSource,
+      mode: "access" | "read" | "invite" = "access",
+    ) => {
+      const currentCfg = params.getCfg?.() ?? params.cfg;
+      return (
+        !currentCfg ||
+        (mode === "read"
+          ? canReadApprovalSession
+          : mode === "invite"
+            ? canAccessInvitedApprovalSession
+            : canAccessApprovalSession)({
+          cfg: currentCfg,
+          client: params.client,
+          ...source,
+          readFacts: (sessionKey, agentId) =>
+            reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg),
+        })
+      );
+    };
     return {
-      canAccess: (source: ApprovalSessionSource) => {
-        const currentCfg = params.getCfg?.() ?? params.cfg;
-        return (
-          !currentCfg ||
-          canAccessApprovalSession({
-            cfg: currentCfg,
-            client: params.client,
-            ...source,
-            readFacts: (sessionKey, agentId) =>
-              reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg),
-          })
-        );
-      },
+      canAccess: (source: ApprovalSessionSource) => check(source),
+      canRead: (source: ApprovalSessionSource) => check(source, "read"),
+      canAccessInvited: (source: ApprovalSessionSource) => check(source, "invite"),
       [Symbol.dispose]: release,
     };
   } catch (error) {
@@ -136,12 +242,20 @@ export async function prepareApprovalSessionAccess(params: {
 }
 
 /** Payloads are kind-specific; every approval kind carries its source session in the same fields. */
-export function readApprovalRequestSource<TPayload>(record: ExecApprovalRecord<TPayload>) {
+export function readApprovalRequestSource(record: ExecApprovalRecord<unknown>) {
   const source = isRecord(record.request) ? record.request : undefined;
   return {
     sessionKey: normalizeOptionalString(source?.sessionKey),
     agentId: normalizeOptionalString(source?.agentId),
+    requestedByProfileId: record.requestedByProfileId,
   };
+}
+
+/** Durable reads use the same profile boundary as live pending records. */
+export function readOperatorApprovalRequestSource(
+  record: OperatorApprovalRecord,
+): ApprovalSessionSource {
+  return { ...record.source, requestedByProfileId: record.requester.profileId };
 }
 
 export function isApprovalRecordVisibleToClient<TPayload>(params: {

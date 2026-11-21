@@ -297,6 +297,9 @@ reuse those records. Compact file fingerprints let a restarted Gateway reuse
 unchanged hashes while detecting same-size edits and files moved by directory
 renames. Initialization retains the identities and timestamp eligibility observed
 while hashing its private checkout, so the first reuse can use those same facts.
+Fresh sandbox projections also include producer-created protected skill directories
+in that initial baseline. A prepared template supplies the unchanged file inventory;
+adding the mount directories does not require another whole-workspace checkpoint.
 Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories. Local checkpoint acceptance reuses the
@@ -422,6 +425,10 @@ accounting, including macOS clones, increment `nativeCloneUnmeasuredCount` inste
 of reporting zero. Native copies require cloning; unsupported clones fail rather
 than silently copying the tree.
 
+Bulk template cleanup and interrupted projection replacement run in a bounded
+child process, leaving the Gateway's shared filesystem threadpool available for
+session reads and writes. Cleanup still finishes before the path is reused.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
@@ -483,6 +490,12 @@ to `templateApply`. Sub-phases separate registration metadata and inspection, co
 The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
 
 Slow chat startup details under `attempt.setup.sandbox.workspace_selection.prepare.reconcile` also name source admission, reservation, initialization, baseline persistence, and checkpoint synchronization. Checkpoint children separate directory validation, rejected-result repair, canonical export, and projection import; warm reuse reports these children under `reuse.reconcile`. These fixed, cumulative phase names appear on the existing slow chat line, including preparation during media staging. Initial projection custody waits precede `prepare.reconcile` in `prepare.acquire`; nested template selection and cloning remain inclusive, so do not add parent and child durations.
+
+Under `attempt.setup.sandbox`, `layout.skills_sync` measures skill synchronization,
+while `layout.mount_sources` and `layout.checkpoint` identify subsequent mount preparation
+and reconciliation. `workspace_selection.owner.session`, `.owner.registry`, and
+`.owner.handoff` distinguish owner-resolution waits; `workspace_selection.baseline.prepare`
+and `.baseline.accept` separate manifest preparation from accepted baseline publication.
 
 The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` starts at the first authorized copy-directory or file admission. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. On Linux with procfs and GNU `cp`, selected directories are admitted once and retained by descriptor; batches of up to 128 pinned files are reflinked through private staging while preserving nanosecond timestamps. One small helper runs those batches, so each batch does not fork the Gateway's resident address space. Other systems retain the portable guarded copier. `copyDetails` records the selected copier and fallback reason, admitted source bytes, batch and Gateway-child counts, synchronous spawn time, child wait time, and live-authority check count/time. Source bytes describe selected content, not exclusive disk usage; reflinks can share those bytes. These bounded diagnostics include no file paths. Creation records the provisioned file paths; later recovery snapshots may replace that ledger with file modes and chunk counts. Those snapshot fields describe recovery storage, not whether initial provisioning used a reflink. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 

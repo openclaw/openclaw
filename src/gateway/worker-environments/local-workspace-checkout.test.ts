@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as checkoutConfig from "../../agents/worktrees/checkout-git-config.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import * as execution from "../../process/exec.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -113,7 +114,8 @@ it.each([
     ]) {
       vi.stubEnv(key, "synthetic-host-only");
     }
-    // Observe the process boundary without executing Windows Git on a POSIX host.
+    // Observe process boundaries without executing Windows programs on a POSIX host.
+    vi.spyOn(nativeWorktreeFilesystem, "remove").mockResolvedValue();
     const pack = path.join(root, "fixture.pack");
     await fs.writeFile(pack, "fixture");
     vi.spyOn(checkoutConfig, "withWorktreeGitConfig").mockResolvedValue(pack);
