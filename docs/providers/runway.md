@@ -49,6 +49,11 @@ The provider exposes seven Runway models split across three modes. The same mode
 
 Local image and video references are supported via data URIs.
 
+Runway's `veo3.1`, `veo3.1_fast`, and `veo3` requests default to four seconds.
+Explicit durations must be exactly 4, 6, or 8 seconds; other values are rejected
+before submission. Other Runway models retain their existing duration defaults
+and normalization.
+
 | Aspect ratios         | Allowed values                              |
 | --------------------- | ------------------------------------------- |
 | Text-to-video         | `16:9`, `9:16`                              |
