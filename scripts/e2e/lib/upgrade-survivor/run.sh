@@ -51,9 +51,15 @@ fi
 if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ] || [ "$WORKER_CELL" = "1" ]; then
   unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
 else
-  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
-  export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"
-  export GEMINI_API_KEY="upgrade-survivor-gemini-key"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    # The loopback model must not advertise synthetic credentials to real provider catalogs.
+    unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+    export SURVIVOR_API_KEY="upgrade-survivor-model-key"
+  else
+    export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
+    export ANTHROPIC_API_KEY="sk-ant-openclaw-upgrade-survivor"
+    export GEMINI_API_KEY="upgrade-survivor-gemini-key"
+  fi
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
