@@ -26,6 +26,7 @@ import {
   shouldKeepCodexSharedAbortOpen,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import { buildCodexTranscriptCoverage } from "./run-attempt-prompt-continuity.js";
 import { settleReplyMedia } from "./run-attempt-reply-media.js";
 import { beginCodexAttemptSettlement } from "./run-attempt-settlement.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
@@ -555,6 +556,11 @@ export async function finalizeCodexAttempt(
             clientId: resourceState.thread.clientId,
             patch: {
               historyCoveredThrough: new Date().toISOString(),
+              transcriptCoverage: buildCodexTranscriptCoverage({
+                message: params.userTurnTranscriptRecorder?.getPersistedMessage?.(),
+                threadId: resourceState.thread.threadId,
+                runId: params.runId,
+              }),
               ...(continuityCalibration ? { continuityCalibration } : {}),
             },
           },
