@@ -323,6 +323,12 @@ internal fun gatewayReconnectDelayMs(attempt: Int): Long {
   return if (delayMs == 60_000L) Random.nextLong(30_000L, 60_001L) else delayMs
 }
 
+internal fun gatewayConnectRetryDelayMs(error: GatewaySession.ErrorShape?): Long {
+  val retryAfterMs = error?.retryAfterMs?.takeIf { error.retryable } ?: return 0
+  val minimumMs = retryAfterMs.toLong().coerceIn(1_000L, 60_000L)
+  return (minimumMs + Random.nextLong(0, minimumMs / 5 + 1)).coerceAtMost(60_000L)
+}
+
 /** Select atomically: a timeout must not cancel a receive that already consumed the wake. */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal suspend fun awaitGatewayReconnectSignal(
@@ -379,6 +385,7 @@ class GatewaySession(
     val message: String,
     val details: GatewayErrorDetails? = null,
     val retryable: Boolean = false,
+    val retryAfterMs: Int? = null,
   ) {
     /** Only the method-bound startup refusal proves this chat send did no handler work. */
     fun startupRetryDelayMs(method: String): Long? {
@@ -2112,7 +2119,13 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true)
+          ErrorShape(
+            wireError.code,
+            wireError.message,
+            details,
+            retryable = wireError.retryable == true,
+            retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
+          )
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }
@@ -2318,7 +2331,12 @@ class GatewaySession(
         if (err is CancellationException) throw err
         target.attempt = (target.attempt + 1).coerceAtMost(10)
         if (desired !== target || target.reconnectPausedForAuthFailure) continue
-        if (awaitGatewayReconnectSignal(reconnectSignal, gatewayReconnectDelayMs(target.attempt))) {
+        val retryDelayMs =
+          maxOf(
+            gatewayReconnectDelayMs(target.attempt),
+            gatewayConnectRetryDelayMs((err as? GatewayConnectFailure)?.gatewayError),
+          )
+        if (awaitGatewayReconnectSignal(reconnectSignal, retryDelayMs)) {
           target.attempt = 0
         }
       }
