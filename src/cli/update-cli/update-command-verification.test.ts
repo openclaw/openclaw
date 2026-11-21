@@ -9,6 +9,7 @@ import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timi
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { gitReleaseSlot } from "../../infra/git-release-paths.js";
+import * as stale from "../../infra/restart-stale-pids.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -20,6 +21,7 @@ import {
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as processIdentity from "../../shared/pid-alive.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as restart from "../daemon-cli/restart-health.test-helpers.js";
 import { expectNoCalls } from "./update-boundary.test-support.js";
@@ -63,9 +65,15 @@ let result: ReturnType<typeof resultFixture>;
 let gatewayPort: number;
 let serviceEnv: NodeJS.ProcessEnv;
 let candidate: { version: string; buildId: string };
-type VerifyParams = Parameters<typeof verifyUpdatedGateway>[0];
 type RestartParams = Parameters<typeof maybeRestartService>[0];
-const withRun = (runId: string) => ({ json: true, run: { runId, env: {} } });
+const withRun = (runId: string, executorFence?: { assertCurrent: () => void }) => ({
+  json: true,
+  run: { runId, env: {}, executorFence },
+});
+const defaults = () => ({ result, gatewayPort, serviceEnv, opts: { json: true } });
+const command = vi.mocked(runUpdatedInstallGatewayCommand);
+const lease = restart.readGatewayOwnerLease;
+const rpc = restart.callGateway;
 const running = { status: "running", pid: 8000 } as const;
 function pendingHealth(waitOutcome: "still-starting" | "stopped-free", port = 18789) {
   return {
@@ -85,15 +93,12 @@ function useService(runtime: Parameters<typeof restart.makeGatewayService>[0] = 
   return service;
 }
 function busyPort(commandLine?: string, readyAtMs = 0) {
-  restart.inspectPortUsage.mockImplementation(async (port) => ({
-    port,
-    status: restart.monotonicClock.nowMs < readyAtMs ? "free" : "busy",
-    listeners:
-      restart.monotonicClock.nowMs < readyAtMs
-        ? []
-        : [{ pid: 8000, ...(commandLine ? { commandLine } : {}) }],
-    hints: [],
-  }));
+  restart.inspectPortUsage.mockImplementation(async (port) =>
+    restart.portUsage(
+      restart.monotonicClock.nowMs < readyAtMs ? [] : [{ pid: running.pid, commandLine }],
+      { port },
+    ),
+  );
 }
 function gatewayFixture(
   identity: Parameters<typeof gatewayHealthResponse>[0] = {},
@@ -102,29 +107,21 @@ function gatewayFixture(
   mockProcessPlatform(options.platform ?? "linux");
   const service = useService();
   busyPort(options.commandLine, options.readyAtMs);
-  restart.callGateway.mockImplementation(gatewayHealthResponse(identity));
+  rpc.mockImplementation(gatewayHealthResponse(identity));
   return service;
 }
-function verifyGateway(params: Partial<VerifyParams> = {}) {
-  const verification = verifyUpdatedGateway({
-    result,
-    gatewayPort,
+function verifyGateway(params: Partial<Parameters<typeof verifyUpdatedGateway>[0]> = {}) {
+  return (pendingVerification = verifyUpdatedGateway({
+    ...defaults(),
     expectedVersion: candidate.version,
     expectedBuildId: candidate.buildId,
-    opts: { json: true },
-    serviceEnv,
     signal: controller.signal,
     ...params,
-  });
-  pendingVerification = verification;
-  return verification;
+  }));
 }
 function restartGateway(params: Partial<RestartParams> = {}) {
   return maybeRestartService({
-    result,
-    gatewayPort,
-    serviceEnv,
-    opts: { json: true },
+    ...defaults(),
     shouldRestart: true,
     refreshServiceEnv: false,
     requireRunningServiceAfterRestart: true,
@@ -156,22 +153,16 @@ async function verifyHealth(
     service.isLoaded = vi.fn(async () => true);
   }
   busyPort();
-  restart.callGateway.mockImplementation(
-    gatewayHealthResponse({
-      server: { version, buildId: "candidate", bootId: "candidate-boot" },
-      health,
-    }),
-  );
-  Object.assign(
-    result,
-    recovery ? { status: "error" } : { after: { version, buildId: "candidate" } },
-  );
+  const after = { version, buildId: "candidate" };
+  const serving = { ...after, bootId: "candidate-boot" };
+  rpc.mockImplementation(gatewayHealthResponse({ server: serving, health }));
+  Object.assign(result, recovery ? { status: "error" } : { after });
   await listen((req, res) =>
     res
       .writeHead(req.url === "/readyz" && readiness ? 503 : 200)
       .end(readiness ? JSON.stringify(readiness) : undefined),
   );
-  const validation = await verifyGateway({
+  return await verifyGateway({
     opts: { json },
     expectedVersion: version,
     expectedBuildId: "candidate",
@@ -179,7 +170,6 @@ async function verifyHealth(
     purpose: "recovery",
     waitForStartup: false,
   });
-  return { result, validation };
 }
 const reportFor = (input: ReturnType<typeof resultFixture>) =>
   renderUpdateRunReport(updateRunReportInputFromResult(input)).markdown;
@@ -221,17 +211,15 @@ it.each([
   async (mode, state, version, buildId) => {
     const verified = state === "ready" || state === "retained-identity";
     gatewayFixture({}, { commandLine: "openclaw-gateway" });
-    restart.callGateway.mockImplementation(
+    rpc.mockImplementation(
       state === "starting"
         ? async () => {
             throw new Error("gateway timeout after 3000ms");
           }
         : healthResponse(version, buildId, "watcher-successor"),
     );
-    Object.assign(result, {
-      mode,
-      after: { version: "2026.9.8", buildId: "candidate" },
-    });
+    result.mode = mode;
+    result.after = { version: "2026.9.8", buildId: "candidate" };
     await listen();
     const outcome = await restartGateway({
       opts: { ...withRun("watcher-restart"), restart: false },
@@ -244,7 +232,7 @@ it.each([
           : undefined,
     });
     expect(outcome).toBe("ok");
-    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
     expect(result.status).toBe("ok");
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]?.failureFacts).toBeUndefined();
@@ -267,21 +255,16 @@ it.each(["transient-timeout", "mixed"])(
   "records collection and channel probe warnings after core verification (%s)",
   async (kind) => {
     gatewayFixture({}, { commandLine: "openclaw-gateway" });
+    const timeout = "health collection timed out after 7000ms";
+    const failed = { ok: false, timedOut: true, error: timeout };
     let probes = 0;
-    restart.callGateway.mockImplementation((opts) =>
+    rpc.mockImplementation((opts) =>
       gatewayHealthResponse({
         server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
         health: {
           channels: {
             telegram: {
-              probe:
-                kind === "transient-timeout" && probes++ > 0
-                  ? { ok: true }
-                  : {
-                      ok: false,
-                      timedOut: true,
-                      error: "health collection timed out after 7000ms",
-                    },
+              probe: kind === "transient-timeout" && probes++ > 0 ? { ok: true } : failed,
             },
             ...(kind === "mixed"
               ? { discord: { probe: { ok: false, error: "invalid credentials" } } }
@@ -318,17 +301,14 @@ it.each(["transient-timeout", "mixed"])(
     expect(report).toContain("telegram: health collection timed out after 7000ms");
     expect(report).toContain("openclaw channels status --probe");
     expect(report).toContain("openclaw health --json");
-    expect(result.steps[0]?.warnings?.join("\n")).toContain(
-      "telegram: health collection timed out after 7000ms",
-    );
+    expect(result.steps[0]?.warnings?.join("\n")).toContain(`telegram: ${timeout}`);
   },
 );
 
 it("bounds foreground recovery observation with hung readiness", async () => {
-  const service = useService({ status: "stopped" });
-  vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+  useService({ status: "unknown" });
   busyPort();
-  restart.callGateway.mockImplementation(healthResponse("2026.9.5", undefined, "foreground-boot"));
+  rpc.mockImplementation(healthResponse("2026.9.5", undefined, "foreground-boot"));
   await listen((req, res) => {
     if (req.url === "/healthz") {
       res.writeHead(200).end();
@@ -355,7 +335,7 @@ it("bounds foreground recovery observation with hung readiness", async () => {
   expect(result.steps[0]?.termination).toBeUndefined();
   expect(result.steps[0]?.advisory).toBeUndefined();
   expect(restart.sleep).not.toHaveBeenCalled();
-  for (const [params] of restart.callGateway.mock.calls) {
+  for (const [params] of rpc.mock.calls) {
     expect(params.timeoutMs).toBeLessThanOrEqual(3_000);
   }
 });
@@ -411,10 +391,9 @@ it.each([true, false])(
     mockProcessPlatform("linux");
     useService();
     // The retained updater speaks an older protocol than the restarted Gateway.
-    const mismatch = restart.gatewayProtocolMismatchError();
-    restart.callGateway.mockRejectedValue(mismatch);
+    rpc.mockRejectedValue(restart.gatewayProtocolMismatchError());
     const inspecting = createDeferred();
-    let completedInspections = observed ? 1 : 0;
+    let completedInspections = Number(observed);
     restart.inspectPortUsage.mockImplementation(async (port) => {
       if (completedInspections-- > 0) {
         return { port, status: "busy", listeners: [{ pid: 8000 }], hints: [] };
@@ -530,7 +509,7 @@ it.each([
     const refreshServiceEnv = activation === "service refresh";
     const childTimeout = activation === "child readiness timeout";
     if (childTimeout) {
-      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {
+      command.mockImplementationOnce(async () => {
         restart.monotonicClock.nowMs = 60_000;
         throw new GatewayRestartHealthError(
           "Gateway restart timed out after 60s waiting for health checks.",
@@ -540,7 +519,7 @@ it.each([
     gatewayFixture({ server: { ...candidate, bootId: "slow-boot" } }, { readyAtMs: 90_000 });
     await listen();
     if (activation.includes("receipt")) {
-      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async ({ onReadiness }) => {
+      command.mockImplementationOnce(async ({ onReadiness }) => {
         const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
         const health = await waitForGatewayHealthyRestart({
           service: gatewayService.resolveGatewayService(),
@@ -565,9 +544,7 @@ it.each([
     expect(outcome).toBe(pending ? "readiness-pending" : "ok");
     const facts = vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1];
     expect(facts?.versionMatch).toBe(pending ? undefined : true);
-    expect(restart.callGateway).toHaveBeenCalledTimes(
-      pending ? 0 : activation === "mismatched receipt" ? 2 : 1,
-    );
+    expect(rpc).toHaveBeenCalledTimes(pending ? 0 : activation === "mismatched receipt" ? 2 : 1);
   },
 );
 
@@ -585,28 +562,18 @@ it("preserves Windows cold startup within the default update timeout", async () 
   });
   await listen();
   result.after = { version: "2026.9.4" };
-  const outcome = await restartGateway({
-    opts: { json: true, timeout: undefined },
-    timeoutMs: 30 * 60_000,
-  });
-
+  const outcome = await restartGateway({ timeoutMs: 30 * 60_000 });
   expect(outcome).toBe("ok");
-  expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ timeoutMs: budgetMs }),
-    "restart",
-  );
+  const allowance = expect.objectContaining({ timeoutMs: budgetMs });
+  expect(command).toHaveBeenCalledExactlyOnceWith(allowance, "restart");
   expect(restart.monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs));
 });
 
 it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
   "checks final native and HTTP readiness: %s",
   async (transition) => {
-    gatewayFixture({}, { commandLine: "openclaw-gateway" });
-    restart.callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.9.1", buildId: "candidate-build", bootId: "boot-a" },
-      }),
-    );
+    const serving = { version: "2026.9.1", buildId: "candidate-build", bootId: "boot-a" };
+    gatewayFixture({ server: serving }, { commandLine: "openclaw-gateway" });
     const reached = createDeferred();
     const release = createDeferred();
     await listen((req, res) => {
@@ -632,7 +599,7 @@ it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
         throw new Error("Verifier returned before HTTP readiness");
       }),
     ]);
-    expect(restart.callGateway).toHaveBeenCalledOnce();
+    expect(rpc).toHaveBeenCalledOnce();
     if (transition.endsWith("at-deadline")) {
       restart.monotonicClock.nowMs = 300_000;
     }
@@ -658,7 +625,7 @@ it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
 it.each([true, false, undefined])(
   "completes an update during a channel outage only with core readiness (%s)",
   async (coreReady) => {
-    const { validation } = await verifyHealth(
+    const validation = await verifyHealth(
       { channels: { telegram: { configured: true, running: false } } },
       false,
       true,
@@ -675,7 +642,7 @@ it.each([true, false, undefined])(
 );
 
 it.each([false, true])("warns about stopped channels after repair (json=%s)", async (json) => {
-  const { validation } = await verifyHealth(
+  const validation = await verifyHealth(
     {
       channels: {
         telegram: {
@@ -726,10 +693,8 @@ async function gitTrial() {
   for (const version of ["1.0.0", "2.0.0"]) {
     const { releaseRoot } = await createGitReleaseDirs(prefix);
     await fs.mkdir(releaseRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(releaseRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-    );
+    const manifest = JSON.stringify({ name: "openclaw", version });
+    await fs.writeFile(path.join(releaseRoot, "package.json"), manifest);
     await publishGitRelease({ prefix, releaseRoot, trial: true });
   }
   result.root = gitReleaseSlot(prefix);
@@ -739,8 +704,7 @@ async function gitTrial() {
 }
 it("ends a verified Git release's trial without the release's own settlement", async () => {
   const trial = await gitTrial();
-  const { validation } = await verifyHealth({});
-  expect(validation.ok).toBe(true);
+  expect((await verifyHealth({})).ok).toBe(true);
   await expect(fs.access(trial)).rejects.toThrow();
 });
 
@@ -749,19 +713,18 @@ const changedPlugins = () => ({
 });
 async function gitReleaseRestart() {
   const trial = await gitTrial();
-  const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
+  const identity = { ...candidate, bootId: "candidate-boot" };
+  const service = gatewayFixture({ server: identity }, { commandLine: "openclaw-gateway" });
   await listen();
   vi.spyOn(await import("../../utils/sleep.js"), "sleep").mockImplementation(restart.sleep);
   const incumbent = { ...restart.ownerLease(running.pid), port: gatewayPort };
   const successor = { ...restart.ownerLease(8001), port: gatewayPort };
-  result.mode = "git";
-  result.before = candidate;
-  result.after = candidate;
+  Object.assign(result, { mode: "git", before: candidate, after: candidate });
   const onVerified = vi.fn();
   const verify = (gitReleaseRestartMode?: RestartParams["gitReleaseRestartMode"]) =>
     restartGateway({
       gitReleaseRestartMode,
-      opts: withRun("release-handoff"),
+      opts: withRun("release-handoff", { assertCurrent: () => controller.signal.throwIfAborted() }),
       timeoutMs: 60_000,
       onVerified,
       serviceUpdateVerdict: {
@@ -774,19 +737,8 @@ async function gitReleaseRestart() {
   return { service, incumbent, successor, onVerified, verify, trial };
 }
 
-it("restarts a release through the admitted native service instead of sending a signal", async () => {
-  const { verify, incumbent, onVerified } = await gitReleaseRestart();
-  restart.readGatewayOwnerLease.mockReturnValue(incumbent);
-  restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
-  expect(await verify("native")).toBe("ok");
-  expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
-    expect.anything(),
-    "restart",
-  );
-  expect(onVerified).toHaveBeenCalledOnce();
-});
-
 it.each([
+  ["native", "same", false, "ok"],
   ["absent", "distinct", false, "ok"],
   ["absent", "same", true, "readiness-pending"],
   ["live", "same", false, "readiness-pending"],
@@ -795,9 +747,7 @@ it.each([
   ["live", "wrong", false, "restart-health-failed"],
 ] as const)("Git release: %s owner, %s build, plugins=%s", async (owner, target, changed, want) => {
   const { incumbent, onVerified, verify, trial } = await gitReleaseRestart();
-  if (owner === "live") {
-    restart.readGatewayOwnerLease.mockReturnValue(incumbent);
-  }
+  lease.mockReturnValue(owner === "absent" ? undefined : incumbent);
   if (target !== "same") {
     result.before = { ...candidate, buildId: "old-build" };
   }
@@ -805,13 +755,14 @@ it.each([
     result.postUpdate = changedPlugins();
   }
   const build = target === "wrong" ? "old-build" : candidate.buildId;
-  restart.callGateway.mockImplementation(healthResponse(candidate.version, build));
-  const outcome = await verify();
-  expect(restart.readGatewayOwnerLease).toHaveBeenCalledWith(
-    expect.objectContaining({ current: true }),
-  );
-  expect(outcome).toBe(want);
-  expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+  rpc.mockImplementation(healthResponse(candidate.version, build));
+  expect(await verify(owner === "native" ? "native" : undefined)).toBe(want);
+  if (owner === "native") {
+    expect(command).toHaveBeenCalledExactlyOnceWith(expect.anything(), "restart");
+  } else {
+    expect(lease).toHaveBeenCalledWith(expect.objectContaining({ current: true }));
+    expect(command).not.toHaveBeenCalled();
+  }
   expect(onVerified).toHaveBeenCalledTimes(want === "ok" ? 1 : 0);
   expect(vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1]).toMatchObject({
     pid: running.pid,
@@ -844,12 +795,12 @@ it.each([
       result.after = { version: candidate.version };
     }
     using now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    restart.readGatewayOwnerLease.mockReturnValue(incumbent);
+    lease.mockReturnValue(incumbent);
     // An older resident has no deferral receipt. Its listener changes after the lease
     // wait gave up, just as the ordinary verifier begins inspecting the service.
     vi.mocked(service.readRuntime).mockImplementation(async () => {
       now.mockReturnValue(10_100);
-      restart.readGatewayOwnerLease.mockReturnValue({
+      lease.mockReturnValue({
         ...successor,
         expired: state === "expired lease",
         pid: state === "lease for another listener" ? 8100 : successor.pid,
@@ -857,20 +808,17 @@ it.each([
       });
       return { status: "running", pid: 9000 };
     });
-    restart.inspectPortUsage.mockImplementation(async (port) =>
+    const pids = state === "mixed listeners" ? [successor.pid, incumbent.pid] : [successor.pid];
+    restart.inspectPortUsage.mockResolvedValue(
       restart.portUsage(
-        [
-          { pid: successor.pid, ppid: 9000 },
-          ...(state === "mixed listeners" ? [{ pid: incumbent.pid, ppid: 9000 }] : []),
-        ],
-        { port },
+        pids.map((pid) => ({ pid, ppid: 9000 })),
+        { port: gatewayPort },
       ),
     );
-    restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
     const verified = state === "ready successor";
     expect(await verify()).toBe(verified ? "ok" : "readiness-pending");
     expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
-    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
     expect(vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1]).toMatchObject({
       readyz: true,
       settled: verified,
@@ -883,36 +831,86 @@ it.each([
   },
 );
 
+const conflicts = ["stale", "healthy", "woke", "foreign", "reused", "busy", "leased", "revoked"];
 it.each([
-  ["changed", "stopped"],
-  ["incumbent", "stopped"],
-  ["absent", "stopped"],
-  ["absent", "unknown"],
-  ["incumbent", "unknown"],
+  ["changed", "stopped", "free"],
+  ["incumbent", "stopped", "free"],
+  ["absent", "stopped", "free"],
+  ["absent", "unknown", "free"],
+  ["incumbent", "unknown", "free"],
+  ["absent", "unknown", "stale"],
+  ["incumbent", "stopped", "stale"],
+  ["absent", "stopped", "masked"],
+  ...conflicts.map((port) => ["absent", "stopped", port] as const),
 ] as const)(
-  "recovers a switched Git release only after confirmed stop: owner=%s, service=%s",
-  async (owner, status) => {
+  "recovers a switched Git release only after confirmed stop: %s, %s, %s",
+  async (owner, status, port) => {
     const { service, incumbent, successor, onVerified, verify } = await gitReleaseRestart();
-    if (owner !== "absent") {
-      restart.readGatewayOwnerLease.mockReturnValueOnce(incumbent);
-    }
+    lease.mockReturnValueOnce(owner === "absent" ? undefined : incumbent);
     if (owner === "changed") {
-      restart.readGatewayOwnerLease.mockReturnValueOnce(successor);
+      lease.mockReturnValueOnce(successor);
     }
+    const refusal = { reason: "masked" as const, message: "test service is masked" };
+    const systemd = port === "masked" ? { startRefusal: refusal } : undefined;
+    vi.mocked(service.readRuntime).mockResolvedValue({ status, systemd });
+    const ancestry = { complete: true, pids: new Set([process.pid]) };
+    vi.spyOn(stale, "inspectSelfAndAncestorPidsSync").mockReturnValue(ancestry);
+    const setFree = () =>
+      restart.inspectPortUsage.mockResolvedValue(restart.portUsage([], { port: gatewayPort }));
+    const staleError = new Error("gateway install changed; run: openclaw gateway restart");
+    if (port === "free") {
+      setFree();
+    } else if (port === "woke") {
+      rpc.mockRejectedValueOnce(staleError);
+    } else if (port !== "healthy") {
+      rpc.mockRejectedValue(staleError);
+    }
+    restart.readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: port === "foreign" ? 8001 : running.pid,
+      port: gatewayPort,
+      startTime: 123,
+    });
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
+      port === "reused" ? 456 : 123,
+    );
+    const cleanup = vi.spyOn(stale, "terminateStaleGatewayPids");
+    cleanup.mockImplementation(async (pids, opts) => {
+      expect(pids).toEqual([running.pid]);
+      if (port === "revoked") {
+        controller.abort(new Error("update canceled"));
+      }
+      opts!.assertCurrent!();
+      if (port === "leased") {
+        const unknown = { ...successor, state: "unknown" as const };
+        lease.mockImplementation((q) => (q?.current ? unknown : undefined));
+      }
+      if (port !== "busy") {
+        setFree();
+      }
+      return pids;
+    });
     const stopped = status === "stopped";
-    vi.mocked(service.readRuntime).mockResolvedValue({ status });
-    restart.inspectPortUsage.mockImplementation(async (port) => restart.portUsage([], { port }));
-    if (stopped) {
-      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {
+    const cleans = stopped && owner === "absent" && ["stale", "busy", "leased"].includes(port);
+    const recovers = stopped && (port === "free" || (cleans && port === "stale"));
+    if (recovers) {
+      command.mockImplementationOnce(async () => {
         vi.mocked(service.readRuntime).mockResolvedValue(running);
         busyPort("openclaw-gateway");
+        rpc.mockImplementation(healthResponse(candidate.version, candidate.buildId));
         return "accepted";
       });
     }
-    restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
-    expect(await verify()).toBe(stopped ? "ok" : "restart-health-failed");
-    expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(stopped ? 1 : 0);
-    expect(onVerified).toHaveBeenCalledTimes(stopped ? 1 : 0);
+    if (port === "revoked") {
+      await expect(verify()).rejects.toThrow("update canceled");
+      expect(cleanup).toHaveBeenCalledOnce();
+      expectNoCalls(command, onVerified);
+      return;
+    }
+    const failure = port === "masked" ? "reconciliation-pending" : "restart-health-failed";
+    expect(await verify()).toBe(recovers ? "ok" : failure);
+    expect(cleanup).toHaveBeenCalledTimes(Number(cleans));
+    expect(command).toHaveBeenCalledTimes(Number(recovers));
+    expect(onVerified).toHaveBeenCalledTimes(Number(recovers));
     expect(vi.mocked(recordUpdateRunVerification).mock.calls[0]?.[1]).toMatchObject({
       serviceRunning: stopped ? false : undefined,
       settled: false,

@@ -177,6 +177,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           owner.mockReturnValue({
             ...incumbent,
             heartbeatAt: Date.now(),
+            listeningAt: Date.now(),
             [timestamp]: started - 1,
           });
           await vi.advanceTimersByTimeAsync(25_000);

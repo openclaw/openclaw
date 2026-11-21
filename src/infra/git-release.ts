@@ -421,8 +421,10 @@ export async function waitForGitReleaseSuccessor(params: {
     if (!incumbent) {
       // After an unreadable first poll, only a lease that demonstrably predates
       // the wait can identify the incumbent. A new arrival is not ours to signal.
-      const observedAt = current.listeningAt ?? current.heartbeatAt;
-      if (observedAt === undefined || observedAt >= waitStartedAtMs) {
+      const predatesWait = [current.listeningAt, current.heartbeatAt].some(
+        (at) => at !== undefined && at < waitStartedAtMs,
+      );
+      if (!predatesWait) {
         continue;
       }
       incumbent = current;

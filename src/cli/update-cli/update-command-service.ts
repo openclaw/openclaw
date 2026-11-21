@@ -33,6 +33,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { tryWriteCompletionCache } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { recoverStaleGitListener } from "./update-command-git-stale-listener.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
 import { recordOwedUpdateStep } from "./update-command-owed.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
@@ -317,39 +318,37 @@ export async function maybeRestartService(
     }
   };
   let activationAccepted = false;
-  let childReadinessPending = false;
+  let skipFurtherHealthRecovery = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
   const verifyRestartedGateway = async (
-    expectedGatewayVersion: string | undefined,
-    expectedGatewayBuildId: string | undefined,
     opts: Pick<
       Parameters<typeof verifyUpdatedGateway>[0],
       "requireRunningService" | "health" | "unverifiedGitHandoff"
-    > & { recoverHealth?: boolean } = {},
+    > & { recoverHealth?: false | "stopped-stale" } = {},
+    expectedGatewayVersion = expectedVersion,
   ) => {
     recordPhase("verifying");
     const verification = await verifyUpdatedGateway({
-      result: activation.result,
-      opts: activation.opts,
-      serviceEnv: activation.serviceEnv,
-      gatewayPort: activation.gatewayPort,
-      timeoutMs: activation.timeoutMs,
+      ...activation,
       onProgress,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
       ...opts,
-      onVerified: params.onVerified,
-      assertCurrent,
-      recoverHealth: async (initialHealth, reinspect, assertReadinessCurrent) => {
-        assertReadinessCurrent();
+      recoverHealth: async (initial, reinspect, assertReady) => {
+        assertReady();
         if (
-          childReadinessPending ||
+          skipFurtherHealthRecovery ||
           opts.recoverHealth === false ||
-          initialHealth.runtime?.systemd?.startRefusal
+          initial.runtime?.systemd?.startRefusal
         ) {
-          return { health: initialHealth, launchAgentRecovery: null };
+          return { health: initial, launchAgentRecovery: null };
         }
-        let health = initialHealth;
+        if (opts.recoverHealth === "stopped-stale") {
+          const health = await recoverStaleGitListener(activation, initial, reinspect, assertReady);
+          skipFurtherHealthRecovery = initial.waitOutcome === "stale-pids";
+          return { health, launchAgentRecovery: null };
+        }
+        let health = initial;
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!activation.opts.json) {
             defaultRuntime.log(
@@ -360,9 +359,9 @@ export async function maybeRestartService(
           }
           const terminated = await terminateStaleGatewayPids(health.staleGatewayPids, {
             env: activation.serviceEnv,
-            assertCurrent: assertReadinessCurrent,
+            assertCurrent: assertReady,
           });
-          assertReadinessCurrent();
+          assertReady();
           const currentOwner = readGatewayOwnerLease({ env: activation.serviceEnv });
           if (
             terminated.length > 0 &&
@@ -371,27 +370,26 @@ export async function maybeRestartService(
           ) {
             activationAccepted =
               (await runUpdatedInstallGatewayCommand(
-                { ...activation, assertCurrent: assertReadinessCurrent },
+                { ...activation, assertCurrent: assertReady },
                 "restart",
               )) === "accepted";
           }
           health = await reinspect();
         }
         const recovery = await recoverLaunchAgentAndRecheckGatewayHealth({
-          onGatewayStartAttempted: params.onGatewayStartAttempted,
-          updateRun: params.opts.run,
-          assertCurrent: assertReadinessCurrent,
+          ...activation,
+          updateRun: run,
+          assertCurrent: assertReady,
           preserveDefinition,
           health,
           service: resolveGatewayService(),
           port: activation.gatewayPort,
-          timeoutMs: activation.timeoutMs,
           onProgress,
           expectedVersion: expectedGatewayVersion,
-          ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
+          expectedBuildId: expectedGatewayBuildId,
           env: activation.serviceEnv,
         });
-        assertReadinessCurrent();
+        assertReady();
         const nativeRecovery = recovery.launchAgentRecovery;
         if (nativeRecovery?.status === "recovered" || nativeRecovery?.status === "failed") {
           activationAccepted = nativeRecovery.status === "recovered";
@@ -473,17 +471,20 @@ export async function maybeRestartService(
     const waitStartedAtMs = Date.now();
     const handoff = await waitForGitReleaseSuccessor(activation);
     assertCurrent();
-    const outcome = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
+    const outcome = await verifyRestartedGateway({
       requireRunningService: true,
       // A missing owner row proves neither turnover nor that the service stopped.
-      recoverHealth: false,
+      recoverHealth: handoff.status === "no-incumbent" ? "stopped-stale" : false,
       unverifiedGitHandoff:
         handoff.status === "changed" ? undefined : { ...handoff, waitStartedAtMs },
     });
     if (outcome) {
       return outcome;
     }
-    if (!lastVerification?.serviceStoppedFree) {
+    if (
+      !lastVerification?.serviceStoppedFree ||
+      (readGatewayOwnerLease({ env: serviceEnv, current: true })?.state ?? "dead") !== "dead"
+    ) {
       return await failed("restart-health-failed");
     }
   }
@@ -508,16 +509,13 @@ export async function maybeRestartService(
         ) {
           recordPhase("verifying");
           const { health } = await observeUpdateGatewayReadiness({
+            ...activation,
             healthOnly: true,
-            gatewayPort: activation.gatewayPort,
-            timeoutMs: activation.timeoutMs,
             deadline: run?.deadline,
             onProgress,
             expectedVersion: expectedGatewayVersion,
-            ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-            serviceEnv: activation.serviceEnv,
+            expectedBuildId: expectedGatewayBuildId,
             requireRunningService: true,
-            assertCurrent,
           });
           assertCurrent();
           refreshedGatewayHealth =
@@ -621,10 +619,10 @@ export async function maybeRestartService(
     }
     // Keep the install's observation, including a pending startup, without restarting it again.
     if (refreshedGatewayHealth) {
-      const healthy = await verifyRestartedGateway(expectedGatewayVersion, expectedGatewayBuildId, {
-        requireRunningService: true,
-        health: refreshedGatewayHealth,
-      });
+      const healthy = await verifyRestartedGateway(
+        { requireRunningService: true, health: refreshedGatewayHealth },
+        expectedGatewayVersion,
+      );
       return healthy ?? (await failed("restart-health-failed"));
     }
     let restartHealth: GatewayRestartSnapshot | undefined;
@@ -656,7 +654,7 @@ export async function maybeRestartService(
           throw error;
         }
         // Activation succeeded; the update verifier owns the longer readiness budget.
-        childReadinessPending = true;
+        skipFurtherHealthRecovery = true;
         defaultRuntime.error("Gateway is not ready yet; continuing update readiness verification.");
         return "accepted" as const;
       });
@@ -679,9 +677,8 @@ export async function maybeRestartService(
       const requireRunningService =
         updatedInstallRestartNeedsServiceRootProof || activation.requireRunningServiceAfterRestart;
       const restartHealthy = await verifyRestartedGateway(
-        expectedGatewayVersion,
-        expectedGatewayBuildId,
         { requireRunningService, health: restartHealth },
+        expectedGatewayVersion,
       );
       if (!restartHealthy) {
         if (!activation.opts.json) {
@@ -709,7 +706,7 @@ export async function maybeRestartService(
     if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
       // The installed CLI owns restart retries; observe its final health result
       // without another native mutation.
-      const healthy = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
+      const healthy = await verifyRestartedGateway({
         requireRunningService: true,
         recoverHealth: false,
       });
