@@ -13,11 +13,29 @@ const continued = `data: ${JSON.stringify({
     },
   ],
 })}\n\n`;
+const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+const checkpoint = (finishReason: null | undefined, continuationToken: unknown = "checkpoint") =>
+  frame({
+    candidates: [
+      { continuationToken, finishReason, content: { parts: [{ text: "checkpoint " }] } },
+    ],
+    usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 2, totalTokenCount: 14 },
+  });
+
+type ManagedCase = {
+  name: string;
+  tail?: string;
+  wire?: string;
+  error?: string;
+  receipt?: boolean;
+  checkpointOnly?: boolean;
+  preservesCheckpoint?: boolean;
+};
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Google continuation through managed HTTP", () => {
-  it.each([
+  it.each<ManagedCase>([
     { name: "completed continuation", tail: "", error: undefined },
     {
       name: "standalone error event",
@@ -29,7 +47,47 @@ describe("Google continuation through managed HTTP", () => {
       tail: JSON.stringify({ error: { message: "synthetic terminal failure", code: 503 } }),
       error: "synthetic terminal failure",
     },
-  ])("preserves $name at HTTP EOF", async ({ tail, error }) => {
+    ...[undefined, null].flatMap((finishReason) => [
+      {
+        name: `${String(finishReason)} checkpoint before final continuation`,
+        wire: checkpoint(finishReason) + continued,
+        preservesCheckpoint: true,
+      },
+      {
+        name: `${String(finishReason)} checkpoint alone`,
+        wire: checkpoint(finishReason),
+        error: "Google stream ended before a terminal finish reason",
+        receipt: false,
+        checkpointOnly: true,
+        preservesCheckpoint: true,
+      },
+    ]),
+    ...["", 42, "x".repeat(16 * 1024 + 1)].map((invalidToken, index) => ({
+      name: `malformed checkpoint token ${index}`,
+      wire: checkpoint(null, invalidToken) + continued,
+      receipt: false,
+    })),
+    {
+      name: "contradictory final tokens",
+      wire:
+        continued +
+        frame({ candidates: [{ finishReason: "CONTINUATION", continuationToken: "other" }] }),
+      receipt: false,
+    },
+    ...["STOP", "FINISH_REASON_UNSPECIFIED"].map((finishReason) => ({
+      name: `token with ${finishReason}`,
+      wire: frame({ candidates: [{ finishReason, continuationToken: "checkpoint" }] }) + continued,
+      receipt: false,
+    })),
+  ])("preserves $name at HTTP EOF", async (testCase) => {
+    const {
+      tail = "",
+      wire = continued + tail,
+      error,
+      receipt = true,
+      checkpointOnly = false,
+      preservesCheckpoint = false,
+    } = testCase;
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
     const requests: {
       method: string | undefined;
@@ -45,7 +103,7 @@ describe("Google continuation through managed HTTP", () => {
         });
         request.resume();
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(continued + tail);
+        response.end(wire);
       },
       async (origin) => {
         const model = makeProviderModel("google-generative-ai", "clawrouter", "gemini-3.5-flash", {
@@ -79,7 +137,20 @@ describe("Google continuation through managed HTTP", () => {
           expect(result.errorMessage).toContain(error);
         } else {
           expect(result.stopReason).toBe("length");
-          expect(result.providerReplay?.id).toBe(token);
+          if (receipt) {
+            expect(result.providerReplay?.id).toBe(token);
+          } else {
+            expect(result.providerReplay).toBeUndefined();
+          }
+        }
+        if (preservesCheckpoint) {
+          expect(result.content).toEqual([
+            expect.objectContaining({
+              type: "text",
+              text: checkpointOnly ? "checkpoint " : "checkpoint partial response",
+            }),
+          ]);
+          expect(result.usage).toMatchObject({ input: 12, output: 2, totalTokens: 14 });
         }
       },
     );

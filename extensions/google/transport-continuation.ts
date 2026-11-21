@@ -24,7 +24,7 @@ export function prepareGoogleContinuation(params: {
   const headers = Object.entries(params.headers)
     .map(([name, value]) => [name.toLowerCase(), value] as const)
     .filter(([name]) => name !== "x-request-id")
-    .sort(([left], [right]) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   const binding = createHash("sha256")
     .update(
       JSON.stringify([
@@ -65,14 +65,18 @@ export function prepareGoogleContinuation(params: {
         }
         const candidate = chunk.candidates?.[0];
         if (candidate?.continuationToken !== undefined) {
-          if (
-            candidate.finishReason !== "CONTINUATION" ||
-            !isToken(candidate.continuationToken) ||
-            (token !== undefined && token !== candidate.continuationToken)
-          ) {
+          if (!isToken(candidate.continuationToken)) {
             invalid = true;
-          } else {
-            token = candidate.continuationToken;
+          } else if (candidate.finishReason != null) {
+            // Intermediate checkpoints carry content, but only CONTINUATION owns replay.
+            if (
+              candidate.finishReason !== "CONTINUATION" ||
+              (token !== undefined && token !== candidate.continuationToken)
+            ) {
+              invalid = true;
+            } else {
+              token = candidate.continuationToken;
+            }
           }
         }
         if (
