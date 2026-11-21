@@ -46,6 +46,21 @@ describe("sessions-list-tool", () => {
     mocks.getSessionStateVersions.mockReturnValue({});
   });
 
+  it.each([
+    { method: "chat.history", params: { messageLimit: 1 } },
+    { method: "sessions.describe", params: { includeDerivedTitles: true } },
+  ])("propagates $method enrichment errors with existing all visibility", async ({ params }) => {
+    const failure = new Error("Synthetic transcript read failed");
+    mocks.gatewayCall.mockImplementation(async (request: { method: string }) => {
+      if (request.method === "sessions.list") {
+        return { sessions: [{ ...sessionRow("agent:main:main", "main"), sessionId: "visible" }] };
+      }
+      throw failure;
+    });
+
+    await expect(list(params)).rejects.toBe(failure);
+  });
+
   it("filters Gateway-projected agent sessions by their authoritative classification", async () => {
     const cases = [
       ["agent:main:main", "direct", "main", "main"],

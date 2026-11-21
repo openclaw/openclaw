@@ -1,0 +1,5 @@
+# PR #163267: retained cross-channel session-disclosure regressions.
+# Exact net test-line growth against official main 634c1bfe531e782671b1a1da904819be44eee4ba.
+# Independent session-tool, memory, SDK visibility contracts and one public Gateway proof.
+# No inherited debt, shared scalar change, assertion removal, or extra credit.
+2429

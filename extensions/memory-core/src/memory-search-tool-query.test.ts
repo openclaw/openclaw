@@ -7,7 +7,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { executeMemorySearchToolQuery } from "./memory-search-tool-query.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 
-vi.mock("./session-search-visibility.js", () => ({
+vi.mock("./session-search-visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-search-visibility.js")>()),
   filterMemorySearchHitsBySessionVisibility: vi.fn(),
 }));
 

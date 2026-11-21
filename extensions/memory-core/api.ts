@@ -15,7 +15,12 @@ export { filterRecallEntriesWithinLookback } from "./src/dreaming-phases.js";
 export { previewRemHarness } from "./src/rem-harness.js";
 export type { PreviewRemHarnessOptions, PreviewRemHarnessResult } from "./src/rem-harness.js";
 export { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
-export { filterMemorySearchHitsBySessionVisibility } from "./src/session-search-visibility.js";
+export {
+  filterMemorySearchHitsBySessionVisibility,
+  prepareMemorySearchChannelRead,
+  type MemorySearchChannelRead,
+  type MemorySearchChannelTargets,
+} from "./src/session-search-visibility.js";
 export { captureMemoryRebuildNotice } from "./src/memory-rebuild-notice.js";
 export { inspectMemoryIndexPresence } from "./src/memory/manager-status-presence.runtime.js";
 export {

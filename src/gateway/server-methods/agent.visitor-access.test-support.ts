@@ -4,6 +4,10 @@ import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import {
+  LegacyPluginSdkResourceHost,
+  bindLegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { clearActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -168,6 +172,7 @@ export async function startVisitorGateway({
   });
   const registry = loaded.pluginRegistry;
   const catalog = await prepareUserProfileCatalog();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
   let services: PluginServicesHandle | undefined;
   const stop = async () => {
     try {
@@ -176,12 +181,17 @@ export async function startVisitorGateway({
         expect(stopped.errors).toEqual([]);
       }
     } finally {
-      catalog.release();
-      loaded.retireGatewayRuntimeBindings();
-      await clearActivePluginRegistry(registry);
+      try {
+        await sdkResourceHost.close();
+      } finally {
+        catalog.release();
+        loaded.retireGatewayRuntimeBindings();
+        await clearActivePluginRegistry(registry);
+      }
     }
   };
   try {
+    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResourceHost);
     const methods = createGatewayMethodRegistry(
       createCoreGatewayMethodDescriptors(handlers),
       registry,
