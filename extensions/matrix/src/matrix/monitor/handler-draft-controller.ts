@@ -114,6 +114,7 @@ export async function createMatrixDraftController(params: {
     }
     return {
       suppressDefaultToolProgressMessages: true,
+      allowProgressCallbacksWhenSourceDeliverySuppressed: true,
       progressPreambleEnabled: true,
       commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
       onToolStart: progressDraft.pushToolEvent,
