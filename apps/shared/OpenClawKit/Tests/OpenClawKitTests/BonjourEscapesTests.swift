@@ -23,4 +23,17 @@ import Testing
     @Test func decodeUsesDecimalUnicodeScalarValue() {
         #expect(BonjourEscapes.decode("Hello\\065World") == "HelloAWorld")
     }
+
+    // DNS-SD escapes are octets, so multi-byte characters arrive as several escapes.
+    @Test func decodeUTF8ByteEscapes() {
+        #expect(BonjourEscapes.decode("Bobby\\226\\128\\153s Mac") == "Bobby\u{2019}s Mac")
+    }
+
+    @Test func decodeKeepsOutOfRangeEscapesLiteral() {
+        #expect(BonjourEscapes.decode("a\\999b") == "a\\999b")
+    }
+
+    @Test func decodePreservesUnescapedNonASCII() {
+        #expect(BonjourEscapes.decode("Caf\u{00E9}\\032Bar") == "Caf\u{00E9} Bar")
+    }
 }
