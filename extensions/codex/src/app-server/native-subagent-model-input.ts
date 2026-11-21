@@ -105,6 +105,12 @@ export class RetiredNativeChildPaths {
   childThreadIds(nativeParentThreadId: string): Iterable<string> {
     return this.byParent.get(nativeParentThreadId)?.values() ?? [];
   }
+
+  agentPaths(nativeParentThreadId: string, childThreadId: string): string[] {
+    return [...(this.byParent.get(nativeParentThreadId) ?? [])].flatMap(([path, threadId]) =>
+      threadId === childThreadId ? [path] : [],
+    );
+  }
 }
 
 function nativeAgentPath(known: KnownChild | undefined): string | undefined {
