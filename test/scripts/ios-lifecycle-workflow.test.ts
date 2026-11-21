@@ -473,7 +473,14 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/TalkTranscriptCompletionTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
-  { owner: "apps/ios/Tests/ChatSessionsCodingTests.swift", groups: ["lifecycle"] },
+  {
+    owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatSessionsCodingTests.swift",
+    groups: ["lifecycle"],
+  },
+  {
+    owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ToolResultIngestionTransport.swift",
+    groups: ["lifecycle"],
+  },
   { owner: "apps/ios/UITests/OpenClawSnapshotUITests+Chat.swift", groups: ["lifecycle"] },
   { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
   { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
@@ -518,6 +525,7 @@ it.skipIf(process.platform === "win32").each([
     }
     if (
       owner.endsWith("/ChatSessionsCodingTests.swift") ||
+      owner.endsWith("/ToolResultIngestionTransport.swift") ||
       owner.endsWith("/OpenClawSnapshotUITests+Chat.swift")
     ) {
       expect(test.args).toContain("-only-testing:OpenClawTests/ChatSessionsCodingTests");
