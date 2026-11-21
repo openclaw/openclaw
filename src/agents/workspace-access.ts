@@ -1,4 +1,6 @@
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -379,6 +381,39 @@ export function getAgentWorkspaceAccess(
     assertBindingCurrent(key, binding);
   }
   return binding?.access;
+}
+
+/** Admit local scans without exposing declared owners or falling back to stale local copies. */
+export function assertLocalAgentWorkspaceScanAccess(
+  roots: readonly { path: string; recursive?: boolean }[],
+  capability?: keyof AgentWorkspaceAccess,
+): void {
+  const canonicalPath = (input: string) => {
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(path.resolve(input));
+    return path.join(existingPath, ...unresolvedSegments);
+  };
+  const localRoots = roots.map((root) => ({
+    path: canonicalPath(root.path),
+    recursive: root.recursive,
+  }));
+  for (const [key, binding] of bindings) {
+    // Unstarted declarations reserve all capabilities; stopped providers retain only their own.
+    if (capability && binding.access && !binding.access[capability]) {
+      continue;
+    }
+    const remoteRoot = canonicalPath(key);
+    if (
+      localRoots.some(
+        (root) =>
+          isPathInside(remoteRoot, root.path) ||
+          (root.recursive && isPathInside(root.path, remoteRoot)),
+      )
+    ) {
+      throw new WorkspaceAccessUnavailableError(
+        "Local scanning cannot include a declared remote workspace; run the command on the workspace host with a local-workspace configuration.",
+      );
+    }
+  }
 }
 
 /** Internal routing capture: unrelated Gateway media remains usable while the host is offline. */

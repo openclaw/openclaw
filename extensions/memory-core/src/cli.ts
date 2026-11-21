@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MemoryCommandOptions,
+  MemoryDuplicatesCommandOptions,
   MemoryForgetCommandOptions,
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
@@ -100,6 +101,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
             "Repair stale recall locks and normalize promotion metadata.",
           ],
           ["openclaw memory status --deep", "Check embedding provider readiness."],
+          ["openclaw memory duplicates", "Locate repeated Markdown blocks without changing files."],
           ["openclaw memory index --force", "Force a full reindex."],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
@@ -165,6 +167,34 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(lazyAction("runMemoryIndex"));
+
+  agentCommand("duplicates", "Report identical Markdown memory blocks without changing files")
+    .option("--json", "Print JSON without memory text")
+    .option(
+      "--max-groups <n>",
+      "Maximum duplicate groups to show",
+      memoryCliNumberOption("--max-groups", "positive integer"),
+      20,
+    )
+    .option(
+      "--min-chars <n>",
+      "Minimum block length in characters",
+      memoryCliNumberOption("--min-chars", "positive integer"),
+      80,
+    )
+    .action(async (opts: MemoryDuplicatesCommandOptions) => {
+      await runWithLocalStateOwner({
+        method: "memory.cli",
+        params: {},
+        target: "memory files",
+        databaseAccess: "none",
+        onForeignOwner: "refuse",
+        runLocal: async () => {
+          const { runMemoryDuplicates } = await import("./cli-duplicates.runtime.js");
+          await runMemoryDuplicates(opts);
+        },
+      });
+    });
 
   agentCommand(
     "reset",

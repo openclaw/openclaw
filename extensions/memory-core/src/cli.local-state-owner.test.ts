@@ -23,6 +23,7 @@ afterEach(() => vi.clearAllMocks());
 describe("memory CLI owner admission", () => {
   it.each([
     [["status"], "memory.cli", true],
+    [["duplicates"], "memory.cli", true],
     [["index"], "memory.cli", true],
     [["search", "query"], "memory.search.owner", false],
     [["forget", "--session", "fixture"], "memory.cli", true],
@@ -52,6 +53,9 @@ describe("memory CLI owner admission", () => {
       expect.objectContaining({ method, runLocal: expect.any(Function) }),
     );
     expect(fixture.admit.mock.calls[0]?.[0].onForeignOwner).toBe(offline ? "refuse" : undefined);
+    if (args[0] === "duplicates") {
+      expect(fixture.admit.mock.calls[0]?.[0].databaseAccess).toBe("none");
+    }
     expect(fixture.runtimeLoaded).not.toHaveBeenCalled();
   });
 });
