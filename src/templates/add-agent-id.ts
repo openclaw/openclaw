@@ -1,5 +1,8 @@
 // Shared with the Control UI, which names the agent it wants before Add.
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+
+const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export function templateAgentCopyNumber(baseId: string, agentId: string): number {
   const prefix = `${normalizeAgentId(baseId)}-`;
@@ -36,4 +39,23 @@ export function selectNextTemplateAgentId(
     throw new Error(`No portable agent ID remains for ${JSON.stringify(normalizedBase)}.`);
   }
   return next;
+}
+
+/** Why Add cannot create an agent under this ID; `openclaw agents add` rejects the same IDs. */
+export function templateAgentIdProblem(
+  agentId: string,
+): { code: string; message: string } | undefined {
+  if (!AGENT_ID_PATTERN.test(agentId)) {
+    return {
+      code: "invalid_agent_id",
+      message: `Final agent id ${JSON.stringify(agentId)} is not a valid portable agent id.`,
+    };
+  }
+  if (isReservedSystemAgentId(agentId)) {
+    return {
+      code: "reserved_agent_id",
+      message: `Agent id ${JSON.stringify(agentId)} is reserved for a system agent; choose another agent id.`,
+    };
+  }
+  return undefined;
 }
