@@ -10,6 +10,11 @@ function edit(raw: string, address: string, value: string) {
 }
 
 describe("setOcPath", () => {
+  it.each(["true", "FALSE", "null"])("edits the frontmatter key spelled %s", (key) => {
+    const raw = `---\n${key}: old # keep\n"${key}": other\n---\nBody\n`;
+    expect(edit(raw, `[frontmatter]/${key}`, "new").raw).toBe(raw.replace("old", "new"));
+  });
+
   it("replaces frontmatter while retaining unrelated pre-existing sentinel text", () => {
     const raw = `---\nname: github\ndescription: old desc\n---\nBody ${REDACTED_SENTINEL}.`;
     const r = edit(raw, "[frontmatter]/description", "new desc");
