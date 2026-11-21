@@ -146,8 +146,9 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const observeInlineWait = vi
       .spyOn(runWait, "waitForAgentRunReply")
       .mockImplementation((params) => {
-        if (params.timeoutMs === 1_000) {
-          // Admission uses real asynchronous work; only own the inline reply clock.
+        if (params.timeoutMs > 0 && params.timeoutMs <= 1_000) {
+          // Reply preparation consumes part of the one-second deadline. Admission
+          // uses real asynchronous work; only own the remaining inline reply clock.
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           inlineWaitStarted.resolve();
         }
