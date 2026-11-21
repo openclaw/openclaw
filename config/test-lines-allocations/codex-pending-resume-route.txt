@@ -1,0 +1,2 @@
+# Exact net regression-test lines: deleting and manually resuming a managed Codex thread restores its inference route without restarting its sibling client.
+215

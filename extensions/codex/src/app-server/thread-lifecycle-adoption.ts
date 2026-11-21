@@ -28,6 +28,7 @@ import {
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import {
   resolveCodexThreadAgentDir,
+  type prepareCodexThreadLifecyclePreflight,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
@@ -124,7 +125,8 @@ export async function withCodexThreadLifecycleBinding(
   }
 }
 
-type PendingResumeContext = CodexThreadRequestContext & {
+type PendingResumeContext = Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>> & {
+  prepareRequestContext: () => Promise<CodexThreadRequestContext>;
   binding: CodexAppServerThreadBinding;
   stageBindingReplacement: (operation: string) => void;
   releaseRetainedThread: (threadId: string, assertCurrent: () => void) => Promise<boolean>;
