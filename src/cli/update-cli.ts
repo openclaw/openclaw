@@ -4,6 +4,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { checkRelease } from "../update/check-release.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
@@ -230,6 +231,26 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         });
       } catch (err) {
         handleUpdateCommandError(err);
+      }
+    });
+
+  update
+    .command("check-release")
+    .description("Check a staged release without changing configuration or state")
+    .option("--json", "Output result as JSON", false)
+    .action(async () => {
+      const deadline = setTimeout(() => {
+        defaultRuntime.writeJson({ ok: false, reason: "check-release-timeout", surfaces: [] }, 0);
+        defaultRuntime.exit(1);
+      }, 3 * 60_000);
+      try {
+        const result = await checkRelease();
+        defaultRuntime.writeJson(result, 0);
+        if (!result.ok) {
+          process.exitCode = 1;
+        }
+      } finally {
+        clearTimeout(deadline);
       }
     });
 

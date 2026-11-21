@@ -7,7 +7,6 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   expectNoSideEffects,
   expectPackageInstallSpec,
@@ -16,7 +15,6 @@ import {
   getLogOutput,
   lastWriteJsonCall,
   packageInstallCommandCall,
-  requireValue,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
@@ -26,7 +24,6 @@ import {
   probePortUsage,
   serviceFixtureState,
   serviceLoaded,
-  serviceReadCommand,
   serviceReadRuntime,
   serviceRestart,
   serviceStart,
@@ -38,11 +35,7 @@ import {
   defaultRuntime,
   ExitError,
   invokeUpdateCli,
-  makeOkUpdateResult,
-  mockGitUpdateAfterMutation,
   resolveGatewayInstallEntrypoint,
-  resolveOpenClawPackageRoot,
-  runCommandWithTimeout,
   updateCommand,
   updateGitRelease,
   updateStatusCommand,
@@ -202,7 +195,6 @@ describe("update-cli", () => {
     env: NodeJS.ProcessEnv;
     supervisor: "systemd" | "launchd";
     options?: Parameters<typeof updateCommand>[0];
-    git?: boolean;
   }>([
     {
       platform: "linux",
@@ -215,37 +207,16 @@ describe("update-cli", () => {
       env: { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" },
       supervisor: "launchd",
     },
-    // A Git release hands off from its service inspection too, before any release is built.
-    { platform: "linux", env: {}, supervisor: "systemd", git: true },
   ])(
-    "hands agent-initiated updates to $supervisor before stopping the gateway ($env, git=$git)",
-    async ({ platform, env, supervisor, options = {}, git = false }) => {
+    "hands agent-initiated updates to $supervisor before stopping the gateway ($env)",
+    async ({ platform, env, supervisor, options = {} }) => {
       const phases = vi.spyOn(
         await import("./update-cli/update-command-service.js"),
         "maybeStopManagedServiceBeforeMutableUpdate",
       );
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const caseDir = createCaseDir("openclaw-update-handoff");
-      const sha = "a".repeat(40);
-      const { pkgRoot: root, entryPath } = git
-        ? {
-            pkgRoot: caseDir,
-            entryPath: await writeOpenClawPackageFixture(caseDir, "1.0.0", {
-              git: true,
-              builtSha: sha,
-              entrySource: "export {};\n",
-            }),
-          }
-        : await setupInstalledPackageRoot(caseDir);
-      if (git) {
-        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-        vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-        vi.mocked(updateGitRelease).mockImplementationOnce(async ({ opts: updateOptions }) => {
-          await updateOptions.inspectGitTarget({});
-          await requireValue(updateOptions.beforeGitMutation, "Git mutation admission")({});
-          return makeOkUpdateResult();
-        });
-      }
+      const { pkgRoot: root, entryPath } = await setupInstalledPackageRoot(caseDir);
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid, 1]));
@@ -273,8 +244,7 @@ describe("update-cli", () => {
           supervisor,
           parentPid: gatewayFixturePid,
           invocationCwd: process.cwd(),
-          tag:
-            git || options.channel === "extended-stable" ? undefined : (options.tag ?? "9999.0.0"),
+          tag: options.channel === "extended-stable" ? undefined : (options.tag ?? "9999.0.0"),
           acceptCapabilities: true,
         }),
       );
@@ -287,7 +257,7 @@ describe("update-cli", () => {
       expect(phases.mock.calls.length).toBeGreaterThan(1);
       expectNoSideEffects(serviceStop, serviceRestart);
       expect(freshRestartCalls()).toHaveLength(0);
-      expect(updateGitRelease).toHaveBeenCalledTimes(git ? 1 : 0);
+      expect(updateGitRelease).not.toHaveBeenCalled();
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(lastWriteJsonCall()).toMatchObject({
@@ -335,27 +305,18 @@ describe("update-cli", () => {
   });
 
   it.each([
-    { kind: "git", platform: "linux", restart: true, fault: "read" },
     { kind: "package", platform: "darwin", restart: false, fault: "stale-record" },
   ] as const)(
     "admits $kind on $platform with restart=$restart when service inspection is unavailable ($fault)",
-    async ({ kind, platform, restart, fault }) => {
+    async ({ platform, restart }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      if (kind === "package") {
-        await mockPackageInstallAtCaseDir();
-      } else {
-        mockGitUpdateAfterMutation();
-      }
+      await mockPackageInstallAtCaseDir();
       const staleState = path.join(createCaseDir("stale-service-record"), "state");
-      if (fault === "read") {
-        serviceReadCommand.mockRejectedValue(new Error("inspection-secret-canary"));
-      } else {
-        primeServiceCommand(["/old-node/bin/node", "/old-install/dist/index.js", "gateway"], {
-          OPENCLAW_STATE_DIR: staleState,
-        });
-        serviceLoaded.mockRejectedValue(new Error("manager unavailable"));
-        serviceReadRuntime.mockResolvedValue({ status: "unknown" });
-      }
+      primeServiceCommand(["/old-node/bin/node", "/old-install/dist/index.js", "gateway"], {
+        OPENCLAW_STATE_DIR: staleState,
+      });
+      serviceLoaded.mockRejectedValue(new Error("manager unavailable"));
+      serviceReadRuntime.mockResolvedValue({ status: "unknown" });
 
       await invokeUpdateCli({ yes: true, json: true, restart });
 
