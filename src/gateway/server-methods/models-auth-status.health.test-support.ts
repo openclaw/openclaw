@@ -63,3 +63,33 @@ export function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
     ],
   };
 }
+
+const OPENAI_DEFAULT_PROFILE = "openai:default";
+const configuredOAuthProvider = {
+  baseUrl: "https://example.invalid/v1",
+  apiKey: OPENAI_DEFAULT_PROFILE,
+  models: [],
+};
+export const configBoundOAuthOwnershipCases = [
+  { name: "local", local: [OPENAI_DEFAULT_PROFILE], external: [], supported: true },
+  { name: "inherited", local: [], external: [], supported: false },
+  { name: "external", local: [], external: [OPENAI_DEFAULT_PROFILE], supported: false },
+  {
+    name: "external even with a local overlap",
+    local: [OPENAI_DEFAULT_PROFILE],
+    external: [OPENAI_DEFAULT_PROFILE],
+    supported: false,
+  },
+  { name: "unknown ownership", local: undefined, external: [], supported: false },
+].map(({ name, local, external, supported }) => ({
+  name,
+  config: { models: { providers: { openai: configuredOAuthProvider } } },
+  store: {
+    version: 1,
+    profiles: { [OPENAI_DEFAULT_PROFILE]: oauthCredential("openai") },
+    runtimeLocalProfileIds: local,
+    runtimeExternalProfileIds: external,
+  },
+  supported,
+  logoutSupported: external.length ? undefined : true,
+}));
