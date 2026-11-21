@@ -2,6 +2,7 @@ import childProcess from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -83,8 +84,11 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
     return results;
   } catch (cause) {
     const failure = asOptionalRecord(cause);
-    const hint =
-      typeof failure?.path === "string"
+    // A locked managed-browser profile names its stop step; other sources keep the generic hint.
+    const browserHint = describeLockedBackupSource(cause);
+    const hint = browserHint.includes("--browser-profile")
+      ? browserHint
+      : typeof failure?.path === "string"
         ? ` Backup source ${shortenHomePath(failure.path)} could not be read (${typeof failure.code === "string" ? failure.code : "unknown error"}). Check read permissions or close the program using it, then retry the backup or update.`
         : " Check that the backup worker can run and the source files are readable, then retry the backup.";
     throw new Error(
