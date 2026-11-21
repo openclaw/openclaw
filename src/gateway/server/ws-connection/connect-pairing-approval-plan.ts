@@ -22,6 +22,7 @@ import {
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "../../openclaw-id/tunnel-principal.js";
+import { isPublicationTransportScope } from "../../publication-reader.js";
 import {
   resolvePairedAccessScopes,
   isControlUiOwnerBootstrapProfile,
@@ -97,7 +98,12 @@ export function resolveTrustedProxyDeviceGrantScopes(params: {
   ) {
     return null;
   }
-  const scopes = intersectOperatorScopes(params.scopes, resolvePairedAccessScopes(pairedDevice));
+  const grantedScopes = resolvePairedAccessScopes(pairedDevice);
+  // Reserved transport scopes require their own device-token admission.
+  if (grantedScopes.some(isPublicationTransportScope)) {
+    return null;
+  }
+  const scopes = intersectOperatorScopes(params.scopes, grantedScopes);
   return scopes.length > 0 ? scopes : null;
 }
 
