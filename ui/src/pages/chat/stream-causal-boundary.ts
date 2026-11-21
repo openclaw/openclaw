@@ -151,26 +151,22 @@ export function resolveAssistantTextTail(
       continue;
     }
     const remaining = cumulativeText.slice(persistedPrefixLength);
-    if (remaining.startsWith(persistedText)) {
-      persistedPrefixLength += persistedText.length;
+    // Persisted display texts are trimmed by both extraction callers.
+    const candidate = persistedPrefixLength > 0 ? remaining.trimStart() : remaining;
+    if (candidate.startsWith(persistedText)) {
+      persistedPrefixLength += remaining.length - candidate.length + persistedText.length;
       continue;
     }
-    if (persistedText.startsWith(remaining)) {
-      return null;
-    }
-    const whitespace = persistedPrefixLength > 0 ? /^\s+/u.exec(remaining)?.[0] : undefined;
-    if (whitespace && remaining.slice(whitespace.length).startsWith(persistedText)) {
-      persistedPrefixLength += whitespace.length + persistedText.length;
-      continue;
-    }
-    if (whitespace && persistedText.startsWith(remaining.slice(whitespace.length))) {
+    if (persistedText.startsWith(candidate)) {
       return null;
     }
     if (persistedPrefixLength > 0) {
       break;
     }
   }
-  return cumulativeText.slice(persistedPrefixLength);
+  return persistedPrefixLength > 0
+    ? cumulativeText.slice(persistedPrefixLength).trimStart()
+    : cumulativeText;
 }
 
 /** Keep a durable cumulative prefix hidden until its terminal or next tail arrives. */

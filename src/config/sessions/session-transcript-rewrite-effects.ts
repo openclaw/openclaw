@@ -84,3 +84,25 @@ export function transcriptRewritePreservesProjection(
     isDeepStrictEqual(extractTranscriptIndexEntry(before, 0), extractTranscriptIndexEntry(after, 0))
   );
 }
+
+/** Closed assistant disposition settlement cannot alter content, identity, or topology. */
+export function transcriptAssistantMetadataSettlementIsValid(
+  beforeJson: string,
+  afterJson: string,
+): boolean {
+  const events: unknown[] = [JSON.parse(beforeJson), JSON.parse(afterJson)];
+  for (const event of events) {
+    if (
+      !isRecord(event) ||
+      event.type !== "message" ||
+      !isRecord(event.message) ||
+      event.message.role !== "assistant"
+    ) {
+      return false;
+    }
+    for (const field of ["stopReason", "usage", "display", "openclawStreamFallback"]) {
+      delete event.message[field];
+    }
+  }
+  return isDeepStrictEqual(events[0], events[1]);
+}

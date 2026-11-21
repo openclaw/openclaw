@@ -8,11 +8,12 @@ import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { MemoryCliSessionHistoryIndex } from "../gateway/cli-session-history-index-memory.js";
 import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import type { CliOutput } from "./cli-output-contracts.js";
+import type { CliCommentarySegment, CliOutput } from "./cli-output-contracts.js";
 import { transformCliResultText } from "./cli-output-results.js";
 import { createClaudeParser, joinJsonlFrames } from "./cli-output.test-helpers.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import { attachCliMessagingDeliveryEvidence } from "./cli-runner/delivery-evidence.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 
 const { execute } = vi.hoisted(() => ({ execute: vi.fn() }));
@@ -47,17 +48,52 @@ async function prepareHistoryRun(sessionId: string, runId: string) {
   return { target, context };
 }
 
+it.each([true, false])(
+  "settles saved snapshots on delivered failure (final=%s)",
+  async (sourceReplyFinal) => {
+    const { target, context } = await prepareHistoryRun(
+      "delivered-failure",
+      "delivered-failure-run",
+    );
+    execute.mockImplementation(async (_context, _sessionId, options) => {
+      for (const text of ["Findings", "Done"]) {
+        options.onCommentarySegment({ text, key: text, timestamp: 1 });
+      }
+      throw attachCliMessagingDeliveryEvidence(new Error("failed after delivery"), {
+        didSendViaMessagingTool: true,
+        ...(sourceReplyFinal ? { sourceReplyDelivered: true as const } : {}),
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal }],
+      });
+    });
+    const result = await runPreparedCliAgent(context);
+    expect(result.meta.error).toBeDefined();
+    expect(result.sourceReplyDelivered === true).toBe(sourceReplyFinal);
+    const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+      typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+    );
+    expect(messages).toMatchObject([
+      { stopReason: "error", content: [{ text: "Findings" }] },
+      { stopReason: "error", content: [{ text: "Done" }], display: false },
+    ]);
+    expect(messages[0]).not.toHaveProperty("display", false);
+  },
+);
+
 // Completed held answers are not narration: canonical consumers need both results.
 it.each([
-  { transformed: false, finalInterim: false },
-  { transformed: true, finalInterim: false },
-  { transformed: false, finalInterim: true },
+  { transformed: false, finalInterim: false, streamed: false },
+  { transformed: true, finalInterim: false, streamed: false },
+  { transformed: false, finalInterim: true, streamed: false },
+  { transformed: false, finalInterim: false, streamed: true },
+  { transformed: true, finalInterim: true, streamed: true },
 ])(
   "retains held answers and deduplicates the final interim result in canonical history (%j)",
-  async ({ transformed, finalInterim }) => {
+  async ({ transformed, finalInterim, streamed }) => {
     setRuntimeConfigSnapshot({});
     const { target, context } = await prepareHistoryRun("held-answer", "held-answer-run");
-    const parser = createClaudeParser();
+    const segments: CliCommentarySegment[] = [];
+    const parser = createClaudeParser({ onCommentarySegment: (segment) => segments.push(segment) });
     for (const [index, text] of ["PARENT_COMPLETE", "CHILD_COMPLETE"].entries()) {
       parser.push(
         joinJsonlFrames(
@@ -89,7 +125,17 @@ it.each([
     if (!output) {
       throw new Error("Expected completed CLI output");
     }
-    execute.mockResolvedValue(transformed ? transformCliResultText(output, replacements) : output);
+    execute.mockImplementation(async (_context, _sessionId, options) => {
+      if (streamed) {
+        for (const segment of segments) {
+          options.onCommentarySegment?.({
+            ...segment,
+            text: transformed ? segment.text.replaceAll("COMPLETE", "DONE") : segment.text,
+          });
+        }
+      }
+      return transformed ? transformCliResultText(output, replacements) : output;
+    });
     if (transformed) {
       context.backendResolved.textTransforms = { output: replacements };
     }

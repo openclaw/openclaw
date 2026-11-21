@@ -1,7 +1,6 @@
-import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import type { CliJsonlStreamingParserOptions, CliOutput } from "./cli-output-contracts.js";
 import { isGeminiStreamJsonDialect, supportsCliJsonlToolEvents } from "./cli-output-records.js";
-import { withCliRawFinalText } from "./cli-output-results.js";
+import { hasInterruptedClaudeToolProtocol, withCliRawFinalText } from "./cli-output-results.js";
 
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
@@ -51,18 +50,13 @@ export function resolveCliStreamOutput(state: {
   const partialOutput = { text: text.trim(), sessionId, usage };
   // An unfinished stream cannot disambiguate raw protocol from a completed example.
   // Rejected partial output carries empty text, so it also reports no final message.
-  if (claudeStreamJson) {
-    const codeRegions = findCodeRegions(text);
-    for (const match of text.matchAll(/(?:^|\n)[ \t]*<(?:invoke|parameter)(?=[\s/>]|$)/gu)) {
-      if (!isInsideCode(match.index + match[0].lastIndexOf("<"), codeRegions)) {
-        return {
-          ...partialOutput,
-          text: "",
-          errorText: CLAUDE_INTERRUPTED_RAW_TOOL_PROTOCOL_ERROR,
-          partialOutputRejected: true,
-        };
-      }
-    }
+  if (claudeStreamJson && hasInterruptedClaudeToolProtocol(text)) {
+    return {
+      ...partialOutput,
+      text: "",
+      errorText: CLAUDE_INTERRUPTED_RAW_TOOL_PROTOCOL_ERROR,
+      partialOutputRejected: true,
+    };
   }
   if (sawCustomJsonlEvent || partialOutput.text) {
     return settle({

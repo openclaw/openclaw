@@ -31,7 +31,7 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliCommentaryItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName } from "./tool-policy.js";
 import { recordCliTrajectoryEvent } from "./trajectory.js";
@@ -469,7 +469,7 @@ export function createCliEventHandlers(params: {
       });
     }
   };
-  const emitCliCommentaryText = (text: string) => {
+  const emitCliCommentaryText = (text: string, itemId?: string) => {
     if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
@@ -484,7 +484,7 @@ export function createCliEventHandlers(params: {
     commentaryCounter += 1;
     emitLiveEvent("item", () => ({
       kind: "preamble",
-      itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
+      itemId: cliCommentaryItemId(runParams.runId, itemId ?? String(commentaryCounter)),
       // The JSONL parser flushes a complete pre-tool text segment here.
       // Mark its boundary so channels can safely create their first notification.
       phase: "end",

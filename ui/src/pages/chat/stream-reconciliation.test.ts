@@ -89,6 +89,43 @@ function expectTexts(messages: unknown[], ...expected: string[]) {
   expect(messages.map(messageText)).toEqual(expected);
 }
 
+it("materializes only the unsaved CLI tail after an interrupted cumulative stream", () => {
+  const runId = "active-run";
+  const saved = {
+    role: "assistant",
+    content: "One.",
+    __openclaw: {
+      runId,
+      idempotencyKey: `cli-assistant:${runId}:seg:1`,
+    },
+  };
+  const state = idle({
+    chatRunId: runId,
+    chatMessages: [saved],
+    chatStream: "One.\n\nTail",
+    chatStreamStartedAt: 1,
+  });
+  expect(currentTail(state, () => false)).toBe("Tail");
+  expectTexts(materialize([user("Ask"), saved], state), "Ask", "One.", "Tail");
+});
+
+it("retains an interrupted answer whose prefix matches independent saved commentary", () => {
+  const runId = "active-run";
+  const saved = {
+    ...assistant("Check"),
+    openclawStreamFallback: { itemId: "commentary-active-run-1", runId },
+    __openclaw: { runId, idempotencyKey: `cli-assistant:${runId}:seg:1` },
+  };
+  const state = idle({
+    chatRunId: runId,
+    chatMessages: [saved],
+    chatStream: "Checking succeeded",
+    chatStreamStartedAt: 1,
+  });
+  expect(currentTail(state, () => false)).toBe("Checking succeeded");
+  expectTexts(materialize([saved], state), "Check", "Checking succeeded");
+});
+
 function createToolStreamEntry(
   toolCallId: string,
   runId = "run-active",

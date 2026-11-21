@@ -5,6 +5,7 @@ import type { SessionTranscriptContextVersion } from "./session-transcript-conte
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type SessionMessageRewriteSelection = {
+  assistantMetadataOnly?: boolean;
   scope: ResolvedTranscriptScope;
   target:
     | { kind: "anchor"; anchor: TranscriptEntryAnchor; active?: "exact" | "sequence" }

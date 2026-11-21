@@ -1,10 +1,14 @@
-import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readSessionMessageIdentity,
+  readAssistantStreamSegmentIdentity,
+} from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { streamCausalInterval } from "./stream-causal-boundary.ts";
 import {
   hasAssistantStreamPartReplacement,
@@ -48,6 +52,21 @@ export function prunePersistedAssistantStreamSegments(
 ): void {
   const identity = readAssistantStreamSegmentIdentity(message);
   if (!identity) {
+    const row = readSessionMessageIdentity(message);
+    const runId = row?.runId;
+    if (runId && row.idempotencyKey?.startsWith(`cli-assistant:${runId}:seg:`)) {
+      const text = extractText(message)?.trim();
+      // Retain cumulative coordinates; only this run's covered indexed display retires.
+      state.chatStreamSegments = pruneAccumulatedStreamSegments(
+        state.chatStreamSegments,
+        runId,
+        (segment) =>
+          segment.runId === runId &&
+          streamSegmentUsesAccumulatedText(segment) &&
+          Boolean(segment.text.trim()) &&
+          Boolean(text?.startsWith(segment.text.trim())),
+      );
+    }
     return;
   }
   const segments = state.chatStreamSegments.filter((segment) => {

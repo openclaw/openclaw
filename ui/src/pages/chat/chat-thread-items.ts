@@ -1,3 +1,7 @@
+import {
+  readSessionMessageIdentity,
+  readAssistantStreamSegmentIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -394,6 +398,22 @@ export function hasRenderableNormalizedMessage(
 export function sanitizeStreamText(text: string): string {
   const stripped = stripInboundMetadata(text);
   return stripped.trim().length > 0 ? stripped : "";
+}
+
+export function savedCliStreamTexts(
+  messages: readonly unknown[] | undefined,
+  runId: string | null | undefined,
+): Array<string | null> {
+  if (!runId) {
+    return [];
+  }
+  const prefix = `cli-assistant:${runId}:seg:`;
+  return (messages ?? []).flatMap((message) =>
+    readSessionMessageIdentity(message)?.idempotencyKey?.startsWith(prefix) &&
+    !readAssistantStreamSegmentIdentity(message)
+      ? [extractTextCached(message)?.trim() ?? null]
+      : [],
+  );
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {

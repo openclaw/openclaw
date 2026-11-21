@@ -6,8 +6,8 @@ import { t } from "../../i18n/index.ts";
 import {
   type ChatItem,
   type MessageGroup,
-  accumulatedStreamText,
   advanceAccumulatedStreamText,
+  accumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
@@ -67,6 +67,7 @@ import {
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
+  savedCliStreamTexts,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
@@ -85,6 +86,7 @@ import {
   createStreamSegmentProjector,
 } from "./chat-thread-stream-projection.ts";
 import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { resolveAssistantTextTail } from "./stream-causal-boundary.ts";
 
 export type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
 
@@ -100,9 +102,7 @@ export function buildChatItems(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
   const toolItems = buildMessageItems(tools).map((item) => {
-    const projection: ChatProjection<typeof item> = {
-      item,
-    };
+    const projection: ChatProjection<typeof item> = { item };
     return {
       projection,
       runId: normalizeOptionalString(item.message.runId),
@@ -577,10 +577,10 @@ export function buildChatItems(
     ...projectResolvedQuestionPrompts(props.questionPrompts, resolveProjectionBounds),
   );
 
-  const visibleText = trimAccumulatedStreamPrefix(
-    sanitizeStreamText(props.stream ?? ""),
-    accumulatedStreamText(segments, sanitizeStreamText),
-  );
+  const prefix = accumulatedStreamText(segments, sanitizeStreamText);
+  const texts = savedCliStreamTexts(props.messages, props.runId);
+  const tail = trimAccumulatedStreamPrefix(sanitizeStreamText(props.stream ?? ""), prefix);
+  const visibleText = resolveAssistantTextTail(texts, tail) ?? "";
   if (props.reasoning) {
     const { runId } = props.reasoning;
     for (const reasoning of props.reasoning.items) {

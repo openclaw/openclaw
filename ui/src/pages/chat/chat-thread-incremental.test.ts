@@ -456,6 +456,98 @@ it("retires superseded grouping snapshots when prepends extend a forwarded segme
   }
 });
 
+it("keeps saved CLI narration out of cached cumulative stream updates", () => {
+  resetChatThreadState();
+  const saved = {
+    role: "assistant",
+    content: "Narration 1.",
+    __openclaw: {
+      id: "saved-narration",
+      seq: 1,
+      runId: "active-run",
+      idempotencyKey: "cli-assistant:active-run:seg:1",
+    },
+  };
+  const props = createProps({
+    runId: "active-run",
+    messages: [saved],
+    stream: "Narration 1.\n\nNarration 2.",
+    streamStartedAt: 1,
+    runWorking: true,
+  });
+  const streamText = (items: ReturnType<typeof buildCachedChatItems>) =>
+    items.filter((item) => item.kind === "stream").map((item) => item.text);
+
+  expect(streamText(buildCachedChatItems(props))).toEqual(["Narration 2."]);
+  expect(
+    streamText(
+      buildCachedChatItems({
+        ...props,
+        stream: "Narration 1.\n\nNarration 2.\n\nNarration 3.",
+      }),
+    ),
+  ).toEqual(["Narration 2.\n\nNarration 3."]);
+});
+
+it.each(["Check", "Checking succeeded"])(
+  "keeps independent saved commentary out of answer %s",
+  (answer) => {
+    resetChatThreadState();
+    const saved = {
+      role: "assistant",
+      content: "Check",
+      openclawStreamFallback: { itemId: "commentary-active-run-1", runId: "active-run" },
+      __openclaw: {
+        id: "commentary",
+        seq: 1,
+        runId: "active-run",
+        idempotencyKey: "cli-assistant:active-run:seg:1",
+      },
+    };
+    const props = createProps({
+      runId: "active-run",
+      messages: [saved],
+      stream: answer,
+      streamStartedAt: 1,
+    });
+    const texts = (items: ReturnType<typeof buildChatItems>) =>
+      items.filter((item) => item.kind === "stream").map((item) => item.text);
+    expect(texts(buildChatItems(props))).toEqual([answer]);
+    expect(texts(buildCachedChatItems(props))).toEqual([answer]);
+    expect(texts(buildCachedChatItems({ ...props, stream: `${answer} now` }))).toEqual([
+      `${answer} now`,
+    ]);
+  },
+);
+
+it("deduplicates saved CLI narration when an empty cached stream resumes", () => {
+  resetChatThreadState();
+  const saved = {
+    role: "assistant",
+    content: "Narration 1.",
+    __openclaw: {
+      id: "saved-narration",
+      seq: 1,
+      runId: "active-run",
+      idempotencyKey: "cli-assistant:active-run:seg:1",
+    },
+  };
+  const props = createProps({
+    runId: "active-run",
+    messages: [saved],
+    stream: null,
+    streamStartedAt: 1,
+    runWorking: true,
+  });
+  const streamText = (items: ReturnType<typeof buildCachedChatItems>) =>
+    items.filter((item) => item.kind === "stream").map((item) => item.text);
+
+  buildCachedChatItems(props);
+  expect(streamText(buildCachedChatItems({ ...props, stream: "Narration 1.\n\nTail" }))).toEqual([
+    "Tail",
+  ]);
+});
+
 it("keeps one owned canvas while its answer shortcode streams", () => {
   resetChatThreadState();
   const runId = "widget-run";
