@@ -62,8 +62,10 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     ].includes(String(type)) &&
     !queue
   ) {
-    return loadQueue().then((loaded) => {
+    // Claimed runs finalize later, possibly during shutdown after an update replaced chunks.
+    return Promise.all([loadQueue(), loadFinalization()]).then(([loaded, loadedFinalization]) => {
       queue = loaded;
+      finalization = loadedFinalization;
     });
   }
   if (type === "cron.finalizeRuns" && !finalization) {
