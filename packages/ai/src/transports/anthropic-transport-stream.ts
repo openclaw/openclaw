@@ -22,6 +22,7 @@ import {
 } from "../providers/anthropic-model-contract.js";
 import { redactDiagnosticText } from "../utils/credential-redaction.js";
 import {
+  isDirectAnthropicEndpoint,
   isDirectAnthropicModel,
   supportsAnthropicServerSideFallback,
 } from "./anthropic-payload-policy.js";
@@ -252,7 +253,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               }),
             );
             // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-            directApiKeyBetaHeader = isDirectAnthropicModel(model)
+            directApiKeyBetaHeader = isDirectAnthropicEndpoint(model)
               ? (new Headers(omitNullRequestHeaders(defaultHeaders)).get("anthropic-beta") ?? "")
               : undefined;
           }

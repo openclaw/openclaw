@@ -4,7 +4,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { AnthropicContextManagementOptions, AnthropicOptions } from "../provider-options.js";
 import {
-  isDirectAnthropicModel,
+  isDirectAnthropicEndpoint,
   supportsAnthropicServerSideFallback,
 } from "../transports/anthropic-payload-policy.js";
 import { runAnthropicStreamLifecycle } from "../transports/anthropic-stream-lifecycle.js";
@@ -218,7 +218,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             optionsHeaders,
           );
           // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
-          if (isDirectAnthropicModel(model)) {
+          if (isDirectAnthropicEndpoint(model)) {
             directApiKeyBetaHeader =
               Object.entries(defaultHeaders).findLast(
                 ([name]) => name.toLowerCase() === "anthropic-beta",
