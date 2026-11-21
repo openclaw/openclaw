@@ -1,0 +1,9 @@
+1075
+# Child participation needs independent persistence/reset, live invitation/source,
+# host-bound native spawn, real Gateway every-turn, completion-steering, and
+# repeated model-policy intersection proofs. The final cutover also covers native
+# child/grandchild private completion, deleted-row and collector restart custody,
+# real child process isolation, and original-creator-only child approval.
+# These cover separate authority boundaries; helper-only proof missed the actual
+# prepared-run writer admission and the active-owner steering path.
+# Timings are retained in the item7-stageb-* evidence logs; CI timings pending.

@@ -21,7 +21,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { isInProcessSessionRun } from "./in-process-session-run.js";
+import { isInProcessSessionRun, readInProcessParticipationRun } from "./in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
@@ -51,6 +51,7 @@ import { resolvePluginSessionWorkDispatch } from "./plugin-session-work-authorit
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
+  OperatorContinuationOptions,
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
@@ -120,8 +121,7 @@ export async function withOperatorToolGatewayAuthority<T>(
 
 export function captureOperatorToolGatewayContinuationContextInternal(
   target?: { sessionKey: string; agentId?: string },
-  options?: {
-    retainRequester?: true;
+  options?: OperatorContinuationOptions & {
     request?: { method: string; params: Record<string, unknown> };
   },
 ) {
@@ -160,6 +160,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
   });
   return prepareGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
+    participationCeiling: options?.participationCeiling,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
   }).then((captured) => {
@@ -293,7 +294,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
 export function captureOperatorToolGatewayContinuationContext(
   target?: { sessionKey: string; agentId?: string },
-  options?: { retainRequester?: true },
+  options?: OperatorContinuationOptions,
 ) {
   return captureOperatorToolGatewayContinuationContextInternal(target, options);
 }
@@ -303,11 +304,10 @@ export async function runWithOperatorToolGatewayContinuationContext<T>(
   run: () => Promise<T>,
   agentId?: string,
 ): Promise<T> {
-  const preparation = captureOperatorToolGatewayContinuationContext();
-  if (!preparation) {
+  const captured = await captureOperatorToolGatewayContinuationContext();
+  if (!captured) {
     return await runWithOperatorToolGatewayCleanupContext(run);
   }
-  const captured = await preparation;
   try {
     return await captured.runWithRequester(run, agentId);
   } finally {
@@ -519,6 +519,7 @@ export function resolveInProcessGatewayDispatch(
   });
   // Narrow by authority, not literal membership: write also authorizes reads
   // and Talk, including tools called by a synthetic continuation.
+  const participantLaunch = Boolean(readInProcessParticipationRun(method, params)?.source);
   const syntheticScopes = operatorScopes
     ? syntheticScopeMode === "exact"
       ? requestedSyntheticScopes.filter((requestedScope) =>
@@ -531,12 +532,18 @@ export function resolveInProcessGatewayDispatch(
       : projectOperatorScopesForMethod({
           method,
           requestParams: params,
-          requestedScopes: requestedSyntheticScopes,
+          requestedScopes: participantLaunch ? [READ_SCOPE] : requestedSyntheticScopes,
           allowedScopes: operatorScopes,
           ...(allowOwnSessionScope || isInProcessSessionRun(method, params)
-            ? { sessionScope: SESSION_WRITE_SCOPE }
+            ? {
+                sessionScope: participantLaunch ? SESSION_READ_SCOPE : SESSION_WRITE_SCOPE,
+              }
             : {}),
-          ...(isOperatorScope(registeredScope) ? { requiredScope: registeredScope } : {}),
+          ...(participantLaunch
+            ? { requiredScope: READ_SCOPE }
+            : isOperatorScope(registeredScope)
+              ? { requiredScope: registeredScope }
+              : {}),
         })
     : syntheticScopeMode === "exact"
       ? requestedSyntheticScopes

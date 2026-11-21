@@ -99,6 +99,9 @@ export function createAdmittedRunOperatorAuthority(
       : undefined,
     scopes: Object.freeze([...source.scopes]),
     requesterOwner: source.requesterOwner,
+    participationCeiling: source.participationCeiling
+      ? freezeJsonSnapshot(structuredClone(source.participationCeiling))
+      : undefined,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,

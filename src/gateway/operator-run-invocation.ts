@@ -2,7 +2,10 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 
@@ -48,10 +51,22 @@ export function retainGatewayOperatorInvocation(
   const authority = createAdmittedRunOperatorAuthority({
     ...captured.authority,
     invocation,
+    scopes: invocation.participationAuthority
+      ? intersectOperatorScopes(captured.authority.scopes, invocation.participationAuthority.scopes)
+      : captured.authority.scopes,
+    participationCeiling: intersectParticipationCeilings(
+      captured.authority.participationCeiling,
+      invocation.participationAuthority?.participationCeiling,
+    ),
     assertCurrent,
     signal: AbortSignal.any(signals),
     get modelPolicy() {
-      return captured.authority.modelPolicy;
+      return invocation.participationAuthority
+        ? intersectOperatorModelPolicy(
+            captured.authority.modelPolicy,
+            invocation.participationAuthority.modelPolicy,
+          )
+        : captured.authority.modelPolicy;
     },
     retain: () => {
       assertCurrent();

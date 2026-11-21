@@ -53,6 +53,7 @@ import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import { buildThinkingCatalog } from "../model-thinking-default-core.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
@@ -61,6 +62,7 @@ import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
 import { resolveSessionWorktree } from "../worktrees/session-lifecycle.js";
+import { prepareCommandParticipation } from "./participation.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -225,7 +227,7 @@ export async function prepareAgentCommandExecution(
         threadId: explicitRecipientSession.threadId,
       }
     : selectedCommandOpts;
-  const assertPreparationCurrent = () => {
+  const assertInitialPreparationCurrent = () => {
     if (abortSignal?.aborted) {
       throw createAbortError("Operation aborted", { cause: abortSignal.reason });
     }
@@ -241,9 +243,9 @@ export async function prepareAgentCommandExecution(
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
     signal: abortSignal,
-    assertCurrent: assertPreparationCurrent,
+    assertCurrent: assertInitialPreparationCurrent,
   });
-  assertPreparationCurrent();
+  assertInitialPreparationCurrent();
   const {
     sessionId,
     sessionKey,
@@ -256,76 +258,110 @@ export async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
-  await assertAgentInitializationCompleteInWorker(cfg, sessionAgentId, assertPreparationCurrent);
-  const harnessSessionError = sessionKey
-    ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
-    : undefined;
-  if (harnessSessionError) {
-    throw new Error(harnessSessionError);
-  }
-  if (isRawModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
-    throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
-  }
-  const sessionStore: Record<string, InternalSessionEntry> =
-    sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-
-  assertAgentDatabaseAdmitted(sessionAgentId);
-  const outboundSession = buildOutboundSessionContext({
-    cfg,
+  const participation = await prepareCommandParticipation({
+    opts: commandOpts,
     agentId: sessionAgentId,
     sessionKey,
+    sessionId,
+    entry: sessionEntryRaw,
+    assertCurrent: assertInitialPreparationCurrent,
   });
-  const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
-  const workspaceDir = resolveUserPath(workspaceDirRaw);
-  const { getAcpSessionManager } = await loadAcpManagerRuntime();
-  const acpManager = getAcpSessionManager();
-  const assertAcpPreparationCurrent = () => {
-    assertPreparationCurrent();
-    assertAgentDatabaseAdmitted(sessionAgentId);
+  const assertPreparationCurrent = () => {
+    assertInitialPreparationCurrent();
+    participation?.authority.assertCurrent();
   };
-  const acpResolution = sessionKey
-    ? await acpManager.resolveSessionAsync({
-        cfg,
-        sessionKey,
-        agentId: sessionAgentId,
-        assertCurrent: assertAcpPreparationCurrent,
-      })
-    : null;
-  assertAcpPreparationCurrent();
-  // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
-  // "stale") execute on their own node with a node-owned execCwd, so the config
-  // fallback applies only to ordinary sessions and never bridges into a node.
-  const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
-  const cwd =
-    normalizeOptionalString(opts.cwd) ??
-    normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
-    (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
-  const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const pluginsEnabled = cfg.plugins?.enabled !== false;
-  const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
-  const manifestMetadataSnapshot = pluginsEnabled
-    ? (preparedMetadataSnapshot ??
-      (await resolvePluginMetadataSnapshotAsync({ config: cfg, env: process.env, workspaceDir })))
-    : undefined;
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot ?? [],
-  } satisfies ModelManifestNormalizationContext;
-  const configuredModel = resolveConfiguredModelRef({
-    cfg,
-    agentId: sessionAgentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: pluginsEnabled,
-    ...modelManifestContext,
-  });
-  const configuredThinkingCatalog = buildConfiguredModelCatalog({
-    cfg,
-    workspaceDir,
-    ...modelManifestContext,
-  });
-  const configuredThinkingRuntime =
-    configuredModel &&
-    resolveEffectiveAgentRuntime({
+  try {
+    if (participation) {
+      const previousAssertion = commandOpts.assertSourceCurrent;
+      const source = participation.authority;
+      commandOpts = {
+        ...commandOpts,
+        participationCeiling: source.participationCeiling,
+        operatorAuthority: source,
+        assertSourceCurrent: () => {
+          previousAssertion?.();
+          source.assertCurrent();
+        },
+        abortSignal: AbortSignal.any(
+          [commandOpts.abortSignal, source.signal].filter((signal): signal is AbortSignal =>
+            Boolean(signal),
+          ),
+        ),
+        approvalReviewerDeviceId: undefined,
+      };
+    }
+    await assertAgentInitializationCompleteInWorker(cfg, sessionAgentId, assertPreparationCurrent);
+    const harnessSessionError = sessionKey
+      ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
+      : undefined;
+    if (harnessSessionError) {
+      throw new Error(harnessSessionError);
+    }
+    if (isRawModelRun && sessionKey && sessionEntryRaw?.modelSelectionLocked === true) {
+      throw new Error(AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE);
+    }
+    const sessionStore: Record<string, InternalSessionEntry> =
+      sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+
+    assertAgentDatabaseAdmitted(sessionAgentId);
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: sessionAgentId,
+      sessionKey,
+    });
+    const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+    const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
+    const workspaceDir = resolveUserPath(workspaceDirRaw);
+    const { getAcpSessionManager } = await loadAcpManagerRuntime();
+    const acpManager = getAcpSessionManager();
+    const assertAcpPreparationCurrent = () => {
+      assertPreparationCurrent();
+      assertAgentDatabaseAdmitted(sessionAgentId);
+    };
+    const acpResolution = sessionKey
+      ? await acpManager.resolveSessionAsync({
+          cfg,
+          sessionKey,
+          agentId: sessionAgentId,
+          assertCurrent: assertAcpPreparationCurrent,
+        })
+      : null;
+    assertAcpPreparationCurrent();
+    // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
+    // "stale") execute on their own node with a node-owned execCwd, so the config
+    // fallback applies only to ordinary sessions and never bridges into a node.
+    const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
+    if (isAcpPlacedSession) {
+      assertParticipationRuntime(commandOpts.participationCeiling, "acp");
+    }
+    const cwd =
+      normalizeOptionalString(opts.cwd) ??
+      normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
+      (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
+    const agentDir = resolveAgentDir(cfg, sessionAgentId);
+    const pluginsEnabled = cfg.plugins?.enabled !== false;
+    const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
+    const manifestMetadataSnapshot = pluginsEnabled
+      ? (preparedMetadataSnapshot ??
+        (await resolvePluginMetadataSnapshotAsync({ config: cfg, env: process.env, workspaceDir })))
+      : undefined;
+    const modelManifestContext = {
+      manifestPlugins: manifestMetadataSnapshot ?? [],
+    } satisfies ModelManifestNormalizationContext;
+    const configuredModel = resolveConfiguredModelRef({
+      cfg,
+      agentId: sessionAgentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      allowPluginNormalization: pluginsEnabled,
+      ...modelManifestContext,
+    });
+    const configuredThinkingCatalog = buildConfiguredModelCatalog({
+      cfg,
+      workspaceDir,
+      ...modelManifestContext,
+    });
+    const configuredThinkingRuntime = resolveEffectiveAgentRuntime({
       cfg,
       provider: configuredModel.provider,
       modelId: configuredModel.model,
@@ -333,187 +369,198 @@ export async function prepareAgentCommandExecution(
       sessionKey,
       sessionEntry: sessionEntryRaw,
     });
-  const sessionStableReplyMode = await resolveSessionStableReplyMode({
-    cfg,
-    metadataSnapshot: manifestMetadataSnapshot,
-    ctx: { CommandAuthorized: false },
-    sessionEntry: sessionEntryRaw,
-    sessionAgentId,
-    sessionKey,
-  });
-  commandOpts = {
-    ...commandOpts,
-    // Seed the same reusable policy before the first row and on later completion turns.
-    cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
-      sourceReplyDeliveryMode: sessionStableReplyMode,
-    },
-    ...(sessionEntryRaw &&
-    isSyntheticSourceReplyTurn({
-      inputProvenance: commandOpts.inputProvenance,
-    })
-      ? {
-          // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
-          sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
-        }
-      : {}),
-  };
-  // Built only for the error, since it loads the selected model's bundled row.
-  const formatThinkingLevelsHint = () =>
-    formatThinkingLevels(
-      configuredModel?.provider,
-      configuredModel?.model,
-      ", ",
-      configuredModel &&
+    const sessionStableReplyMode = await resolveSessionStableReplyMode({
+      cfg,
+      metadataSnapshot: manifestMetadataSnapshot,
+      ctx: { CommandAuthorized: false },
+      sessionEntry: sessionEntryRaw,
+      sessionAgentId,
+      sessionKey,
+    });
+    commandOpts = {
+      ...commandOpts,
+      // Seed the same reusable policy before the first row and on later completion turns.
+      cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
+        sourceReplyDeliveryMode: sessionStableReplyMode,
+      },
+      ...(sessionEntryRaw &&
+      isSyntheticSourceReplyTurn({
+        inputProvenance: commandOpts.inputProvenance,
+      })
+        ? {
+            // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.
+            sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
+          }
+        : {}),
+    };
+    // Built only for the error, since it loads the selected model's bundled row.
+    const formatThinkingLevelsHint = () =>
+      formatThinkingLevels(
+        configuredModel.provider,
+        configuredModel.model,
+        ", ",
         buildThinkingCatalog({
           cfg,
           provider: configuredModel.provider,
           model: configuredModel.model,
         }),
-      configuredThinkingRuntime,
-    );
-  const thinkOverride = normalizeThinkLevel(opts.thinking);
-  const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
-  if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
-  }
-  if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
-  }
-  const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
-  const worktreeSource =
-    sessionKey && sessionEntryRaw?.worktree
-      ? await resolveSessionWorktree({
-          binding: sessionEntryRaw.worktree,
-          sessionKey,
-          assertCurrent: assertPreparationCurrent,
-          turn: true,
-        }).then((prepared) =>
-          prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
-        )
-      : await resolveWorktreeForPath({
-          sessionEntry: sessionEntryRaw,
-          candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
-        });
-  const runLease = worktreeSource
-    ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
-    : undefined;
-  try {
-    const { resolveAcpAgentWorkspaceProvisioningForTurn } =
-      await import("../acp-workspace-provisioning.js");
-    const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
-      cfg,
-      agentId: sessionAgentId,
-      workspaceDir: agentWorkspaceDir,
-      cwd: resolvedCwd,
-      sessionKey: sessionKey ?? undefined,
-      sessionEntry: sessionEntryRaw ?? undefined,
-    });
-    await ensureAgentWorkspace({
-      dir: agentWorkspaceDir,
-      ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
-      skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-      provisioning: workspaceProvisioning,
-      guard: { assertHost: assertAcpPreparationCurrent },
-    });
-    const runId = opts.runId?.trim() || sessionId;
-    let promptMessage = message;
-    if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
-      const {
-        expandExplicitSkillReferences,
-        hasSkillReferenceCandidate,
-        prepareSkillCommandsForWorkspace,
-        resolveEffectiveAgentSkillFilter,
-      } = await import("../../skills/discovery/chat-commands.runtime.js");
-      const hasExplicitSkillCandidate =
-        message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
-      if (hasExplicitSkillCandidate) {
-        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
-        const commandParams = {
-          workspaceDir,
-          cfg,
-          agentId: sessionAgentId,
-          sessionEntry: sessionEntryRaw,
-          sessionKey,
-          ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
-          ...(skillFilter ? { skillFilter } : {}),
-        };
-        const lifecycleGeneration = opts.lifecycleGeneration;
-        const assertCurrent =
-          lifecycleGeneration !== undefined
-            ? () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)
-            : undefined;
-        const skillCommands = await prepareSkillCommandsForWorkspace(commandParams, assertCurrent);
-        const allSkillCommands = skillFilter
-          ? await prepareSkillCommandsForWorkspace(
-              { ...commandParams, includeAllowlistHidden: true },
-              assertCurrent,
-            )
-          : skillCommands;
-        const expansion = expandExplicitSkillReferences({
-          text: message,
-          skillCommands,
-          allSkillCommands,
-        });
-        if (expansion.error) {
-          throw new Error(expansion.error);
-        }
-        promptMessage = expansion.body;
-      }
+        configuredThinkingRuntime,
+      );
+    const thinkOverride = normalizeThinkLevel(opts.thinking);
+    const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
+    if (opts.thinking && !thinkOverride) {
+      throw new Error(`Invalid thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
     }
-    const acpRuntimeContext = projectRuntimeContextFragments(opts.runtimeContextFragments ?? []);
-    const body =
-      !isRawModelRun && acpResolution?.kind === "ready"
-        ? [
-            acpRuntimeContext ? labelRuntimeContextText(acpRuntimeContext) : "",
-            resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance),
-          ]
-            .filter(Boolean)
-            .join("\n\n")
-        : promptMessage;
-    const transcriptBody =
-      opts.transcriptMessage ??
-      resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
+    if (opts.thinkingOnce && !thinkOnce) {
+      throw new Error(
+        `Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`,
+      );
+    }
+    const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
+    const worktreeSource =
+      sessionKey && sessionEntryRaw?.worktree
+        ? await resolveSessionWorktree({
+            binding: sessionEntryRaw.worktree,
+            sessionKey,
+            assertCurrent: assertPreparationCurrent,
+            turn: true,
+          }).then((prepared) =>
+            prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
+          )
+        : await resolveWorktreeForPath({
+            sessionEntry: sessionEntryRaw,
+            candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
+          });
+    const runLease = worktreeSource
+      ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
+      : undefined;
+    try {
+      const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+        await import("../acp-workspace-provisioning.js");
+      const workspaceProvisioning = await resolveAcpAgentWorkspaceProvisioningForTurn({
+        cfg,
+        agentId: sessionAgentId,
+        workspaceDir: agentWorkspaceDir,
+        cwd: resolvedCwd,
+        sessionKey: sessionKey ?? undefined,
+        sessionEntry: sessionEntryRaw ?? undefined,
+      });
+      await ensureAgentWorkspace({
+        dir: agentWorkspaceDir,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        provisioning: workspaceProvisioning,
+        guard: { assertHost: assertAcpPreparationCurrent },
+      });
+      const runId = opts.runId?.trim() || sessionId;
+      let promptMessage = message;
+      if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
+        const {
+          expandExplicitSkillReferences,
+          hasSkillReferenceCandidate,
+          prepareSkillCommandsForWorkspace,
+          resolveEffectiveAgentSkillFilter,
+        } = await import("../../skills/discovery/chat-commands.runtime.js");
+        const hasExplicitSkillCandidate =
+          message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
+        if (hasExplicitSkillCandidate) {
+          const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+          const commandParams = {
+            workspaceDir,
+            cfg,
+            agentId: sessionAgentId,
+            sessionEntry: sessionEntryRaw,
+            sessionKey,
+            ...(preparedMetadataSnapshot
+              ? { pluginMetadataSnapshot: preparedMetadataSnapshot }
+              : {}),
+            ...(skillFilter ? { skillFilter } : {}),
+          };
+          const lifecycleGeneration = opts.lifecycleGeneration;
+          const assertCurrent =
+            lifecycleGeneration !== undefined
+              ? () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)
+              : undefined;
+          const skillCommands = await prepareSkillCommandsForWorkspace(
+            commandParams,
+            assertCurrent,
+          );
+          const allSkillCommands = skillFilter
+            ? await prepareSkillCommandsForWorkspace(
+                { ...commandParams, includeAllowlistHidden: true },
+                assertCurrent,
+              )
+            : skillCommands;
+          const expansion = expandExplicitSkillReferences({
+            text: message,
+            skillCommands,
+            allSkillCommands,
+          });
+          if (expansion.error) {
+            throw new Error(expansion.error);
+          }
+          promptMessage = expansion.body;
+        }
+      }
+      const acpRuntimeContext = projectRuntimeContextFragments(opts.runtimeContextFragments ?? []);
+      const body =
+        !isRawModelRun && acpResolution?.kind === "ready"
+          ? [
+              acpRuntimeContext ? labelRuntimeContextText(acpRuntimeContext) : "",
+              resolveAcpPromptBody(promptMessage, opts.internalEvents, opts.inputProvenance),
+            ]
+              .filter(Boolean)
+              .join("\n\n")
+          : promptMessage;
+      const transcriptBody =
+        opts.transcriptMessage ??
+        resolveInternalEventTranscriptBody(message, opts.internalEvents, opts.inputProvenance);
 
-    return {
-      opts: commandOpts,
-      body,
-      transcriptBody,
-      cfg,
-      configuredThinkingCatalog,
-      normalizedSpawned,
-      agentCfg,
-      thinkOverride,
-      thinkOnce,
-      verboseOverride,
-      timeoutMs,
-      runTimeoutOverrideMs,
-      sessionId,
-      sessionKey,
-      sessionEntry: sessionEntryRaw,
-      sessionStore,
-      storePath,
-      isNewSession,
-      previousSessionId,
-      ...(automaticReset ? { automaticReset } : {}),
-      persistedThinking,
-      persistedVerbose,
-      sessionAgentId,
-      outboundSession,
-      workspaceDir,
-      cwd: resolvedCwd,
-      agentDir,
-      pluginsEnabled,
-      manifestMetadataSnapshot,
-      ...(runtimeContext ? { commandRuntimeContext: runtimeContext } : {}),
-      modelManifestContext,
-      runId,
-      isSubagentLane,
-      acpManager,
-      acpResolution,
-      runLease,
-    };
+      return {
+        opts: commandOpts,
+        body,
+        transcriptBody,
+        cfg,
+        configuredThinkingCatalog,
+        normalizedSpawned,
+        agentCfg,
+        thinkOverride,
+        thinkOnce,
+        verboseOverride,
+        timeoutMs,
+        runTimeoutOverrideMs,
+        sessionId,
+        sessionKey,
+        sessionEntry: sessionEntryRaw,
+        sessionStore,
+        storePath,
+        isNewSession,
+        previousSessionId,
+        ...(automaticReset ? { automaticReset } : {}),
+        persistedThinking,
+        persistedVerbose,
+        sessionAgentId,
+        outboundSession,
+        workspaceDir,
+        cwd: resolvedCwd,
+        agentDir,
+        pluginsEnabled,
+        manifestMetadataSnapshot,
+        ...(runtimeContext ? { commandRuntimeContext: runtimeContext } : {}),
+        modelManifestContext,
+        runId,
+        isSubagentLane,
+        acpManager,
+        acpResolution,
+        runLease,
+        releaseParticipation: participation?.release,
+      };
+    } catch (error) {
+      await runLease?.release();
+      throw error;
+    }
   } catch (error) {
-    await runLease?.release();
+    participation?.release();
     throw error;
   }
 }

@@ -25,6 +25,11 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
       { ...scope, sessionKey: "agent:main:sibling" },
       { sessionId: "sibling", updatedAt: 1 },
     );
+    const childKey = "agent:main:subagent:participant-child";
+    await upsertSessionEntryCore(
+      { ...scope, sessionKey: childKey },
+      { sessionId: "child", updatedAt: 1 },
+    );
     addSessionMember(scope, { identityId: "participant", addedBy: "creator", access: "send" });
     const seed = (suffix: string) =>
       runOpenClawAgentWriteTransaction((database) => {
@@ -34,6 +39,8 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
           ["foreign", scope.sessionKey, "current", "other"],
           ["incarnation", scope.sessionKey, "old", "participant"],
           ["sibling", "agent:main:sibling", "sibling", "participant"],
+          ["child", childKey, "child", "participant"],
+          ["child-foreign", childKey, "child", "other"],
         ] as const) {
           const id = `${name}-${suffix}`;
           withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
@@ -52,7 +59,24 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
                 message_json: JSON.stringify({
                   role: "user",
                   content: [],
-                  __openclaw: { participationCeiling: { kind: "send", profileId, sessionKey } },
+                  __openclaw: {
+                    participationCeiling: {
+                      kind: "send",
+                      profileId,
+                      sessionKey: sessionKey === childKey ? scope.sessionKey : sessionKey,
+                      ...(sessionKey === childKey
+                        ? {
+                            source: {
+                              agentId: "main",
+                              sessionId: "current",
+                              lifecycleRevision: null,
+                              creatorProfileId: "creator",
+                              root: "/synthetic/root",
+                            },
+                          }
+                        : {}),
+                    },
+                  },
                 }),
               }),
             ),
@@ -85,8 +109,10 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
       }
       await closeOpenClawAgentDatabasesAsync();
       for (const row of read()) {
-        expect(row.state).toBe(row.input_id.startsWith("own-") ? "cancelled" : "queued");
-        expect(row.end_cause).toBe(row.input_id.startsWith("own-") ? "revoked" : null);
+        const retired =
+          row.input_id.startsWith("own-") || /^child-(downgrade|remove)$/.test(row.input_id);
+        expect(row.state).toBe(retired ? "cancelled" : "queued");
+        expect(row.end_cause).toBe(retired ? "revoked" : null);
       }
     }
   });

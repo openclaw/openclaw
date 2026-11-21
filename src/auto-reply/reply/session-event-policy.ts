@@ -8,7 +8,7 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
-import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
+import { intersectSessionPermissionModes } from "../../agents/session-permission-mode.js";
 import { resolveChannelConfigActivationFacts } from "../../config/channel-config-activation.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { serializeConfigResolutionFacts } from "../../config/resolution-facts.js";

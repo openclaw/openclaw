@@ -151,7 +151,8 @@ type SpawnAcpContext = SpawnRequesterConversationSource & {
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
+  participationCeiling?: import("../../participation-ceiling.js").ParticipationCeiling;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
@@ -165,6 +166,13 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
+  if (ctx.participationCeiling || ctx.inheritedToolPolicySource === "participant") {
+    return buildAcpSpawnError(
+      "runtime_policy",
+      "Participating helpers require the Gateway-local OpenClaw runtime; ACP is unavailable.",
+      "forbidden",
+    );
+  }
   const cfg = getRuntimeConfig();
   const creatorProfileId = requesterCreatorProfileId(
     getGatewayToolCallerIdentity()?.requesterOrigin,

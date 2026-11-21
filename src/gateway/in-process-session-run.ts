@@ -16,6 +16,8 @@ export type PreparedSessionRun = Readonly<{
   lifecycleRevision: string | null;
   runId: string;
   freshChild?: FreshChildSession;
+  /** Restrict-only original source captured by the native child/completion owner. */
+  participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
 }>;
 
 // Source tools and the published Gateway must recognize the same host-owned request.
@@ -36,7 +38,11 @@ export function bindInProcessSessionRun<T extends Record<string, unknown>>(
     expectedExistingSessionId: launch.sessionId,
     expectedExistingSessionLifecycleRevision: launch.lifecycleRevision,
   };
-  runs.set(bound, { ...launch });
+  runs.set(bound, {
+    ...launch,
+    participationCeiling:
+      launch.freshChild?.entry.participationCeiling ?? launch.participationCeiling,
+  });
   return bound;
 }
 
@@ -54,6 +60,10 @@ export function takeInProcessFreshChildSession(params: object): FreshChildSessio
 /** Wire fields cannot grant this alternative; live source and own-session checks still apply. */
 export function isInProcessSessionRun(method: string, params: unknown): boolean {
   return getInProcessSessionRun(method, params) !== undefined;
+}
+
+export function readInProcessParticipationRun(method: string, params: unknown) {
+  return getInProcessSessionRun(method, params)?.participationCeiling;
 }
 
 function getInProcessSessionRun(method: string, params: unknown): PreparedSessionRun | undefined {

@@ -142,6 +142,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     // Without its controls, discovery would hide allowed tools or re-add forbidden ones.
     disableToolSearch:
       attempt.disableToolSearch ||
+      (attempt.participationCeiling && attempt.swarmCollector) ||
       (participationTools &&
         [...TOOL_SEARCH_CONTROL_TOOL_NAMES].some((name) => !participationTools.includes(name)))
         ? true

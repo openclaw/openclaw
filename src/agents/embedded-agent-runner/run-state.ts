@@ -269,7 +269,7 @@ export function captureActiveEmbeddedRunParticipation(identity: AgentRuntimeIden
   if (!captured || !ceiling) {
     return undefined;
   }
-  if (ceiling.sessionKey !== identity.sessionKey) {
+  if (ceiling.sessionKey !== identity.sessionKey && ceiling.source?.agentId !== identity.agentId) {
     throw new Error("Participation approval does not match its admitted session");
   }
   return { ceiling, sessionId: captured.sessionId, assertCurrent: captured.assertCurrent };

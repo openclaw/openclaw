@@ -11,6 +11,10 @@ import { repairPendingAssistantTranscriptTurns } from "./command/assistant-trans
 import type { prepareAgentCommandExecution } from "./command/prepare.js";
 import { loadSessionStoreRuntime } from "./command/runtime-loaders.js";
 import type { AgentCommandOpts } from "./command/types.js";
+import {
+  intersectParticipationCeilings,
+  sessionParticipationCeiling,
+} from "./participation-ceiling.js";
 
 type Prepared = Awaited<ReturnType<typeof prepareAgentCommandExecution>>;
 
@@ -90,6 +94,11 @@ export async function beginAgentCommandSessionEffect(params: {
       if (archivedSessionError) {
         throw archivedSessionError;
       }
+      const childCeiling = sessionParticipationCeiling(currentEntry);
+      if (childCeiling && !opts.operatorAuthority?.participationCeiling) {
+        throw new Error("Participant child has no admitted original-source authority.");
+      }
+      intersectParticipationCeilings(childCeiling, opts.participationCeiling);
       operatorSession?.assertAuthorized(currentEntry);
       sessionEntry = currentEntry;
       params.onValidated(currentEntry);

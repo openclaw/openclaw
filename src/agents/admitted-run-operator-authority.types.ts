@@ -42,6 +42,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   scopes: readonly string[];
   /** Command-owner decision fixed at this run's start. */
   requesterOwner?: boolean;
+  /** Live original-source restriction on a participant child or completion turn. */
+  participationCeiling?: import("./participation-ceiling.js").ParticipationCeiling;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   signal?: AbortSignal;

@@ -3,6 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readInProcessParticipationRun } from "../../../gateway/in-process-session-run.js";
 import { createLifecycleTypingManager } from "../../../gateway/lifecycle-typing.js";
 import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -58,7 +59,12 @@ function setup(sourceTool = "subagent_settle") {
     lifecycleRevision: "requester-revision",
     updatedAt: 1,
   };
-  const state = { entry: initialEntry, allowed: true, active: false };
+  const state = {
+    entry: initialEntry,
+    childEntry: undefined as SessionEntry | undefined,
+    allowed: true,
+    active: false,
+  };
   const storePath = "/synthetic/requester-completion/sessions.json";
   const cfg: OpenClawConfig = { session: { store: storePath } };
   const target = captureSessionTarget({
@@ -93,7 +99,7 @@ function setup(sourceTool = "subagent_settle") {
       canonicalKey: key,
       agentId: "main",
       storePath,
-      entry: state.entry,
+      entry: key === sessionKey ? state.entry : (state.childEntry ?? state.entry),
     }),
     getRequesterSessionActivity: () => ({
       sessionId: initialEntry.sessionId,
@@ -444,6 +450,44 @@ it("keeps the same completion input when timeout recovery ends without a backend
     await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
     abandonment.mockRestore();
   }
+});
+
+it("queues participant completion as a capped new turn instead of steering an active owner", async () => {
+  const fixture = setup("subagent_announce");
+  const ceiling = {
+    kind: "send" as const,
+    profileId: "participant",
+    sessionKey,
+    tools: ["read"],
+    source: {
+      agentId: "main",
+      sessionId: "requester-session",
+      lifecycleRevision: "requester-revision",
+      creatorProfileId: "creator",
+      root: "/synthetic/root",
+    },
+  };
+  fixture.state.childEntry = {
+    sessionId: "child-id",
+    updatedAt: 1,
+    spawnedBy: sessionKey,
+    inheritedToolPolicySource: "participant",
+    participationCeiling: ceiling,
+  };
+  const { queueMessage, input } = steering(fixture, async () => ({
+    transcriptCommit: "committed",
+  }));
+  fixture.dispatchDone.resolve(response([{ text: "Private participant result" }]));
+  await deliverSubagentAnnouncement({
+    ...fixture.params,
+    controllerInput: input,
+    sourceSessionKey: "agent:main:subagent:participant-child",
+  });
+  expect(queueMessage).not.toHaveBeenCalled();
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  const request = fixture.dispatch.mock.calls[0]![1];
+  expect(readInProcessParticipationRun("agent", request)).toEqual(ceiling);
+  expect(request).toMatchObject({ deliver: false });
 });
 
 it("reports no attempted completion phase when cancelled before dispatch", async () => {

@@ -7,6 +7,7 @@ import {
   hasValidSessionEntryIdentity,
   normalizeSessionEntryTimestamp,
 } from "./session-entry-json.js";
+import { preserveSessionParticipationCeiling } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -27,6 +28,7 @@ export function installSessionActorMemoryEntry(
     throw new Error("Refusing invalid memory session entry identity");
   }
   next = preserveCreationStamp(next, previous);
+  next = preserveSessionParticipationCeiling(next, previous);
   next.createdAt ??= previous?.updatedAt ?? Date.now();
   const sameWindow = previous?.sessionId === next.sessionId;
   const sameLifecycle = sameWindow && previous?.lifecycleRevision === next.lifecycleRevision;

@@ -98,7 +98,8 @@ export async function createInitialSubagentSession(input: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: SessionEntry["inheritedToolPolicySource"];
+  participationCeiling?: SessionEntry["participationCeiling"];
   delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   modelPatch: Partial<
     Extract<
@@ -133,6 +134,12 @@ export async function createInitialSubagentSession(input: {
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,
+    ...(params.participationCeiling
+      ? {
+          participationCeiling: params.participationCeiling,
+          inheritedToolPolicySource: "participant" as const,
+        }
+      : {}),
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
@@ -322,10 +329,11 @@ export async function createInitialSubagentSession(input: {
                         ...(!params.worktree
                           ? {
                               sessionRoot: resolveUserPath(
-                                params.inheritedToolPolicySource === "sender"
-                                  ? params.sessionPermissionPolicy.root
-                                  : (params.spawnedWorkspaceDir ??
-                                      params.sessionPermissionPolicy.root),
+                                params.participationCeiling?.source?.root ??
+                                  (params.inheritedToolPolicySource === "sender"
+                                    ? params.sessionPermissionPolicy.root
+                                    : (params.spawnedWorkspaceDir ??
+                                      params.sessionPermissionPolicy.root)),
                               ),
                             }
                           : {}),

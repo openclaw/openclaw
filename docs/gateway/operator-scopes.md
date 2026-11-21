@@ -449,13 +449,28 @@ opt-in keep the existing sandbox requirement for all sessions.
 
 Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
 tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
-`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `web_search`,
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`, `web_search`,
 `web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
 permits no tools. Only these session-contained names are accepted; the result
 still intersects the agent's tool policy and every tool's own authorization checks.
-Cross-session controls, messaging, Gateway/configuration tools and `sessions_spawn`
-are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
+Cross-session controls, messaging, and Gateway/configuration tools are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
 agent-denied tool available.
+
+Participant `sessions_spawn` calls create only hidden, same-agent, Gateway-local
+OpenClaw children. They cannot change the original root through `cwd`, projects,
+worktrees, thread binding, visible sessions, worker placement, ACP, or CLI runtimes.
+Every child and descendant retains the original invitation, creator, incarnation,
+root, tool ceiling, and permission ceiling. A new child turn, restart, or private
+completion rechecks that original invitation and the participant's current role.
+The parent's independent turns do not acquire the child's ceiling. Child exec
+approvals require the original session creator, not an assignee, participant, or
+unrelated administrator. Process tools expose only the child's own process scope.
+
+Removing or reducing membership blocks new child work and completion admission.
+There is no invitation epoch: reinviting the same person may admit a retained child
+under the intersection of its stored ceiling and the current invitation. Missing
+child rows or envelopes never restore owner authority; the retained spawn record
+and private completion capability require the original child constraint.
 
 Use exact names, not groups or wildcards. Unknown names, plugin-owned tools
 (including `browser` and `memory_search`), and MCP tools are rejected. A plugin

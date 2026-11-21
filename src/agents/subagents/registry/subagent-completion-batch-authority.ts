@@ -3,6 +3,7 @@ import {
   getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { intersectParticipationCeilings } from "../../participation-ceiling.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -13,6 +14,21 @@ export function isSubagentCancellationNotice(entry: SubagentRunRecord): boolean 
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
     entry.execution.outcome?.status === "error"
   );
+}
+
+/** Durable child lineage cannot fall back to owner/System authority after custody loss. */
+export function assertParticipationCompletionCustody(
+  entry: SubagentRunRecord,
+  custody: SubagentCompletionCustody["authority"] | undefined,
+): void {
+  if (entry.participationCeiling) {
+    const current = custody?.operatorAuthority?.participationCeiling;
+    if (!current) {
+      throw new Error("Participant completion requires current original-source custody.");
+    }
+    intersectParticipationCeilings(entry.participationCeiling, current);
+    custody.assertCurrent();
+  }
 }
 
 /** Separate requester turns before admission; a sibling never supplies another invocation's authority. */
@@ -34,6 +50,10 @@ export function selectCompletionAuthorityBatch(
       (resolver && getCanonicalGatewayContextResolver(resolver)) === gateway &&
       source?.operatorAuthority?.source === first?.operatorAuthority?.source &&
       source?.operatorAuthority?.invocation === first?.operatorAuthority?.invocation &&
+      isDeepStrictEqual(
+        source?.operatorAuthority?.participationCeiling,
+        first?.operatorAuthority?.participationCeiling,
+      ) &&
       isDeepStrictEqual(source?.operatorAuthority?.scopes, first?.operatorAuthority?.scopes) &&
       isDeepStrictEqual(source?.scopes, first?.scopes)
     );
@@ -51,7 +71,13 @@ export function runWithSubagentCompletionBatchAuthority<T>(
   run: () => T,
 ): T {
   const { batch, custodies } = params;
-  batch.forEach(params.assertCurrent);
+  batch.forEach((entry) => {
+    params.assertCurrent(entry);
+    assertParticipationCompletionCustody(
+      entry,
+      custodies.get(getSubagentRunRuntimeKey(entry))?.authority,
+    );
+  });
   const resultEntry = batch.find((entry) => !isSubagentCancellationNotice(entry));
   if (!resultEntry) {
     const sources = batch.map((entry) => custodies.get(getSubagentRunRuntimeKey(entry))?.authority);
@@ -87,9 +113,20 @@ export function runWithSubagentCompletionBatchAuthority<T>(
       !custody.authority.signal.aborted &&
       source?.source === first?.source &&
       source?.invocation === first?.invocation &&
+      isDeepStrictEqual(source?.participationCeiling, first?.participationCeiling) &&
       isDeepStrictEqual(source?.scopes, first?.scopes) &&
       isDeepStrictEqual(custody.authority.scopes, firstCustody?.authority.scopes)
     );
   });
+  if (
+    !shared &&
+    batch.some(
+      (entry) =>
+        custodies.get(getSubagentRunRuntimeKey(entry))?.authority.operatorAuthority
+          ?.participationCeiling,
+    )
+  ) {
+    throw new Error("Participant completion custody must stay current and separate.");
+  }
   return shared ? params.runWithAuthority(resultEntry, run) : run();
 }

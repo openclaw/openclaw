@@ -517,7 +517,12 @@ export type SessionMutationAuthorization = {
   /** Retain these facts until a detached effect settles, independently of the request. */
   retain?: () => () => void;
   /** Retain published sharing facts for a run, independently of request and writer guards. */
-  retainForRun?: () => { assertCurrent: () => void; signal?: AbortSignal; release: () => void };
+  retainForRun?: () => {
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    release: () => void;
+    participationAuthority?: import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+  };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;
   bindCreation?: (

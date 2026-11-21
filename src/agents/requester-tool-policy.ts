@@ -55,7 +55,7 @@ type RequesterToolPolicyResolution = {
   /** Full ancestor ceiling retained by descendants and completion, even when execution differs. */
   inheritedToolPolicyForSpawn?: SandboxToolPolicy;
   delegatedToolPolicy?: DelegatedToolPolicy;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "participant";
 };
 
 type SenderPolicyMode = "always" | "when-sender-id" | "never";
@@ -144,7 +144,7 @@ function resolveDelegatedPolicy(
       sessionPolicy?: SandboxToolPolicy;
       policyForSpawn?: SandboxToolPolicy;
       delegatedToolPolicy?: DelegatedToolPolicy;
-      inheritedToolPolicySource?: "sender";
+      inheritedToolPolicySource?: "sender" | "participant";
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
@@ -409,9 +409,11 @@ export function resolveRequesterToolPolicies(
       inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
       delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
       inheritedToolPolicySource:
-        toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
-          ? "sender"
-          : delegatedPolicy.inheritedToolPolicySource,
+        delegatedPolicy.inheritedToolPolicySource === "participant"
+          ? "participant"
+          : toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
+            ? "sender"
+            : delegatedPolicy.inheritedToolPolicySource,
     };
   }
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
@@ -429,11 +431,10 @@ export function resolveRequesterToolPolicies(
     groupPolicy,
     senderPolicy,
     inheritedToolPolicySource:
-      inheritedEnvelope?.inheritedToolPolicySource === "sender" ||
-      toolPolicyRestrictsTools(groupPolicy) ||
-      toolPolicyRestrictsTools(senderPolicy)
+      inheritedEnvelope?.inheritedToolPolicySource ??
+      (toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
         ? "sender"
-        : undefined,
+        : undefined),
 
     subagentPolicy,
     inheritedToolPolicy,

@@ -16,6 +16,7 @@ import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import * as methods from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { createSessionParticipationAuthorization } from "./session-participation-authorization.js";
+import { resolveParticipantRunTarget } from "./session-principal-run-authority.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
@@ -142,8 +143,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     members?: readonly string[],
   ) => {
     participation.signal?.throwIfAborted();
+    const participantTarget = resolveParticipantRunTarget(params.participantRunAuthority, target);
     const error =
-      (target && authorizesAgentRun
+      (target && authorizesAgentRun && !participantTarget
         ? policy
           ? policy.authorizeRun(target, participation.isBoundedMethod())
           : authorizeSessionAgentRun({ cfg, client: params.client, target })
@@ -153,6 +155,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         sessionKey: targetRef.sessionKey,
         target,
       });
+    if (participantTarget === "source") {
+      return error;
+    }
     const participating = participation.authorize({ targetRef, target, policy, error });
     if (participating) {
       return participating.error;

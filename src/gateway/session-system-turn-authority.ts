@@ -6,8 +6,9 @@ import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-sou
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import {
   prepareSessionPrincipalRunAuthority,
-  resolveSessionSystemTurnProfileId,
-} from "./session-sharing-authorization-async.js";
+  prepareSessionParticipationRun,
+} from "./session-principal-run-authority.js";
+import { resolveSessionSystemTurnProfileId } from "./session-sharing-authorization-async.js";
 
 /** Capture the interrupted execution's source, never a later steering participant. */
 export function captureSessionRestartOperatorSource(
@@ -52,6 +53,16 @@ export async function prepareSessionSystemTurnAuthority(
   );
   if (entry?.sessionId !== params.sessionId) {
     throw new Error("System turn session is unavailable or has changed.");
+  }
+  const participation = await prepareSessionParticipationRun({
+    context: params.context,
+    agentId: params.agentId,
+    entry,
+    turnCeiling: params.participationCeiling,
+    assertCurrent: params.assertCurrent,
+  });
+  if (participation) {
+    return participation;
   }
   if (params.operatorSource) {
     const restored = await restoreGatewayQueuedOperatorRecovery({

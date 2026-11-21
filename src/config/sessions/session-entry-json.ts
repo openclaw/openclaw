@@ -1,5 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { projectSessionEntryNumericSnapshot } from "./session-entry-numeric-snapshot.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
@@ -45,6 +46,35 @@ export function parseSqliteSessionEntryRecord(
 
 /** Admit unknown persisted or imported metadata once, before typed consumers use it. */
 export function admitCanonicalSessionEntry(value: Record<string, unknown>): SessionEntry {
+  const ceiling = value.participationCeiling;
+  if (ceiling !== undefined) {
+    const nonemptyString = (field: unknown) => typeof field === "string" && field.trim().length > 0;
+    if (
+      !isRecord(ceiling) ||
+      ceiling.kind !== "send" ||
+      !nonemptyString(ceiling.profileId) ||
+      !nonemptyString(ceiling.sessionKey) ||
+      (ceiling.tools !== undefined &&
+        (!Array.isArray(ceiling.tools) || !ceiling.tools.every(nonemptyString))) ||
+      (ceiling.permission !== undefined &&
+        !["read-only", "guarded", "workspace", "full"].some(
+          (permission) => permission === ceiling.permission,
+        )) ||
+      (ceiling.source !== undefined &&
+        (!isRecord(ceiling.source) ||
+          !nonemptyString(ceiling.source.agentId) ||
+          !nonemptyString(ceiling.source.sessionId) ||
+          !nonemptyString(ceiling.source.creatorProfileId) ||
+          !nonemptyString(ceiling.source.root) ||
+          (ceiling.source.lifecycleRevision !== null &&
+            !nonemptyString(ceiling.source.lifecycleRevision))))
+    ) {
+      throw new SessionStoreMigrationRequiredError(
+        'Session field "participationCeiling" is malformed; restore valid participation constraints through offline repair.',
+      );
+    }
+  }
+  // Missing ceilings and source-less stored inputs remain identifiable for runtime refusal.
   const entry = projectCanonicalSessionEntryShape(value);
   return { ...entry, ...projectSessionEntryNumericSnapshot(entry) };
 }

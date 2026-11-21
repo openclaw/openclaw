@@ -24,7 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-principal-run-authority.js";
 
 it("keeps admitted lineage through policy changes and checks fresh work once", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

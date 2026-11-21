@@ -50,6 +50,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   /** Server-only, process-local binding from a validated participation-clamped run. */
   participation?: Readonly<{
     creatorProfileId?: string;
+    /** Descendant execution remains bound to the original session creator. */
+    creatorOnly?: true;
     participantProfileId: string;
     participantLabel?: string;
     sessionKey: string;

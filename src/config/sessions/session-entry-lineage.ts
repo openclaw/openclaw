@@ -26,6 +26,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "participationCeiling"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -45,8 +46,29 @@ export function preserveSessionInheritedToolPolicy(
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
+    ...(entry?.participationCeiling
+      ? { participationCeiling: structuredClone(entry.participationCeiling) }
+      : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),
+  };
+}
+
+/** A logical child retains its original constraints through reset and stale full-row writes. */
+export function preserveSessionParticipationCeiling<T extends SessionEntry>(
+  next: T,
+  previous: SessionEntry | undefined,
+): T {
+  if (
+    previous?.inheritedToolPolicySource !== "participant" &&
+    previous?.participationCeiling === undefined
+  ) {
+    return next;
+  }
+  return {
+    ...next,
+    inheritedToolPolicySource: "participant",
+    participationCeiling: previous.participationCeiling,
   };
 }
 

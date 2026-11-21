@@ -34,13 +34,18 @@ export async function prepareExecApprovalParticipation(
     if (
       !target ||
       target.canonicalKey !== captured.ceiling.sessionKey ||
-      target.entry.sessionId !== captured.sessionId
+      target.entry.sessionId !== (captured.ceiling.source?.sessionId ?? captured.sessionId) ||
+      (captured.ceiling.source &&
+        ((target.entry.lifecycleRevision ?? null) !== captured.ceiling.source.lifecycleRevision ||
+          sessionCreatorProfileId(target.entry.createdActor) !==
+            captured.ceiling.source.creatorProfileId))
     ) {
       throw new Error("Participation approval session owner changed");
     }
     const participantId = readResidentUserProfileId(captured.ceiling.profileId);
     return Object.freeze({
       creatorProfileId: sessionCreatorProfileId(target.entry.createdActor),
+      ...(captured.ceiling.source ? { creatorOnly: true as const } : {}),
       participantProfileId: captured.ceiling.profileId,
       participantLabel:
         (participantId ? getResidentUserProfileDisplay(participantId).displayName : undefined) ||
@@ -52,7 +57,7 @@ export async function prepareExecApprovalParticipation(
   }
 }
 
-/** Undefined preserves ordinary approvals; a bound record admits only its direct creator/admin. */
+/** Direct participation permits creator/admin; descendant execution requires its original creator. */
 export function canResolveParticipationExecApproval(
   record: Pick<ExecApprovalRecord, "participation"> | null | undefined,
   client: GatewayClient | null | undefined,
@@ -64,7 +69,7 @@ export function canResolveParticipationExecApproval(
   if (!client || client.invalidated) {
     return false;
   }
-  if (client.connect.scopes?.includes(ADMIN_SCOPE)) {
+  if (!binding.creatorOnly && client.connect.scopes?.includes(ADMIN_SCOPE)) {
     return true;
   }
   const profileId = client.authenticatedUserProfile?.profileId;

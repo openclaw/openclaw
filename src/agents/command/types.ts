@@ -117,6 +117,8 @@ export type AgentCommandOpts = {
   gitContributorProfileId?: string;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  /** Host-restored original invitation; public ingress cannot supply a participation grant. */
+  participationCeiling?: import("../participation-ceiling.js").ParticipationCeiling;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
   /** The installer owns initial bootstrap until shared setup has completed. */
@@ -271,6 +273,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   assertSourceCurrent: undefined,
   assertTurnAdmissionCurrent: undefined,
   operatorAuthority: undefined,
+  participationCeiling: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
   extraSystemPromptTurnContext: undefined,

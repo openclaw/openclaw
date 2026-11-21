@@ -77,3 +77,30 @@ it("falls back to agentSessionKey when runSessionKey is absent", () => {
   expectKey(mocks.spawnToolOptions, policyKey);
   expectKey(mocks.subagentsToolOptions, policyKey);
 });
+
+it("forwards the current host participation cap, root, and invocation guard to spawn", () => {
+  const participationCeiling = {
+    kind: "send" as const,
+    profileId: "invited",
+    sessionKey: durableKey,
+  };
+  const sessionPermissionPolicy = { root: "/invited-workspace", mode: "read-only" as const };
+  const assertInvocationCurrent = vi.fn();
+  createOpenClawTools({
+    agentSessionKey: policyKey,
+    runSessionKey: durableKey,
+    participationCeiling,
+    sessionPermissionPolicy,
+    assertInvocationCurrent,
+    disableMessageTool: true,
+    disablePluginTools: true,
+  });
+  expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
+    expect.objectContaining({
+      participationCeiling,
+      sessionPermissionPolicy,
+      assertActive: assertInvocationCurrent,
+      agentSessionKey: durableKey,
+    }),
+  );
+});

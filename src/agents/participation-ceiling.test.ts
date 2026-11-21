@@ -203,9 +203,9 @@ it("rejects plugin collisions within the participating core tool projection", ()
 
 it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
   const read = createStubTool("read");
+  const spawn = createStubTool("sessions_spawn");
   const denied = [
     "message",
-    "sessions_spawn",
     "github_publish",
     "knowledge_remember",
     "computer",
@@ -217,19 +217,19 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   ].map(createStubTool);
   const plugin = createStubTool("web_fetch");
   setPluginToolMeta(plugin, { pluginId: "untrusted-plugin", optional: false });
-  for (const tool of [read, plugin, ...denied]) {
+  for (const tool of [read, spawn, plugin, ...denied]) {
     tool.execute = vi.fn(async () => ({ content: [], details: {} }));
   }
   const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [read, plugin, ...denied] });
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [read, spawn, plugin, ...denied] });
   const deniedIds = catalogRef
-    .current!.entries.filter((entry) => entry.name !== "read")
+    .current!.entries.filter((entry) => entry.name !== "read" && entry.name !== "sessions_spawn")
     .map((entry) => entry.id);
   const runtime = new ToolSearchRuntime(
     { catalogRef, participationCeiling: ceiling },
     resolveToolSearchConfig(),
   );
-  expect(runtime.all().map((entry) => entry.name)).toEqual(["read"]);
+  expect(runtime.all().map((entry) => entry.name)).toEqual(["read", "sessions_spawn"]);
   expect(await runtime.search("message")).toEqual([]);
   for (const id of deniedIds) {
     await expect(runtime.describe(id)).rejects.toThrow();
@@ -237,6 +237,8 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   }
   await runtime.call("read", {});
   expect(read.execute).toHaveBeenCalledOnce();
+  await runtime.call("sessions_spawn", {});
+  expect(spawn.execute).toHaveBeenCalledOnce();
   for (const tool of [plugin, ...denied]) {
     expect(tool.execute).not.toHaveBeenCalled();
   }
@@ -266,7 +268,6 @@ it("narrows retained core tools without granting unsafe, plugin or MCP names", a
     "conversations_send",
     "conversations_turn",
     "sessions_send",
-    "sessions_spawn",
     "sessions_list",
     "secrets",
     "plugins",
@@ -319,7 +320,13 @@ it.each([
     participationCeiling,
     sessionPermissionPolicy: { mode: session, root: "/workspace" },
   };
-  expect(projectAgentToolsExecPolicy({ options, execConfig: {}, model: {} }).mode).toBe(mode);
+  expect(
+    projectAgentToolsExecPolicy({
+      options,
+      execConfig: resolveExecToolConfig({ cfg: {} }),
+      model: {},
+    }).mode,
+  ).toBe(mode);
   expect(
     resolveExecDefaults({
       participationCeiling,

@@ -26,6 +26,7 @@ import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js"
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import type { SpawnSubagentParams } from "../subagents/spawn/subagent-spawn-contract.js";
+import { resolveParticipationSpawnError } from "../subagents/spawn/subagent-spawn-participation.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -204,7 +205,7 @@ export function createSessionsSpawnTool(
           }
         }
         const assertSourceActive = composeSessionSourceAssertion(
-          [operatorSelection.assertCurrent, assertSenderOwner],
+          [operatorSelection.assertCurrent, assertSenderOwner, opts?.assertActive],
           (assertSource) => {
             executionSignal?.throwIfAborted();
             assertSource();
@@ -230,6 +231,10 @@ export function createSessionsSpawnTool(
           ? captureCollectorSpawnGuard(tool, _toolCallId, assertSourceActive)
           : assertSourceActive;
         assertActive();
+        const participationError = resolveParticipationSpawnError(params, opts, requesterAgentId);
+        if (participationError) {
+          return jsonResult({ status: "forbidden", error: participationError });
+        }
         if (params.outputSchema !== undefined && !collect) {
           throw new ToolInputError('sessions_spawn "outputSchema" requires collect=true.');
         }
@@ -456,6 +461,7 @@ export function createSessionsSpawnTool(
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,
+          participationCeiling: opts?.participationCeiling,
         });
 
         if (runtime === "acp") {
