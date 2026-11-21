@@ -45,7 +45,12 @@ function collectVisibleText(tokens: readonly Token[], parts: string[]): void {
       case "code_inline":
       case "code_block":
       case "fence":
+      case "math_inline":
         parts.push(token.content);
+        break;
+      case "math_block":
+        // Search matches the TeX source, as the leaf shows it before typesetting.
+        parts.push(token.content, "\n");
         break;
       case "human_mention":
         parts.push(token.content.startsWith("@") ? token.content.slice(1) : token.content);
