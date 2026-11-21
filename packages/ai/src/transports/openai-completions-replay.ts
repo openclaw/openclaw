@@ -2,7 +2,10 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import type { ProviderModel } from "../provider-types.js";
 import type { AssistantMessage } from "../types.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  isNativeOpenAIEndpoint,
+} from "./openai-completions-compat.js";
 import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -122,7 +125,7 @@ export function applyCompletionsReplay(
     compat.thinkingFormat === "deepseek" ||
     compat.thinkingFormat === "zai" ||
     (model.reasoning &&
-      model.provider.trim().toLowerCase() !== "openai" &&
+      !isNativeOpenAIEndpoint(model) &&
       shouldPreserveOpenRouterReasoningReplay(model)) ||
     requiresReasoningContentReplay(model.id);
   for (const message of outgoingMessages) {
