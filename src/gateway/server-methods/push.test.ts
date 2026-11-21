@@ -35,7 +35,7 @@ vi.mock("../../infra/push-web.js", async () => ({
   ) => (await prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params)))?.start(),
 }));
 
-// mock-isolation: Recipient selection and delivery are proven against their owner in event-web-push.test.ts.
+// mock-isolation: Recipient selection and delivery are proven against their owner in event-web-push.profile-send.test.ts.
 vi.mock("../event-web-push.js", () => ({ sendProfileWebPush: mocks.sendProfileWebPush }));
 
 vi.mock("../../state/user-preferences.js", () => ({
