@@ -47,7 +47,14 @@ openclaw hooks info command-logger
 openclaw hooks enable command-logger
 ```
 
-The default `hybrid` [reload mode](/gateway/configuration#reload-modes) applies
+`hooks enable` and `hooks disable` are offline-only, so run them while the
+Gateway is stopped. While the Gateway is running, apply the same change with
+`openclaw config set hooks.internal.enabled true` (enabling only; it turns on
+internal hooks) and then
+`openclaw config set hooks.internal.entries.command-logger.enabled true`
+(`false` to disable). When a hook's config key differs from its name, find it
+with `openclaw hooks info <name> --json` (its `hookKey` field) and use that key
+in the path. The default `hybrid` [reload mode](/gateway/configuration#reload-modes) applies
 hook config changes without a restart. With reload mode `off`, run
 `openclaw gateway restart`, or restart a foreground Gateway yourself. Add
 `--agent <id>` when your configuration has multiple agents and no implicit owner.
