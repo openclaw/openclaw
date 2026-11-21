@@ -128,7 +128,8 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
     }
     if (observed) {
       try {
-        process.kill(-child.pid, "SIGKILL");
+        // The lane simulates a crash at this point: a graceful stop would defeat it.
+        process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
       } catch {}
       Object.assign(record, {
         reached: true,
@@ -143,7 +144,7 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
   }
   if (!record.reached && !done) {
     try {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
     } catch {}
   }
   record.exit = await exited;
