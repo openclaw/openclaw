@@ -45,6 +45,8 @@ export {
   SessionsFilesDownloadParamsSchema,
   SessionsFilesDownloadResultSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesStatParamsSchema,
+  SessionsFilesStatResultSchema,
   SessionsFilesAssetsParamsSchema,
   SessionsFilesAssetsResultSchema,
   SessionsFilesPreviewParamsSchema,

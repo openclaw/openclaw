@@ -1488,7 +1488,8 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-attachment-inset-block) * 3);
+  /* As wide as the remove target's overhang, so neighbors never share a hit area. */
+  gap: var(--chat-attachment-hit-slop);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -4431,16 +4432,19 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   --oc-overlay-distance: 4px;
   --oc-overlay-show-duration: 150ms;
   --overlay-ease-enter: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --oc-overlay-enter-scale: 0.96;
+  --oc-overlay-enter-translate: 0 -4px;
   padding: 4px;
   border: 0;
   border-radius: min(18px, var(--menu-radius));
   background: var(--popover);
   box-shadow: var(--menu-shadow);
-  scale: 1;
   transform-origin: top left;
 }
 
 .chat-controls__settings-popover.chat-controls__runtime-details {
+  --oc-overlay-enter-translate: 0 4px;
+
   position-area: none;
   position-try-fallbacks: none;
   inset: auto;
@@ -4718,28 +4722,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-manage .chat-controls__model-option-action {
   display: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__settings-popover {
-    transition:
-      opacity 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      transform 150ms cubic-bezier(0.22, 0.8, 0.24, 1),
-      display 150ms allow-discrete,
-      overlay 150ms allow-discrete;
-  }
-
-  @starting-style {
-    .chat-controls__settings-popover:popover-open {
-      opacity: 0;
-      scale: 1;
-      transform: translateY(-4px) scale(0.96);
-    }
-
-    .chat-controls__runtime-details:popover-open {
-      transform: translateY(4px) scale(0.96);
-    }
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

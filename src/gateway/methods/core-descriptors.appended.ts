@@ -13,6 +13,7 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
   [
     "projects.moveSessionOptions",
     "projects-session-move",

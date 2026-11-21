@@ -588,6 +588,11 @@ The browser keeps the account and its ID token until the token expires or you si
 out. Signing in only proves which OpenClaw ID account the browser holds; on its own
 it grants nothing.
 
+In the Mac app, local sign-in opens an app-owned login window and returns to the
+original Control UI. The app keeps its own account; signing in in Safari or Chrome
+does not automatically sign the app in. The Gateway still verifies and redeems
+the authorization code.
+
 ### Link OpenClaw ID to your profile
 
 Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
