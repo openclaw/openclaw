@@ -913,7 +913,7 @@ var External = [
     /(^title$|^body$)/u,
     /(^profileId$|^category$|^tag$|^path$|^title$|^body$|^agentId$|^urgency$|^ttlSeconds$)/u,
     /^[A-Za-z0-9._:-]{1,64}$/u,
-    /^(?!.*\/\/)(?!.*\/(?:\.|%2[Ee]){1,2}(?:\/|$))[A-Za-z0-9](?:[A-Za-z0-9._~/-]|%[0-9A-Fa-f]{2})*$/u,
+    /^(?!.*\/\/)(?!.*\/$)(?!(?:approve|ask)(?:\/|$))(?!(?:.*\/)?j(?:\/|$))(?!.*\/(?:\.|%2[Ee]){1,2}(?:\/|$))[A-Za-z0-9](?:[A-Za-z0-9._~/-]|%[0-9A-Fa-f]{2})*$/u,
     /(^endpoint$|^scope$|^preferences$)/u,
     /(^categories$|^detailLevel$|^quietHours$|^agentIds$)/u,
     /(^approvalRequested$|^agentFinished$|^agentQuestion$|^humanMentioned$|^scheduledTaskFailed$)/u,

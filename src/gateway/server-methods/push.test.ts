@@ -432,10 +432,21 @@ describe("push.web.send handler", () => {
       "a//b",
       "a/%zz",
       "a/%",
+      "chat/",
+      "chat/research/",
+      "approve",
+      "approve/",
+      "approve/approval-1",
+      "ask/question-1",
+      "j",
+      "j/ABCD-1234",
+      "chat/j/ABCD-1234",
+      "chat/j",
+      "__openclaw__/browser-pair/start",
     ].map((path): [string, Record<string, unknown>, string] => [
       `path ${path}`,
       { path },
-      "at /path: must be a relative Control UI path without query, fragment, empty or dot segments",
+      "at /path: must be a relative Control UI path without query, fragment, empty or dot segments, or approval, question, or pairing routes",
     ]),
   ])("rejects %s before delivery", async (_name, overrides, message) => {
     const respond = await sendAs({ ...notify, ...overrides });
@@ -448,6 +459,13 @@ describe("push.web.send handler", () => {
     expectErrorResponse(respond, 'agent "ghost" not found');
     expect(mocks.sendProfileWebPush).not.toHaveBeenCalled();
   });
+
+  it.each(["settings/approvals", "approvals", "asked/x", "chat/jobs/j1", "chat/approve-later"])(
+    "accepts the ordinary Control UI path %s",
+    async (path) => {
+      expectSuccess(await sendAs({ ...notify, path }), counts);
+    },
+  );
 
   it("returns delivery counts with the normalized agent id", async () => {
     const params = {
