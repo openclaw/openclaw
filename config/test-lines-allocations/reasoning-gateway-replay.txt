@@ -1,0 +1,2 @@
+# Real Gateway persisted-turn replay through the provider transport; captures serialized reasoning and proves canonical assistant history survives. Component tests cannot establish Gateway/session composition.
+163
