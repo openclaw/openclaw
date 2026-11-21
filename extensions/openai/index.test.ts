@@ -98,6 +98,13 @@ function expectOpenAIPromptContribution(
 }
 
 describe("openai plugin", () => {
+  it("keeps separate requests answerable when several messages arrive together", () => {
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "When instructions conflict, the newest wins. Separate requests each still need an answer.",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("initiative; newest wins.");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
