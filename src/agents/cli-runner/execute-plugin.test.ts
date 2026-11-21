@@ -2,7 +2,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
@@ -116,12 +115,6 @@ async function startBlockedRun({
   await started.promise;
   return { run, output, settled };
 }
-
-const APPROVAL_CONFIG: OpenClawConfig = {
-  tools: { exec: { security: "allowlist", ask: "on-miss" } },
-};
-const createApprovalExecution = (options: Parameters<typeof createExecution>[0] = {}) =>
-  createExecution({ config: APPROVAL_CONFIG, nativeTools: ["WebFetch"], ...options });
 
 function setCallerAuthority(context: PreparedCliRunContext) {
   let current = true;
@@ -407,36 +400,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
   });
 
-  it("does not replay an invalidated resume while native approval is pending", async () => {
-    const { context } = await createExecution({
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-    });
-    const session = registerOwnerSession(context, "required-generation");
-    const approval = createDeferred<{ id: string; decision: "deny" }>();
-    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
-    const streamError = new Error("SDK stream failed during approval");
-    let pending: Promise<CliBackendToolPermissionResult> | undefined;
-
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        pending = requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
-        await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
-        yield { type: "system", subtype: "init", session_id: "sdk-session" };
-        session.handle.close("abort");
-        throw streamError;
-      },
-      {
-        requiredGeneration: "required-generation",
-      },
-    );
-
-    await expect(run).rejects.toBe(streamError);
-    approval.resolve({ id: "approval-pending", decision: "deny" });
-    await pending;
-  });
-
   it("does not replay an invalidated resume while operator input is pending", async () => {
     const { context } = await createExecution({ nativeTools: ["AskUserQuestion"] });
     const session = registerOwnerSession(context, "required-generation");
@@ -531,19 +494,21 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("never silently prompts or grants under allowlist policy", async () => {
+  // Claude's own tools follow Claude's own permission controls; OpenClaw's exec policy no
+  // longer gates them or asks for an exec approval.
+  it("allows an available native tool without an OpenClaw exec approval", async () => {
     const { context } = await createExecution({
       config: { tools: { exec: { security: "allowlist", ask: "off" } } },
       nativeTools: ["Read"],
     });
     const decision = await runTurn(context, (execution) =>
-      requestNativeTool(execution, "Read", {
-        file_path: "/tmp/example.png",
-        nested: { source: "exact" },
-      }),
+      requestNativeTool(execution, "Read", { file_path: "/tmp/example.png" }),
     );
 
-    expect(decision?.behavior).toBe("deny");
+    expect(decision).toMatchObject({
+      behavior: "allow",
+      updatedInput: { file_path: "/tmp/example.png" },
+    });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -564,115 +529,6 @@ describe("plugin-owned CLI execution host boundary", () => {
       }),
     ]);
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("retains safe standing approvals only for the exact live process and current turn policy", async () => {
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "approval-first", decision: "allow-always" })
-      .mockResolvedValueOnce({ id: "approval-second", decision: "allow-always" });
-
-    const first = await createApprovalExecution();
-    registerOwnerSession(first.context, "original-live-process");
-
-    const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
-      await runTurn(
-        context,
-        async (execution) => {
-          const handle = execution.liveSession?.current();
-          if (!handle) {
-            throw new Error("Expected a registered live process");
-          }
-          execution.liveSession?.activate(handle);
-          await expect(
-            requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-          ).resolves.toMatchObject({ behavior: "allow" });
-          if (repeat) {
-            await expect(
-              requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
-            ).resolves.toMatchObject({ behavior: "allow" });
-          }
-        },
-        { liveSession: true },
-      );
-    };
-
-    await runApprovedTurn(first.context, true);
-    const sameProcess = await createApprovalExecution();
-    await runApprovedTurn(sameProcess.context, false);
-    expect(mockCallGatewayTool).toHaveBeenCalledOnce();
-
-    const restricted = await createApprovalExecution({
-      sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "read-only" },
-    });
-    await runTurn(restricted.context, async (execution) => {
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com/restricted" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-    });
-    expect(mockCallGatewayTool).toHaveBeenCalledOnce();
-
-    await closeCliLiveSession(sameProcess.context, "restart");
-    registerOwnerSession(first.context, "replacement-live-process");
-    const replacement = await createApprovalExecution();
-    await runApprovedTurn(replacement.context, false);
-
-    expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["admission", "caller"] as const)(
-    "finishes native approval after %s authority closes",
-    async (authority) => {
-      const { admission, context } = await createApprovalExecution();
-      const revoke = setCallerAuthority(context);
-      mockCallGatewayTool.mockImplementationOnce(async () => {
-        if (authority === "caller") {
-          revoke();
-        } else {
-          admission.close();
-        }
-        return { id: "approval-closed", decision: "allow-once" };
-      });
-      const decision = await runTurn(context, (execution) =>
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-      );
-
-      expect(decision).toMatchObject({ behavior: "allow" });
-    },
-  );
-
-  it("cancels an in-flight native approval and never releases its late decision", async () => {
-    const controller = new AbortController();
-    const { context } = await createApprovalExecution({ abortSignal: controller.signal });
-    const approval = createDeferred<{ id: string; decision: "allow-always" }>();
-    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
-    const granted = vi.fn();
-    const closed = vi.fn();
-    const run = runPlugin(context, async function* (execution) {
-      try {
-        const decision = await requestNativeTool(execution, "WebFetch", {
-          url: "https://example.com/canceled-approval",
-        });
-        if (decision.behavior === "allow") {
-          granted();
-        }
-        yield SUCCESS_RESULT;
-      } finally {
-        closed();
-      }
-    });
-    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
-    const approvalSignal = mockCallGatewayTool.mock.calls[0]?.[3]?.signal;
-
-    controller.abort();
-
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(approvalSignal?.aborted).toBe(true);
-    expect(closed).toHaveBeenCalledOnce();
-    expect(granted).not.toHaveBeenCalled();
-
-    approval.resolve({ id: "canceled-approval", decision: "allow-always" });
-    await Promise.resolve();
-    expect(granted).not.toHaveBeenCalled();
   });
 
   it("fences a retained permission callback as soon as its turn finishes", async () => {
@@ -742,38 +598,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(timeout).toHaveBeenCalledOnce();
     expect(timeout.mock.calls[0]?.[0]).toMatchObject({ reason: "timeout" });
     expect(timeout.mock.calls[0]?.[0]?.code).toBeUndefined();
-  });
-
-  it("keeps an active native approval alive beyond the ordinary no-output watchdog", async () => {
-    vi.useFakeTimers();
-    const { context } = await createApprovalExecution();
-    const approval = createDeferred<{ id: string; decision: "allow-once" }>();
-    mockCallGatewayTool.mockReturnValueOnce(approval.promise);
-    const outstandingWork = vi.fn();
-    let completed = false;
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        const decision = await requestNativeTool(execution, "WebFetch", {
-          url: "https://example.com/approval",
-        });
-        expect(decision.behavior).toBe("allow");
-        yield SUCCESS_RESULT;
-      },
-      { noOutputTimeoutMs: 100, onOutstandingWorkChange: outstandingWork },
-    ).then((result) => {
-      completed = true;
-      return result;
-    });
-    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
-
-    await vi.advanceTimersByTimeAsync(150);
-    expect(completed).toBe(false);
-    expect(outstandingWork).toHaveBeenLastCalledWith(true);
-
-    approval.resolve({ id: "approval-pending", decision: "allow-once" });
-    await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
-    expect(outstandingWork).toHaveBeenLastCalledWith(false);
   });
 
   it("preserves streamed assistant output after the caller deadline expires", async () => {
