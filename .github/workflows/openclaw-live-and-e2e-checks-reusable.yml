@@ -587,6 +587,20 @@ on:
         required: false
       QWEN_API_KEY:
         required: false
+      PARALLEL_API_KEY:
+        required: false
+      REQUESTY_API_KEY:
+        required: false
+      SENSEAUDIO_API_KEY:
+        required: false
+      SUBQ_API_KEY:
+        required: false
+      SUBQ_DECISION_MODEL:
+        required: false
+      TYPESAFE_API_KEY:
+        required: false
+      XIAOMI_API_KEY:
+        required: false
       FAL_KEY:
         required: false
       RUNWAY_API_KEY:
@@ -1769,6 +1783,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -2193,6 +2214,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -4095,6 +4123,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -4265,6 +4300,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -4668,6 +4710,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -4881,6 +4930,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -5161,6 +5217,13 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}

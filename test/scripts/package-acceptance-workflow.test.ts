@@ -11538,6 +11538,73 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("forwards remaining release integration prerequisites through live hydration", () => {
+    const keys = [
+      "PARALLEL_API_KEY",
+      "REQUESTY_API_KEY",
+      "SENSEAUDIO_API_KEY",
+      "SUBQ_API_KEY",
+      "SUBQ_DECISION_MODEL",
+      "TYPESAFE_API_KEY",
+      "XIAOMI_API_KEY",
+    ];
+    for (const jobName of ["live_repo_e2e_release_checks", "docker_e2e_release_checks"]) {
+      const secrets = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName).secrets;
+      expect(secrets, jobName).toMatchObject(
+        Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+      );
+    }
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+      const reusable = readWorkflow(workflowPath);
+      for (const key of keys) {
+        expect(reusable.on?.workflow_call?.secrets?.[key], key).toEqual({ required: false });
+      }
+      for (const [jobName, job] of Object.entries(reusable.jobs ?? {})) {
+        if (job.uses === `./${LIVE_E2E_WORKFLOW}`) {
+          expect(job.secrets, jobName).toMatchObject(
+            Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+          );
+        }
+      }
+    }
+    const reusable = readWorkflow(LIVE_E2E_WORKFLOW);
+    for (const [jobName, job] of Object.entries(reusable.jobs ?? {})) {
+      if (job.env?.QWEN_API_KEY) {
+        expect(job.env, jobName).toMatchObject(
+          Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+        );
+      }
+    }
+    const home = tempDirs.make("remaining-live-auth-");
+    const profile = resolve(home, "live.profile");
+    const values = Object.fromEntries(keys.map((key) => [key, key + "-synthetic"]));
+    const hydrated = spawnSync("bash", [CI_HYDRATE_LIVE_AUTH_SCRIPT, profile], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { PATH: process.env.PATH, HOME: home, ...values },
+    });
+    expect(hydrated.status, hydrated.stderr).toBe(0);
+    const restored = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-euc",
+        'source "$1"; shift; for key in "$@"; do printf "%s\n" "${!key}"; done',
+        "check-profile",
+        profile,
+        ...keys,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { PATH: process.env.PATH, HOME: home },
+      },
+    );
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(restored.stdout.trim().split("\n")).toEqual(Object.values(values));
+  });
+
   it("uses documented Qwen credential aliases in release live lanes", () => {
     for (const jobName of ["live_repo_e2e_release_checks", "docker_e2e_release_checks"]) {
       const secrets = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName).secrets;
