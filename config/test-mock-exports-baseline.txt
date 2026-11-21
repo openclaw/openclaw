@@ -4636,7 +4636,6 @@
 ["src/gateway/server-methods/suspend.test.ts","../server-active-work.js","867adda8ed4388409572b544c977a550eff2febf7c539c9e583712b3550b12dd",1]
 ["src/gateway/server-methods/system-agent-approval-lazy.test.ts","../../system-agent/chat-engine.js","604a3a4acc766f32ade6ad9c4fbb059062d9fdae33ab6c870dab51c819d5834f",1]
 ["src/gateway/server-methods/system-agent-approval-lazy.test.ts","../../system-agent/config-redaction.js","6a610dbd909d4012f8996f9503e1bff057786f8cedee9388729bd777ddf92243",1]
-["src/gateway/server-methods/system-agent-approval-lazy.test.ts","./approval-record-lookup.js","3157317688185d69357f29950761d6ab65f4e0c8f1d07d639e91dc22ff0d0423",1]
 ["src/gateway/server-methods/system-agent-approval.test.ts","../../system-agent/setup-inference.js","205bce35e4dfd74beb9c2bdb3ae0d1efa49e81c4089e587f04f45a3d04817d88",1]
 ["src/gateway/server-methods/system-agent-greeting-welcome.test.ts","../../system-agent/chat-engine.js","b8997802692829816610e61fbdf939ccc780750b5157fa19fec299c25370b4be",1]
 ["src/gateway/server-methods/system-agent-nested-inference.integration.test.ts","../../agents/embedded-agent-runner/cli-backend-dispatch.js","93c460e5a0b3663c38851cc0ef1fe27b1306b5f975e2d8d0049815167ef3b30d",1]
