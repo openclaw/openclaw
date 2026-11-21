@@ -588,8 +588,8 @@ describe("subagent progress drafts", () => {
     return wakes;
   }
 
-  type TestDraft = { push: Mock; retire: Mock };
-  const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
+  type TestDraft = { push: Mock; updatePlan: Mock; retire: Mock };
+  const newDraft = (): TestDraft => ({ push: vi.fn(), updatePlan: vi.fn(), retire: vi.fn() });
 
   it("keeps child labels and distinct short references without changing full identities", async () => {
     const first = "00000000-0000-4000-8000-000000002633";
@@ -691,6 +691,32 @@ describe("subagent progress drafts", () => {
     await registryTesting.sweepOnceForTests();
     await fixture.settle();
     expect(wakes).toHaveLength(2);
+    expectCard(draft);
+  });
+
+  it("shows the resumed requester's checklist but never a child's", async () => {
+    const draft = await adoptCohort(["a"]);
+    const steps = [
+      { step: "Fetch the recording", status: "completed" },
+      { step: "Transcribe it", status: "in_progress" },
+    ];
+    emitAgentEvent({
+      runId: "a",
+      stream: "plan",
+      data: { phase: "update", steps: [{ step: "Private child step", status: "in_progress" }] },
+    });
+    answerWakes(draft, [DONE], async (params) => {
+      emitAgentEvent({
+        runId: String(params?.idempotencyKey),
+        stream: "plan",
+        data: { phase: "update", title: "Plan updated", explanation: "1/2 complete", steps },
+      });
+    });
+
+    await endRun("a");
+    expect(draft.updatePlan).toHaveBeenCalledExactlyOnceWith(steps, {
+      explanation: "1/2 complete",
+    });
     expectCard(draft);
   });
 
