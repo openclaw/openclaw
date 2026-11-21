@@ -128,7 +128,7 @@ export function buildStatusCommandOverviewRows(params: {
   };
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
-  pluginCompatibility: PluginCompatibilityNotice[];
+  pluginCompatibility: PluginCompatibilityNotice[] | null;
   updateValue?: string;
   updateRows?: Array<{ Item: string; Value: string }>;
 }) {
@@ -237,7 +237,9 @@ export function buildStatusCommandOverviewRows(params: {
     memoryValue = parts.join(" · ");
   }
   let pluginCompatibilityValue: string;
-  if (params.pluginCompatibility.length === 0) {
+  if (params.pluginCompatibility === null) {
+    pluginCompatibilityValue = theme.muted("not checked (use --all)");
+  } else if (params.pluginCompatibility.length === 0) {
     pluginCompatibilityValue = theme.success("none");
   } else {
     const pluginCount = new Set(params.pluginCompatibility.map((notice) => notice.pluginId)).size;
