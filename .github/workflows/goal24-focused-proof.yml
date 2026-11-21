@@ -1,0 +1,308 @@
+name: Goal 24 focused secretless proof
+
+on:
+  push:
+    branches: [proof/goal24-secretless-20261115]
+    paths:
+      - .github/workflows/goal24-focused-proof.yml
+      - scripts/goal24-*-proof.*
+      - scripts/goal24-matrix-live.test.ts
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: goal24-focused-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    # Previously collected permissions evidence must not rerun.
+    if: ${{ false }}
+    name: permissions-${{ matrix.variant }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - proof: permissions
+            variant: baseline
+            runner: xcode-27
+            deadline: 45
+            sha: 2f4ae4d3284bf17ad4930cf6770dac14c025bfc1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.deadline }}
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout immutable product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.sha }}
+          path: source
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Execute only the off-main regression
+        env:
+          GOAL24_PROOF: ${{ matrix.proof }}
+          GOAL24_PERMISSION_VARIANT: ${{ matrix.variant }}
+        run: node tooling/scripts/goal24-focused-proof.mjs
+      - name: Preserve allowlisted proof evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-permissions-${{ matrix.variant }}-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  speech-import-probe:
+    # Compiler discriminator collected in run 43782722861; no duplicate spend.
+    if: ${{ false }}
+    name: speech-import-probe
+    runs-on: xcode-27
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed compiler probe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout original callback source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 2f4ae4d3284bf17ad4930cf6770dac14c025bfc1
+          path: baseline
+          persist-credentials: false
+      - name: Checkout candidate seam source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 77ee3e8424d789b7bad5804a9dc5a1693f34c91e
+          path: source
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Inspect imported Speech signature and normal debug SIL
+        run: node tooling/scripts/goal24-speech-import-proof.mjs
+      - name: Preserve compiler-only diagnostic
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-speech-import-${{ github.run_id }}
+          path: compiler-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  matrix-causal:
+    # All product stages collected through run 43791792505; admission-only fixes replay locally.
+    if: ${{ false }}
+    name: matrix-causal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact Matrix candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bf8ee2c6152a18386a175ad329013bc20a4a8051
+          path: source
+          persist-credentials: false
+      - name: Checkout original modules without executing baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 937f77cb20ded2e041f5ea876200d01b449d0329
+          path: baseline
+          persist-credentials: false
+      - name: Recover completed SDK evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: goal24-matrix-43790032640
+          run-id: 43790032640
+          github-token: ${{ github.token }}
+          path: retained-sdk
+      - name: Recover completed candidate and original-wire evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: goal24-matrix-43790694571
+          run-id: 43790694571
+          github-token: ${{ github.token }}
+          path: retained-candidate
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Re-admit retained evidence and execute only original-owner differential
+        run: node tooling/scripts/goal24-matrix-proof.mjs
+      - name: Preserve synthetic causal evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-matrix-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  matrix-live:
+    # All three live contracts collected in run 43990720491; no duplicate spend.
+    if: ${{ false }}
+    name: matrix-live-synapse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed live proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout immutable Matrix candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bf8ee2c6152a18386a175ad329013bc20a4a8051
+          path: source
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Run real Synapse and three live contracts
+        run: node tooling/scripts/goal24-matrix-live-proof.mjs
+      - name: Preserve only bounded synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-matrix-live-${{ github.run_id }}
+          path: |
+            proof-output/summary.json
+            proof-output/observations.json
+            proof-output/live.json
+            proof-output/synapse-pull.log
+            proof-output/synapse-generate.log
+            proof-output/synapse-start.log
+          if-no-files-found: error
+          retention-days: 7
+
+  steering-causal:
+    # Both module variants collected in run 43976840532; replay admission locally.
+    if: ${{ false }}
+    name: steering-causal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact steering candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 1fab66039a51c51fe9c6585d2f9b7365461be252
+          path: source
+          persist-credentials: false
+      - name: Checkout original module without executing baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 976a4fb8784a326579108e03d0df4356dad501a3
+          path: baseline
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Execute four steering cases with candidate and original module
+        run: node tooling/scripts/goal24-steering-proof.mjs
+      - name: Preserve synthetic steering evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-steering-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  audio-package:
+    # Installed fallback and adapter dispatch collected in run 43984943020.
+    if: ${{ false }}
+    name: audio-installed-package
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact audio candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d51696b32be02844d1801dd31819912401859b88
+          path: source
+          persist-credentials: false
+      - name: Checkout retained native proof source without executing it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a9a084486e3df10193dfa9ac5ab9faa9f53a4619
+          path: prior
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Prove installed TTS fallback and recording adapter dispatch
+        run: node tooling/scripts/goal24-audio-package-proof.mjs
+      - name: Preserve synthetic package evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-audio-package-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
