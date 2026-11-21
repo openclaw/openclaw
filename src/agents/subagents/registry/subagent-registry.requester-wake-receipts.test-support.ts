@@ -532,7 +532,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(
           events
             .map((event) => JSON.parse(event.eventJson))
-            .filter((event) => event.customType === "run-failed-before-reply"),
+            .filter((event) => event.customType === "subagent-delivery-failed"),
         ).toEqual([
           expect.objectContaining({
             content: expect.stringContaining(

@@ -1,7 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { hasPrivateRequesterInput } from "../registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
@@ -16,14 +14,13 @@ const RECOVERY =
 export function buildSubagentCompletionFailureNotice(
   batch: readonly SubagentRunRecord[],
   kind: "failed" | "delayed",
+  reason: string,
 ): string {
   const heading =
-    kind === "delayed"
+    (kind === "delayed"
       ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
-      : expectDefined(
-          renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-          "child completion failure notice",
-        );
+      : "The child result couldn't be delivered to this conversation. Check the child session for saved work.") +
+    `\nReason: ${truncateUtf16WithEllipsis(reason === "expired" ? "The completion delivery deadline expired." : reason, 1_024)}`;
   const sorted = batch.toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   const overflow = (count: number) =>
     `[${count} additional child results omitted; list the requester's children with the available session tools and read their history.]`;
@@ -40,7 +37,9 @@ export function buildSubagentCompletionFailureNotice(
         ? outcome.error === "Gateway stopped"
           ? "Interrupted by Gateway restart; not resumed."
           : outcome.error
-        : outcome?.status;
+        : outcome?.status === "ok"
+          ? "Completed successfully."
+          : outcome?.status;
     const identity = `Child ${child.childSessionKey} (run ${child.runId})\n${status ?? "unknown"}`;
     const header = truncateUtf16WithEllipsis(identity, 512);
     const captured = hasPrivateRequesterInput(child)

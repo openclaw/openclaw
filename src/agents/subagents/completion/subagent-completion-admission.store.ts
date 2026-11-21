@@ -123,7 +123,7 @@ export async function recordRequiredCompletionNotice(
       ? "subagent-delivery-delayed"
       : kind === "result"
         ? "subagent-completion"
-        : "run-failed-before-reply";
+        : "subagent-delivery-failed";
   const findings =
     kind === "result"
       ? (
@@ -144,7 +144,7 @@ export async function recordRequiredCompletionNotice(
             }),
           )
         ).join("\n\n")
-      : buildSubagentCompletionFailureNotice(batch, kind);
+      : buildSubagentCompletionFailureNotice(batch, kind, reason);
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
