@@ -305,6 +305,36 @@ describe("balanced JSON extraction", () => {
     },
   );
 
+  it.each(["{}", "[0]", "{bad}", String.raw`{say \"hi\"}`])(
+    "preserves original string bytes when opaque spans expose an apparent child (%s)",
+    (child) => {
+      const source = `["prefix ${child} suffix"]`;
+      const start = source.indexOf(child);
+      const opaqueSpans = [
+        { startIndex: 1, endIndex: start - 1 },
+        { startIndex: start + child.length, endIndex: source.length - 2 },
+      ];
+      const discovery =
+        "[" +
+        " ".repeat(start - 1) +
+        child +
+        " ".repeat(source.length - start - child.length - 1) +
+        "]";
+      expect(() => JSON.parse(source)).not.toThrow();
+      for (const recoverAtLineStart of [false, true]) {
+        for (const view of [source, discovery]) {
+          const options = { recoverAtLineStart, strictJson: { source, opaqueSpans } };
+          expect(extractBalancedJsonFragments(view, options)).toEqual(
+            fragmentsAt(source, [source]),
+          );
+          expect(extractBalancedJsonFragments(view, { ...options, openers: ["{"] })).toEqual(
+            fragmentsAt(source, child === "{}" ? [child] : []),
+          );
+        }
+      }
+    },
+  );
+
   it.each(['{"ok":true}', '{"nested":[{"value":1}]}'])(
     "does not substitute string-interior children exposed by opaque quotes (%s)",
     (child) => {
@@ -535,6 +565,19 @@ describe("balanced JSON extraction", () => {
       }
     },
   );
+
+  it("keeps an unfinished recovery child's quote until an explicit owner boundary", () => {
+    const raw = '["details\n{unfinished\nlast line"]\n{"first":1} {"second":2}';
+    // The apparent parent terminator is still inside the unfinished child's
+    // quote. Recovery does not guess parent priority from malformed prose.
+    for (const options of [
+      { recoverAtLineStart: true },
+      strictRecovery,
+      { ...strictRecovery, strictJson: { source: raw } },
+    ]) {
+      expect(extractBalancedJsonFragments(raw, options)).toEqual(fragmentsAt(raw, ['{"first":1}']));
+    }
+  });
 
   it("does not rescan damaged quote suffixes or copy discarded wrappers", () => {
     const records = ['{"first":1}', '{"second":2}'];
