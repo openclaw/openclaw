@@ -223,9 +223,9 @@ export async function executeLocalWorkspaceManifestRead(
     }
     let canonicalPaths: Set<string> | undefined;
     let scanFailure: unknown;
-    // Older accepted roots can contain the pnpm fallback store. Try current
-    // membership first, then restore only that historical eligibility for repair.
-    for (const includeLegacyPnpmStore of [false, true]) {
+    // Older accepted roots can contain the pnpm fallback store and AGP outputs.
+    // Try current membership first, then restore their historical eligibility for repair.
+    for (const includeLegacyDerivedPaths of [false, true]) {
       let projectionPaths: Set<string> | undefined;
       let projectionDirectories: Set<string> | undefined;
       for (const candidate of [
@@ -272,7 +272,7 @@ export async function executeLocalWorkspaceManifestRead(
             includePaths,
             preserveDirectories,
             buildCacheInputs: retained,
-            includeLegacyPnpmStore,
+            includeLegacyDerivedPaths,
             onEntry: (node) => nodes.push(node),
           });
         } catch (error) {

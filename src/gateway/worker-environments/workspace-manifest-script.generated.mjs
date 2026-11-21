@@ -108,6 +108,9 @@ export async function runWorkspaceManifestProgram(
   const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
     "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|build/intermediates|build/outputs/apk|build/outputs/bundle|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
   );
+  const LEGACY_DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
+    "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
+  );
   function isRuntimeOwnedWorkspacePath(relativePath) {
     return (
       relativePath === ".git" ||
@@ -124,7 +127,7 @@ export async function runWorkspaceManifestProgram(
     relativePath,
     retainedInput = false,
     excludeBuildCaches = false,
-    includeLegacyPnpmStore = false,
+    includeLegacyDerivedPaths = false,
   ) {
     if (isRuntimeOwnedWorkspacePath(relativePath)) {
       return true;
@@ -136,13 +139,15 @@ export async function runWorkspaceManifestProgram(
     if (
       DERIVED_WORKSPACE_ROOT_PATHS.some(
         (root) =>
-          (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+          (!includeLegacyDerivedPaths || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
           (relativePath === root || relativePath.startsWith(root + "/")),
       )
     ) {
       return true;
     }
-    return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
+    return (
+      includeLegacyDerivedPaths ? LEGACY_DERIVED_WORKSPACE_SEGMENT_RE : DERIVED_WORKSPACE_SEGMENT_RE
+    ).test(relativePath);
   }
   function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
     const nonemptyDirectories = new Set();

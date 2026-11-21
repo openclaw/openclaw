@@ -37,6 +37,7 @@ import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.j
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 import * as workspaceHashes from "./workspace-hash-memo.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -220,16 +221,18 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
   },
 );
 
-async function repairFixture(historicalCache = false) {
+async function repairFixture(historicalPaths: readonly string[] = []) {
   const root = await fs.realpath(dirs.make("workspace-baseline-repair-"));
   const projection = path.join(root, "projection");
   const canonical = path.join(root, "canonical");
+  const files = ["nested/file.txt", ...historicalPaths];
+  const directories = new Set(files.flatMap((file) => [...workspacePathAncestors(file)]));
   for (const directory of [projection, canonical]) {
-    await fs.mkdir(path.join(directory, "nested"), { recursive: true });
-    await fs.writeFile(path.join(directory, "nested/file.txt"), "baseline");
-    if (historicalCache) {
-      await fs.mkdir(path.join(directory, ".openclaw/.pnpm-store"), { recursive: true });
-      await fs.writeFile(path.join(directory, ".openclaw/.pnpm-store/cache"), "baseline");
+    for (const file of files) {
+      await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
+      await fs.writeFile(path.join(directory, file), "baseline");
+    }
+    if (historicalPaths.length) {
       await fs.mkdir(path.join(directory, "node_modules"));
       await fs.writeFile(path.join(directory, "node_modules/installed.js"), "local dependency");
     }
@@ -237,21 +240,14 @@ async function repairFixture(historicalCache = false) {
   await requireGit(canonical, ["init", "--quiet"]);
   await requireGit(canonical, ["add", "nested/file.txt"]);
   const records = createLocalWorkspaceManifestTree([
-    { path: "nested", type: "directory" },
-    { path: "nested/file.txt", type: "file", mode: 0o644, size: 8, sha256: hash("baseline") },
-    ...(historicalCache
-      ? [
-          { path: ".openclaw", type: "directory" as const },
-          { path: ".openclaw/.pnpm-store", type: "directory" as const },
-          {
-            path: ".openclaw/.pnpm-store/cache",
-            type: "file" as const,
-            mode: 0o644,
-            size: 8,
-            sha256: hash("baseline"),
-          },
-        ]
-      : []),
+    ...[...directories].map((entryPath) => ({ path: entryPath, type: "directory" as const })),
+    ...files.map((entryPath) => ({
+      path: entryPath,
+      type: "file" as const,
+      mode: 0o644,
+      size: 8,
+      sha256: hash("baseline"),
+    })),
   ]);
   const treeRoot = localWorkspaceDigestBytes(records.get("")!.treeRef);
   const snapshot = {
@@ -370,16 +366,21 @@ it.each(["probe", "scan"] as const)(
 );
 
 it.each([
-  ["projection", false],
-  ["canonical", false],
-  ["checkpoint", false],
-  ["projection", true],
-  ["checkpoint", true],
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, []] as const),
+  ["projection", [".openclaw/.pnpm-store/cache"]],
+  ["checkpoint", [".openclaw/.pnpm-store/cache"]],
+  ...["projection", "canonical", "checkpoint"].map(
+    (matching) =>
+      [
+        matching,
+        ["m/build/intermediates/x", "m/build/outputs/apk/x.apk", "m/build/outputs/bundle/x.aab"],
+      ] as const,
+  ),
 ] as const)(
-  "reconstructs a collected baseline from the verified %s filesystem (historical cache: %s)",
-  async (matching, historicalCache) => {
+  "reconstructs a collected baseline from the verified %s filesystem (historical paths: %s)",
+  async (matching, historicalPaths) => {
     const { projection, canonical, snapshot, treeRoot, records } =
-      await repairFixture(historicalCache);
+      await repairFixture(historicalPaths);
     if (matching === "checkpoint") {
       await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
       const scan = await executeLocalWorkspaceManifestRead(
@@ -392,7 +393,7 @@ it.each([
       );
       snapshot.row.checkpoint_json = JSON.stringify(scan);
     }
-    if (matching === "canonical") {
+    if (matching === "canonical" && !historicalPaths.length) {
       // A later guest name must not enroll unrelated canonical bytes or spoil
       // an already matching canonical candidate.
       await fs.writeFile(path.join(projection, "unaccepted.txt"), "guest addition");
@@ -404,10 +405,7 @@ it.each([
       kind: "repair",
       canonicalRoot: canonical,
     });
-    expect(result.kind).toBe("replace");
-    if (result.kind !== "replace") {
-      throw new Error("Missing prepared repair");
-    }
+    assert(result.kind === "replace", "Missing prepared repair");
     const mutation = deserialize(
       zstdDecompressSync(result.update.mutation),
     ) as LocalWorkspaceMutation;
@@ -440,7 +438,9 @@ it.each([
 it.each(["different", "identical"] as const)(
   "preserves %s later edits when neither filesystem matches the exact missing baseline",
   async (edits) => {
-    const { projection, canonical, snapshot } = await repairFixture(true);
+    const { projection, canonical, snapshot } = await repairFixture([
+      ".openclaw/.pnpm-store/cache",
+    ]);
     await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
     const hostEdit = edits === "identical" ? "guest edit" : "host edit";
     await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);
