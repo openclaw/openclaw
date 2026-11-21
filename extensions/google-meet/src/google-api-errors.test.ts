@@ -38,4 +38,21 @@ describe("Google Meet API errors", () => {
     expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("does not tell the user to re-authenticate when the meeting does not exist", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValueOnce({
+      response: new Response("Requested entity was not found.", {
+        status: 404,
+        headers: { "content-type": "text/plain" },
+      }),
+      finalUrl: "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "test-token", meeting: "abc-defg-hij" }),
+    ).rejects.toMatchObject({
+      message: "Google Meet spaces.get failed (404): Requested entity was not found.",
+    });
+  });
 });
