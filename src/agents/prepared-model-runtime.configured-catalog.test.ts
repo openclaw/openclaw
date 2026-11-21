@@ -736,11 +736,8 @@ it.each([
   expect(rows[0]).toMatchObject({
     name: "Configured",
     baseUrl: custom ? "https://custom.fixture.invalid/v1" : "https://catalog.fixture.invalid/v1",
-    inference: custom ? { chat: false } : inference,
   });
-  if (custom) {
-    expect(rows[0]!.inference).not.toHaveProperty("decision");
-  }
+  expect(rows[0]!.inference).toEqual(custom ? (chat ? undefined : { chat: false }) : inference);
 });
 
 it("keeps typed-only manifest rows after live chat discovery acquires their provider", () => {
