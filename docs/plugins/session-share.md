@@ -259,3 +259,20 @@ Check the configured node ID and `linkGitHubIdentities`. Both profiles need the 
 - [Multiplayer](/start/multiplayer)
 - [Beam](/plugins/beam)
 - [User model](/concepts/user-model)
+
+## Open original on a paired node
+
+The shared-session menu can open an eligible session in a separate source Control UI tab.
+The receiver stays read-only. The source requires its own authentication and permissions.
+This action supports paired node sources only; outbound Gateway sources do not provide original links.
+
+On the source, approve the optional `openclaw.sessions.list-with-links.v1` node command and reconnect.
+On the receiver, configure `plugins.entries.session-share.config.nodes.<nodeId>.controlUiOrigin`
+with the trusted HTTP(S) origin, and `controlUiBasePath` if the source uses a base path (for example `/openclaw`).
+Both settings are unset by default, and the link command is not in the default node allowlist.
+Never derive the address from a node IP or a source-supplied absolute URL.
+
+Only source-relative paths that still resolve to the stored session are included. The receiver
+binds each path to its configured origin. Links follow current source routing; they are not
+immutable session addresses. If a command, address, or eligible route is missing, the menu
+disables **Open original** and shows setup guidance. Ordinary list/read commands are unchanged.
