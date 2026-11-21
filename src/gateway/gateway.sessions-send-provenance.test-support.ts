@@ -372,7 +372,13 @@ beforeAll(async () => {
   workspace = path.join(home, "workspace");
   const emptyBundled = path.join(home, "empty-bundled-plugins");
   const token = `provenance-proof-${randomUUID()}`;
+  const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1"]
+    .filter(Boolean)
+    .join(",");
   const overrides = {
+    // The synthetic provider and sink are owned loopback endpoints.
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
     HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_GATEWAY_TOKEN: token,
@@ -401,7 +407,7 @@ beforeAll(async () => {
   }
   await Promise.all(
     [stateDir, workspace, emptyBundled].map((directory) =>
-      fs.mkdir(directory, { recursive: true }),
+      fs.mkdir(directory, { recursive: true, mode: 0o700 }),
     ),
   );
   const endpoint = await startProviderAndSink();
@@ -426,6 +432,8 @@ beforeAll(async () => {
     },
     gateway: { auth: { mode: "token", token } },
     hooks: { enabled: false },
+    // This proof exercises strict refusal, not the default quiet followup policy.
+    messages: { queue: { collaborativeSteeringFallback: "reject" } },
     logging: { consoleLevel: "error", audit: { enabled: false, executionIdentity: false } },
     models: {
       mode: "replace",
