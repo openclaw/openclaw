@@ -27,6 +27,8 @@ final class OnboardingAISetupModel {
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var activeAuthOption: AuthOption?
+    /// The name the user picked, such as ChatGPT, used in sign-in errors instead of the option's own label.
+    private var authDisplayName: String?
     private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
@@ -54,7 +56,6 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var manualError: Failure?
-    var showManualEntry = false
 
     /// Called when a candidate connects so the page can advance.
     var onConnected: (() -> Void)?
@@ -66,6 +67,10 @@ final class OnboardingAISetupModel {
     private let defaults: UserDefaults
     private let routeIdentityProvider: @MainActor () -> String?
     private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
+    var gatewayIsRemote: Bool {
+        self.connectionModeProvider() == .remote
+    }
+
     private var started = false
     private var attemptToken = UUID()
     @ObservationIgnored private var pendingVerification: PendingVerification?
@@ -553,7 +558,6 @@ final class OnboardingAISetupModel {
         self.manualKey = ""
         self.manualError = nil
         self.manualTesting = false
-        self.showManualEntry = false
         if let authSessionToCancel, let authServerLease {
             Task {
                 await self.gateway.cancelWizardSession(authSessionToCancel, on: authServerLease)
@@ -673,13 +677,11 @@ extension OnboardingAISetupModel {
                         label: label,
                         status: "unavailable",
                         error: "\(label) did not expose a usable local model. Review setup, then retry.")
-                    self.showManualEntry = !self.manualProviders.isEmpty
                 }
                 return
             }
             // Detection is presentation-only. Existing credentials and native
             // subscriptions are never tested or selected until the user clicks one.
-            self.showManualEntry = !self.manualProviders.isEmpty
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -688,7 +690,6 @@ extension OnboardingAISetupModel {
             }
             self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
-            self.showManualEntry = self.candidates.isEmpty
         }
     }
 
@@ -959,7 +960,6 @@ extension OnboardingAISetupModel {
             return
         }
         self.phase = .ready
-        if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
     }
 
     private func requestActivation(
@@ -1163,7 +1163,11 @@ extension OnboardingAISetupModel {
 extension OnboardingAISetupModel {
     /// Provider wizard actions return the task that settles their reply, including stale-reply handling.
     @discardableResult
-    func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) -> Task<Void, Never>? {
+    func startProviderWizard(
+        _ option: AuthOption,
+        kind: ProviderWizardKind,
+        displayName: String? = nil) -> Task<Void, Never>?
+    {
         guard !isBusy, self.activeAuthOption == nil else { return nil }
         if kind == .auth, option.kind == "custom", self.connectionModeProvider() == .remote {
             self.clearProviderAuth()
@@ -1183,11 +1187,13 @@ extension OnboardingAISetupModel {
         if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
             params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
         }
-        return self.startSetupWizard(
+        let task = self.startSetupWizard(
             option,
             kind: kind,
             params: params,
             serverLease: serverLease)
+        self.authDisplayName = displayName
+        return task
     }
 
     @discardableResult
@@ -1472,7 +1478,7 @@ extension OnboardingAISetupModel {
         if status == "error" || (done && error != nil) {
             self.retireProviderAuthSession()
             self.authError = Self.failure(
-                label: option.label,
+                label: self.authDisplayName ?? option.label,
                 status: "unavailable",
                 error: error)
             return
@@ -1515,7 +1521,7 @@ extension OnboardingAISetupModel {
         self.authStep = step
         if validationError {
             self.authError = Self.failure(
-                label: option.label,
+                label: self.authDisplayName ?? option.label,
                 status: "format",
                 error: error)
         }
@@ -1589,6 +1595,7 @@ extension OnboardingAISetupModel {
     private func clearProviderAuth() {
         self.retireProviderAuthSession()
         self.activeAuthOption = nil
+        self.authDisplayName = nil
         self.providerWizardKind = nil
         self.authError = nil
         self.authBusy = false
@@ -1605,9 +1612,9 @@ extension OnboardingAISetupModel {
 extension OnboardingAISetupModel {
     /// Captures submission synchronously; the task settles only after activation recovery finishes.
     @discardableResult
-    func submitManualKey() -> Task<Void, Never>? {
+    func submitManualKey(providerID: String? = nil) -> Task<Void, Never>? {
         let key = self.manualKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let provider = selectedManualProvider, !key.isEmpty, !self.isBusy else { return nil }
+        guard let provider = self.manualProvider(id: providerID), !key.isEmpty, !self.isBusy else { return nil }
         guard let context = beginAttemptContext() else {
             self.manualError = Self.transportFailure(
                 "No Gateway is selected. Select a Gateway, then try again.")

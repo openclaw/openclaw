@@ -26,9 +26,10 @@ public struct OpenClawMascotView: View {
     private let interactive: Bool
     private let minimumFrameInterval: TimeInterval
     private let paused: Bool
+    private let eyeGlow: Bool
 
     private var staticPose: OpenClawMascotPose {
-        var pose = OpenClawMascotPose.staticPose(for: self.mood)
+        var pose = self.withEyeGlowSetting(OpenClawMascotPose.staticPose(for: self.mood))
         // One hat at a time: the working static pose already wears the hard
         // hat, so a requested accessory stays off (mirrors the animator).
         if self.accessory != .none, pose.hardHat == 0 {
@@ -47,6 +48,7 @@ public struct OpenClawMascotView: View {
     ///     a click). Off by default so the mascot never swallows taps meant
     ///     for an enclosing control.
     ///   - minimumFrameInterval: minimum redraw interval for animated poses.
+    ///   - eyeGlow: draws the teal highlight in each eye. Off leaves plain dark eyes.
     ///   - paused: stops redrawing while the mascot is mounted but not shown,
     ///     such as in a hidden sidebar; SwiftUI cannot detect that on its own.
     public init(
@@ -55,7 +57,8 @@ public struct OpenClawMascotView: View {
         accessory: OpenClawMascotAccessory = .none,
         interactive: Bool = false,
         minimumFrameInterval: TimeInterval = 1.0 / 30.0,
-        paused: Bool = false)
+        paused: Bool = false,
+        eyeGlow: Bool = true)
     {
         self.floats = floats
         self.mood = mood
@@ -63,6 +66,7 @@ public struct OpenClawMascotView: View {
         self.interactive = interactive
         self.minimumFrameInterval = minimumFrameInterval
         self.paused = paused
+        self.eyeGlow = eyeGlow
         self._animator = State(initialValue: OpenClawMascotAnimator(allowsAutoSleep: interactive))
     }
 
@@ -81,7 +85,8 @@ public struct OpenClawMascotView: View {
             minimumInterval: self.minimumFrameInterval,
             paused: self.paused))
         { timeline in
-            let pose = self.animator.pose(at: timeline.date.timeIntervalSinceReferenceDate)
+            let pose = self.withEyeGlowSetting(
+                self.animator.pose(at: timeline.date.timeIntervalSinceReferenceDate))
             // Float translates the whole canvas like the site floats the hero
             // container; drawing the offset inside the canvas would clip the
             // antennae (art starts at y~5 of 120) at the float/hop peak.
@@ -116,6 +121,13 @@ public struct OpenClawMascotView: View {
         } else {
             core
         }
+    }
+
+    private func withEyeGlowSetting(_ pose: OpenClawMascotPose) -> OpenClawMascotPose {
+        guard !self.eyeGlow else { return pose }
+        var dimmed = pose
+        dimmed.eyeGlowOpacity = 0
+        return dimmed
     }
 
     private func now() -> TimeInterval {
