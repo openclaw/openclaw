@@ -346,6 +346,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
+        prepareHostFileMutation: assertActive?.prepareSessionSourceStorageEffect,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {

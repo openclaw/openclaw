@@ -206,7 +206,7 @@ describe("update-cli", () => {
     vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
     const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
     mocks.readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(modules.updateGitCheckout).mockResolvedValueOnce(fixture.outcome);
+    vi.mocked(modules.updateGitRelease).mockResolvedValueOnce(fixture.outcome);
     mocks.nodeVersionSatisfiesEngine.mockReturnValue(false);
     vi.mocked(modules.resolveGatewayInstallEntrypoint).mockResolvedValue(
       setup.FRESH_POST_UPDATE_ENTRYPOINT,
