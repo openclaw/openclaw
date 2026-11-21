@@ -6,9 +6,10 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.test-support.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
 import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import { sealSecretSentinel } from "../sentinel.js";
 import {
@@ -114,7 +115,7 @@ async function rawUpgrade(
       ? `Proxy-Authorization: Basic ${Buffer.from(`openclaw:${auth}`).toString("base64")}\r\n`
       : "";
   const target = params.forward
-    ? `https://localhost:${port}${params.pathname ?? "/"}`
+    ? new URL(params.pathname ?? "/", `https://localhost:${port}`).href
     : (params.pathname ?? "/");
   socket.write(
     Buffer.concat([
@@ -163,6 +164,9 @@ beforeAll(async () => {
 afterAll(() => seedDirs.cleanup());
 
 beforeEach(async () => {
+  for (const key of [...PROXY_ENV_KEYS, "NO_PROXY", "no_proxy"]) {
+    vi.stubEnv(key, undefined);
+  }
   caDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-websocket-"));
   for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
     fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
@@ -244,6 +248,7 @@ afterEach(async () => {
     origin.close(() => resolve());
   });
   fs.rmSync(caDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 describe("secret egress WebSocket forwarding", () => {
@@ -363,7 +368,7 @@ describe("secret egress WebSocket forwarding", () => {
     proxyEnv = proxy.registerProcess().env;
     const request = await rawUpgrade({
       pathname: "https://other.example/socket",
-      credential: "ordinary-value",
+      forward: true,
     });
     await request.closed;
     expect(Buffer.concat(request.received).toString()).toMatch(/^HTTP\/1\.1 403 /);

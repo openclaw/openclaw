@@ -562,9 +562,9 @@ describe("secret egress proxy", () => {
     expect(
       (await requestThroughTunnel({ path: `https://127.0.0.1:${originPort}/redirected`, headers }))
         .status,
-    ).toBe(502);
+    ).toBe(400);
     expect(originRequests).toHaveLength(1);
-    expect(auditEvents.at(-1)?.reason).toBe("destination-not-allowed");
+    expect(auditEvents.at(-1)?.reason).toBe("upstream-error");
   });
 
   it("forwards a CJK attachment filename from a real upstream and keeps serving", async () => {

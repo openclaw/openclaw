@@ -12,6 +12,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mintSecretSentinel } from "../sentinel.js";
@@ -119,6 +120,9 @@ beforeAll(async () => {
 afterAll(() => seedDirs.cleanup());
 
 beforeEach(async () => {
+  for (const key of [...PROXY_ENV_KEYS, "NO_PROXY", "no_proxy"]) {
+    vi.stubEnv(key, undefined);
+  }
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", undefined);
   observed = [];
   auditEvents = [];

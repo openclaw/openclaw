@@ -1,0 +1,2 @@
+# Real CONNECT socket controls: TLS/plaintext Host pinning, bounded idle/EOF cleanup, and post-await grant revocation.
+274

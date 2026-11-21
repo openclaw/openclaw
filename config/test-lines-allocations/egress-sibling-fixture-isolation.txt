@@ -1,0 +1,2 @@
+# Isolate existing lifecycle/WebSocket fixtures from ambient proxy settings.
+9

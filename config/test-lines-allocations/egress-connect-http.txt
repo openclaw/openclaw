@@ -1,0 +1,2 @@
+# Five real authenticated CONNECT cases preserve loopback success, sentinel refusal, and scheme/host/port pinning.
+97
