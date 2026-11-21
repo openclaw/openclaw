@@ -280,11 +280,6 @@ openclaw-model-setup-page > .content-header {
   flex: 1;
   min-width: 0;
   gap: 2px;
-}
-
-.model-setup-provider-select__copy strong,
-.model-setup-provider-select__copy span,
-.model-setup-provider-select__copy small {
   overflow-wrap: anywhere;
 }
 
