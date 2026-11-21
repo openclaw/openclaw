@@ -165,17 +165,30 @@ function AttachmentTile(props: {
                     progress: props.entry.progress,
                   }}
                   metadata={
-                    props.entry.preparation === "compressing" ? (
+                    props.entry.preparation === "compressing" ||
+                    props.entry.preparation === "preparing" ? (
                       <span class="chat-attachment-file__type" role="status">
-                        {t("chat.attachments.compressing", {
-                          progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
-                        })}
+                        {t(
+                          props.entry.preparation === "preparing"
+                            ? "chat.attachments.preparingVideo"
+                            : "chat.attachments.compressing",
+                          {
+                            progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
+                          },
+                        )}
                       </span>
                     ) : (
-                      <span class="chat-attachment-file__type">
+                      <span class="chat-attachment-file__type chat-attachment-compression-actions">
                         {failed() && (
-                          <span class="sr-only" role="status">
+                          <span class="chat-attachment-compression-error" role="status">
                             {failureLabel()}
+                            <Show when={props.entry.read.compressionDiagnostic}>
+                              {(code) => (
+                                <span class="chat-attachment-compression-diagnostic">
+                                  {t("chat.attachments.compressionDiagnostic", { code: code() })}
+                                </span>
+                              )}
+                            </Show>
                           </span>
                         )}
                         <button

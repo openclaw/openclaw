@@ -16,6 +16,7 @@ import {
   type ChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
 import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
+import type { VideoCompressionDiagnostic } from "./chat-attachment-video.ts";
 
 registerChatComposerEnglish();
 
@@ -31,8 +32,9 @@ export type ChatAttachmentRead = {
   attachment: ChatAttachment;
   state: "reading" | "ready" | "error";
   errorMessage?: string;
+  compressionDiagnostic?: VideoCompressionDiagnostic;
   progress?: number;
-  preparation?: "offer" | "compressing";
+  preparation?: "offer" | "compressing" | "preparing";
   compress?: () => void;
   reservedBytes?: number;
   cancel?: () => void;
@@ -167,13 +169,19 @@ export class ChatAttachmentReadLifecycle {
     return true;
   }
 
-  failCompression(entry: ChatAttachmentRead, message: string, retry: () => void): void {
+  failCompression(
+    entry: ChatAttachmentRead,
+    message: string,
+    retry: () => void,
+    diagnostic?: VideoCompressionDiagnostic,
+  ): void {
     if (!this.entries.includes(entry)) {
       return;
     }
     this.failureCount += 1;
     entry.state = "error";
     entry.errorMessage = message;
+    entry.compressionDiagnostic = diagnostic;
     entry.preparation = undefined;
     entry.compress = retry;
     entry.cancel = undefined;
@@ -197,6 +205,7 @@ export class ChatAttachmentReadLifecycle {
     );
     entry.state = "reading";
     entry.errorMessage = undefined;
+    entry.compressionDiagnostic = undefined;
     entry.compress = undefined;
     entry.progress = undefined;
     this.notify();
@@ -261,6 +270,7 @@ export function readChatAttachmentFile(
     outcome: "ready" | "error" | "aborted",
     failureMessage = "chat.attachments.readFailed",
     retryCompression?: () => void,
+    diagnostic?: VideoCompressionDiagnostic,
   ) => {
     if (settled) {
       return;
@@ -298,7 +308,7 @@ export function readChatAttachmentFile(
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else if (retryCompression) {
-      reads.failCompression(entry, failureMessage, retryCompression);
+      reads.failCompression(entry, failureMessage, retryCompression, diagnostic);
     } else if (reads.fail(entry)) {
       showToast({ message: t(failureMessage), placement: "top-center", severity: "error" });
     }
@@ -352,6 +362,12 @@ export function readChatAttachmentFile(
       );
       return;
     }
+    if (entry.preparation === "compressing") {
+      // Encoding and data-URL preparation are different units of work. Reset
+      // only after changing the phase, never show file-read bytes as encoding.
+      entry.preparation = "preparing";
+      reads.updateProgress(entry, 0);
+    }
     preparedFile = prepared;
     entry.attachment = {
       ...entry.attachment,
@@ -378,21 +394,17 @@ export function readChatAttachmentFile(
       entry.compress = undefined;
       entry.preparation = "compressing";
       reads.updateProgress(entry, 0);
-      void import("./chat-attachment-video.ts")
-        .then(({ compressChatAttachmentVideo }) =>
-          compressChatAttachmentVideo(file, videoLimit, preparation.signal, (progress) =>
-            reads.updateProgress(entry, Math.max(entry.progress ?? 0, progress * 0.95)),
-          ),
-        )
-        .then(readPreparedFile, (error: unknown) => {
-          const reason = error instanceof Error ? error.message : "failed";
-          const message =
-            reason === "unsupported"
-              ? "chat.attachments.compressionUnsupported"
-              : reason === "too-large"
-                ? "chat.attachments.compressionTooLarge"
-                : "chat.attachments.compressionFailed";
-          finish("error", message, () => {
+      const failedCompression = (reason: string, diagnostic: VideoCompressionDiagnostic) => {
+        const message =
+          reason === "unsupported"
+            ? "chat.attachments.compressionUnsupported"
+            : reason === "too-large"
+              ? "chat.attachments.compressionTooLarge"
+              : "chat.attachments.compressionFailed";
+        finish(
+          "error",
+          message,
+          () => {
             if (
               signal.aborted ||
               !uploadsEnabled(props.uploadConfig) ||
@@ -402,8 +414,20 @@ export function readChatAttachmentFile(
             }
             readChatAttachmentFile(file, entry, reads, props);
             entry.compress?.();
-          });
-        });
+          },
+          diagnostic,
+        );
+      };
+      void import("./chat-attachment-video.ts").then(
+        ({ compressChatAttachmentVideo, describeVideoCompressionFailure }) =>
+          compressChatAttachmentVideo(file, videoLimit, preparation.signal, (progress) =>
+            reads.updateProgress(entry, Math.max(entry.progress ?? 0, progress)),
+          ).then(readPreparedFile, (error: unknown) => {
+            const failure = describeVideoCompressionFailure(error);
+            failedCompression(failure.reason, failure.diagnostic);
+          }),
+        () => failedCompression("failed", "load/failed"),
+      );
     };
     reads.updateProgress(entry, 0);
   } else if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {

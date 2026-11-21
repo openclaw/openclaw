@@ -138,11 +138,30 @@ suite.define(() => {
         await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
         const expectError = async (error: string) => {
           await expect.poll(() => button(page, "Send message").isEnabled()).toBe(true);
-          await page
+          const status = page
             .locator(".chat-attachment-thumb")
             .getByRole("status")
-            .filter({ hasText: error })
-            .waitFor();
+            .filter({ hasText: error });
+          await status.waitFor();
+          // A title or 1px sr-only label cannot satisfy mobile-visible recovery.
+          expect(
+            await status.evaluate((node) => {
+              const box = node.getBoundingClientRect();
+              const tile = node.closest(".chat-attachment-thumb")!;
+              const tileBox = tile.getBoundingClientRect();
+              return {
+                readable: box.width > 20 && box.height > 10,
+                contained: box.right <= tileBox.right && box.bottom <= tileBox.bottom,
+                unclipped: tile.scrollHeight <= tile.clientHeight + 1,
+                viewport: tileBox.right <= innerWidth,
+              };
+            }),
+          ).toEqual({ readable: true, contained: true, unclipped: true, viewport: true });
+          expect(
+            await status.locator(".chat-attachment-compression-diagnostic").textContent(),
+          ).toMatch(
+            /^Error code: (input|codec|conversion|encoding|output|budget)\/(failed|unsupported|too-large)$/,
+          );
           await button(page, "Retry compression").waitFor();
           expect(await page.locator(".app-toast").count()).toBe(0);
           expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
