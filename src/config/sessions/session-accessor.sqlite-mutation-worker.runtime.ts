@@ -135,8 +135,8 @@ async function runColdMutationWorker(
   data: SessionColdWorkerData,
   operationId: number,
 ) {
-  const { mutateSessionColdTranscriptInWorker, assertSessionColdSourceCurrent } =
-    await import("./session-cold-storage-worker.js");
+  const { assertSessionColdSourceCurrent } = await import("./session-cold-storage-custody.js");
+  const { mutateSessionColdTranscriptInWorker } = await import("./session-cold-storage-worker.js");
   const { prepareSessionColdSourceGuard, SessionColdSourceRefusedError } =
     await import("./session-cold-storage-source-guard.worker.js");
   const assertPhysicalSource = () =>
