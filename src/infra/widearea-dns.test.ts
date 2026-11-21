@@ -82,6 +82,20 @@ it("renders gateway DNS-SD records", () => {
   }
 });
 
+it("keeps truncated host labels as valid DNS hostnames", () => {
+  const dnsLabelRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  // 68 chars: truncating to 63 lands on the hyphen before the trailing "bbbbb".
+  vi.spyOn(os, "hostname").mockReturnValue(`${"a".repeat(62)}-bbbbb`);
+  const txt = renderZoneText();
+
+  const srvTarget = /IN SRV 0 0 18789 (\S+)/.exec(txt)?.[1];
+  expect(srvTarget).toBeDefined();
+  expect(dnsLabelRe.test(srvTarget!)).toBe(true);
+
+  // The gateway's own A record shares the SRV target; the nameserver is "ns1".
+  expect(txt).toContain(`${srvTarget} IN A `);
+});
+
 it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
   const error = Object.assign(new Error("cannot read existing zone"), { code });
   vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
