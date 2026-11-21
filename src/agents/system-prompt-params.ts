@@ -10,11 +10,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  formatActiveNodeContextLabel,
-  getActiveNodeIdentityScope,
-  getCurrentActiveNodeContext,
-} from "../infra/active-node-context.js";
 import { findGitRootAsync } from "../infra/git-root.js";
 import { safeStat } from "../infra/path-existence.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
@@ -38,7 +33,6 @@ export function buildSystemPromptParams(params: {
   preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string | null;
   preparedSessionEntry?: InternalSessionEntry;
-  requesterProfileId?: string;
 }): {
   runtimeInfo: RuntimeInfoInput;
 } {
@@ -65,10 +59,6 @@ export function buildSystemPromptParams(params: {
       ...params.runtime,
       gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
       sessionUrl,
-      activeNode: formatActiveNodeContextLabel(
-        getCurrentActiveNodeContext(params.requesterProfileId),
-      ),
-      activeNodeIdentity: getActiveNodeIdentityScope(params.requesterProfileId),
       repoRoot,
     },
   };

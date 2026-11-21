@@ -1,0 +1,7 @@
+# Exact net test-line growth from PR #192423 (move active node presence out of the
+# cached Runtime line); main is 2 lines under its ceiling, so the growth is credited
+# in full. 75 lines: the serialized openai-completions prefix regression proving that
+# only the newest message changes when the active node appears or goes away.
+# 12 lines: the earlier test updates in this PR (attempt-prompt-context,
+# system-prompt-params, worker-turn-launcher-remote-handoff).
+87

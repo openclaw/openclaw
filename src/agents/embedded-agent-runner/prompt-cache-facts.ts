@@ -11,8 +11,6 @@ const RUNTIME_FIELDS = new Set([
   "os",
   "arch",
   "node",
-  "active_node",
-  "active_node_identity",
   "model",
   "default_model",
   "shell",

@@ -94,8 +94,6 @@ export function buildRuntimeLine(
     os: runtimeInfo?.os && `${runtimeInfo.os}${runtimeInfo.arch ? ` (${runtimeInfo.arch})` : ""}`,
     arch: runtimeInfo?.os ? undefined : runtimeInfo?.arch,
     node: runtimeInfo?.node,
-    active_node: runtimeInfo?.activeNode && sanitizeForPromptLiteral(runtimeInfo.activeNode),
-    active_node_identity: runtimeInfo?.activeNodeIdentity,
     model: runtimeInfo?.model,
     default_model: runtimeInfo?.defaultModel,
     shell: runtimeInfo?.shell,

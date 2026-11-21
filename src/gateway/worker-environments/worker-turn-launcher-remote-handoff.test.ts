@@ -324,8 +324,14 @@ describe("worker turn launcher remote handoff", () => {
     const systemPrompt = assignment.systemPrompt;
     expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
     expect(systemPrompt).toContain("Keep the worker guidance.");
-    expect(systemPrompt).toContain("active_node=active-mac");
-    expect(systemPrompt).toContain("active_node_identity=unknown");
+    // Presence travels in the current-turn runtime context; keeping it in the cached
+    // system prompt would rewrite history whenever the active node changes.
+    const runtimeContextText = (assignment.runtimeContext ?? [])
+      .map((fragment) => fragment.text)
+      .join("\n\n");
+    expect(runtimeContextText).toContain("active_node=active-mac");
+    expect(runtimeContextText).toContain("active_node_identity=unknown");
+    expect(systemPrompt).not.toContain("active_node=");
     expect(systemPrompt).toContain("Working directory: /worker/workspace");
     const verifiedRuntimeIdentity = await verifyIdentity(assignment);
     expect(verifiedRuntimeIdentity).toMatchObject({
@@ -427,8 +433,14 @@ describe("worker turn launcher remote handoff", () => {
 
     const assignment = expectDefined(descriptor, "worker launch descriptor").assignment;
     expect(assignment.prompt).toContain("Inspect this workspace");
-    expect(assignment.systemPrompt).toContain("active_node=unknown");
-    expect(assignment.systemPrompt).toContain("active_node_identity=unknown");
+    // A revoked node still reports presence, but only through the current-turn context.
+    const revokedRuntimeContext = (assignment.runtimeContext ?? [])
+      .map((fragment) => fragment.text)
+      .join("\n\n");
+    expect(revokedRuntimeContext).toContain("active_node=unknown");
+    expect(revokedRuntimeContext).toContain("active_node_identity=unknown");
+    expect(revokedRuntimeContext).not.toContain("disconnected-mac");
+    expect(assignment.systemPrompt).not.toContain("active_node=");
     expect(assignment.systemPrompt).not.toContain("disconnected-mac");
     const verifiedRuntimeIdentity = await verifyIdentity(assignment);
     expect(verifiedRuntimeIdentity).not.toHaveProperty("executionIdentity");
