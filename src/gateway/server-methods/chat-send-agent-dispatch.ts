@@ -320,7 +320,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           }
           phase?.mark("preparation");
           const skillLibraryAuthoring = await prepareGatewaySkillLibraryTurn(
-            skillLibrary,
+            { ...skillLibrary, sessionEntry: entry, listingStore: { agentId, storePath } },
             turn.prepareSessionCreation,
             () => phase?.mark("authoring"),
           );

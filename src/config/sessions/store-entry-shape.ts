@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
+import { readSkillLibraryPromptListing } from "./skill-library-prompt-listing.js";
 import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
@@ -90,6 +91,10 @@ export function projectCanonicalSessionEntryShape(
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "skillLibraryPromptListing",
+    readSkillLibraryPromptListing(canonicalValue.skillLibraryPromptListing),
+  );
   setOptionalField(
     "clientCapabilities",
     Array.isArray(canonicalValue.clientCapabilities)

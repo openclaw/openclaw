@@ -12,6 +12,7 @@ import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.j
 
 export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & {
   skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+  skillLibraryPromptListing?: import("../config/sessions/skill-library-prompt-listing.js").SkillLibraryPromptListing;
   via: SessionCreatedVia;
   surface?: SessionRow["createdSurface"];
   actor?: SessionCreatedActor;

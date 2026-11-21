@@ -40,7 +40,7 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-project.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import { resolveGatewaySkillLibraryPromptGrant } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
@@ -381,14 +381,15 @@ async function executeAgentRun(
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
-            ? await prepareGatewaySkillAuthoring(
-                {
+            ? await resolveGatewaySkillLibraryPromptGrant({
+                owner: {
                   client: params.client,
                   context: gatewayContext,
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
-                params.resolvedSessionKey,
-                !params.inputProvenance &&
+                sessionKey: params.resolvedSessionKey,
+                isHumanTurn:
+                  !params.inputProvenance &&
                   !params.isOneShotModelRun &&
                   !params.request.internalEvents &&
                   !params.request.internalRuntimeHandoffId &&
@@ -397,7 +398,15 @@ async function executeAgentRun(
                   !params.request.suppressPromptPersistence &&
                   !params.request.swarmCollector &&
                   params.request.lane !== "subagent",
-              )
+                storedListing: params.sessionEntry?.skillLibraryPromptListing,
+                sessionEntry: params.sessionEntry,
+                listingStore: prepared.lifecycleStorePath
+                  ? {
+                      agentId: params.activeSessionAgentId,
+                      storePath: prepared.lifecycleStorePath,
+                    }
+                  : undefined,
+              })
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
         await dispatchAdmittedAgentRun(

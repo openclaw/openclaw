@@ -12,6 +12,7 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SkillLibraryPromptListing } from "./skill-library-prompt-listing.js";
 
 /** Persisted identity excludes display-only actor projections. */
 export type SessionActor = SchemaContract<
@@ -214,6 +215,7 @@ export function buildSessionCreationStamp(params: {
   sandbox?: "required";
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
+  skillLibraryPromptListing?: SkillLibraryPromptListing;
   inheritedGitContributorProfileIds?: string[];
 }): {
   createdVia: SessionCreatedVia;
@@ -222,6 +224,7 @@ export function buildSessionCreationStamp(params: {
   createdAt: number;
   sandbox?: "required";
   skillLibrarySelections?: SkillLibrarySelection[];
+  skillLibraryPromptListing?: SkillLibraryPromptListing;
   inheritedGitContributorProfileIds?: string[];
 } {
   return {
@@ -239,6 +242,9 @@ export function buildSessionCreationStamp(params: {
             ...selection,
           })),
         }
+      : {}),
+    ...(params.skillLibraryPromptListing
+      ? { skillLibraryPromptListing: { ...params.skillLibraryPromptListing } }
       : {}),
   };
 }

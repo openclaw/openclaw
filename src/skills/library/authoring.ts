@@ -67,6 +67,11 @@ export type SkillLibraryAuthoringCapability = {
   target: "personal";
   defaultTarget: "workspace" | "personal";
   multipleProfiles: boolean;
+  /**
+   * Set when this session lists the tool but the current turn has no human
+   * requester. The definition stays; execution refuses before any library call.
+   */
+  turnRefusal?: string;
   /** Set on a grant that only keeps the declaration of an earlier human turn. */
   expired?: true;
   /** Gate for Workshop calls through the workspace-default wrapper, given the run's sandbox state. */
