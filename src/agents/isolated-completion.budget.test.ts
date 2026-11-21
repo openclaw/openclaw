@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isolatedAssistant,
@@ -15,6 +16,9 @@ describe("isolated completion token budgets", () => {
   it.each(["host-v1", "host-v2", "harness-v2", "cli"] as const)(
     "reserves requested reasoning while preserving explicit limits through %s",
     async (route) => {
+      // Token-budget propagation is independent of cold-loader time; deadline tests own expiry.
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(0);
       const model = {
         provider: "openai",
         id: "gpt-test",
@@ -44,7 +48,11 @@ describe("isolated completion token budgets", () => {
         { streamParams: { maxTokens: 100, temperature: 0.2 } },
         { answerTokenBudget: 300, streamParams: { maxTokens: 150, temperature: 0.2 } },
         {},
-        { answerTokenBudget: 300, thinkLevel: "off" as const },
+        {
+          answerTokenBudget: 300,
+          thinkLevel: "off" as const,
+          streamParamsMode: "preferred" as const,
+        },
       ]) {
         await runIsolatedCompletion({ ...isolatedRequest(), ...budget });
       }
@@ -61,7 +69,11 @@ describe("isolated completion token budgets", () => {
       );
       expect(completion).toHaveBeenNthCalledWith(
         5,
-        expect.objectContaining({ thinkLevel: "off", streamParams: { maxTokens: 300 } }),
+        expect.objectContaining({
+          thinkLevel: "off",
+          streamParams: { maxTokens: 300 },
+          ...(route === "cli" ? {} : { streamParamsMode: "preferred" }),
+        }),
       );
     },
   );

@@ -124,6 +124,10 @@ agent capabilities.
 Host-authorized calls must use the supplied model and credential without substitution.
 Harnesses using the shared host-prepared completion helper
 preserve the exact route, deadline, sampling options, and empty tool surface.
+`streamParamsMode: "preferred"` identifies internal sampling defaults that a
+harness may omit when the selected authentication route cannot support them.
+Without that mode, explicit sampling limits must be honored or rejected before
+inference. This never permits changing the selected route or credential.
 Harness-authorized calls may resolve only the supplied prepared
 route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,

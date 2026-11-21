@@ -152,6 +152,7 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            streamParamsMode: "preferred",
             classifyResult: ({ result: candidateResult }) => {
               parsed = normalizeSessionObserverModelOutput(candidateResult.text);
               return parsed
