@@ -30,6 +30,52 @@ type SharedModelsListRequest = Omit<
 };
 type PreparedModels = Awaited<ReturnType<typeof prepareModelsListResult>>;
 
+export function resolveSharedModelsListRequest(request: PreparedModelsListRequest) {
+  const { requesterProfileId: _requesterProfileId, readScope, ...shared } = request;
+  if (
+    readScope &&
+    (!readScope.sessionKey ||
+      isUserModelAuthProfileId(readScope.sessionEntry?.authProfileOverride?.trim() ?? ""))
+  ) {
+    return undefined;
+  }
+  const entry = readScope?.sessionEntry;
+  // Both caches retain selection facts, never the original saved row or request authority.
+  const selected: SharedModelsListRequest = {
+    ...shared,
+    ...(readScope && {
+      readScope: {
+        agentId: request.agentId,
+        sessionKey: readScope.sessionKey,
+        sessionEntry: entry && {
+          modelOverride: entry.modelOverride,
+          modelOverrideSource: entry.modelOverrideSource,
+          providerOverride: entry.providerOverride,
+          modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+          modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+          modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+          agentRuntimeOverride: entry.agentRuntimeOverride,
+          authProfileOverride: entry.authProfileOverride,
+          authProfileOverrideSource: entry.authProfileOverrideSource,
+          authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+        },
+      },
+    }),
+  };
+  return {
+    request: selected,
+    key: JSON.stringify([
+      selected.agentId,
+      { ...selected.params, sessionKey: Boolean(selected.params.sessionKey) },
+      selected.includeManualSelection,
+      Boolean(readScope),
+      selected.readScope?.sessionEntry,
+    ]),
+  };
+}
+
+type SharedModelsListSelection = NonNullable<ReturnType<typeof resolveSharedModelsListRequest>>;
+
 type ProviderIdentitySource = {
   config: OpenClawConfig;
   agentId: string;
@@ -133,15 +179,9 @@ export function createChatMetadataModelList(params: {
   const agents = new Map(params.facts.agents.map((agent) => [agent.agentId, agent]));
   const projections = new Map<string, Promise<PreparedModels>>();
   const prepare = async (
-    request: SharedModelsListRequest,
+    { request, key }: SharedModelsListSelection,
     authority?: CurrentReadAuthority,
   ): Promise<PreparedModels> => {
-    const key = JSON.stringify([
-      request.agentId,
-      { ...request.params, sessionKey: Boolean(request.params.sessionKey) },
-      request.includeManualSelection,
-      request.readScope?.sessionEntry,
-    ]);
     const existing = projections.get(key);
     if (existing) {
       const projection = await existing;
@@ -186,64 +226,38 @@ export function createChatMetadataModelList(params: {
     return pending;
   };
   return {
-    async read(request: PreparedModelsListRequest): Promise<PreparedModels | undefined> {
-      const { requesterProfileId, readScope, ...shared } = request;
-      if (readScope) {
-        const entry = readScope.sessionEntry;
-        if (
-          !readScope.sessionKey ||
-          isUserModelAuthProfileId(entry?.authProfileOverride?.trim() ?? "")
-        ) {
-          return undefined;
-        }
-        // Retain selection facts, never the saved row, request authority, or private account.
-        return prepare(
-          {
-            ...shared,
-            readScope: {
-              agentId: request.agentId,
-              sessionKey: readScope.sessionKey,
-              sessionEntry: entry && {
-                modelOverride: entry.modelOverride,
-                modelOverrideSource: entry.modelOverrideSource,
-                providerOverride: entry.providerOverride,
-                modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
-                modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
-                modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
-                agentRuntimeOverride: entry.agentRuntimeOverride,
-                authProfileOverride: entry.authProfileOverride,
-                authProfileOverrideSource: entry.authProfileOverrideSource,
-                authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
-              },
-            },
-          },
-          readScope,
-        );
+    async read(
+      selection: SharedModelsListSelection,
+      requesterProfileId?: string,
+      authority?: CurrentReadAuthority,
+    ): Promise<PreparedModels | undefined> {
+      if (selection.request.readScope) {
+        return prepare(selection, authority);
       }
-      if (requesterProfileId && request.params.view !== "provider-config") {
-        const authority = captureUserProfileModelAccountLinksAuthority(
+      if (requesterProfileId && selection.request.params.view !== "provider-config") {
+        const linksAuthority = captureUserProfileModelAccountLinksAuthority(
           captureOpenClawStateReadContext().admission,
           requesterProfileId,
         );
         // Personal-account links are read under the requesting human's authority.
         const links = await listUserProfileAuthLinksAsync(requesterProfileId);
-        if (!authority()) {
+        if (!linksAuthority()) {
           return { isCurrent: () => false, read: () => ({ models: [] }) };
         }
         // Private account credentials and discovery stay within the requesting human's authority.
         if (links.length > 0) {
           return undefined;
         }
-        const projection = await prepare(shared);
+        const projection = await prepare(selection);
         return {
-          isCurrent: () => authority() && projection.isCurrent(),
+          isCurrent: () => linksAuthority() && projection.isCurrent(),
           read: (): ModelsListResult => ({
             ...projection.read(),
             accountSelection: { kind: "automatic", label: "Automatic account selection" },
           }),
         };
       }
-      return prepare(shared);
+      return prepare(selection);
     },
   };
 }

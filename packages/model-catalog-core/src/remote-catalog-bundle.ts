@@ -372,6 +372,23 @@ export type RemoteModelCatalogBundleV3 = Omit<
   "models"
 > & { models: RemoteModelCatalogModelV3[] };
 
+// Reuse invariant envelopes so repeated reads retain each schema's compiled parser.
+// Row validation and repair still run against the providers in each incoming bundle.
+const bundleV1EnvelopeSchema = remoteModelCatalogBundleSchema.extend({
+  providers: z.record(
+    z.string().trim().min(1),
+    providerFieldsSchema.extend({ models: z.array(z.unknown()) }),
+  ),
+});
+const bundleV2EnvelopeSchema = bundleV2FieldsSchema.extend({ models: z.array(z.unknown()) });
+const pricingEntriesSchema = z.record(z.string(), z.unknown());
+const bundleV3EnvelopeSchema = bundleV3FieldsSchema.extend({
+  providers: z.record(z.string().trim().min(1), z.unknown()),
+  models: z.array(z.unknown()),
+  upstreamPricing: pricingEntriesSchema.optional(),
+  providerPricing: pricingEntriesSchema.optional(),
+});
+
 export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
   // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
   return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
@@ -421,16 +438,7 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
   value: unknown,
   warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundle {
-  const bundle = remoteModelCatalogBundleSchema
-    .extend({
-      providers: z.record(
-        z.string().trim().min(1),
-        providerFieldsSchema.extend({
-          models: z.array(z.unknown()),
-        }),
-      ),
-    })
-    .parse(value);
+  const bundle = bundleV1EnvelopeSchema.parse(value);
   const providers = Object.fromEntries(
     Object.entries(bundle.providers).flatMap<[string, ModelCatalogProvider]>(([id, provider]) => {
       const models = parseCatalogRows(
@@ -474,11 +482,7 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
   value: unknown,
   warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundleV2 {
-  const bundle = bundleV2FieldsSchema
-    .extend({
-      models: z.array(z.unknown()),
-    })
-    .parse(value);
+  const bundle = bundleV2EnvelopeSchema.parse(value);
   const rowSchema = modelV2Schema.refine((model) =>
     Object.hasOwn(bundle.providers, model.provider),
   );
@@ -663,16 +667,7 @@ export function validateAndSanitizeRemoteModelCatalogBundleV3(
   value: unknown,
   warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundleV3 {
-  const entries = z.record(z.string(), z.unknown());
-  const envelope = safeParseIgnoringUnknownKeys(
-    bundleV3FieldsSchema.extend({
-      providers: z.record(z.string().trim().min(1), z.unknown()),
-      models: z.array(z.unknown()),
-      upstreamPricing: entries.optional(),
-      providerPricing: entries.optional(),
-    }),
-    value,
-  );
+  const envelope = safeParseIgnoringUnknownKeys(bundleV3EnvelopeSchema, value);
   if (!envelope.success) {
     throw envelope.error;
   }

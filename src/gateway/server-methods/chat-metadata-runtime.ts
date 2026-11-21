@@ -39,6 +39,7 @@ import {
 } from "./chat-metadata-facts.js";
 import {
   createChatMetadataModelList,
+  resolveSharedModelsListRequest,
   retainPublishedModelsList,
 } from "./chat-metadata-model-list.js";
 import {
@@ -414,7 +415,8 @@ export function createGatewayChatMetadataRuntime(params: {
     {
       result: ModelsListResult;
       source: Parameters<typeof retainPublishedModelsList>[1];
-      readAuthStore: () => AuthProfileStore;
+      agentDir: string;
+      inheritedAuthDir?: string;
     }
   >();
   const retainedModelsList = async (key: string, request: PreparedModelsListRequest) => {
@@ -435,7 +437,11 @@ export function createGatewayChatMetadataRuntime(params: {
     return retainPublishedModelsList(published.result, published.source, {
       config: params.getConfig(),
       agentId: published.source.agentId,
-      authStore: published.readAuthStore(),
+      authStore:
+        getPreparedRuntimeAuthProfileStoreSnapshot(
+          published.agentDir,
+          published.inheritedAuthDir,
+        ) ?? EMPTY_AUTH_STORE,
     });
   };
   const readModelsList = async (
@@ -443,14 +449,11 @@ export function createGatewayChatMetadataRuntime(params: {
   ): Promise<ModelsListResult | undefined> => {
     assertAgentDatabaseReadAdmitted(request.agentId);
     const agentId = normalizeAgentId(request.agentId);
-    const key = JSON.stringify([
-      agentId,
-      request.params,
-      request.includeManualSelection,
-      request.requesterProfileId,
-      request.readScope?.sessionKey,
-      request.readScope?.sessionEntry,
-    ]);
+    const selection = resolveSharedModelsListRequest(request);
+    if (!selection) {
+      return undefined;
+    }
+    const key = JSON.stringify([selection.key, request.requesterProfileId]);
     const rebuilding =
       pending !== undefined ||
       getPendingPreparedModelRuntimeReplacement() !== undefined ||
@@ -466,7 +469,11 @@ export function createGatewayChatMetadataRuntime(params: {
     try {
       result = await readCurrent(request.agentId, async (read) => {
         generation = read;
-        const prepared = await read.modelLists.read(request);
+        const prepared = await read.modelLists.read(
+          selection,
+          request.requesterProfileId,
+          request.readScope,
+        );
         return prepared ?? { isCurrent: () => true, read: () => undefined };
       });
     } catch (error) {
@@ -491,9 +498,8 @@ export function createGatewayChatMetadataRuntime(params: {
           authStore: agent.authStore,
           providerPlugins: metadataSnapshot.owners.providers,
         },
-        readAuthStore: () =>
-          getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir) ??
-          EMPTY_AUTH_STORE,
+        agentDir,
+        inheritedAuthDir,
       });
       pruneMapToMaxSize(publishedModelLists, CHAT_METADATA_CACHE_MAX_ENTRIES);
     }
