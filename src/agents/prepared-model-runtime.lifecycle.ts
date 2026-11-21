@@ -19,6 +19,20 @@ export function capturePreparedModelRuntimeGeneration(
   return (owner.generationRetirement ??= new AbortController()).signal;
 }
 
+// Catalog callbacks retain this guard. Capture only its generation, not the batch's
+// previous catalog, candidates or transient publication callbacks.
+export function createPreparedModelRuntimeGenerationGuard(
+  owner: PreparedModelRuntimeOwner,
+  generation: number,
+  key: string,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean,
+): () => boolean {
+  return () =>
+    owner.generation === generation &&
+    (isOwnerRegistered?.(key, owner) ?? owners.get(key) === owner);
+}
+
 export function retirePreparedModelRuntimeGeneration(
   owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
 ): void {

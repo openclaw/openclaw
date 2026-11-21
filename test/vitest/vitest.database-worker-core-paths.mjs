@@ -1275,6 +1275,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.reload-auth.test.ts",
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",
   "src/agents/prepared-model-runtime.remote-publication.test.ts",
+  "src/agents/prepared-model-runtime.remote-retention.test.ts",
   "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
   "src/agents/prepared-model-runtime.sources.test.ts",
   "src/agents/prepared-model-runtime.native-demand.test.ts",
