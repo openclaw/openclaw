@@ -126,6 +126,16 @@ Use explicit config when:
 
   </Accordion>
 
+  <Accordion title="Prompt-cache reporting">
+    SGLang reuses cached prompt prefixes by default, but its usage payload
+    reports cached prompt tokens only when the server is started with
+    `--enable-cache-report`. OpenClaw then maps
+    `usage.prompt_tokens_details.cached_tokens` to `cacheRead` and reports the
+    uncached remainder as input. Without the flag, `cacheRead` stays `0` even
+    when SGLang's own cache hit rate is high.
+
+  </Accordion>
+
   <Accordion title="Troubleshooting">
     **Server not reachable**
 

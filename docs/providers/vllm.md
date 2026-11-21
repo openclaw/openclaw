@@ -200,6 +200,20 @@ Before switching the server back to FCFS, disable `priorityScheduling` and remov
 any explicit nonzero priority overrides. This new optional field needs no Doctor
 migration.
 
+### Report prompt-cache hits
+
+vLLM reuses cached prompt prefixes by default, but its usage payload reports
+cached prompt tokens only when the server runs with:
+
+```bash
+vllm serve <model-id> --enable-prompt-tokens-details
+```
+
+OpenClaw then maps `usage.prompt_tokens_details.cached_tokens` to `cacheRead`
+and reports the uncached remainder as input. Without the flag, `cacheRead`
+stays `0` even when vLLM's own prefix-cache metrics show hits. See
+[Prompt caching](/reference/prompt-caching).
+
 <AccordionGroup>
   <Accordion title="Proxy-style behavior">
     vLLM is treated as a proxy-style OpenAI-compatible `/v1` backend, not a native OpenAI endpoint:
