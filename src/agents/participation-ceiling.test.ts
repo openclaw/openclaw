@@ -189,12 +189,12 @@ it("never binds the participating device as approval reviewer", () => {
 it("rejects plugin collisions within the participating core tool projection", () => {
   const capabilityProfile = resolveConversationCapabilityProfile({
     sessionKey: ceiling.sessionKey,
-    participationCeiling: { ...ceiling, tools: ["read", "message"] },
+    participationCeiling: { ...ceiling, tools: ["read", "web_fetch"] },
   });
   expect(
     projectConversationToolNames({
       capabilityProfile,
-      toolNames: ["read", "message"],
+      toolNames: ["read", "web_fetch"],
       toolMeta: () => ({ pluginId: "collision" }),
       warn: () => undefined,
     }),
@@ -242,9 +242,9 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   }
 });
 
-it("widens deferred core tools without granting plugin or MCP collisions", async () => {
-  const core = createStubTool("sessions_list");
-  const plugin = createStubTool("message");
+it("narrows retained core tools without granting unsafe, plugin or MCP names", async () => {
+  const core = createStubTool("web_fetch");
+  const plugin = createStubTool("read");
   const mcp = createStubTool("web_fetch");
   setPluginToolMeta(plugin, { pluginId: "collision", optional: false });
   setPluginToolMeta(mcp, {
@@ -257,11 +257,28 @@ it("widens deferred core tools without granting plugin or MCP collisions", async
       operation: "tool",
     },
   });
-  for (const tool of [core, plugin, mcp]) {
+  const unsafe = [
+    "gateway",
+    "openclaw",
+    "automations",
+    "message",
+    "conversations_list",
+    "conversations_send",
+    "conversations_turn",
+    "sessions_send",
+    "sessions_spawn",
+    "sessions_list",
+    "secrets",
+    "plugins",
+    "nodes",
+    "computer",
+    "github_publish",
+  ].map(createStubTool);
+  for (const tool of [core, plugin, mcp, ...unsafe]) {
     tool.execute = vi.fn(async () => ({ content: [], details: {} }));
   }
   const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [core, plugin, mcp] });
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [core, plugin, mcp, ...unsafe] });
   const coreId = catalogRef.current!.entries.find((entry) => entry.tool === core)!.id;
   const deniedIds = catalogRef
     .current!.entries.filter((entry) => entry.tool !== core)
@@ -269,11 +286,14 @@ it("widens deferred core tools without granting plugin or MCP collisions", async
   const runtime = new ToolSearchRuntime(
     {
       catalogRef,
-      participationCeiling: { ...ceiling, tools: ["sessions_list", "message", "web_fetch"] },
+      participationCeiling: {
+        ...ceiling,
+        tools: ["read", "web_fetch", ...unsafe.map((tool) => tool.name)],
+      },
     },
     resolveToolSearchConfig(),
   );
-  expect(runtime.all().map((entry) => entry.name)).toEqual(["sessions_list"]);
+  expect(runtime.all().map((entry) => entry.name)).toEqual(["web_fetch"]);
   await runtime.callExactId(coreId, {});
   for (const id of deniedIds) {
     await expect(runtime.callExactId(id, {})).rejects.toThrow();
@@ -281,6 +301,9 @@ it("widens deferred core tools without granting plugin or MCP collisions", async
   expect(core.execute).toHaveBeenCalledOnce();
   expect(plugin.execute).not.toHaveBeenCalled();
   expect(mcp.execute).not.toHaveBeenCalled();
+  for (const tool of unsafe) {
+    expect(tool.execute).not.toHaveBeenCalled();
+  }
 });
 
 it.each([

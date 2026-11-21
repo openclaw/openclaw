@@ -1,0 +1,6 @@
+# 41 net follow-on lines close unsafe invitedTools config AND retained runtime
+# ceilings. Reuses config and real deferred-catalog tests; no new fixture layer.
+# Both failed on the unsafe base. Real embedded assembly additionally proves an
+# empty ceiling denies all, ordinary owners stay unchanged and agent denies apply.
+# Independent Astra verified all-unsafe retained ceilings execute zero tools.
+41

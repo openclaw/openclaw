@@ -1,8 +1,7 @@
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { isKnownCoreToolId, isPluginBuiltCoreToolId } from "../agents/core-tool-facts.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../agents/tool-search-protocol.js";
+import { isParticipationToolAllowed } from "../agents/participation-ceiling.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -48,10 +47,8 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
             .string()
             .trim()
             .refine(
-              (name) =>
-                TOOL_SEARCH_CONTROL_TOOL_NAMES.has(name) ||
-                (isKnownCoreToolId(name) && !isPluginBuiltCoreToolId(name)),
-              "Expected an exact core tool name; plugin/MCP tools, groups, and wildcards are not supported",
+              isParticipationToolAllowed,
+              "Expected a session-contained participant tool; cross-session controls, plugin/MCP tools, groups, and wildcards are not supported",
             ),
         )
         .transform(uniqueValues)

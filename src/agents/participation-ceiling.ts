@@ -31,9 +31,14 @@ export const PARTICIPATION_TOOL_ALLOWLIST = Object.freeze([
   "dispatch_action",
 ]);
 
-/** Read the admitted tool ceiling without consulting mutable role configuration. */
+/** Only tools with an enforced per-session boundary can enter a participation ceiling. */
+export function isParticipationToolAllowed(name: string): boolean {
+  return PARTICIPATION_TOOL_ALLOWLIST.includes(name);
+}
+
+/** Retained inputs cannot restore unsafe names admitted by earlier policy. */
 export function participationToolAllowlist(ceiling: ParticipationCeiling): readonly string[] {
-  return ceiling.tools ?? PARTICIPATION_TOOL_ALLOWLIST;
+  return ceiling.tools?.filter(isParticipationToolAllowed) ?? PARTICIPATION_TOOL_ALLOWLIST;
 }
 
 export const PARTICIPATION_RUNTIME_ERROR =

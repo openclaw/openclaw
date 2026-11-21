@@ -98,9 +98,11 @@ unsandboxed session of their own. Roles without `maxInvitedAccess` keep their
 sandbox requirement when opening other sessions too.
 
 `invitedTools` replaces the default list. Omit it for the standard file, shell,
-web, and tool-discovery tools, use `[]` for no tools, or explicitly add core names
-such as `sessions_list` to widen it. Agent tool policy can still deny any listed
-tool. Plugin/MCP names, plugin-owned tools, groups, and wildcards are rejected;
+web, and tool-discovery tools, use `[]` for no tools, or select a subset of those
+names. Cross-session controls and messaging tools are not participant capabilities;
+`sessions_spawn` remains unavailable until child authority can be inherited safely.
+Agent tool policy can still deny any listed tool. Plugin/MCP names, plugin-owned
+tools, groups, and wildcards are rejected;
 name collisions never authorize a plugin. Adding `exec` keeps approvals and
 workspace containment in force. Accepted inputs retain their ceiling across
 queueing and restart; widening the role does not widen an old input. See
