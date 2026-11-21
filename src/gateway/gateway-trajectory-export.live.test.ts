@@ -1,12 +1,16 @@
 // Gateway trajectory export live tests verify Codex harness runs emit trajectory artifacts under live settings.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryBundleManifest } from "../trajectory/types.js";
@@ -20,6 +24,9 @@ import {
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
+
+// The Gateway and its native plugins must share the same admission context.
+const requireHost = createRequire(import.meta.url);
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = process.env.OPENCLAW_LIVE_CODEX_HARNESS === "1";
@@ -462,10 +469,13 @@ describeLive("gateway live trajectory export", () => {
     "exports a combined runtime and transcript trajectory bundle through the live gateway",
     async () => {
       const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
-      const { startGatewayServer } = await import("./server.js");
+      const { startGatewayServer } = requireHost("./server.ts") as typeof import("./server.js");
+      const nativeConfig = requireHost(
+        "../config/runtime-snapshot.ts",
+      ) as typeof import("../config/runtime-snapshot.js");
 
       const previousEnv = snapshotEnv();
-      const tempDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-openclaw-trajectory-live-"));
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trajectory-live-"));
       cleanup.push(async () => {
         restoreEnv(previousEnv);
         clearRuntimeConfigSnapshot();
@@ -501,7 +511,7 @@ describeLive("gateway live trajectory export", () => {
       process.env.OPENCLAW_TRAJECTORY = "1";
       process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
 
-      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
       await fs.mkdir(trajectoryDir, { recursive: true });
       const config = await writeLiveGatewayConfig({
         configPath,
@@ -511,6 +521,18 @@ describeLive("gateway live trajectory export", () => {
         workspace: workspaceDir,
       });
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
+
+      if (process.platform === "linux") {
+        // The native Gateway graph cannot see Vitest's prepared worker resolver.
+        // Reuse its compiled owner: a source loader cannot own Linux child reaping.
+        const owner = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
+        await fs.access(owner);
+        const { bindInheritedNativeProcessOwner } = requireHost(
+          "../process/supervisor/inherited-process-lineage.ts",
+        ) as typeof import("../process/supervisor/inherited-process-lineage.js");
+        const releaseOwner = bindInheritedNativeProcessOwner(owner.href);
+        cleanup.push(async () => releaseOwner());
+      }
 
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -522,8 +544,15 @@ describeLive("gateway live trajectory export", () => {
       // config only after startup so later tool reads cannot observe it cleared.
       const runtimeConfig = useLiveTestRuntimeConfig(config);
       cleanup.push(async () => runtimeConfig[Symbol.dispose]());
+      // Native plugin SDK imports live outside Vitest's transformed config graph.
+      // Prepare that graph too, as in the native memory-plugin fixtures.
+      nativeConfig.setRuntimeConfigSnapshot(config);
       cleanup.push(async () => {
-        await server.close();
+        try {
+          await server.close();
+        } finally {
+          nativeConfig.clearRuntimeConfigSnapshot();
+        }
       });
 
       const gatewayEvents: EventFrame[] = [];
