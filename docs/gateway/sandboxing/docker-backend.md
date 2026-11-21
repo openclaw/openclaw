@@ -119,6 +119,12 @@ Gateway allocator settings from the child environment while preserving other
 preloaded libraries. This does not change the configured environment inside
 sandbox containers.
 
+Workspace result capture and transfer omit the exact tool-owned cache roots
+`.cache/convex/binaries`, `.local/share/NuGet/http-cache`,
+`.local/share/NuGet/v3-cache`, and `.nuget/packages`. Neighboring files, nested
+project fixtures, and staged inputs remain workspace data. NuGet HTTP caches can
+be relocated with `NUGET_HTTP_CACHE_PATH`, and global packages with `NUGET_PACKAGES`.
+
 ### Sandboxed browser
 
 - The sandbox browser auto-starts and waits for CDP to become reachable when the browser tool needs it. Configure via `agents.defaults.sandbox.browser.autoStart` (default `true`) and `autoStartTimeoutMs` (default 12s).
