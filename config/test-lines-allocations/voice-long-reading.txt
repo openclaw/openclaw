@@ -1,2 +1,2 @@
-357
-# Long initial readings: carrier-acknowledged ordering, protected opening and input resumption, cancellation, unchanged short/continuous paths, synthetic long-audio overflow replay; shared harness extraction avoids oversized handler growth.
+499
+# Carrier-acknowledged statement delivery, pre-ready input, interruption/resume/stop, late cleared acknowledgments, later prepared speech, unchanged short/continuous paths, and overflow replay. Shared handler harness avoids duplicate servers.

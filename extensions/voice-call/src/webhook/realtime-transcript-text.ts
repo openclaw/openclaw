@@ -1,3 +1,8 @@
+import { readRealtimeVoiceConsultQuestion } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
@@ -140,4 +145,30 @@ export function consumeUserTranscript(
   } else {
     clearRecentFinalUserTranscript(state);
   }
+}
+
+export function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
+  const providerQuestion = readRealtimeVoiceConsultQuestion(args);
+  const question = fallback?.trim();
+  if (providerQuestion) {
+    if (
+      question &&
+      providerQuestion.length <= 40 &&
+      question.length >= providerQuestion.length + 8
+    ) {
+      const record = asOptionalRecord(args);
+      const context = normalizeOptionalString(record?.context);
+      const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
+      return {
+        ...record,
+        question,
+        context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
+      };
+    }
+    return args;
+  }
+  if (!question) {
+    return args;
+  }
+  return { ...asOptionalRecord(args), question };
 }

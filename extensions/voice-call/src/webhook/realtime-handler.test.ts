@@ -364,7 +364,7 @@ describe("RealtimeCallHandler path routing", () => {
         [expect.objectContaining({ type: "call.answered", callId: "call-1" })],
       ]);
       expect(createBridge.mock.calls[0]?.[0]).toMatchObject({
-        instructions: "instructions:support",
+        instructions: expect.stringContaining("instructions:support"),
         agentId: "support",
       });
       callbacks[0]?.onReady?.();

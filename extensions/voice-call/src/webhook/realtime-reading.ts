@@ -3,26 +3,29 @@ import {
   buildRealtimeVoiceSpeakExactMessage,
   type RealtimeVoiceResponseOutcome,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 
-// Bound each generation rather than enlarging the paced-audio queue. A passage is
-// deliberately much shorter than the queue's two minutes of telephony audio.
 const PASSAGE_CHARACTERS = 480;
+export const READING_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: "openclaw_statement",
+  description:
+    "Deliver a prepared long statement in paced passages, or resume/stop an interrupted statement. Use start with the complete text for a new statement. The host retains the full unfinished statement; never ask the caller to supply it again. After an interruption, answer the caller first; resume only when appropriate, and stop if they abandon the statement. Never recite the remainder yourself. Resume repeats the last unacknowledged short passage, so no unheard words are skipped. Speak any answer before calling resume; the host handles the reading after this tool returns.",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["start", "resume", "stop"] },
+      text: { type: "string", description: "Complete prepared text; required only for start." },
+    },
+    required: ["action"],
+  },
+};
 
-function createRealtimeReading(params: {
-  text: string;
-  instructions?: string;
-  speak: (instructions: string) => void;
-  afterPlayback: (mark: string, acknowledge: () => void) => void;
-}) {
-  if (params.text.length <= PASSAGE_CHARACTERS) {
-    return undefined;
-  }
+function splitPassages(text: string): string[] {
   const passages: string[] = [];
-  let remaining = params.text;
+  let remaining = text;
   while (remaining.length > PASSAGE_CHARACTERS) {
-    // Avoid making the model finish a sentence in a later response when a
-    // complete sentence fits. Preserve the word fallback for long sentences.
     const sentence = [
       ...remaining.slice(0, PASSAGE_CHARACTERS + 1).matchAll(/[.!?]["'”’]?\s+/gu),
     ].at(-1);
@@ -31,7 +34,6 @@ function createRealtimeReading(params: {
       : remaining.lastIndexOf(" ", PASSAGE_CHARACTERS);
     if (end <= 0) {
       end = PASSAGE_CHARACTERS;
-      // Do not split a surrogate pair in a long unbroken word.
       if (/^[\uDC00-\uDFFF]$/u.test(remaining[end] ?? "")) {
         end -= 1;
       }
@@ -42,65 +44,7 @@ function createRealtimeReading(params: {
     remaining = remaining.slice(end);
   }
   passages.push(remaining);
-  const prefix = `openclaw-reading-${randomUUID()}`;
-  let index = 0;
-  let phase: "ready" | "generating" | "playing" | "stopped" = "ready";
-  const cancel = () => {
-    phase = "stopped";
-  };
-  const speak = () => {
-    phase = "generating";
-    params.speak(
-      [
-        params.instructions,
-        "Read only this passage verbatim, in its original language. Do not add a greeting, summary, or closing. Stop after this passage; the host will supply the next passage after playback.",
-        buildRealtimeVoiceSpeakExactMessage({
-          text: passages[index] ?? "",
-          surfaceLabel: "the callee",
-        }),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
-  };
-  return {
-    start() {
-      if (phase === "ready") {
-        speak();
-      }
-    },
-    cancel,
-    // Protect pending openings too: providers can buffer pre-ready caller audio
-    // and drain it immediately after starting the first response.
-    isActive: () => phase !== "stopped",
-    interrupt() {
-      if (phase !== "ready") {
-        cancel();
-      }
-    },
-    responseDone(outcome: RealtimeVoiceResponseOutcome) {
-      if (phase !== "generating") {
-        return;
-      }
-      if (outcome.status !== "completed") {
-        cancel();
-        return;
-      }
-      phase = "playing";
-      const completedIndex = index;
-      params.afterPlayback(`${prefix}-${index}`, () => {
-        if (phase !== "playing" || index !== completedIndex) {
-          return;
-        }
-        index += 1;
-        if (index === passages.length) {
-          cancel();
-        } else {
-          speak();
-        }
-      });
-    },
-  };
+  return passages;
 }
 
 export function attachRealtimeReading(params: {
@@ -112,27 +56,145 @@ export function attachRealtimeReading(params: {
   afterPlayback: (mark: string, acknowledge: () => void) => void;
 }) {
   const { session, text } = params;
-  // Continuous/native-delegation providers do not expose response completion;
-  // retain their existing opening path rather than silently dropping passages.
-  if (!text || params.handlesAgentConsult || session.bridge.outputAudioMode === "continuous") {
+  if (params.handlesAgentConsult || session.bridge.outputAudioMode === "continuous") {
     return undefined;
   }
   const triggerGreeting = session.triggerGreeting.bind(session);
-  const reading = createRealtimeReading({
-    text,
-    instructions: params.instructions,
-    speak: triggerGreeting,
-    afterPlayback: params.afterPlayback,
-  });
-  if (reading) {
-    session.triggerGreeting = (prompt) => {
-      if (prompt === params.initialGreetingInstructions) {
-        reading.start();
-      } else {
-        reading.interrupt();
-        triggerGreeting(prompt);
+  let passages = text && text.length > PASSAGE_CHARACTERS ? splitPassages(text) : [];
+  let managed = passages.length > 0;
+  let index = 0;
+  let phase: "ready" | "requested" | "generating" | "playing" | "paused" | "stopped" =
+    passages.length ? "ready" : "stopped";
+  let responseId: string | undefined;
+  let playbackMark: string | undefined;
+  const cancel = () => {
+    phase = "stopped";
+    passages = [];
+    playbackMark = undefined;
+  };
+  const interrupt = () => {
+    if (phase !== "stopped") {
+      phase = "paused";
+      playbackMark = undefined;
+    }
+  };
+  const speak = () => {
+    phase = "requested";
+    responseId = undefined;
+    triggerGreeting(
+      [
+        params.instructions,
+        "Read only this passage verbatim. Do not add a greeting, summary, or closing. Stop after this passage; the host supplies the next after playback. If interrupted, listen and answer normally; use openclaw_statement to resume or stop the retained statement, never improvise its remainder.",
+        buildRealtimeVoiceSpeakExactMessage({
+          text: passages[index] ?? "",
+          surfaceLabel: "the callee",
+        }),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
+  };
+  const afterPlayback = (advance: () => void) => {
+    const mark = `openclaw-reading-${randomUUID()}`;
+    playbackMark = mark;
+    phase = "playing";
+    params.afterPlayback(mark, () => {
+      // Cleared carrier marks can arrive after interruption or a later resume.
+      if (phase !== "playing" || playbackMark !== mark) {
+        return;
       }
-    };
-  }
-  return reading;
+      playbackMark = undefined;
+      advance();
+    });
+  };
+  session.triggerGreeting = (prompt) => {
+    if (prompt === params.initialGreetingInstructions && managed) {
+      if (phase === "ready") {
+        speak();
+      } else if (phase === "paused") {
+        triggerGreeting(
+          "The caller interrupted before the prepared statement began. The host retains the complete statement. Respond to the caller naturally; when they are ready, use openclaw_statement with action resume. Do not ask them to supply the text again.",
+        );
+      }
+    } else {
+      interrupt();
+      triggerGreeting(prompt);
+    }
+  };
+  return {
+    cancel,
+    interrupt,
+    // Override opening suppression only for a managed statement; ordinary short greetings retain it.
+    isInterruptible: () => managed,
+    startText(value: string) {
+      if (value.length <= PASSAGE_CHARACTERS) {
+        return false;
+      }
+      managed = true;
+      passages = splitPassages(value);
+      index = 0;
+      speak();
+      return true;
+    },
+    responseStarted(id?: string) {
+      if (phase === "requested") {
+        responseId = id;
+        phase = "generating";
+      }
+    },
+    responseDone(outcome: RealtimeVoiceResponseOutcome) {
+      if (phase !== "generating" || (responseId && responseId !== outcome.responseId)) {
+        return;
+      }
+      if (outcome.status !== "completed") {
+        interrupt();
+        return;
+      }
+      afterPlayback(() => {
+        index += 1;
+        if (index === passages.length) {
+          cancel();
+        } else {
+          speak();
+        }
+      });
+    },
+    async control(args: unknown, invocationId: string) {
+      if (!args || typeof args !== "object" || !("action" in args)) {
+        await session.submitToolResult(invocationId, { error: "Expected start, resume, or stop." });
+        return;
+      }
+      if (args.action === "stop") {
+        cancel();
+        await session.submitToolResult(invocationId, { stopped: true });
+        return;
+      }
+      if (
+        args.action === "start" &&
+        "text" in args &&
+        typeof args.text === "string" &&
+        args.text.trim()
+      ) {
+        managed = true;
+        passages = splitPassages(args.text);
+        index = 0;
+      } else if (args.action !== "resume" || phase !== "paused" || !passages.length) {
+        await session.submitToolResult(invocationId, {
+          error: "Supply text for start, or resume a paused statement.",
+        });
+        return;
+      }
+      // Finish any answer already spoken by the model before restarting a passage.
+      // Suppression prevents an automatic extra response racing the host's reading.
+      phase = "ready";
+      await session.submitToolResult(
+        invocationId,
+        { reading: "queued" },
+        { suppressResponse: true },
+      );
+      if (phase === "ready") {
+        afterPlayback(speak);
+      }
+    },
+  };
 }

@@ -2,7 +2,10 @@ import { once } from "node:events";
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeCall as makeCallRecord } from "./realtime-call-control.test-helpers.js";
+import {
+  makeCall as makeCallRecord,
+  makeRealtimeProvider,
+} from "./realtime-call-control.test-helpers.js";
 import {
   closeCallHarnessTransports,
   makeCallHarness,
@@ -53,8 +56,9 @@ describe("RealtimeCallHandler long initial readings", () => {
     };
     // Providers can buffer carrier input before readiness and drain it after the greeting starts.
     await sendCallerAudio();
-    expect(sendAudio).not.toHaveBeenCalled();
+    expect(sendAudio).toHaveBeenCalled();
     callbacks.onReady?.();
+    sendAudio.mockClear();
     const spoken: string[] = [];
     while (spoken.join("").length < text.length) {
       const count = spoken.length + 1;
@@ -65,18 +69,14 @@ describe("RealtimeCallHandler long initial readings", () => {
       expect(passage.length).toBeLessThanOrEqual(481);
       expect(passage.trimEnd()).toMatch(/[.!?]$/u);
       spoken.push(passage);
-      await sendCallerAudio();
-      expect(sendAudio).not.toHaveBeenCalled();
-      callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-      callbacks.onClearAudio("barge-in");
+      callbacks.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: `reading-${count}`,
+      });
       callbacks.onAudio(Buffer.alloc(160, 0x80));
-      callbacks.onClearAudio("barge-in");
-      callbacks.onResponseDone?.({ status: "completed" });
+      callbacks.onResponseDone?.({ status: "completed", responseId: `reading-${count}` });
       await waitFor(() => expect(marks).toHaveLength(count));
-      callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-      callbacks.onClearAudio("barge-in");
-      await sendCallerAudio();
-      expect(sendAudio).not.toHaveBeenCalled();
       // Generation completion and media writes are not proof of carrier playback.
       expect(triggerGreeting).toHaveBeenCalledTimes(count);
       ws.send(JSON.stringify({ event: "mark", mark: { name: marks[count - 1] } }));
@@ -102,6 +102,128 @@ describe("RealtimeCallHandler long initial readings", () => {
     expect(ws.readyState).toBe(WebSocket.OPEN);
   });
 
+  it("pauses on caller speech, repeats only the unacknowledged passage on resume, and stops permanently", async () => {
+    const triggerGreeting = vi.fn<NonNullable<RealtimeVoiceBridge["triggerGreeting"]>>();
+    const submitToolResult = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
+    const sendAudio = vi.fn<RealtimeVoiceBridge["sendAudio"]>();
+    const fixture = makeCallHarness(
+      { triggerGreeting, submitToolResult, sendAudio, outputAudioMode: "response" },
+      {
+        call: makeCallRecord("CA-resume", {
+          metadata: { initialMessage: "A prepared sentence. ".repeat(80) },
+        }),
+      },
+    );
+    const { ws, callbacks } = await fixture.start();
+    const marks: string[] = [];
+    let clears = 0;
+    ws.on("message", (data) => {
+      const message = parseWebSocketMessage(data);
+      if (message.event === "mark") {
+        marks.push((message.mark as { name: string }).name);
+      }
+      if (message.event === "clear") {
+        clears++;
+      }
+    });
+    const ack = (mark: string) => ws.send(JSON.stringify({ event: "mark", mark: { name: mark } }));
+    const response = (id: string) => {
+      callbacks.onEvent?.({ direction: "server", type: "response.created", responseId: id });
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      callbacks.onResponseDone?.({ status: "completed", responseId: id });
+    };
+    const control = (action: string, text?: string) =>
+      callbacks.onToolCall?.({
+        callId: action,
+        itemId: action,
+        name: "openclaw_statement",
+        args: { action, ...(text ? { text } : {}) },
+      });
+    callbacks.onReady?.();
+    response("first");
+    await waitFor(() => expect(marks).toHaveLength(1));
+    ack(marks[0]!);
+    await waitForCalls(triggerGreeting, 2);
+    const interrupted = triggerGreeting.mock.calls[1]?.[0];
+    response("second");
+    await waitFor(() => expect(marks).toHaveLength(2));
+    callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    callbacks.onClearAudio("barge-in");
+    await waitFor(() => expect(clears).toBe(1));
+    callbacks.onTranscript?.("user", "Wait, what is this about?", true);
+    response("answer");
+    ack(marks[1]!); // Twilio can return a cleared mark; it must not skip the interrupted passage.
+    control("resume");
+    await waitFor(() => expect(marks).toHaveLength(3));
+    expect(triggerGreeting).toHaveBeenCalledTimes(2); // Wait for the answer's playback.
+    ack(marks[2]!);
+    await waitForCalls(triggerGreeting, 3);
+    expect(triggerGreeting.mock.calls[2]?.[0]).toBe(interrupted);
+    response("resumed");
+    await waitFor(() => expect(marks).toHaveLength(4));
+    callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    callbacks.onClearAudio("barge-in");
+    control("stop");
+    await waitFor(() =>
+      expect(submitToolResult).toHaveBeenCalledWith("stop", { stopped: true }, undefined),
+    );
+    ack(marks[3]!);
+    control("resume");
+    await waitFor(() =>
+      expect(submitToolResult).toHaveBeenLastCalledWith(
+        "resume",
+        { error: "Supply text for start, or resume a paused statement." },
+        undefined,
+      ),
+    );
+    expect(triggerGreeting).toHaveBeenCalledTimes(3);
+    // The same owner can deliver a new prepared statement later in the call.
+    control("start", "A new prepared statement. ".repeat(40));
+    await waitFor(() => expect(marks).toHaveLength(5));
+    ack(marks[4]!);
+    await waitForCalls(triggerGreeting, 4);
+    expect(triggerGreeting.mock.calls[3]?.[0]).toContain("A new prepared statement.");
+    const later = "A host supplied statement. ".repeat(40);
+    expect(fixture.handler.speak(fixture.call.callId, later, later)).toEqual({ success: true });
+    await waitForCalls(triggerGreeting, 5);
+    expect(triggerGreeting.mock.calls[4]?.[0]).toContain("A host supplied statement.");
+    expect(fixture.endCall).not.toHaveBeenCalled();
+  });
+
+  it("retains an opening interrupted before readiness and resumes without requesting new text", async () => {
+    const triggerGreeting = vi.fn<NonNullable<RealtimeVoiceBridge["triggerGreeting"]>>();
+    const fixture = makeCallHarness(
+      { triggerGreeting, outputAudioMode: "response" },
+      {
+        call: makeCallRecord("CA-early", {
+          metadata: { initialMessage: "A retained opening sentence. ".repeat(30) },
+        }),
+      },
+    );
+    const { ws, callbacks } = await fixture.start();
+    const marks: string[] = [];
+    ws.on("message", (data) => {
+      const message = parseWebSocketMessage(data);
+      if (message.event === "mark") {
+        marks.push((message.mark as { name: string }).name);
+      }
+    });
+    callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    callbacks.onReady?.();
+    expect(triggerGreeting).toHaveBeenCalledTimes(1);
+    expect(triggerGreeting.mock.calls[0]?.[0]).toContain("host retains the complete statement");
+    callbacks.onToolCall?.({
+      name: "openclaw_statement",
+      callId: "resume-early",
+      itemId: "resume-early",
+      args: { action: "resume" },
+    });
+    await waitFor(() => expect(marks).toHaveLength(1));
+    ws.send(JSON.stringify({ event: "mark", mark: { name: marks[0] } }));
+    await waitForCalls(triggerGreeting, 2);
+    expect(triggerGreeting.mock.calls[1]?.[0]).toContain("A retained opening sentence.");
+  });
+
   it.each(["reset", "failed", "closed"] as const)(
     "does not resume a long reading after %s and a late playback acknowledgment",
     async (reason) => {
@@ -123,6 +245,7 @@ describe("RealtimeCallHandler long initial readings", () => {
         }
       });
       callbacks.onReady?.();
+      callbacks.onEvent?.({ direction: "server", type: "response.created" });
       callbacks.onAudio(Buffer.alloc(160, 0x80));
       if (reason === "failed") {
         callbacks.onResponseDone?.({ status: "failed", message: "generation failed" });
@@ -160,9 +283,26 @@ describe("RealtimeCallHandler long initial readings", () => {
     const triggerGreeting = vi.fn<NonNullable<RealtimeVoiceBridge["triggerGreeting"]>>();
     const fixture = makeCallHarness(
       { triggerGreeting, outputAudioMode: kind === "continuous" ? "continuous" : "response" },
-      { call: makeCallRecord("CA-reading-unchanged", { metadata: { initialMessage: text } }) },
+      {
+        call: makeCallRecord("CA-reading-unchanged", { metadata: { initialMessage: text } }),
+        ...(kind === "continuous"
+          ? {
+              deps: {
+                realtimeProvider: makeRealtimeProvider(
+                  () => {
+                    throw new Error("fixture installs createBridge");
+                  },
+                  { id: "continuous-provider" },
+                ),
+              },
+            }
+          : {}),
+      },
     );
     const { callbacks } = await fixture.start();
+    if (kind === "continuous") {
+      expect(callbacks.tools?.some((tool) => tool.name === "openclaw_statement")).toBe(false);
+    }
     callbacks.onReady?.();
     expect(triggerGreeting).toHaveBeenCalledTimes(1);
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain(text.trim());

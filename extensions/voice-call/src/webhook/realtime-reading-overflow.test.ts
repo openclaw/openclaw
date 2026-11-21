@@ -111,6 +111,7 @@ describe("long reading playback overflow replay", () => {
             await vi.advanceTimersByTimeAsync(250);
           }
           passageCount += 1;
+          reading?.responseStarted();
           modelCallbacks?.onResponseDone?.({ status: "completed" });
           if (sequenced) {
             await vi.advanceTimersByTimeAsync(passage.length * 20);

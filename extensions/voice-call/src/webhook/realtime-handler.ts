@@ -15,7 +15,6 @@ import {
   createSpeechThresholdGate,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-  readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
   resolveRealtimeVoiceBargeIn,
   resolveRealtimeVoiceSessionPolicy,
@@ -27,10 +26,6 @@ import {
   type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   rejectWebSocketUpgrade,
@@ -51,8 +46,9 @@ import {
   speakOnRealtimeBridge,
   type RealtimeCallControlResult,
 } from "./realtime-call-session-control.js";
-import { attachRealtimeReading } from "./realtime-reading.js";
+import { attachRealtimeReading, READING_TOOL } from "./realtime-reading.js";
 import {
+  withFallbackConsultQuestion,
   appendTranscriptText,
   resolveFinalTranscriptText,
   limitPartialUserTranscript,
@@ -84,32 +80,6 @@ const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const CALLER_SPEECH_RMS_THRESHOLD = 0.035;
-
-function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
-  const providerQuestion = readRealtimeVoiceConsultQuestion(args);
-  const question = fallback?.trim();
-  if (providerQuestion) {
-    if (
-      question &&
-      providerQuestion.length <= 40 &&
-      question.length >= providerQuestion.length + 8
-    ) {
-      const record = asOptionalRecord(args);
-      const context = normalizeOptionalString(record?.context);
-      const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
-      return {
-        ...record,
-        question,
-        context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
-      };
-    }
-    return args;
-  }
-  if (!question) {
-    return args;
-  }
-  return { ...asOptionalRecord(args), question };
-}
 
 type StreamSessionRequest = {
   providerName: "twilio" | "telnyx";
@@ -168,6 +138,7 @@ type RealtimeTelephonyBinding = {
   endCall: () => void;
   noteMediaActivity: () => void;
   playVoicemail: (instructions: string) => Promise<void>;
+  speakStatement: (text: string) => boolean;
   retire: () => void;
 };
 
@@ -476,7 +447,13 @@ export class RealtimeCallHandler {
     this.toolHandlers.set(name, fn);
   }
 
-  speak(callId: string, instructions: string): RealtimeCallControlResult {
+  speak(callId: string, instructions: string, preparedText?: string): RealtimeCallControlResult {
+    if (
+      preparedText &&
+      this.activeTelephonyBindingsByCallId.get(callId)?.speakStatement(preparedText)
+    ) {
+      return { success: true };
+    }
     return speakOnRealtimeBridge(this.activeBridgesByCallId, callId, instructions);
   }
 
@@ -658,6 +635,9 @@ export class RealtimeCallHandler {
       capabilities,
     } = registration;
     const { handlesAgentConsult, toolPolicy } = sessionPolicy;
+    // This coordinator relies on OpenAI response-created/done events and silent tool results.
+    // Other providers retain their existing speech path; GPT-Live uses native delegation.
+    const supportsStatements = realtimeProvider.id === "openai" && !handlesAgentConsult;
     if (handlesAgentConsult) {
       console.warn(
         "[voice-call] This realtime model uses native agent delegation; hang-up is available through the call-scoped OpenClaw agent, while other custom realtime function tools remain unavailable.",
@@ -731,7 +711,7 @@ export class RealtimeCallHandler {
         adapter,
         harness,
         initialGreetingInstructions,
-        isReading: () => reading?.isActive(),
+        isOpeningInterruptible: () => reading?.isInterruptible() ?? false,
         onPlaybackReset: () => reading?.interrupt(),
         hostOwnsOpening,
         holdOpeningMaxMs: this.holdOpeningMaxMs,
@@ -899,8 +879,14 @@ export class RealtimeCallHandler {
       interruptResponseOnInputAudio,
       instructions: handlesAgentConsult
         ? `${sessionInstructions}\n\nUse native agent delegation for OpenClaw work. To end the current call, say out loud that you are hanging up and delegate; the OpenClaw agent acts on the transcript. Other custom realtime function tools are unavailable in this session.`
-        : sessionInstructions,
-      tools: handlesAgentConsult ? [] : this.config.tools,
+        : supportsStatements
+          ? `${sessionInstructions}\n\nFor prepared statements, use ${READING_TOOL.name}. ${READING_TOOL.description}`
+          : sessionInstructions,
+      tools: handlesAgentConsult
+        ? []
+        : supportsStatements
+          ? [...this.config.tools.filter((tool) => tool.name !== READING_TOOL.name), READING_TOOL]
+          : this.config.tools.filter((tool) => tool.name !== READING_TOOL.name),
       ...(handlesAgentConsult
         ? {
             runAgentConsult: async (request) => {
@@ -1076,6 +1062,10 @@ export class RealtimeCallHandler {
             callId: toolEvent.callId,
             payload: { name: toolEvent.name, args: toolEvent.args },
           });
+          if (toolEvent.name === READING_TOOL.name && reading) {
+            await reading.control(toolEvent.args, invocationId);
+            return;
+          }
           await this.executeToolCall(
             sessionLocal,
             callId,
@@ -1094,7 +1084,11 @@ export class RealtimeCallHandler {
         }
       },
       onEvent: (event) => {
+        if (event.direction === "server" && event.type === "response.created") {
+          reading?.responseStarted(event.responseId);
+        }
         if (event.direction === "client" && event.type === "session.continuity.reset") {
+          reading?.cancel();
           audioController.finishGreeting();
           // Clear current playback and cancel consult work on a provider reset.
           const turnId = harness.talk.activeTurnId;
@@ -1118,6 +1112,7 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
+          reading?.interrupt();
           transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
           activity.noteSpeech();
@@ -1224,17 +1219,19 @@ export class RealtimeCallHandler {
     }
     const session = candidate;
     nativeConsultOwner = session;
-    reading = attachRealtimeReading({
-      session,
-      text: initialGreeting,
-      instructions,
-      initialGreetingInstructions,
-      handlesAgentConsult,
-      afterPlayback: (mark, acknowledge) => {
-        pendingMarkAcks.set(mark, acknowledge);
-        audioPacer.sendMark(mark);
-      },
-    });
+    reading = supportsStatements
+      ? attachRealtimeReading({
+          session,
+          text: initialGreeting,
+          instructions,
+          initialGreetingInstructions,
+          handlesAgentConsult,
+          afterPlayback: (mark, acknowledge) => {
+            pendingMarkAcks.set(mark, acknowledge);
+            audioPacer.sendMark(mark);
+          },
+        })
+      : undefined;
     const localBargeIn =
       !(session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn) &&
       resolveRealtimeVoiceBargeIn({
@@ -1262,6 +1259,7 @@ export class RealtimeCallHandler {
         activity.noteSpeech();
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
+        reading?.interrupt();
         audioController.noteCallerSpeech();
         outboundGreeting.claim();
         if (localBargeIn && !activity.isPaused()) {
@@ -1364,6 +1362,7 @@ export class RealtimeCallHandler {
       },
       noteMediaActivity: () => activity.noteMedia(),
       playVoicemail: (speechInstructions) => hostSpeech.speak(speechInstructions),
+      speakStatement: (text) => reading?.startText(text) ?? false,
       retire: () => {
         void closeBinding();
       },
