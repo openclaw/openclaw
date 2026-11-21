@@ -5,6 +5,7 @@ import {
   type SqliteWalHealth,
 } from "../../infra/sqlite-wal-checkpoint.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -87,7 +88,11 @@ type BudgetKickState = {
   };
 };
 
-const budgetKickStateByStore = new Map<string, BudgetKickState>();
+// A store has one kick owner even when its module is loaded again, as a lazy lifecycle import can.
+const budgetKickStateByStore = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionHistoryBudgetKickState"),
+  () => new Map<string, BudgetKickState>(),
+);
 
 /** Per-agent legacy and SQLite locators share one lane; custom stores can aggregate partitions. */
 export function sessionHistoryBudgetStoreKey(storePath: string): string {
