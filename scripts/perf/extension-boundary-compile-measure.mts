@@ -66,10 +66,23 @@ try {
   });
   const elapsedMs = performance.now() - started;
   const inputs = result.inputs.map((file) => path.relative(root, file));
-  const digest = createHash("sha256")
-    .update(JSON.stringify(inputs))
-    .update(JSON.stringify(result.lookups))
-    .digest("hex");
+  const digest = (lookups: typeof result.lookups) =>
+    createHash("sha256")
+      .update(JSON.stringify(inputs))
+      .update(JSON.stringify(lookups))
+      .digest("hex");
+  const consumed = new Set(result.inputs);
+  // Native resolution may repeat a positive existence probe for an already-read file.
+  // Keep every other lookup, including negatives and positive probes outside the inputs.
+  const semanticLookups = result.lookups.filter((lookup) => {
+    const file = path.resolve(root, lookup.path);
+    return !(
+      lookup.kind === "fileExists" &&
+      lookup.result &&
+      consumed.has(file) &&
+      fs.statSync(file, { throwIfNoEntry: false })?.isFile()
+    );
+  });
   console.log(
     JSON.stringify({
       revision,
@@ -80,7 +93,8 @@ try {
       inputs: result.inputs.length,
       lookups: result.lookups.length,
       outputs: result.outputFiles.size,
-      digest,
+      digest: digest(result.lookups),
+      semanticDigest: digest(semanticLookups),
       manifest: process.argv.includes("--manifest")
         ? { inputs, lookups: result.lookups }
         : undefined,
