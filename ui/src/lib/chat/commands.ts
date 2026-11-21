@@ -45,8 +45,6 @@ export type SlashCommandDef = {
   modelIndependent?: ChatCommandDefinition["modelIndependent"];
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
-  /** Whether a multi-word argument may execute from an inline prose position. */
-  allowsInlineMultiWordArgs?: boolean;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
@@ -148,8 +146,6 @@ const COMMAND_PRESENTATION: Partial<Record<string, Pick<SlashCommandDef, "icon" 
   elevated: { category: "model" },
   queue: { category: "model" },
 };
-
-const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
   "btw",
@@ -274,7 +270,6 @@ function toSlashCommand(command: CommandLike, source: "local" | "remote"): Slash
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     modelIndependent: command.modelIndependent,
     argOptions: getArgOptions(command),
-    allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
     ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),

@@ -23,38 +23,38 @@ function expectSearch(view: ReturnType<typeof composerFixture>, query: string) {
 }
 
 it.each([
-  { input: "keyboard", history: "loading", action: "ordinary" },
-  { input: "keyboard", history: "ready", action: "command" },
-  { input: "keyboard", history: "loading", action: "held" },
-  { input: "button", history: "loading", action: "message" },
-])("handles appended commands via $input with history $history", ({ input, history, action }) => {
-  const recipient = mention("profile-alex-online", 7, 12);
-  const draft = action === "ordinary" ? "Review @Alex" : "Review @Alex /dashboard release health";
-  const view = composerFixture(
-    "chat",
-    "Review @Alex",
-    [recipient],
-    history === "loading" ? "Loading conversation…" : undefined,
-  );
+  { input: "keyboard", history: "loading", suffix: "" },
+  { input: "keyboard", history: "ready", suffix: " /dashboard release health" },
+  { input: "keyboard", history: "loading", suffix: " /dashboard release health" },
+  { input: "button", history: "ready", suffix: " /dashboard release health" },
+  { input: "button", history: "loading", suffix: " /dashboard release health" },
+])(
+  "sends mention prose $suffix intact via $input with history $history",
+  ({ input, history, suffix }) => {
+    const recipient = mention("profile-alex-online", 7, 12);
+    const draft = `Review @Alex${suffix}`;
+    const view = composerFixture(
+      "chat",
+      "Review @Alex",
+      [recipient],
+      history === "loading" ? "Loading conversation…" : undefined,
+    );
 
-  view.edit(draft);
-  if (action === "ordinary") {
-    view.key("Escape");
-  }
-  if (input === "keyboard") {
-    view.key("Enter");
-  } else {
-    findPrimaryButton(view.container).click();
-  }
+    view.edit(draft);
+    if (!suffix) {
+      view.key("Escape");
+    }
+    if (input === "keyboard") {
+      view.key("Enter");
+    } else {
+      findPrimaryButton(view.container).click();
+    }
 
-  expect(view.slashCommand.mock.calls).toEqual(
-    action === "command" ? [["/dashboard release health"]] : [],
-  );
-  expect(view.send.mock.calls).toEqual(
-    action === "message" || action === "ordinary" ? [[{ draft, mentions: [recipient] }]] : [],
-  );
-  view.expectValue(action === "command" ? "Review @Alex " : draft, [recipient]);
-});
+    expect(view.slashCommand).not.toHaveBeenCalled();
+    expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [recipient] });
+    view.expectValue(draft, [recipient]);
+  },
+);
 
 describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   it("navigates and selects an offline same-name profile with Tab before sending", async () => {
