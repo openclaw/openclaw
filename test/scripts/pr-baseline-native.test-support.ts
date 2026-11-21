@@ -19,6 +19,9 @@ export function reuseBaselineFixture<T extends object>(create: (root: string) =>
     if (!context) {
       context = create(root);
       copyTreeCloseOnExec(root, pristine);
+      // The first caller already owns the pristine live tree; only later
+      // acquisitions need to undo mutations from an earlier test.
+      return context;
     }
     // Captured JavaScript state must stay read-only after setup. Registered
     // worktrees and evidence bind absolute paths, so restore the whole private root.
@@ -123,9 +126,59 @@ export function signBaselineRequest(
   };
 }
 
+// Resolve live refs once per response, without caching across authority checks.
+function writeBaselineGitHubAdapter(path: string, product: string[]) {
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const fs = require('node:fs'), cp = require('node:child_process'), path = require('node:path');
+const root = process.env.FIXTURE_REPO;
+const refs = (...names) => {
+ const resolved = cp.execFileSync('git', ['-C',root,'rev-parse',...names], {encoding:'utf8'}).trim().split('\\n');
+ if (resolved.length !== names.length || resolved.some(oid => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid))) {
+  throw new Error('Incomplete or invalid fixture Git refs.');
+ }
+ return resolved;
+};
+const repo = {id:1,node_id:'R_fixture',full_name:'fixture/repo',name:'repo',html_url:'https://github.com/fixture/repo',owner:{login:'fixture'}};
+const args = process.argv.slice(2);
+if (args[0] === 'auth') process.exit(1);
+if (args[0] === 'api' && args[1] === 'user') {
+ console.log('HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}');
+} else if (args[0] === 'api' && args[1] === 'graphql') {
+ if (!args.some(arg => arg.startsWith('query=query('))) { console.error('Unexpected fixture GraphQL mutation'); process.exit(99); }
+ const live = path.join(root,'.local','merge-live.json');
+ const supplied = fs.existsSync(live) ? JSON.parse(fs.readFileSync(live,'utf8')) : undefined;
+ const [topic, main] = supplied === undefined ? refs('topic','main') : [undefined, ...refs('main')];
+ const pullRequest = supplied === undefined ? {
+  id:'PR_fixture',number:42,url:'https://github.com/fixture/repo/pull/42',state:'OPEN',
+  headRefOid:topic,baseRefName:'main',isDraft:false,mergeCommit:null,
+  autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,
+  mergeable:'MERGEABLE',mergeStateStatus:'CLEAN'} : supplied;
+ if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\r\\n\\r\\n');
+ console.log(JSON.stringify({data:{repository:{id:'R_fixture',databaseId:1,
+  nameWithOwner:'fixture/repo',url:'https://github.com/fixture/repo',
+  ref:{target:{oid:main}},pullRequest}}}));
+} else if (args.includes('repos/fixture/repo/pulls/42')) {
+ const overrides = path.join(root,'.local','live.json');
+ const [main, topic] = refs('main','topic');
+ console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
+  user:{login:'fixture'},base:{ref:'main',sha:main,repo},
+  head:{ref:'topic',sha:topic,repo}, changed_files:${product.length},
+  ...(fs.existsSync(overrides) ? JSON.parse(fs.readFileSync(overrides,'utf8')) : {})}));
+} else if (args.some(a => a.startsWith('repos/fixture/repo/collaborators/'))) {
+ console.log('{"permission":"write"}');
+} else if (args.some(a => a.startsWith('repos/fixture/repo/pulls/42/files?'))) {
+ console.log(JSON.stringify([${JSON.stringify(product)}.map(filename => ({filename,status:'modified',additions:1,deletions:0}))]));
+} else { console.error('Unexpected fixture GitHub request: '+JSON.stringify(args)); process.exit(99); }
+`,
+    { mode: 0o755 },
+  );
+}
+
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(
+export function createIncomingBaselineFixture(
   root: string,
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
@@ -210,43 +263,7 @@ export function createBaselineFixture(
   const worktree = join(repo, ".worktrees", "pr-42");
   git(repo, "worktree", "add", "-q", "-b", "pr-42-prep", worktree, incoming);
   mkdirSync(join(worktree, ".local"));
-  writeFileSync(
-    join(bin, "gh"),
-    `#!/usr/bin/env node
-const fs = require('node:fs'), cp = require('node:child_process'), path = require('node:path');
-const root = process.env.FIXTURE_REPO;
-const git = (...args) => cp.execFileSync('git', ['-C',root,...args], {encoding:'utf8'}).trim();
-const repo = {id:1,node_id:'R_fixture',full_name:'fixture/repo',name:'repo',html_url:'https://github.com/fixture/repo',owner:{login:'fixture'}};
-const args = process.argv.slice(2);
-if (args[0] === 'auth') process.exit(1);
-if (args[0] === 'api' && args[1] === 'user') {
- console.log('HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}');
-} else if (args[0] === 'api' && args[1] === 'graphql') {
- if (!args.some(arg => arg.startsWith('query=query('))) { console.error('Unexpected fixture GraphQL mutation'); process.exit(99); }
- const live = path.join(root,'.local','merge-live.json');
- const pullRequest = fs.existsSync(live) ? JSON.parse(fs.readFileSync(live,'utf8')) : {
-  id:'PR_fixture',number:42,url:'https://github.com/fixture/repo/pull/42',state:'OPEN',
-  headRefOid:git('rev-parse','topic'),baseRefName:'main',isDraft:false,mergeCommit:null,
-  autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,
-  mergeable:'MERGEABLE',mergeStateStatus:'CLEAN'};
- if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\r\\n\\r\\n');
- console.log(JSON.stringify({data:{repository:{id:'R_fixture',databaseId:1,
-  nameWithOwner:'fixture/repo',url:'https://github.com/fixture/repo',
-  ref:{target:{oid:git('rev-parse','main')}},pullRequest}}}));
-} else if (args.includes('repos/fixture/repo/pulls/42')) {
- const overrides = path.join(root,'.local','live.json');
- console.log(JSON.stringify({number:42,node_id:'PR_fixture',html_url:'https://github.com/fixture/repo/pull/42',state:'open',draft:false,
-  user:{login:'fixture'},base:{ref:'main',sha:git('rev-parse','main'),repo},
-  head:{ref:'topic',sha:git('rev-parse','topic'),repo}, changed_files:${productCount},
-  ...(fs.existsSync(overrides) ? JSON.parse(fs.readFileSync(overrides,'utf8')) : {})}));
-} else if (args.some(a => a.startsWith('repos/fixture/repo/collaborators/'))) {
- console.log('{"permission":"write"}');
-} else if (args.some(a => a.startsWith('repos/fixture/repo/pulls/42/files?'))) {
- console.log(JSON.stringify([${JSON.stringify(product)}.map(filename => ({filename,status:'modified',additions:1,deletions:0}))]));
-} else { console.error('Unexpected fixture GitHub request: '+JSON.stringify(args)); process.exit(99); }
-`,
-    { mode: 0o755 },
-  );
+  writeBaselineGitHubAdapter(join(bin, "gh"), product);
   const repository = {
     id: "R_fixture",
     nameWithOwner: "fixture/repo",
@@ -311,9 +328,6 @@ if (args[0] === 'api' && args[1] === 'user') {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return result;
   };
-  pass("prepare-correction-init");
-  writeProduct(worktree, product, "corrected\n");
-  commit(worktree, "fix: fixture correction");
   const approve = () => {
     pass("prepare-correction-review-init");
     const file = local("correction-review.json");
@@ -325,7 +339,6 @@ if (args[0] === 'api' && args[1] === 'user') {
       "Verified the corrected fixture behavior.";
     writeFileSync(file, JSON.stringify(candidateReview));
   };
-  approve();
   const advanceMain = (label: string, changed = product) => {
     writeProduct(repo, changed, `${label}\n`);
     commit(repo, `test: ${label}`);
@@ -436,4 +449,25 @@ if (args[0] === 'api' && args[1] === 'user') {
     incoming,
     meta,
   };
+}
+
+export function createBaselineFixture(
+  root: string,
+  productCount = 16,
+  incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+  seedRepository?: (repo: string) => void,
+) {
+  const fixture = createIncomingBaselineFixture(
+    root,
+    productCount,
+    incomingSeverity,
+    seedRepository,
+  );
+  fixture.pass("prepare-correction-init");
+  for (const path of fixture.product) {
+    writeFileSync(join(fixture.worktree, path), "corrected\n");
+  }
+  fixture.prepGit("commit", "-qam", "fix: fixture correction");
+  fixture.approve();
+  return fixture;
 }

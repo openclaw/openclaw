@@ -18,7 +18,15 @@ import {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const fixture = reuseBaselineFixture((root) => {
-  const f = createBaselineFixture(root, 1);
+  let seedCalls = 0;
+  const f = createBaselineFixture(root, 1, "IMPORTANT", (repo) => {
+    seedCalls++;
+    writeFileSync(join(repo, "docs/seed-witness.txt"), "initial fixture bytes\n");
+  });
+  expect(seedCalls).toBe(1);
+  expect(f.git(f.repo, "show", `${f.incoming}^:docs/seed-witness.txt`)).toBe(
+    "initial fixture bytes",
+  );
   f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
   const credit = "Co-authored-by: Ada Example <ada@example.invalid>";
   f.prepGit("commit", "--allow-empty", "-qm", `fix: complete the reviewed correction\n\n${credit}`);
