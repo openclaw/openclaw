@@ -2,6 +2,7 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
@@ -183,6 +184,49 @@ export function appendExecTimeoutRetryGuidance(
 
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+/** The retained wake window: the last 2,000 chars the process registry keeps. */
+const COMPLETION_TAIL_CHARS = 2000;
+
+/** One-line summary markers an agent appends so the wake names the outcome plainly. */
+const COMPLETION_SUMMARY_MARKERS = ["OK: ", "ERR: "] as const;
+
+/** A bare closing bracket: the tail is one structured value, e.g. a multi-line JSON blob. */
+const STRUCTURED_TAIL_LINE = /^[}\]]\s*,?$/;
+
+/**
+ * Chooses the completion wake's content from the retained output: the last non-empty line,
+ * with a one-line summary marker stripped, so the wake never lands mid-line. When no usable
+ * last line exists (empty output, structured blob) it returns the tail unchanged.
+ */
+export function selectExecCompletionContent(
+  value: string,
+  maxChars: number = COMPLETION_TAIL_CHARS,
+): string {
+  const lines = value.split(/\r?\n/);
+  let lastLine: string | undefined;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const candidate = lines[i]?.trim();
+    if (candidate) {
+      lastLine = candidate;
+      break;
+    }
+  }
+  if (lastLine === undefined || STRUCTURED_TAIL_LINE.test(lastLine)) {
+    return value;
+  }
+  let content = lastLine;
+  for (const marker of COMPLETION_SUMMARY_MARKERS) {
+    if (content.startsWith(marker)) {
+      const rest = content.slice(marker.length).trim();
+      if (rest) {
+        content = rest;
+      }
+      break;
+    }
+  }
+  return content.length <= maxChars ? content : sliceUtf16Safe(content, content.length - maxChars);
 }
 
 export function joinExecFailureOutput(aggregated: string, reason: string) {
