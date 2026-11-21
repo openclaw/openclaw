@@ -38,7 +38,6 @@ import { resetGatewayState } from "./gateway-startup-routing.test-support.js";
 // HTTP is synthetic. Each step calls a slow plugin tool that reports its plugin generation.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const STEPS = 6;
-const STEP_MS = 1_500;
 const RELOAD_AFTER_STEP = 2;
 const FINAL_REPLY = "All handover steps done.";
 beforeEach(resetGatewayState);
@@ -46,12 +45,32 @@ afterEach(resetGatewayState);
 
 type Body = {
   instructions?: string;
+  model?: string;
   input: Array<Partial<Record<"role" | "type" | "call_id" | "output", string>>>;
 };
-type Step = { step: number; plugin: string; generation: number; atMs: number };
-type Plugin = { id: string; turnHandover: boolean; contextEngine?: boolean };
-// `bundled` steps through a shipped plugin's tool, which reports no generation.
-type Scenario = { name: string; plugins: Plugin[]; handsOver: boolean; bundled?: Bundled };
+type Step = {
+  step: number;
+  plugin: string;
+  generation: number;
+  atMs: number;
+  finishedAtMs: number;
+};
+type Plugin = {
+  id: string;
+  turnHandover: boolean;
+  contextEngine?: boolean;
+  longThirdCall?: boolean;
+};
+
+type Scenario = {
+  name: string;
+  plugins: Plugin[];
+  handsOver: boolean;
+  unrelated?: boolean;
+  longCall?: boolean;
+  // Shipped plugin tools do not report synthetic generations or effect logs.
+  bundled?: Bundled;
+};
 type Bundled = { id: string; tool: string };
 type EngineEvent = { event: string; generation: number; atMs: number; toolResults?: number };
 
@@ -118,9 +137,12 @@ async function writePlugin(home: string, plugin: Plugin, counts: string, events:
  fs.writeFileSync(file, String(generation));
  api.on("agent_end", () => { fs.appendFileSync(${JSON.stringify(counts)}, "agent_end\\n"); });
 ${plugin.contextEngine ? contextEngineSource(id, events) : ""}
+ let calls = 0;
  api.registerTool({ name: ${JSON.stringify(tool)}, label: "Step", description: "Slow step", parameters: { type: "object", properties: {} },
-  async execute() { await new Promise((r) => setTimeout(r, ${STEP_MS}));
-   return { content: [{ type: "text", text: JSON.stringify({ plugin: ${JSON.stringify(id)}, generation }) }] }; } },
+  async execute(callId) { await new Promise((r) => setTimeout(r, ${plugin.longThirdCall ? "++calls === 3 ? 6_000 : 1_500" : "1_500"}));
+   const result = { plugin: ${JSON.stringify(id)}, generation, finishedAtMs: Date.now() };
+   fs.appendFileSync(${JSON.stringify(path.join(home, "effects.log"))}, JSON.stringify({ callId, ...result }) + "\\n");
+   return { content: [{ type: "text", text: JSON.stringify(result) }] }; } },
   { name: ${JSON.stringify(tool)} });
 } };`,
   );
@@ -128,6 +150,34 @@ ${plugin.contextEngine ? contextEngineSource(id, events) : ""}
 }
 
 const scenarios: Scenario[] = [
+  {
+    name: "unrelated project without handover",
+    plugins: [
+      { id: "swap-proof", turnHandover: false },
+      { id: "work-proof", turnHandover: false },
+    ],
+    handsOver: false,
+    unrelated: true,
+  },
+  {
+    name: "unrelated project",
+    plugins: [
+      { id: "swap-proof", turnHandover: true },
+      { id: "work-proof", turnHandover: false },
+    ],
+    handsOver: true,
+    unrelated: true,
+  },
+  {
+    name: "unrelated project with a long call",
+    plugins: [
+      { id: "swap-proof", turnHandover: true },
+      { id: "work-proof", turnHandover: false, longThirdCall: true },
+    ],
+    handsOver: true,
+    unrelated: true,
+    longCall: true,
+  },
   { name: "declared", plugins: [{ id: "swap-proof", turnHandover: true }], handsOver: true },
   { name: "undeclared", plugins: [{ id: "swap-proof", turnHandover: false }], handsOver: false },
   {
@@ -154,7 +204,10 @@ const scenarios: Scenario[] = [
 it.for(scenarios)(
   "plugin reload during a running turn: $name",
   { timeout: 180_000 },
-  async ({ name, plugins, handsOver, bundled }, { signal, onTestFinished }) => {
+  async (
+    { name, plugins, handsOver, unrelated, longCall, bundled },
+    { signal, onTestFinished },
+  ) => {
     const home = tempDirs.make("openclaw-turn-handover-");
     const stateDir = path.join(home, ".openclaw");
     const workspaceDir = path.join(home, "workspace");
@@ -175,6 +228,16 @@ it.for(scenarios)(
     const token = randomUUID();
     const failure = createDeferred<Error>();
     const delivered = createDeferred();
+    const arrivalDelivered = createDeferred();
+    const arrivalSteps: Step[] = [];
+    const arrivalModel = "qa-new-project";
+    const arrivalReply = "New project done.";
+    let arrivalRequestedAt = 0;
+    let arrivalStartedAt = 0;
+    let arrivalDeliveredAt = 0;
+    let arrivalFinals = 0;
+    let finalReplies = 0;
+    let arrival: Promise<unknown> | undefined;
     const steps: Step[] = [];
     const startedAt = Date.now();
     let reloadStartedAt = 0;
@@ -215,28 +278,84 @@ it.for(scenarios)(
                 return;
               }
               const outputs = body.input.filter((item) => item.type === "function_call_output");
+              if (body.model === arrivalModel) {
+                arrivalStartedAt ||= Date.now();
+                if (outputs.length === 0) {
+                  writeToolCall(response, written[0]!.tool, "new-project-effect");
+                } else {
+                  arrivalSteps.push({
+                    step: outputs.length,
+                    atMs: Date.now() - startedAt,
+                    ...(JSON.parse(outputs[0]!.output ?? "{}") as Pick<
+                      Step,
+                      "plugin" | "generation" | "finishedAtMs"
+                    >),
+                  });
+                  writeOpenAiResponsesText(response, {
+                    text: arrivalReply,
+                    messageId: "arrival",
+                    responseId: "arrival",
+                  });
+                }
+                return;
+              }
               for (const output of outputs.slice(steps.length)) {
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
+                  ...(JSON.parse(output.output ?? "{}") as Pick<
+                    Step,
+                    "plugin" | "generation" | "finishedAtMs"
+                  >),
                 });
                 // The bundled tool is fast; slow its steps so the reload lands mid-turn.
                 if (bundled) {
-                  await delay(STEP_MS);
+                  await delay(1_500);
                 }
               }
               if (steps.length === RELOAD_AFTER_STEP && !reload) {
                 reloadStartedAt = Date.now();
                 reload = gateway!.client
                   .request("plugins.reload", {
-                    plugins: written.map(({ id }) => ({ pluginId: id })),
+                    plugins: (unrelated ? written.slice(0, 1) : written).map(({ id }) => ({
+                      pluginId: id,
+                    })),
                   })
                   .finally(() => {
                     reloadSettledAt = Date.now();
                   });
+                if (unrelated) {
+                  arrival = (async () => {
+                    // Observe the public maintenance state before submitting new work.
+                    await expect
+                      .poll(
+                        async () => {
+                          const status = await gateway!.client.request<{
+                            pluginReload?: { phase: string };
+                          }>("status", {});
+                          return status.pluginReload?.phase;
+                        },
+                        { timeout: 10_000 },
+                      )
+                      .toBe("reloading");
+                    arrivalRequestedAt = Date.now();
+                    return gateway!.client.request("chat.send", {
+                      sessionKey: "agent:arrival:dashboard:" + randomUUID(),
+                      message: "Run the new project's action once.",
+                      deliver: false,
+                      idempotencyKey: randomUUID(),
+                    });
+                  })().catch((error: unknown) => {
+                    failure.resolve(error instanceof Error ? error : new Error(String(error)));
+                  });
+                }
               }
               if (steps.length >= STEPS) {
+                if (unrelated && handsOver) {
+                  // Keep the original turn alive until new work is admitted. Reply order is
+                  // scheduler-dependent, so do not race two independent final deliveries.
+                  await expect.poll(() => arrivalStartedAt, { timeout: 15_000 }).toBeGreaterThan(0);
+                }
                 writeOpenAiResponsesText(response, {
                   text: FINAL_REPLY,
                   messageId: "f",
@@ -244,8 +363,10 @@ it.for(scenarios)(
                 });
                 return;
               }
-              // Alternate tools across plugins so every reloaded plugin is held by the turn.
-              const tool = written[steps.length % written.length]!.tool;
+              // The unrelated project only calls the unchanged plugin; ordinary cases alternate tools.
+              const tool = unrelated
+                ? written[1]!.tool
+                : written[steps.length % written.length]!.tool;
               writeToolCall(response, tool, "s" + steps.length + "-" + outputs.length);
             } catch (error) {
               failure.resolve(error instanceof Error ? error : new Error(String(error)));
@@ -268,6 +389,19 @@ it.for(scenarios)(
           },
         };
         cfg.agents!.entries = { main: {} };
+        if (unrelated) {
+          cfg.agents!.ownership = "explicit";
+          const models = cfg.models!.providers!["mock-openai"]!.models;
+          models.push({ ...models[0]!, id: arrivalModel, name: arrivalModel });
+          cfg.agents!.defaults!.models![`mock-openai/${arrivalModel}`] = {
+            agentRuntime: { id: "openclaw" },
+            params: { transport: "sse", openaiWsWarmup: false },
+          };
+          cfg.agents!.entries.arrival = {
+            workspace: path.join(home, "arrival-workspace"),
+            model: { primary: `mock-openai/${arrivalModel}` },
+          };
+        }
         cfg.plugins = {
           enabled: true,
           allow: written.map(({ id }) => id),
@@ -318,9 +452,19 @@ it.for(scenarios)(
           onEvent: (event) => {
             if (
               event.event === "chat" &&
+              (event.payload as { state?: string })?.state === "final" &&
+              JSON.stringify(event.payload).includes(arrivalReply)
+            ) {
+              arrivalFinals += 1;
+              arrivalDeliveredAt = Date.now();
+              arrivalDelivered.resolve();
+            }
+            if (
+              event.event === "chat" &&
               JSON.stringify(event.payload).includes(FINAL_REPLY) &&
               (event.payload as { state?: string })?.state === "final"
             ) {
+              finalReplies += 1;
               deliveredAt = Date.now();
               delivered.resolve();
             }
@@ -330,6 +474,9 @@ it.for(scenarios)(
         const runtime = getRuntimeConfigSnapshot();
         assert(runtime);
         withFastReplyConfig(runtime);
+        const workloadStartedAt = Date.now();
+        const cpuBefore = process.cpuUsage();
+        const rssBefore = process.memoryUsage().rss;
         await gateway.client.request("chat.send", {
           sessionKey,
           message: "Run every handover step.",
@@ -338,7 +485,9 @@ it.for(scenarios)(
         });
         await withinTest(
           Promise.race([
-            delivered.promise,
+            unrelated
+              ? Promise.all([delivered.promise, arrivalDelivered.promise])
+              : delivered.promise,
             failure.promise.then((error) => {
               throw error;
             }),
@@ -347,12 +496,14 @@ it.for(scenarios)(
         );
         assert(reload, "the turn never reached the reload step");
         await reload;
+        await arrival;
         // agent_end side effects settle after the reply; wait for every plugin, then for strays.
         const agentEnds = async () =>
           (await fs.readFile(counts, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+        const expectedAgentEnds = bundled ? 0 : written.length * (unrelated ? 2 : 1);
         for (
           let waited = 0;
-          (await agentEnds()) < (bundled ? 0 : written.length) && waited < 15_000;
+          (await agentEnds()) < expectedAgentEnds && waited < 15_000;
           waited += 100
         ) {
           await new Promise((resolve) => {
@@ -362,12 +513,39 @@ it.for(scenarios)(
         await new Promise((resolve) => {
           setTimeout(resolve, 1_000);
         });
+        const cpu = process.cpuUsage(cpuBefore);
+        const effects = bundled
+          ? undefined
+          : (await fs.readFile(path.join(home, "effects.log"), "utf8"))
+              .trim()
+              .split("\n")
+              .map(
+                (line) =>
+                  JSON.parse(line) as { callId: string; plugin: string; generation: number },
+              );
         const summary = {
           turnMs: deliveredAt - startedAt,
+          workloadMs: Date.now() - workloadStartedAt,
+          cpuMs: { user: cpu.user / 1_000, system: cpu.system / 1_000 },
+          rssBeforeBytes: rssBefore,
+          rssAfterBytes: process.memoryUsage().rss,
+          processPeakRssKiB: process.resourceUsage().maxRSS,
+          effects: effects?.length,
           reloadMs: reloadSettledAt - reloadStartedAt,
           reloadSettledBeforeReply: reloadSettledAt < deliveredAt,
           steps: steps.map(({ plugin, generation, atMs }) => `${plugin}@${generation}+${atMs}ms`),
           agentEnds: await agentEnds(),
+          ...(unrelated
+            ? {
+                arrivalWaitMs: arrivalStartedAt - arrivalRequestedAt,
+                arrivalStartedBeforeOriginal: arrivalStartedAt < deliveredAt,
+                arrivalCompletedBeforeOriginal: arrivalDeliveredAt < deliveredAt,
+                arrivalSteps,
+                ...(longCall
+                  ? { heldCallFinishedAfterReloadMs: steps[2]!.finishedAtMs - reloadStartedAt }
+                  : {}),
+              }
+            : {}),
           engine: (engineId ? await fs.readFile(events, "utf8") : "")
             .split("\n")
             .filter(Boolean)
@@ -383,26 +561,47 @@ it.for(scenarios)(
           await fs.appendFile(process.env.OPENCLAW_E2E_PROOF_OUT, `${name} ${proof}\n`);
         }
 
-        // One logical turn: every step ran exactly once, and agent_end fired once per plugin.
+        // Each turn executes its effects once and fires agent_end once per plugin.
         expect(steps, proof).toHaveLength(STEPS);
-        expect(summary.agentEnds, proof).toBe(bundled ? 0 : written.length);
+        if (effects) {
+          expect(effects, proof).toHaveLength(STEPS + (unrelated ? 1 : 0));
+          expect(new Set(effects.map(({ callId }) => callId)).size, proof).toBe(effects.length);
+        }
+        expect(summary.agentEnds, proof).toBe(expectedAgentEnds);
+        expect(finalReplies, proof).toBe(1);
+        if (unrelated) {
+          expect(arrivalFinals, proof).toBe(1);
+          if (longCall) {
+            expect(arrivalStartedAt, proof).toBeGreaterThanOrEqual(steps[2]!.finishedAtMs);
+            expect(reloadSettledAt, proof).toBeGreaterThanOrEqual(steps[2]!.finishedAtMs);
+          }
+          expect(arrivalRequestedAt, proof).toBeLessThan(reloadSettledAt);
+          expect(
+            arrivalSteps.map(({ plugin, generation }) => ({ plugin, generation })),
+            proof,
+          ).toEqual([{ plugin: "swap-proof", generation: 2 }]);
+          expect(summary.arrivalStartedBeforeOriginal, proof).toBe(handsOver);
+          expect(
+            steps.map(({ plugin, generation }) => ({ plugin, generation })),
+            proof,
+          ).toEqual(Array.from({ length: STEPS }, () => ({ plugin: "work-proof", generation: 1 })));
+        }
         const firstGeneration = new Map<string, number>();
         for (const { plugin, generation } of steps.slice(0, RELOAD_AFTER_STEP)) {
           firstGeneration.set(plugin, firstGeneration.get(plugin) ?? generation);
         }
         const later = steps.slice(RELOAD_AFTER_STEP + 1);
         if (handsOver) {
-          // The reload finished mid-turn. A slow reload can land a step late, but from
-          // the first step on the new generation the turn never returns to the old one.
+          // Unchanged plugins retain their generation (checked above). Reloaded
+          // plugins can move a step late, but never return to their old generation.
           expect(summary.reloadSettledBeforeReply, proof).toBe(true);
-          const moved = later.map(
-            ({ plugin, generation }) => generation > firstGeneration.get(plugin)!,
-          );
-          const landed = moved.indexOf(true);
-          expect(
-            Boolean(bundled) || (landed >= 0 && moved.slice(landed).every(Boolean)),
-            proof,
-          ).toBe(true);
+          if (!unrelated && !bundled) {
+            const moved = later.map(
+              ({ plugin, generation }) => generation > firstGeneration.get(plugin)!,
+            );
+            const landed = moved.indexOf(true);
+            expect(landed >= 0 && moved.slice(landed).every(Boolean), proof).toBe(true);
+          }
         } else {
           // The reload waited for the whole turn, which stayed on its first generation.
           expect(summary.reloadSettledBeforeReply, proof).toBe(false);
