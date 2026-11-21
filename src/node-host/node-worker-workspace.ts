@@ -176,8 +176,9 @@ export class NodeWorkerWorkspaceRuntime {
   async prepare(
     input: NodeWorkerPreparedWorkspaceInput,
     signal?: AbortSignal,
+    deferRegistrationVerification = false,
   ): Promise<NodeWorkerPreparedWorkspaceResult> {
-    return await this.prepared.prepare(input, signal);
+    return await this.prepared.prepare(input, signal, deferRegistrationVerification);
   }
 
   async acquirePreparedWorkspace(

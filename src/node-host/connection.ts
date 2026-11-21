@@ -328,6 +328,12 @@ export function startNodeHostConnection({
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),
+              ...(prepared.preparedWorkspacesEnabled &&
+              gatewayCapabilities.has(
+                GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_DEFERRED_VERIFICATION,
+              )
+                ? { preparedWorkspaceDeferredVerification: true }
+                : {}),
               bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
               ...(!prepared.preparedWorkspacesEnabled &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH)

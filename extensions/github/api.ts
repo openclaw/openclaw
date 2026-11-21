@@ -13,6 +13,7 @@ export {
   GITHUB_GRAPHQL_URL,
   GITHUB_REQUEST_TIMEOUT_MS,
   GitHubGraphQLUnavailableError,
+  GitHubResponseTooLargeError,
   githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,

@@ -86,6 +86,7 @@ type GitHubPublicApi = {
     options?: { retryAtMs?: number; upstreamStatus?: number; retryable?: boolean },
   ) => ControlUiGitHubError;
   GitHubGraphQLUnavailableError: new (upstreamStatus: number) => GitHubGraphQLUnavailableError;
+  GitHubResponseTooLargeError: new () => ControlUiGitHubError;
   formatControlUiGitHubPreviewError: (error: unknown) => {
     message: string;
     retryable: boolean;

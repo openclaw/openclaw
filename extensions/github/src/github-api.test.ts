@@ -3,7 +3,9 @@ import {
   fetchGitHubApi,
   fetchGitHubJson,
   fetchGitHubJsonPage,
+  GitHubResponseTooLargeError,
   readGitHubGraphQLResponse,
+  readGitHubJsonResponse,
   resolveGitHubApiUrls,
 } from "./github-api.js";
 
@@ -23,6 +25,15 @@ function setup(base = "https://api.github.com") {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+});
+
+it.each([false, true])("classifies bounded overflow (declared length: %s)", async (declared) => {
+  const response = new Response('{"padding":"overflow"}', {
+    headers: declared ? { "content-length": "22" } : {},
+  });
+  await expect(readGitHubJsonResponse(response, 8)).rejects.toBeInstanceOf(
+    GitHubResponseTooLargeError,
+  );
 });
 
 it("keeps slow failed-fetch diagnostics at debug", async () => {

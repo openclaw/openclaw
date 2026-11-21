@@ -1,0 +1,4 @@
+# Snapshot-lineage comparison fallback regressions owned by PR #193872.
+# Exact measured LF growth: GitHub bounded-response owner +11; admission/authority cases +142.
+# Covers only the final lineage-fallback tests; no inherited-debt credit or shared-scalar change.
+153

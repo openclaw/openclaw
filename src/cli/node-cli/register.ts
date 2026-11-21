@@ -40,6 +40,24 @@ export function registerNodeCli(program: Command) {
   );
 
   node.addCommand(
+    node
+      .createCommand("prepare-worker-bundle")
+      .requiredOption("--input <json>", "Worker build and archive identity")
+      .option("--verify-only", "Verify prepared code without repairing it")
+      .action(async (options: { input: string; verifyOnly?: boolean }) => {
+        const { parseNodeWorkerBundlePreparationInput } =
+          await import("../../worker/node-bundle-install-protocol.js");
+        const { preparePackagedNodeWorkerBundle } =
+          await import("../../node-host/node-worker-bundle-cache.js");
+        await preparePackagedNodeWorkerBundle(
+          parseNodeWorkerBundlePreparationInput(options.input),
+          options.verifyOnly,
+        );
+      }),
+    { hidden: true },
+  );
+
+  node.addCommand(
     createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
       const { runNodeHostWorker } = await import("../../node-host/worker.js");
       await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });

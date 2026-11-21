@@ -704,12 +704,11 @@ export function createWorkerProviderLifecycle(
     }
   };
 
-  const { createWithProfile, prepareIntent, prepareRetention, assertPreparedIntentCurrent } =
-    createWorkerProviderIntent({
-      ...options,
-      providerFor,
-      resumeProvision,
-    });
+  const providerIntent = createWorkerProviderIntent({
+    ...options,
+    providerFor,
+    resumeProvision,
+  });
 
   return {
     inspectTurnLease: leaseInspection.inspectTurnLease,
@@ -721,10 +720,11 @@ export function createWorkerProviderLifecycle(
     },
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
     clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
-    createWithProfile,
-    prepareIntent,
-    prepareRetention,
-    assertPreparedIntentCurrent,
+    createWithProfile: providerIntent.createWithProfile,
+    prepareIntent: providerIntent.prepareIntent,
+    prepareRetention: providerIntent.prepareRetention,
+    assertPreparedIntentCurrent: providerIntent.assertPreparedIntentCurrent,
+    preparedRepositorySource: providerIntent.preparedRepositorySource,
     resumePrepared: createPreparedWorkerRecovery({
       ...options,
       expirePrepared,

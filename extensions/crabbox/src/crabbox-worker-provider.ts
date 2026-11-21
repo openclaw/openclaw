@@ -415,7 +415,8 @@ export function createCrabboxWorkerProvider(
           wallpaperBase64,
           prepareBeforeEnrollment: Boolean(project),
         });
-        if (project?.preparation && (await warmImages.lookupLease(leaseId))?.phase === "enrolled") {
+        const lease = project?.preparation ? await warmImages.lookupLease(leaseId) : undefined;
+        if (project?.preparation && lease?.phase === "enrolled") {
           // An enrolled replay may have lost its response before core registration.
           // Verify the preserved completion only; setup and capture remain closed.
           try {
@@ -423,7 +424,7 @@ export function createCrabboxWorkerProvider(
               ...context,
               id: leaseId,
               project,
-              inspectPrepared: true,
+              inspectPrepared: { baseCommit: lease.baseCommit },
               signal: preparationSignal,
               timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
             });
@@ -464,6 +465,8 @@ export function createCrabboxWorkerProvider(
               ...context,
               id: leaseId,
               project,
+              snapshotBaseCommit:
+                allocationChoice.kind === "checkpoint" ? allocationChoice.baseCommit : undefined,
               signal: preparationSignal,
               timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
               recordRecipePreparation: (metadata) =>
@@ -477,7 +480,7 @@ export function createCrabboxWorkerProvider(
             assertCurrent();
             await warmImages.markPrepared(
               leaseId,
-              project.baseCommit,
+              preparedProject?.baseCommit ?? project.baseCommit,
               () => {
                 preparationSignal?.throwIfAborted();
                 assertCurrent();

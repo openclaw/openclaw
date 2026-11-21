@@ -1,4 +1,5 @@
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
+import type { CrabboxRuntimeInstallationIdentity } from "./crabbox-worker-runtime-verification.js";
 
 export type CrabboxOfflineRuntimeSetupOptions = {
   nodeBootstrap: {
@@ -11,7 +12,7 @@ export type CrabboxOfflineRuntimeSetupOptions = {
     manifestSha256: string;
     enabledPluginIds: readonly string[];
   };
-  workerBundle: { localPath: string; sha256: string; bytes: number; packageRelativePath: string };
+  workerBundle: CrabboxRuntimeInstallationIdentity["workerBundle"] & { localPath: string };
   target?: CrabboxOperatingSystem;
 };
 

@@ -1,0 +1,5 @@
+# Mixed-peer registration/binding phase negotiation and default-branch lineage regressions.
+# Exact net LF growth from adbf95d3a6d5913df16d7d345b609f59c5e6b13f: 230.
+# Includes native negotiation, cross-process legacy hash reuse/private replay, and fixture extraction.
+# No inherited-debt credit; existing scalar and prior allocations are unchanged.
+230

@@ -33,6 +33,7 @@ vi.mock("./repository-git-pack.js", () => ({
   prepareRepositoryWorkerGitPack: mocks.prepareGitPack,
 }));
 
+import { gitHubPublicApi } from "../github-public-api.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 
@@ -168,6 +169,215 @@ describe("repository project admission", () => {
     vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([
+    undefined,
+    "HEAD",
+    "main",
+    "refs/heads/main",
+    "topic",
+    "refs/tags/main",
+    "pinned",
+    "replay",
+  ])("reuses a snapshot base only for fresh default-branch requests: %s", async (ref) => {
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      repository: {
+        ...initial.repository,
+        ...(ref === "pinned" ? { baseCommit: commit } : ref === "replay" ? {} : { ref }),
+      },
+    });
+    const result =
+      ref === "replay"
+        ? await prepareRepositoryWorkerProjectSource({ ...admission, expected: admitted.project })
+        : admitted;
+    expect(result.snapshotStart === true).toBe(
+      [undefined, "HEAD", "main", "refs/heads/main"].includes(ref),
+    );
+    if (!result.snapshotStart) {
+      await expect(
+        result.isSnapshotBaseAncestor(commit, new AbortController().signal),
+      ).resolves.toBe(false);
+      expect(requestPaths().some((path) => path.includes("/compare/"))).toBe(false);
+    }
+  });
+
+  it.each(["ancestor", "topic", "revoked", "replaced"])(
+    "qualifies snapshot ancestry through the admitted repository owner: %s",
+    async (scenario) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const candidate = "e".repeat(40);
+      const original = fetchImpl.getMockImplementation()!;
+      fetchImpl.mockImplementation(async (input, init) => {
+        const url = new URL(new Request(input).url);
+        if (url.pathname.includes("/compare/")) {
+          expect(url.pathname).toBe(`/repos/acme/project/compare/${candidate}...${commit}`);
+          expect(url.search).toBe("?per_page=1");
+          if (scenario === "revoked") {
+            selected = false;
+          }
+          if (scenario === "replaced") {
+            repositoryId = "R_replacement";
+          }
+          return new Response(
+            JSON.stringify({
+              status: scenario === "topic" ? "diverged" : "ahead",
+              base_commit: { sha: candidate },
+              merge_base_commit: { sha: scenario === "topic" ? "f".repeat(40) : candidate },
+            }),
+          );
+        }
+        return original(input, init);
+      });
+      const result = admitted.isSnapshotBaseAncestor(candidate, new AbortController().signal);
+      if (scenario === "revoked" || scenario === "replaced") {
+        await expect(result).rejects.toThrow(/identity changed|identity changed; retry/);
+      } else {
+        await expect(result).resolves.toBe(scenario === "ancestor");
+      }
+    },
+  );
+
+  it.each([
+    ["missing commit", undefined],
+    ["orphan history", undefined],
+    ["oversized", undefined],
+    ["streamed oversized", undefined],
+    ["revoked identity", /identity changed/],
+    ["replaced repository", /identity changed/],
+    ["revoked repository access", /HTTP 404/],
+    ["reassigned account", /identity changed/],
+    ["rotated credential", /credential changed/],
+    ["retired agent", /identity changed/],
+    ["closed caller", /caller closed/],
+    ["changed configuration", /configuration changed/],
+    ["anonymous missing", undefined],
+    ["anonymous oversized", undefined],
+    ["cancelled", /comparison cancelled/],
+    ["identity 404", /identity revalidation refused/],
+    ["unauthenticated", /HTTP 401/],
+    ["forbidden", /HTTP 403/],
+    ["transport", /Could not reach GitHub/],
+    ["invalid JSON", /not valid JSON/],
+    ["unreadable body", /could not be read/],
+    ["unknown upstream", /HTTP 500/],
+  ] as const)(
+    "keeps comparison misses separate from authority and read failures: %s",
+    async (scenario, failure) => {
+      privateRepository = !scenario.startsWith("anonymous");
+      if (!privateRepository) {
+        token = undefined;
+        selection = { source: "anonymous" };
+      }
+      let active = true;
+      let configCurrent = true;
+      const admitted = await prepareRepositoryWorkerProjectSource({
+        ...initial,
+        getConfig: () => {
+          if (!configCurrent) {
+            throw new Error("configuration changed");
+          }
+          return {};
+        },
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller closed");
+          }
+        },
+      });
+      const controller = new AbortController();
+      const original = fetchImpl.getMockImplementation()!;
+      let compared = false;
+      let repositoryConfirmed = false;
+      fetchImpl.mockImplementation(async (input, init) => {
+        const url = new URL(new Request(input).url);
+        if (!url.pathname.includes("/compare/")) {
+          repositoryConfirmed ||= compared && url.pathname === "/repos/acme/project";
+          return original(input, init);
+        }
+        compared = true;
+        if (scenario === "revoked identity") {
+          selected = false;
+        }
+        if (scenario === "replaced repository") {
+          repositoryId = "R_replacement";
+        }
+        if (scenario === "revoked repository access") {
+          unavailable = true;
+        }
+        if (scenario === "reassigned account") {
+          selection = {
+            source: "system-configured",
+            profileId: `ghp_${"1".repeat(32)}`,
+            accountId: 2,
+          };
+        }
+        if (scenario === "rotated credential") {
+          token = "replaced-credential";
+        }
+        if (scenario === "retired agent") {
+          mocks.matchesAgentLifecycleBinding.mockReturnValue(false);
+        }
+        if (scenario === "closed caller") {
+          active = false;
+        }
+        if (scenario === "changed configuration") {
+          configCurrent = false;
+        }
+        if (scenario === "cancelled") {
+          controller.abort(new Error("comparison cancelled"));
+        }
+        if (scenario === "identity 404") {
+          const identity: PreparedGitHubSourceReadIdentity =
+            await mocks.prepareGitHubReadIdentity.mock.results.at(-1)!.value;
+          identity.revalidate = vi
+            .fn()
+            .mockRejectedValueOnce(
+              new gitHubPublicApi.ControlUiGitHubError(404, "identity revalidation refused"),
+            );
+        }
+        if (scenario === "transport") {
+          throw new TypeError("synthetic transport failure");
+        }
+        if (scenario === "invalid JSON") {
+          return new Response("{");
+        }
+        if (scenario === "unreadable body") {
+          return new Response(
+            new ReadableStream({ start: (stream) => stream.error(new Error("read failed")) }),
+          );
+        }
+        if (scenario.includes("oversized")) {
+          const body = JSON.stringify({ files: [{ patch: "x".repeat(1024 * 1024) }] });
+          return new Response(body, {
+            headers:
+              scenario === "oversized" ? { "content-length": String(Buffer.byteLength(body)) } : {},
+          });
+        }
+        const status =
+          scenario === "unauthenticated"
+            ? 401
+            : scenario === "forbidden"
+              ? 403
+              : scenario === "unknown upstream"
+                ? 500
+                : 404;
+        return new Response(
+          JSON.stringify({
+            message: scenario === "orphan history" ? "No common ancestor" : "Not Found",
+          }),
+          { status },
+        );
+      });
+      const result = admitted.isSnapshotBaseAncestor("e".repeat(40), controller.signal);
+      if (failure) {
+        await expect(result).rejects.toThrow(failure);
+      } else {
+        await expect(result).resolves.toBe(false);
+        expect(repositoryConfirmed).toBe(true);
+      }
+    },
+  );
 
   it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
     const blob = "e".repeat(40);

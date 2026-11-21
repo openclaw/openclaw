@@ -45,6 +45,7 @@ export async function prepareWorkerProviderProject(params: {
       ? {
           revalidateRepositorySource: repository.revalidate,
           prepareRepositoryGitPack: repository.prepareGitPack,
+          isSnapshotBaseAncestor: repository.isSnapshotBaseAncestor,
         }
       : {}),
     preparation: preparation
@@ -55,6 +56,7 @@ export async function prepareWorkerProviderProject(params: {
         }
       : undefined,
     setupAuthorized: true,
+    snapshotStart: repository?.snapshotStart,
     signal: params.signal,
     requireCurrent: () => {
       params.requireCurrent();

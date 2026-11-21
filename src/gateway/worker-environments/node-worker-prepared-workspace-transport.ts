@@ -45,8 +45,11 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     if (!node || !transport.isCurrent(node)) {
       throw new Error("Prepared workspace node protocol is unavailable");
     }
-    // Registration and first binding verify completed contents; exact bind replay preserves edits.
-    const timeoutMs = input.action === "register" ? 10 * 60_000 + 5_000 : 30_000;
+    // Only a negotiated node moves the cold scan from registration to first bind.
+    // Old nodes retain the shipped registration budget and unchanged strict payload.
+    const deferred = node.workerHost.preparedWorkspaceDeferredVerification === true;
+    const verifiesContents = input.action === "bind" ? deferred : !deferred;
+    const timeoutMs = verifiesContents ? 10 * 60_000 + 5_000 : 30_000;
     const result = await transport.invoke({
       node,
       command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
@@ -120,7 +123,12 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
           action: "register",
           gatewayNamespace: options.gatewayNamespace,
           environmentId: record.environmentId,
-          ...workspace,
+          preparationKey: workspace.preparationKey,
+          cacheKey: workspace.cacheKey,
+          workspaceDir: workspace.workspaceDir,
+          homeDir: workspace.homeDir,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
         },
       });
     },

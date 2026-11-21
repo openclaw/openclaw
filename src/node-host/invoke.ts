@@ -289,6 +289,7 @@ export async function handleInvoke(
     }
     const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
       command,
+      serverCapabilities: client.serverCapabilities,
       paramsJSON: frame.paramsJSON,
       bundleInstaller: runtime.workerBundleInstaller,
       supervisor: runtime.workerSupervisor,

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -8,7 +8,7 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { GatewayClient } from "../gateway/client.js";
+import { GatewayClient } from "../gateway/client.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -20,6 +20,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import * as logger from "../logger.js";
@@ -139,8 +140,14 @@ async function invokePrivate(params: {
   gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
   signal?: AbortSignal;
+  serverCapabilities?: ReadonlySet<string>;
 }) {
-  const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+  // An unstarted client preserves the generic RPC signature without opening a connection.
+  const client = Object.assign(new GatewayClient({}), {
+    serverCapabilities: params.serverCapabilities,
+  });
+  const request = vi.spyOn(client, "request").mockResolvedValue(null);
+  onTestFinished(() => request.mockRestore());
   await handleInvoke(
     {
       id: "invoke-1",
@@ -148,7 +155,7 @@ async function invokePrivate(params: {
       command: params.command,
       paramsJSON: params.paramsJSON,
     },
-    { request } as unknown as GatewayClient,
+    client,
     { current: async () => [] },
     undefined,
     {
@@ -174,6 +181,42 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it.each([false, true])(
+    "negotiates the prepared base with the Gateway (supported=%s)",
+    async (supported) => {
+      const workspace = new NodeWorkerWorkspaceRuntime({
+        root: tempDirs.make("node-prepared-wire-"),
+      });
+      // v2026.11.1 accepts this exact strict result shape; baseCommit is opt-in.
+      const legacy = {
+        gatewayNamespace: "gateway",
+        environmentId: "environment",
+        preparationKey: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        workspaceDir: "/prepared/workspace",
+        homeDir: "/prepared/home",
+        sourceManifestRef: `sha256:${"c".repeat(64)}`,
+        preparedManifestRef: `sha256:${"d".repeat(64)}`,
+      };
+      const prepared = Object.freeze({ ...legacy, baseCommit: "e".repeat(40) });
+      const prepare = vi.spyOn(workspace, "prepare").mockResolvedValue(prepared);
+      try {
+        const { result } = await invokePrivate({
+          command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+          paramsJSON: JSON.stringify({ action: "register", ...legacy }),
+          workspace,
+          serverCapabilities: supported
+            ? new Set(["node-worker-prepared-workspace-base-v1"])
+            : undefined,
+        });
+        expect(result?.ok).toBe(true);
+        expect(JSON.parse(result?.payloadJSON ?? "null")).toEqual(supported ? prepared : legacy);
+      } finally {
+        prepare.mockRestore();
+      }
+    },
+  );
+
   it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
     const supervisor = supervisorWith(fullReceipt());
     const controller = new AbortController();

@@ -449,6 +449,7 @@ setPhase("preparation");
   if (${Boolean(params.verifyOnly)}) {
     await verifyRuntime(runtimeDir);
     if (!await verifyWorkerArchive(runtimeDir)) throw new Error("Cloud worker prepared archive is missing");
+    prepareExpandedWorker(true);
     reportRuntimeInstallation("existing-verified");
     setPhase("complete");
     return;
@@ -636,6 +637,7 @@ setPhase("preparation");
     if (!existingRuntime) fs.renameSync(installDir, runtimeDir);
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
+  if (!mode) prepareExpandedWorker();
   installRuntimePrefetch();
   // A project snapshot contains only verified runtime bytes, never enrollment state.
   if (!mode) {
