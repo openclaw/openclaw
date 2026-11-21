@@ -492,6 +492,21 @@ describe("web search runtime", () => {
     );
   });
 
+  it("matches an explicitly selected provider id case-insensitively", async () => {
+    useProviders(searchProvider("google"), searchProvider("duckduckgo"));
+    await expectSearch({ providerId: "Google" }, "google");
+  });
+
+  it("keeps an explicit selection matching a mixed-case registered id", async () => {
+    useProviders(searchProvider("google"), searchProvider("MixedCase"));
+    await expectSearch({ providerId: "MixedCase" }, "MixedCase");
+  });
+
+  it("does not treat a blank explicit provider id as unknown", async () => {
+    useProviders(searchProvider("google"), searchProvider("duckduckgo"));
+    await expectSearch({ providerId: "" }, "google");
+  });
+
   it("fails fast when the caller explicitly selects an unknown provider", async () => {
     useProviders(searchProvider("google"), searchProvider("duckduckgo"));
     await expect(search({ providerId: "missing-id" })).rejects.toThrow(
