@@ -432,7 +432,7 @@ it("keeps actor release during input preparation a terminal custody refusal", as
       });
       expect(f.events()).toEqual([]);
     } finally {
-      pending.finish("interrupted", "failed");
+      pending.finish("interrupted");
       await pending.settled?.();
       await input.actor.release();
     }
