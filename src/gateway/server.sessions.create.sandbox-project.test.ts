@@ -124,6 +124,7 @@ test.each(["all", "off"] as const)(
         },
       },
       gateway: {
+        projects: { defaultProjectId: project.id },
         roles: {
           default: "guest",
           definitions: {
@@ -145,7 +146,11 @@ test.each(["all", "off"] as const)(
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     };
     await initializeSessionReadContext(context);
-    const request = async (method: string, params: Record<string, unknown>) => {
+    const request = async (
+      method: string,
+      params: Record<string, unknown>,
+      requestContext = context,
+    ) => {
       const respond = vi.fn();
       const req = {
         type: "req" as const,
@@ -156,7 +161,13 @@ test.each(["all", "off"] as const)(
             ? { agentId: "main", ...params }
             : params,
       };
-      await handleGatewayRequest({ req, client, context, respond, isWebchatConnect: () => false });
+      await handleGatewayRequest({
+        req,
+        client,
+        context: requestContext,
+        respond,
+        isWebchatConnect: () => false,
+      });
       expect(respond).toHaveBeenCalledOnce();
       return respond.mock.calls[0];
     };
@@ -197,6 +208,31 @@ test.each(["all", "off"] as const)(
     await expectOptions(project.id, false, true);
     await expectOptions("workspace:main", true, true);
     await expectOptions("workspace:other", false, false);
+    const [, defaults] = (await request("projects.list", {}))!;
+    const [defaultOk, defaultResult, defaultError] = (await request("sessions.create", {}))!;
+    expect(defaultOk, JSON.stringify(defaultError)).toBe(true);
+    expect(defaultResult).toHaveProperty("worktree.path");
+    const defaultSession = defaultResult as { key: string; worktree: { path: string } };
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: defaultSession.key, storePath }),
+    ).toMatchObject({
+      projectId: project.id,
+      spawnedCwd: defaultSession.worktree.path,
+      sessionRoot: defaultSession.worktree.path,
+    });
+    expect(defaults).toHaveProperty("defaultProjectId", project.id);
+    expect(defaultSession.worktree.path).not.toBe(outside);
+    expect(await fs.readFile(path.join(defaultSession.worktree.path, "README.md"), "utf8")).toBe(
+      "outside\n",
+    );
+    const [explicitOk, explicitResult] = (await request("sessions.create", {
+      projectId: "workspace:main",
+    }))!;
+    expect(explicitOk).toBe(true);
+    expect(explicitResult).toMatchObject({
+      entry: { projectId: "workspace:main", spawnedCwd: workspace },
+    });
+    expect(explicitResult).not.toHaveProperty("worktree");
     for (const { projectId, worktree } of [
       { projectId: project.id, worktree: false },
       { projectId: project.id, worktree: true },
@@ -240,11 +276,43 @@ test.each(["all", "off"] as const)(
       undefined,
       { code: "INVALID_REQUEST", message: `unknown project id: ${project.id}` },
     ]);
+    const [reused] = (await request("sessions.create", { key: defaultSession.key }))!;
+    expect(reused).toBe(true);
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: defaultSession.key, storePath })?.spawnedCwd,
+    ).toBe(defaultSession.worktree.path);
     await expectOptions(project.id, false, false);
     const [, listed] = (await request("projects.list", {}))!;
     expect(
       (listed as { projects: { id: string }[] }).projects.map((entry) => entry.id),
     ).not.toContain(project.id);
+    expect(listed).not.toHaveProperty("defaultProjectId");
+    expect(await request("sessions.create", {})).toEqual([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message:
+          "Default project is unavailable; select an available project or ask the operator to update gateway.projects.defaultProjectId.",
+      },
+    ]);
+    for (const defaultProjectId of ["missing-project", "workspace:main"]) {
+      activeCfg = { ...cfg, gateway: { ...cfg.gateway, projects: { defaultProjectId } } };
+      expect(await request("sessions.create", {})).toMatchObject([
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("Default project is unavailable"),
+        },
+      ]);
+      const updatedContext = createDirectChatContext({ getRuntimeConfig: () => activeCfg });
+      await initializeSessionReadContext(updatedContext);
+      const listing = await request("projects.list", {}, updatedContext);
+      expect(listing).toEqual([true, expect.any(Object), undefined]);
+      expect(listing?.[1]).not.toHaveProperty("defaultProjectId");
+    }
+    activeCfg = cfg;
     for (const [method, params] of [
       ["sessions.create", { projectGitUrl: `https://github.com/${repository}.git` }],
       ["projects.searchRemote", { query: repository }],

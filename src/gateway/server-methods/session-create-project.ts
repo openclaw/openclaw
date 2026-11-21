@@ -72,17 +72,48 @@ type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
 /** A hidden registry project reads as an unknown id to restricted requesters. */
 export async function resolveRequestedSessionProject(
   cfg: OpenClawConfig,
-  params: Pick<SessionsCreateParams, "projectId" | "worktree">,
+  params: Pick<
+    SessionsCreateParams,
+    | "projectId"
+    | "worktree"
+    | "worktreeSource"
+    | "execNode"
+    | "deviceFolder"
+    | "projectGitUrl"
+    | "repository"
+    | "catalogId"
+    | "fork"
+  >,
   client: GatewayClient | null,
   {
     cwd,
     existingTargetEntry,
+    automaticEmptyWorkspace = false,
+    inheritParentWorktree = false,
   }: {
     cwd?: string;
     existingTargetEntry?: Pick<InternalSessionEntry, "projectId">;
+    automaticEmptyWorkspace?: boolean;
+    inheritParentWorktree?: boolean;
   } = {},
 ): Promise<Result<{ projectId?: string; root?: string; worktree: boolean }, ErrorShape>> {
-  const projectId = normalizeOptionalString(params.projectId);
+  const defaultProjectId = cfg.gateway?.projects?.defaultProjectId;
+  const useDefault = Boolean(
+    defaultProjectId &&
+    !existingTargetEntry &&
+    !inheritParentWorktree &&
+    !params.projectId &&
+    !cwd &&
+    !params.execNode &&
+    !params.deviceFolder &&
+    !params.projectGitUrl &&
+    !params.repository &&
+    !params.catalogId &&
+    !params.fork &&
+    params.worktree !== false &&
+    (params.worktreeSource !== "empty" || automaticEmptyWorkspace),
+  );
+  const projectId = useDefault ? defaultProjectId : normalizeOptionalString(params.projectId);
   const requester = projectRequesterForClient(client);
   // A saved folder selection can still name the shared clone's root. Reuse its project binding.
   // Do not reinterpret the source of a previously accepted direct checkout.
@@ -95,6 +126,11 @@ export async function resolveRequestedSessionProject(
   const project = projectId
     ? await resolveRequesterProject(cfg, projectId, requester, { fresh: true })
     : clone;
+  if (useDefault && (!project || project.source === "workspace")) {
+    return invalidSessionRequest(
+      "Default project is unavailable; select an available project or ask the operator to update gateway.projects.defaultProjectId.",
+    );
+  }
   if (!project) {
     return projectId
       ? invalidSessionRequest(`unknown project id: ${projectId}`)
@@ -104,7 +140,8 @@ export async function resolveRequestedSessionProject(
     return invalidSessionRequest("requested working directory is unavailable");
   }
   // Product-owned clones are maintenance sources, never session checkouts.
-  const worktree = project.source === "cloned" || params.worktree === true;
+  // An implicit project always gets a private checkout, never the shared source directory.
+  const worktree = useDefault || project.source === "cloned" || params.worktree === true;
   const root = await resolveSessionProjectRootForRecord(project, worktree);
   return root.ok ? ok({ projectId: project.id, root: root.value, worktree }) : root;
 }

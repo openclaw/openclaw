@@ -27,6 +27,49 @@ function delayedCatalog(
 }
 
 describe("DraftPlaceState configured repository defaults", () => {
+  it.each(["default", "saved", "opt-out", "required"] as const)(
+    "restores a registered default without replacing a %s choice",
+    (selection) => {
+      const f = createRepositoryFixture();
+      if (selection === "required") {
+        Object.defineProperty(f.gateway, "requiredProfile", { value: "required" });
+      }
+      f.readPreference.mockReturnValue(
+        selection === "saved"
+          ? { projectId: "other" }
+          : selection === "opt-out"
+            ? { defaultRepositoryOptOut: true }
+            : {},
+      );
+      vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
+      vi.spyOn(f.browser, "defaultProjectId", "get").mockReturnValue("default");
+      vi.spyOn(f.browser, "projects", "get").mockReturnValue(
+        ["default", "other"].map((id) => ({ id, displayName: id, source: "registered" })),
+      );
+      f.state.adoptAgentDefaults();
+      f.state.restorePreferenceSelections();
+      expect(f.browser.projectId).toBe(
+        selection === "opt-out" ? "" : selection === "saved" ? "other" : "default",
+      );
+      if (selection === "default" || selection === "required") {
+        expect(
+          buildSelectedSessionCreateParams(f.state, { message: "Inspect", visibility: "normal" }),
+        ).toMatchObject({ projectId: "default", worktree: true });
+        f.state.clearProjectSelection();
+        const cleared = buildSelectedSessionCreateParams(f.state, {
+          message: "Inspect",
+          visibility: "normal",
+        });
+        expect(cleared).not.toHaveProperty("projectId");
+        expect(cleared).toMatchObject(
+          selection === "required"
+            ? { worktree: true, worktreeSource: "empty" }
+            : { cwd: "/workspace" },
+        );
+      }
+    },
+  );
+
   it.each(["saved", "active"] as const)(
     "validates %s clone selections using the accepted Git URL forms",
     (source) => {
