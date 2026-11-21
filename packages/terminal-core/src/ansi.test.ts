@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
+import {
+  AnsiSequenceStripper,
+  iterateAnsiSegments,
+  matchAnsiOscAt,
+  scanAnsiCsiAt,
+  scanAnsiOscAt,
+} from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   stripAnsi,
@@ -19,6 +25,69 @@ function expectEverySplit(input: string, text: string, expected: string[]) {
 }
 
 describe("terminal ansi helpers", () => {
+  it("preserves complete OSC matching while exposing the first excluded body byte", () => {
+    // Freeze the existing complete-match grammar as the independent compatibility oracle.
+    const complete = /(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x1b\\|\x07|\x9c)/y;
+    for (const opener of ["\u001b]", "\u009d"]) {
+      for (const body of ["", "text😀", "\u009d\u009d", '"{}[]\r\n', "\u001bX", '\u009b1"q']) {
+        for (const ending of ["\u0007", "\u001b\\", "\u009c", ""]) {
+          const input = `${opener}${body}${ending}after`;
+          for (let index = 0; index < input.length; index++) {
+            complete.lastIndex = index;
+            const expected = complete.exec(input)?.[0];
+            expect(matchAnsiOscAt(input, index)).toBe(expected);
+            expect(scanAnsiOscAt(input, index)?.value).toBe(expected);
+          }
+        }
+      }
+    }
+    for (const ending of ["\u0007", "\u001b\\", "\u009c", "\u001bX", ""]) {
+      expect(scanAnsiOscAt(`\u009dpayload${ending}`, 0)).toEqual({
+        bodyEnd: 8,
+        value: ending && ending !== "\u001bX" ? `\u009dpayload${ending}` : undefined,
+      });
+    }
+  });
+
+  it("bounds failed OSC search work while preserving CSI and OSC at the failure frontier", () => {
+    const repeated = "\u009d".repeat(32_768);
+    const csi = '\u001b[1"q';
+    const osc = '\u009d0;"title\u0007';
+    for (const expected of [[], [csi, osc], ["\u001b]next\u0007"]]) {
+      const input = repeated + expected.join("") + (expected.length ? repeated : "");
+      let failedUntil = 0;
+      let failedWork = 0;
+      let failedCalls = 0;
+      const sequences: string[] = [];
+      for (let index = 0; index < input.length; index++) {
+        const scan = index < failedUntil ? undefined : scanAnsiOscAt(input, index);
+        if (scan && scan.value === undefined) {
+          failedUntil = scan.bodyEnd;
+          failedWork += scan.bodyEnd - index;
+          failedCalls++;
+        }
+        const value = scan?.value ?? scanAnsiCsiAt(input, index)?.value;
+        if (value) {
+          sequences.push(value);
+          index += value.length - 1;
+        }
+      }
+      expect(failedWork).toBeLessThanOrEqual(input.length);
+      expect(failedCalls).toBe(expected.length ? 2 : 1);
+      expect(sequences).toEqual(expected);
+    }
+  });
+
+  it("does not share failed OSC frontiers between inputs or consume the blocking escape", () => {
+    const unfinished = "\u009d\u009d\u001b[31m";
+    const complete = "\u009dtitle\u0007";
+    const first = scanAnsiOscAt(unfinished, 0);
+    expect(first).toEqual({ bodyEnd: 2, value: undefined });
+    expect(scanAnsiOscAt(complete, 0)?.value).toBe(complete);
+    expect(scanAnsiCsiAt(unfinished, first!.bodyEnd)?.value).toBe("\u001b[31m");
+    expect(scanAnsiOscAt(unfinished, 0)).toEqual(first);
+  });
+
   it.each([
     ["ESC OSC with ESC ST", ["A\u001B]0;title", "\u001B\\B"]],
     ["C1 OSC with C1 ST", ["A\u009D0;title", "\u009CB"]],
