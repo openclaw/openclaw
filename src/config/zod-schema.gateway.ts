@@ -73,6 +73,9 @@ function validateGatewayPublicOrigin(value: string): boolean {
 
 export const GatewayConfigSchema = z
   .strictObject({
+    resources: z
+      .strictObject({ profile: z.enum(["auto", "standard", "lean"]).optional() })
+      .optional(),
     sessionControl: z
       .strictObject({
         publicationReadEnabled: z.boolean().optional(),
