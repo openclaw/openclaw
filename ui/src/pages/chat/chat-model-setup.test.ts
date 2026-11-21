@@ -59,7 +59,6 @@ it.each(["missing-auth", "auth-failed"] as const)(
         sessionsResult: null,
         onSetup: () => undefined,
         onOpenModels: () => undefined,
-        onOpenModels: () => undefined,
         activeSession: { ...session, placement },
         ...overrides,
       }).modelUnavailableBanner;

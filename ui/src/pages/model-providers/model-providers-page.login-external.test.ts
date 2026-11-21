@@ -134,7 +134,7 @@ describe("Models provider login", () => {
       externalUrl: "https://provider.example/sign-in",
     };
     const reason = "This address belongs to a different sign-in attempt.";
-    request.mockImplementation(async (method, params) =>
+    request.mockImplementation(async (method: string, params?: unknown) =>
       method === "wizard.next"
         ? {
             done: false,
