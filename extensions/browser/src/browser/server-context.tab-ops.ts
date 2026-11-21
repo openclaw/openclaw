@@ -416,9 +416,11 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     let createdTargetId: string | undefined;
     let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
+      const launchHeadless =
+        runtime.running?.headless ?? (await runtime.externalBrowserMode?.headless);
       const headless =
         resolveBrowserEngine(profile.engine).descriptor.id === "chromium" &&
-        (runtime.running?.headless ?? (await runtime.externalBrowserMode?.headless)) === true;
+        launchHeadless === true;
       opts?.signal?.throwIfAborted();
       // Playwright installs the context guard before creating or navigating the first page.
       if (
@@ -469,6 +471,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         url,
         ssrfPolicy: cdpPolicy,
         waitForNavigationResult: true,
+        headless: launchHeadless,
         ...(ssrfPolicyOpts.allowOperatorPages ? { allowOperatorPages: true } : {}),
         ...(cdpActionTimeouts ? { timeouts: cdpActionTimeouts } : {}),
         ...(opts?.signal ? { signal: opts.signal } : {}),

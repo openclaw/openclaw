@@ -91,6 +91,8 @@ export async function createTargetViaCdp(opts: {
   /** Wait for the created document to finish navigation and return its authoritative URL. */
   waitForNavigationResult?: boolean;
   allowOperatorPages?: true;
+  /** Effective launch mode of the browser process, when known. */
+  headless?: boolean;
 }): Promise<{ targetId: string; finalUrl?: string }> {
   opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
@@ -140,7 +142,14 @@ export async function createTargetViaCdp(opts: {
         candidateWsUrl,
         async (send) => {
           opts.signal?.throwIfAborted();
-          const params = { url: opts.url, background: true }; // Target-id selection must not activate browser UI.
+          // Target-id selection must not activate browser UI. A background tab in a
+          // headed window never paints, so its screenshots would never finish; its own
+          // unfocused window keeps it rendering without taking the user's tab or focus.
+          const params = {
+            url: opts.url,
+            background: true,
+            ...(opts.headless === false ? { newWindow: true } : {}),
+          };
           const created = (await send("Target.createTarget", params)) as { targetId?: string };
           const targetId = created?.targetId?.trim() ?? "";
           if (!targetId) {
