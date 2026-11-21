@@ -1,3 +1,8 @@
+import {
+  isLocalSandboxWorkspaceBackend,
+  resolveSandboxConfigForAgent,
+} from "../agents/sandbox/config.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
@@ -15,6 +20,30 @@ export type SessionProjectRequester =
 
 export function projectRequester(requester: SessionProjectRequester): ProjectRequester {
   return requester ? { kind: "operator", scopes: requester.scopes } : { kind: "internal" };
+}
+
+export function describeProjectMoveSandboxBackend(backend: string): string | undefined {
+  return isLocalSandboxWorkspaceBackend(backend)
+    ? undefined
+    : "Moving a sandboxed conversation to a project requires Docker or Podman.";
+}
+
+export function describeSessionProjectSandboxBlocker(
+  cfg: OpenClawConfig,
+  session: { agentId: string; sessionKey: string },
+  entry: InternalSessionEntry,
+): string | undefined {
+  const runtime = resolvePreparedSandboxRuntimeStatus({
+    cfg,
+    ...session,
+    preparedSessionEntry: entry,
+  });
+  if (runtime.sandboxed) {
+    return describeProjectMoveSandboxBackend(
+      resolveSandboxConfigForAgent(cfg, runtime.agentId).backend,
+    );
+  }
+  return undefined;
 }
 
 /** Registered projects this requester may move a conversation into. */

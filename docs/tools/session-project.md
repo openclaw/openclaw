@@ -27,6 +27,7 @@ workspace, the tool is removed from its tool list.
 ## What a move does
 
 - The conversation keeps its key, transcript, model and permissions.
+- For sandboxed conversations, project moves require Docker or Podman.
 - The move records the project and a new [worktree](/concepts/managed-worktrees)
   on the conversation, the same intent a session created in the project with a
   new worktree carries, and opens it the same way: the setup script, ignored

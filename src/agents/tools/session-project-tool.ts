@@ -80,6 +80,14 @@ export function createSessionProjectTool(options: {
         throw new ToolInputError("move requires a projectId from list.");
       }
       const initialSandbox = options.sandbox;
+      if (initialSandbox?.enabled) {
+        const { describeProjectMoveSandboxBackend } =
+          await import("../../gateway/session-project-move-policy.js");
+        const reason = describeProjectMoveSandboxBackend(initialSandbox.backendId);
+        if (reason) {
+          throw new ToolInputError(reason);
+        }
+      }
       const carrySandbox =
         input.checkout && initialSandbox?.enabled
           ? {

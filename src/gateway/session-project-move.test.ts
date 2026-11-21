@@ -20,6 +20,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { withSessionControllerOwner } from "../sessions/session-controller.context.js";
@@ -33,6 +34,53 @@ import { moveSessionIntoProject, openMovedSession } from "./session-project-move
 import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.js";
 
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
+
+it("refuses an SSH sandbox move before changing the stored conversation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "all", backend: "ssh", workspaceAccess: "rw" } },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const repoRoot = path.join(state.root, "project");
+    await fs.mkdir(repoRoot);
+    await requireGit(repoRoot, ["init", "-b", "main"]);
+    await requireGit(repoRoot, [...commit, "--allow-empty", "-m", "Project base"]);
+    const project = await registerProjectRegistry({ path: repoRoot, name: "project" });
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:chat:move",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const sessionId = "move";
+    await upsertSessionEntryCore(target, {
+      sessionId,
+      updatedAt: 1,
+      sessionRoot: state.workspaceDir,
+    });
+    const manager = await SessionManager.openAsync({ ...target, sessionId }, state.workspaceDir);
+    await manager.appendMessageAsync(makeUserMessage("Move into the project", 1));
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+
+    await expect(
+      moveSessionIntoProject({
+        context,
+        session: target,
+        carrySource: { kind: "host", workspaceDir: state.workspaceDir },
+        projectId: project.id,
+        requester: undefined,
+        assertCurrent() {},
+      }),
+    ).rejects.toThrow("Docker or Podman");
+    const entry = loadSessionEntryReadOnly(target);
+    expect(entry).toMatchObject({ sessionId, sessionRoot: state.workspaceDir });
+    expect(entry?.projectId).toBeUndefined();
+    expect(entry?.pendingWorktree).toBeUndefined();
+    expect(entry?.worktree).toBeUndefined();
+  });
+});
 
 it.each(["sandbox", "host"] as const)(
   "carries an unbound %s conversation after the project advances, preserving its checkout work and running no Git programs on the host",

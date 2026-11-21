@@ -10,6 +10,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import {
   canChooseSessionProject,
+  describeSessionProjectSandboxBlocker,
   projectRequester,
   type SessionProjectRequester,
 } from "./session-project-move-policy.js";
@@ -75,6 +76,10 @@ export async function moveSessionIntoProject(params: {
     throw new Error(
       "Only the person who started this conversation, or someone with full operator write permission, can move it into a project.",
     );
+  }
+  const sandboxBlocker = describeSessionProjectSandboxBlocker(cfg, target, entry);
+  if (sandboxBlocker) {
+    throw new Error(sandboxBlocker);
   }
   const assertCurrent = () => {
     signal?.throwIfAborted();
