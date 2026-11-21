@@ -58,6 +58,41 @@ internal data class GatewayModelCatalogResult(
   val nativeRefreshFailed: Boolean = false,
 )
 
+internal fun GatewayModelSummary.providerQualifiedRef(): String {
+  val trimmedProvider = provider.trim()
+  if (trimmedProvider.isEmpty()) return id
+  val providerPrefix = "$trimmedProvider/"
+  return if (id.startsWith(providerPrefix)) id else "$providerPrefix$id"
+}
+
+internal fun selectedChatModelUnavailableReason(
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): GatewayModelUnavailableReason? {
+  val selected = selectedModelRef?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  val matches = catalog.filter { it.providerQualifiedRef().equals(selected, ignoreCase = true) }
+  if (matches.isEmpty() || matches.any { it.available != false || it.unavailableReason == null }) return null
+  if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.Cooldown }) {
+    return GatewayModelUnavailableReason.Cooldown
+  }
+  return if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.AuthFailed }) {
+    GatewayModelUnavailableReason.AuthFailed
+  } else {
+    GatewayModelUnavailableReason.MissingAuth
+  }
+}
+
+internal fun selectedChatModelSendBlockingReason(
+  gatewayReady: Boolean,
+  selectedModelRef: String?,
+  catalog: List<GatewayModelSummary>,
+): GatewayModelUnavailableReason? {
+  if (!gatewayReady) return null
+  return selectedChatModelUnavailableReason(selectedModelRef, catalog).takeIf {
+    it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
+  }
+}
+
 private val catalogProviderIdentifier = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult {

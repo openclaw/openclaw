@@ -3,6 +3,9 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.parseGatewayModels
+import ai.openclaw.app.providerQualifiedRef
+import ai.openclaw.app.selectedChatModelSendBlockingReason
+import ai.openclaw.app.selectedChatModelUnavailableReason
 import ai.openclaw.app.ui.design.providerBrandTintArgb
 import ai.openclaw.app.ui.design.providerFallbackLabel
 import ai.openclaw.app.ui.design.providerIconSlug
