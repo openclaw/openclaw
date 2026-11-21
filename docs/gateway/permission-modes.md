@@ -18,6 +18,8 @@ Session permission modes set one session's filesystem boundary and exec escalati
 
 These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
 
+The filesystem boundary is enforced on the built-in OpenClaw runtime. A chat that runs on a CLI backend (for example `claude-cli`) uses that CLI's own permission controls: for owner and unrestricted turns, OpenClaw tools the CLI calls through the Gateway are not limited to `sessionRoot`. Turns from restricted senders still keep their sender limits. For the strictest boundary, use the built-in runtime.
+
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
 Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
