@@ -34,6 +34,7 @@ import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
+import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
@@ -425,9 +426,15 @@ describe("scoped vitest configs", () => {
 
   it("runs state-sensitive tooling tests isolated from shared mocks", () => {
     const testConfig = requireTestConfig(createToolingIsolatedVitestConfig({}));
+    const genericConfig = requireTestConfig(createToolingVitestConfig({}));
     expect(testConfig.include).toEqual(toolingIsolatedTestFiles);
+    expect(testConfig.pool).toBe("forks");
     expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
+    for (const file of toolingIsolatedTestFiles) {
+      expect(matchingExcludePatterns(testConfig.exclude ?? [], file), file).toEqual([]);
+      expect(matchingExcludePatterns(genericConfig.exclude ?? [], file), file).not.toEqual([]);
+    }
   });
 
   it("keeps plugin source forks and native-loader forks on their own loaders", async () => {

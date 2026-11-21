@@ -700,12 +700,13 @@ function install(spec) {
   };
   const observe = (event, callback) => {
     if (failure) {
-      return;
+      return undefined;
     }
     try {
-      callback();
+      return callback();
     } catch (error) {
       fail(error, event);
+      return undefined;
     }
   };
   const report = (event, detail = {}) => {

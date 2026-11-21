@@ -15,6 +15,8 @@ export const toolingIsolatedTestFiles = [
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
   "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
   "test/scripts/control-ui-i18n.test.ts",
+  // Real updater ledger cleanup requires the main-thread shared-state broker.
+  "test/scripts/installed-terminal-observer.test.ts",
   "test/scripts/managed-child-process.drain.test.ts",
   "test/scripts/managed-child-process.termination.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",

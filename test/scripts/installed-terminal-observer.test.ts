@@ -1809,19 +1809,26 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
 
     const bound = bounded.at(-1)?.lifetimeBound;
     assert(bound && typeof bound === "object" && "time" in bound && typeof bound.time === "string");
+    const lateOwner =
+      ending === "sync-process"
+        ? rows.find((row) => row.event === "startup" && row.entry === actor && row.thread === 0)
+        : leafStart;
+    assert(lateOwner);
     const late = {
-      ...leafStart,
+      ...lateOwner,
       event: "sqlite-intent",
       operation: 0,
       time: String(BigInt(bound.time) + 1n),
     };
     rewrite((events) =>
-      events[0]?.pid === leafStart.pid && events[0]?.thread === leafStart.thread
+      events[0]?.pid === lateOwner.pid && events[0]?.thread === lateOwner.thread
         ? [...events, late]
         : events,
     );
     expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
-      "exceeds enclosing native bound",
+      ending === "sync-process"
+        ? "Synchronous child observation exceeds its native lifetime or lacks startup"
+        : "exceeds enclosing native bound",
     );
     rewrite((events) =>
       events.filter(
