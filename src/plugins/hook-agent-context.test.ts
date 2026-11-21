@@ -124,20 +124,30 @@ describe("exec request owners on agent hook contexts", () => {
           ...(ownerDeviceId ? { ownerDeviceId } : {}),
         },
       },
-      async () => ({
-        owners: captureExecRequestOwners({ runId, sessionId: "session-1" }) ?? [],
-        own: identity("user"),
-      }),
+      async () => {
+        const owners = captureExecRequestOwners({ runId, sessionId: "session-1" }) ?? [];
+        // A run re-entering with its own captured owners (for example a tool callback) continues nothing.
+        const reentered = await withExecRequestTurn(
+          { identity: { runId, sessionId: "session-2" }, owners },
+          async () => identity("user"),
+        );
+        return { owners, own: identity("user"), reentered };
+      },
     );
   const complete = (runId: string, owners: readonly ExecRequestOwner[]) =>
     withExecRequestTurn(
-      { identity: { runId, sessionKey: "agent:main:main", sessionId: "session-1" }, owners },
+      {
+        identity: { runId, sessionKey: "agent:main:main", sessionId: "session-1" },
+        owners,
+        continues: true,
+      },
       async () => identity("event"),
     );
 
   it("names the starting turn on an idle session's completion run", async () => {
     const a = await start("run-a", "device-a");
     expect(a.own).not.toHaveProperty("execRequestOwners");
+    expect(a.reentered).not.toHaveProperty("execRequestOwners");
     const fields = await complete("run-completion", a.owners);
     expect(fields).toEqual({
       execRequestOwners: [
@@ -185,7 +195,11 @@ describe("exec request owners on agent hook contexts", () => {
   it("gives before_tool_call the same owners as the agent hooks", async () => {
     const a = await start("run-a", "device-a");
     const fields = await withExecRequestTurn(
-      { identity: { runId: "run-completion", sessionId: "session-1" }, owners: a.owners },
+      {
+        identity: { runId: "run-completion", sessionId: "session-1" },
+        owners: a.owners,
+        continues: true,
+      },
       async () => ({
         agent: identity("event"),
         tool: buildAgentHookContextExecRequestFields(),

@@ -229,6 +229,8 @@ export async function withExecRequestTurn<T>(
   params: {
     identity: ExecRequestIdentity;
     owners?: readonly ExecRequestOwner[];
+    /** The owners came from another request's events; hooks then report them as ancestry. */
+    continues?: boolean;
     abortSignal?: AbortSignal;
   },
   run: () => Promise<T>,
@@ -251,7 +253,7 @@ export async function withExecRequestTurn<T>(
   const turn = {
     identity,
     owners,
-    continues: params.owners?.length ? true : (sameTurn?.continues ?? false),
+    continues: params.continues ?? sameTurn?.continues ?? false,
   };
   const stop = () => {
     // Restart interrupts commands with their run, overlapping their cleanup grace.

@@ -132,14 +132,16 @@ async function completionOwnerDevice(steeringDevice: string) {
     { catchErrors: false },
   );
   const completionRunId = `run-completion-${steeringDevice}`;
-  await withExecRequestTurn({ identity: { runId: completionRunId, sessionId }, owners }, () =>
-    runner.runAgentEnd(
-      { messages: [], success: true },
-      {
-        runId: completionRunId,
-        ...buildAgentHookContextIdentityFields({ trigger: "event" }),
-      },
-    ),
+  await withExecRequestTurn(
+    { identity: { runId: completionRunId, sessionId }, owners, continues: true },
+    () =>
+      runner.runAgentEnd(
+        { messages: [], success: true },
+        {
+          runId: completionRunId,
+          ...buildAgentHookContextIdentityFields({ trigger: "event" }),
+        },
+      ),
   );
   return seen;
 }
