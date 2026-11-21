@@ -46,6 +46,11 @@ Outputs `dist/OpenClaw.app`. By default this is a debug-configuration build
 with the development bundle identifier `ai.openclaw.mac.debug`, meant to run
 beside an installed release. To replace a release install, see
 [Replace an installed release app](#replace-an-installed-release-app).
+Set `OPENCLAW_MAC_SWIFT_JOBS=3` to cap the total Swift build job budget.
+The packager divides that budget across concurrent architectures and applies it
+to the app, native CLI, and MLX helper. The default is the available CPU count;
+a budget of one builds architectures sequentially. This caps jobs, not memory.
+
 Packaging requires a real signing identity by default and fails if none is
 available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
 permissions. See [macOS signing](/platforms/mac/signing).
