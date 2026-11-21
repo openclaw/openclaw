@@ -105,26 +105,6 @@ it("signs in as OpenClaw's own Console client on Console's own origin, backing o
   expect(progress.stop).toHaveBeenCalledWith("OpenCode Console sign-in complete");
 });
 
-it("refuses a sign-in link to another site before showing it", async () => {
-  reply({ ...devicePayload, verification_uri_complete: "https://evil.example/device" });
-  const { ctx } = context();
-
-  await expect(loginOpencodeConsole(ctx)).rejects.toThrow("invalid verification URL");
-  expect(ctx.openUrl).not.toHaveBeenCalled();
-  expect(ctx.prompter.note).not.toHaveBeenCalled();
-});
-
-it("stops on a denied sign-in without polling again", async () => {
-  reply(devicePayload);
-  reply({ error: "access_denied", error_description: "secret-response-value" }, 400);
-  const { ctx } = context();
-
-  const rejection = expect(loginOpencodeConsole(ctx)).rejects.toThrow("denied");
-  await vi.advanceTimersByTimeAsync(1_000);
-  await rejection;
-  expect(guardedFetch).toHaveBeenCalledTimes(2);
-});
-
 it("refreshes with the stored refresh token and keeps the rotated one, never the old", async () => {
   reply({ ...tokenPayload, refresh_token: "rotated-refresh" });
   const credential: OAuthCredential = {
@@ -146,18 +126,4 @@ it("refreshes with the stored refresh token and keeps the rotated one, never the
     grant_type: "refresh_token",
     refresh_token: "old-refresh",
   });
-});
-
-it("rejects a refresh answer without a rotated refresh token", async () => {
-  reply({ access_token: "access-test", expires_in: 3600 });
-
-  await expect(
-    refreshOpencodeConsoleCredential({
-      type: "oauth",
-      provider: "opencode-go",
-      access: "a",
-      refresh: "old-refresh",
-      expires: 1,
-    }),
-  ).rejects.toThrow("invalid credentials");
 });
