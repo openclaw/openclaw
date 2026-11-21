@@ -21,7 +21,7 @@ export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
           "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`.",
           'Date/time in the reader\'s time zone, only with an exact Unix time in seconds: `<tg-time unix="1647531900" format="wDT">Thu, Mar 17 2022, 15:45 UTC</tg-time>` (format `r` relative, else `w?[dD]?[tT]?`).',
           "Not MarkdownV2/parse_mode.",
-          "Lists, checklists, and inline formatting: Markdown (`- item`, `1. item`, `- [ ]`, `- [x]`, `**bold**`, `*italic*`, inline code, `[label](url)`) so Control UI also renders them; HTML only for supported rich features without Markdown equivalents. Collapse=`<details>` (not expandable blockquote).",
+          "Lists, checklists, and inline formatting: Markdown (`- item`, `1. item`, `- [ ]`, `- [x]`, `**bold**`, `*italic*`, inline code, `[label](url)`) so Control UI also renders them; HTML only for supported rich features without Markdown equivalents. Collapse: `<details>` for titled sections; `<blockquote expandable>` for a long text-only quote.",
           "Media https URLs only, block-level only, captions/credits when useful; buttons plain text; normal files via attachments.",
         ],
       };

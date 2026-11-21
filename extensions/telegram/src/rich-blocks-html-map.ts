@@ -2,6 +2,7 @@
 // and island discovery, on top of the fragment parser in rich-blocks-html.ts.
 import { TELEGRAM_HTML_BLOCK_ISLAND_TAGS } from "./format-html.js";
 import {
+  normalizeRichText,
   richTextToPlainString,
   type InputRichBlock,
   type InputRichBlockListItem,
@@ -442,6 +443,20 @@ function elementToBlock(
         return undefined;
       }
       const credit = cite ? htmlNodesToRichText(cite.children) : "";
+      // Telegram's expandable quote holds one text; quotes with lists, tables,
+      // code, or nested blocks keep their structure as an ordinary quote.
+      if (
+        parseHtmlAttrs(node.raw).has("expandable") &&
+        blocks.every((block) => block.type === "paragraph")
+      ) {
+        // A blank line keeps authored paragraph breaks distinct from <br>.
+        const text = normalizeRichText(
+          blocks.flatMap((block, index) => (index === 0 ? [block.text] : ["\n\n", block.text])),
+        );
+        return credit !== ""
+          ? { type: "expandable_blockquote", text, credit }
+          : { type: "expandable_blockquote", text };
+      }
       return credit !== ""
         ? { type: "blockquote", blocks, credit }
         : { type: "blockquote", blocks };

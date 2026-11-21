@@ -294,19 +294,65 @@ describe("block HTML islands", () => {
     expect(new Set(lines.map((line) => stringWidth(line))).size).toBe(1);
   });
 
-  it("splits oversized credited blockquotes with the credit on the last piece", () => {
+  it.each([
+    ["blockquote", "<blockquote>"],
+    ["expandable_blockquote", "<blockquote expandable>"],
+  ] as const)("splits oversized credited %s with the credit on the last piece", (type, open) => {
     const { blocks } = markdownToTelegramRichBlocks(
-      `<blockquote>${"q".repeat(50)} ${"r".repeat(50)}<cite>Author</cite></blockquote>`,
+      `${open}${"q".repeat(50)} ${"r".repeat(50)}<cite>Author</cite></blockquote>`,
     );
     const pieces = splitTelegramRichBlocks(blocks, { textLimit: 64 });
-    const quotes = pieces.flat().filter((piece) => piece.type === "blockquote");
+    const quotes = pieces.flat().filter((piece) => piece.type === type);
+    const credits = quotes.map((quote) => ("credit" in quote ? quote.credit : undefined));
     expect(quotes.length).toBeGreaterThan(1);
-    expect(quotes.filter((quote) => quote.credit !== undefined)).toHaveLength(1);
-    expect(quotes.at(-1)?.credit).toBe("Author");
+    expect(quotes).toHaveLength(pieces.flat().length);
+    expect(credits.filter((credit) => credit !== undefined)).toEqual(["Author"]);
+    expect(credits.at(-1)).toBe("Author");
     for (const chunk of pieces) {
       const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
+  });
+
+  it("maps authored <blockquote expandable> text to a collapsed quote with its credit", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      "<blockquote expandable>\n\nFirst **bold** line<br>second line\n\nNext paragraph\n<cite>Author</cite></blockquote>",
+    );
+    expect(blocks).toEqual([
+      {
+        type: "expandable_blockquote",
+        text: [
+          "First ",
+          { type: "bold", text: "bold" },
+          " line",
+          "\n",
+          "second line",
+          "\n\n",
+          "Next paragraph",
+        ],
+        credit: "Author",
+      },
+    ]);
+    expect(plainText).toBe("First bold line\nsecond line\n\nNext paragraph\n— Author");
+  });
+
+  it.each([
+    ["a quote without the attribute", "<blockquote>Line one<br>Line two</blockquote>", "paragraph"],
+    ["a Markdown quote", "> Line one\n> Line two", "paragraph"],
+    [
+      "an expandable quote with a list",
+      "<blockquote expandable><ul><li>item</li></ul></blockquote>",
+      "list",
+    ],
+    [
+      "an expandable quote with a nested quote",
+      "<blockquote expandable>Intro<blockquote>Inner</blockquote></blockquote>",
+      "blockquote",
+    ],
+  ] as const)("keeps %s as an ordinary quote", (_name, markdown, innerType) => {
+    const block = single(markdown);
+    assert(block.type === "blockquote");
+    expect(block.blocks.map(({ type }) => type)).toContain(innerType);
   });
 
   it("keeps rowspan tables atomic when splitting", () => {
