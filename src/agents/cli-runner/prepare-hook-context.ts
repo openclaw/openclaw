@@ -1,5 +1,6 @@
 import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
@@ -46,6 +47,11 @@ export async function prepareCliTurnHookContext(
     turnAudience,
     promptBuildHookContext: {
       runId: run.runId,
+      ...buildAgentHookContextCronFields({
+        runId: run.runId,
+        agentId: facts.agentId,
+        trigger: run.trigger,
+      }),
       agentId: facts.agentId,
       sessionKey: run.sessionKey,
       sessionId: run.sessionId,
