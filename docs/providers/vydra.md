@@ -9,7 +9,7 @@ title: "Vydra"
 The official Vydra plugin adds:
 
 - Image generation via `vydra/grok-imagine`
-- Video generation via `vydra/veo3` (text-to-video) and `vydra/kling` (image-to-video)
+- Video generation via `vydra/veo3` (text-to-video) and `vydra/kling` (motion control)
 - Speech synthesis via Vydra's ElevenLabs-backed TTS route
 
 OpenClaw uses the same `VYDRA_API_KEY` for all three capabilities.
@@ -92,8 +92,8 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
   <Accordion title="Video generation">
     Registered video models:
 
-    - `vydra/veo3` for text-to-video (rejects image reference inputs)
-    - `vydra/kling` for image-to-video (requires exactly one remote image URL)
+    - `vydra/veo3` for text-to-video (rejects image and video reference inputs)
+    - `vydra/kling` for motion control (requires one character image and one motion video)
 
     Set Vydra as the default video provider:
 
@@ -113,8 +113,8 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
 
     Notes:
 
-    - `vydra/kling` rejects local file uploads up front; only a remote image URL reference works.
-    - Vydra's `kling` HTTP route has been inconsistent about whether it requires `image_url` or `video_url`; the plugin sends the same remote image URL in both fields.
+    - `vydra/kling` requires distinct remote HTTPS image and motion-video URLs, as specified by the [native Kling API](https://www.vydra.ai/docs/models/kling). The image is never reused as the motion video.
+    - Image-only, buffered, extra and audio references are rejected before submission. The plugin does not upload local files.
     - The plugin stays conservative and does not forward undocumented style knobs such as aspect ratio, resolution, watermark, or generated audio.
 
     <Note>
