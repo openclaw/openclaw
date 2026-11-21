@@ -85,85 +85,67 @@ revoke cannot resurrect the credential.
 
 ## Caddy integration
 
-Integrate this routing into your existing HTTPS site. Keep your existing Basic
-usernames and bcrypt hashes, TLS setup, and Gateway origin policy. The example
-uses `127.0.0.1:18789` for the Gateway; replace it with your actual private
-upstream. Configure `gateway.auth.trustedProxy.userHeader` as `x-forwarded-user`.
-For a loopback upstream, retain the explicit loopback trust opt-in.
+Print the maintained drop-in once. This command needs no Gateway connection and
+writes only to stdout; it does not inspect or change your Caddy configuration:
+
+```bash
+openclaw shellgate caddy > shellgate.caddy
+```
+
+Add two imports and keep your existing Basic-auth account block. Place the
+second import **before Basic auth inside an ordered `route`**:
 
 ```caddy
+import shellgate.caddy
+
 control.example.com {
     route {
-        @verification path /plugins/shellgate/verify*
-        respond @verification 404
+        import shellgate 127.0.0.1:18789 X-Forwarded-User
 
-        request_header -X-Forwarded-*
-        request_header -Forwarded
-        request_header -X-Real-IP
-        request_header -X-Shellgate-*
-        request_header -X-OpenClaw-Scopes
-        request_header -X-Occ-*
-        request_header -Remote-User
-        request_header -X-Remote-User
-        request_header -X-Auth-Request-*
-        request_header -Cf-Access-*
-        request_header -Tailscale-*
-
-        @bearer header_regexp Authorization (?i)^Bearer(?:[[:space:]]|$)
-        handle @bearer {
-            route {
-                forward_auth 127.0.0.1:18789 {
-                    uri /plugins/shellgate/verify?
-                    copy_headers X-Shellgate-User>X-Forwarded-User
-                    header_up X-Forwarded-For {client_ip}
-                    header_up -Connection
-                    header_up -Upgrade
-                }
-                @missingSubject not header X-Forwarded-User *
-                respond @missingSubject 503
-            }
+        # Keep your existing Basic usernames and password hashes here.
+        basic_auth {
+            {$SHELLGATE_BASIC_USER} {$SHELLGATE_BASIC_HASH}
         }
-        handle {
-            route {
-                basic_auth {
-                    {$SHELLGATE_BASIC_USER} {$SHELLGATE_BASIC_HASH}
-                }
-                request_header X-Forwarded-User {http.auth.user.id}
-            }
-        }
-
         reverse_proxy 127.0.0.1:18789 {
+            header_up X-Forwarded-User {http.auth.user.id}
             header_up -Authorization
-            header_up X-Forwarded-For {client_ip}
         }
     }
 }
 ```
 
-The two Basic placeholders stand for an existing account and its password hash;
-preserve all accounts you intend to keep. Keep the `route` blocks: their order
-ensures Bearer failures cannot fall through to Basic auth. The verifier receives
-a plain GET with a query-free request URL and no body or WebSocket upgrade headers.
-Caddy still supplies the original URI in `X-Forwarded-Uri`; Shellgate does not
-read or log it. Removing `Connection` and `Upgrade` from the verification subrequest is required:
-the authentication check must not itself open a Gateway WebSocket. The final
-proxy preserves the original request body and supports WebSocket upgrades.
-Consumed proxy credentials are not forwarded to the Gateway.
+The snippet arguments are the private Gateway upstream and your configured
+`gateway.auth.trustedProxy.userHeader`. Change both occurrences of the upstream
+and identity header in this example to match your existing setup. For a
+loopback upstream, retain the explicit loopback trust opt-in. Preserve TLS,
+origin policy, all Basic accounts, and any separate node route. For a Bearer-only
+site, keep the two imports and ordered `route`, then use `respond 401` after the
+snippet import instead of the Basic-auth and final reverse-proxy blocks.
+
+The drop-in handles Bearer requests completely and leaves other requests to
+existing Basic auth. An invalid Bearer never falls back to Basic. It hides the
+verification endpoint, overwrites identity, strips client scope/provider claims,
+and removes the consumed Bearer credential before proxying. The existing Basic
+upstream should likewise remove `Authorization` after authenticating, as above.
+
+Verification uses a plain GET with a query-free URL, no body, and no WebSocket
+upgrade headers. Only the final proxy upgrades WebSockets. Caddy still supplies
+the original URI in `X-Forwarded-Uri`; Shellgate does not read or log it. The
+original method/body remain intact on the final upstream request.
 
 For a separate EDGE before Caddy, configure Caddy's `trusted_proxies` with only
-that EDGE's exact addresses, enable `trusted_proxies_strict`, and use its
-`client_ip_headers X-Forwarded-For` support. `{client_ip}` is calculated before
-the request headers are stripped. Without that trust configuration, it names
-the immediate peer instead. Never fabricate a non-loopback client address to
-make Gateway admission pass. A same-host browser whose actual client address is
-loopback needs a topology supported by the Gateway's attribution rules.
+that EDGE's exact addresses, enable `trusted_proxies_strict`, and use
+`client_ip_headers X-Forwarded-For`. The drop-in uses `{client_ip}`, calculated
+before stripping request headers. Without that trust, it names the immediate
+peer. Never fabricate a non-loopback client address to make admission pass.
 
-The example regenerates forwarded host/proto from Caddy's connection. If EDGE
-terminates TLS and connects to Caddy over HTTP, retain your existing safe,
-canonical external host/proto handling rather than copying this block unchanged.
-If you configured another identity header or identity-enrichment headers, strip
-those client claims too; do not mix this local-account route with an external
-provider's verified identity assertions.
+The drop-in is for local-account ingress, not an external identity provider's
+verified assertions. Strip any other custom identity/enrichment headers used by
+your Gateway. It regenerates host/proto from Caddy's connection: if EDGE
+terminates TLS and talks HTTP to Caddy, preserve your safe canonical external
+host/proto settings in the generated forwarding blocks. Validate with
+`caddy validate --config Caddyfile` before reloading. Regenerate and review the
+drop-in after an OpenClaw update; no proxy configuration is rewritten for you.
 
 ## Verification and revocation
 

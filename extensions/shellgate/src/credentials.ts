@@ -15,7 +15,7 @@ export const CREDENTIAL_STORE_OPTIONS = {
 } as const;
 
 const CREDENTIAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const BEARER = /^Bearer (sg_([0-9a-f-]{36})[.][A-Za-z0-9_-]{43})$/iu;
+const BEARER = /^Bearer +(sg_([0-9a-f-]{36})[.][A-Za-z0-9_-]{43})$/iu;
 
 function credentialId(value: unknown): string {
   if (typeof value !== "string" || !CREDENTIAL_ID.test(value)) {

@@ -63,6 +63,11 @@ describe("Shellgate proxy credential boundary", () => {
   it("keeps human/service bindings durable and makes rotation and revocation effective on the next request", async () => {
     const human = await credentials.issue("alice@example.test");
     const service = await credentials.issue("local:build-service");
+    for (const scheme of ["Bearer ", "bEaReR ", "Bearer   "]) {
+      const response = await fetch(url, { headers: { authorization: scheme + human.token } });
+      expect(response.status).toBe(204);
+      expect(response.headers.get("x-shellgate-user")).toBe(human.subject);
+    }
     for (const issued of [human, service]) {
       const response = await verify(issued.token);
       expect(response.status).toBe(204);

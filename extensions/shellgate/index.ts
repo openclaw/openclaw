@@ -22,6 +22,7 @@ export default definePluginEntry({
             name: "shellgate",
             description: "Manage proxy Bearer credentials",
             hasSubcommands: true,
+            machineOutput: () => true,
           },
         ],
       },
