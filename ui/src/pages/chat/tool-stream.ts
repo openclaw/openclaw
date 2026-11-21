@@ -19,7 +19,7 @@ import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import {
   cleanAgentActivityItem,
   isAgentActivityItem,
-} from "../../lib/protocol-validators.generated/activity.js";
+} from "../../lib/protocol-validators.generated/session.js";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";

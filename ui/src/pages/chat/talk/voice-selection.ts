@@ -3,7 +3,7 @@ import { TALK_VOICE_CHANGE_TIMEOUT_MS } from "../../../../../packages/gateway-pr
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/session-input.js";
+import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/session.js";
 
 registerChatComposerEnglish();
 

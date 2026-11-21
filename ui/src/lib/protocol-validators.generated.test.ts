@@ -37,19 +37,15 @@ import {
 import { TalkVoiceChangeEventSchema } from "../../../packages/gateway-protocol/src/schema/talk-voice.js";
 import { readTranscriptDisplayPosition } from "../../../src/chat/transcript-display-position.js";
 import { CHAT_TRANSCRIPT_METADATA_KEYS } from "../pages/chat/chat-transcript-metadata.ts";
-import * as activityChecks from "./protocol-validators.generated/activity.js";
 import * as approvalChecks from "./protocol-validators.generated/approvals.js";
 import * as boardChecks from "./protocol-validators.generated/board.js";
 import * as historyStateChecks from "./protocol-validators.generated/history-state.js";
-import * as sessionInputChecks from "./protocol-validators.generated/session-input.js";
-import * as transcriptChecks from "./protocol-validators.generated/transcript.js";
+import * as sessionChecks from "./protocol-validators.generated/session.js";
 
 const checks = {
-  ...activityChecks,
+  ...sessionChecks,
   ...approvalChecks,
   ...boardChecks,
-  ...sessionInputChecks,
-  ...transcriptChecks,
   ...historyStateChecks,
   isSessionParticipantIdentity,
 };

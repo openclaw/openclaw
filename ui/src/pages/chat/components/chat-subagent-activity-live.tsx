@@ -2,7 +2,7 @@ import { createMemo, createStore, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../../../lib/observer-digest.ts";
-import { isSessionObserverDigest } from "../../../lib/protocol-validators.generated/activity.js";
+import { isSessionObserverDigest } from "../../../lib/protocol-validators.generated/session.js";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import {
   areUiSessionKeysEquivalent,

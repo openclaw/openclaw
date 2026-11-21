@@ -50,16 +50,9 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputBase = "ui/src/lib/protocol-validators.generated";
 const schemaRoot = "../../../../packages/gateway-protocol/src/schema/";
-type Group =
-  | "activity"
-  | "approvals"
-  | "session-input"
-  | "transcript"
-  | "board"
-  | "history-state"
-  | "sender-identity";
+type Group = "session" | "approvals" | "board" | "history-state" | "sender-identity";
 const additionalLintRules: Partial<Record<Group, string[]>> = {
-  activity: ["eslint/curly"],
+  session: ["eslint/curly"],
   approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
@@ -79,31 +72,31 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "AgentActivityItem",
     AgentActivityItemSchema,
     'import("' + schemaRoot + 'logs-chat.js").AgentActivityItem',
-    "activity",
+    "session",
   ],
   [
     "AgentRuntimeRestrictionErrorDetails",
     AgentRuntimeRestrictionErrorDetailsSchema,
     'import("../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js").AgentRuntimeRestrictionErrorDetails',
-    "session-input",
+    "session",
   ],
   [
     "SessionObserverDigest",
     SessionObserverDigestSchema,
     'import("' + schemaRoot + 'sessions.js").SessionObserverDigest',
-    "activity",
+    "session",
   ],
   [
     "SessionNarrationEvent",
     SessionNarrationEventSchema,
     'import("' + schemaRoot + 'sessions.js").SessionNarrationEvent',
-    "activity",
+    "session",
   ],
   [
     "SessionReactionEvent",
     SessionReactionEventSchema,
     'import("' + schemaRoot + 'sessions-reactions.js").SessionReactionEvent',
-    "activity",
+    "session",
   ],
   [
     "SessionApprovalEvent",
@@ -121,13 +114,13 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "SessionsGoalUpdateParams",
     SessionsGoalUpdateParamsSchema,
     'import("' + schemaRoot + 'sessions-goal.js").SessionsGoalUpdateParams',
-    "session-input",
+    "session",
   ],
   [
     "SessionsGoalClearParams",
     SessionsGoalClearParamsSchema,
     'import("' + schemaRoot + 'sessions-goal.js").SessionsGoalClearParams',
-    "session-input",
+    "session",
   ],
   ...(
     [
@@ -142,19 +135,19 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     `Session${key.charAt(0).toUpperCase()}${key.slice(1)}`,
     SessionsCreateParamsSchema.properties[key],
     `import("${schemaRoot}sessions-create.js").SessionsCreateParams["${key}"]`,
-    "session-input",
+    "session",
   ]),
   [
     "SessionPermissionMode",
     SessionPermissionModeSchema,
     'import("' + schemaRoot + 'sessions-row.js").SessionPermissionMode',
-    "session-input",
+    "session",
   ],
   [
     "SessionToolOverrides",
     SessionToolOverridesSchema,
     'import("' + schemaRoot + 'sessions-row.js").SessionToolOverrides',
-    "session-input",
+    "session",
   ],
   [
     "ChatHistoryState",
@@ -174,31 +167,31 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "ChatTranscriptMetadata",
     Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS),
     'import("../../pages/chat/chat-transcript-metadata.ts").ChatTranscriptMetadata',
-    "transcript",
+    "session",
   ],
   [
     "ProgressCard",
     ProgressCardSchema,
     'import("' + schemaRoot + 'progress-card.js").ProgressCard',
-    "transcript",
+    "session",
   ],
   [
     "MessageReactionSummary",
     MessageReactionSummarySchema,
     'import("' + schemaRoot + 'sessions-reactions.js").MessageReactionSummary',
-    "transcript",
+    "session",
   ],
   [
     "TalkVoiceChangeEvent",
     TalkVoiceChangeEventSchema,
     'import("' + schemaRoot + 'talk-voice.js").TalkVoiceChangeEvent',
-    "session-input",
+    "session",
   ],
   [
     "SessionFileReadMetadata",
     Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]),
     'Pick<import("' + schemaRoot + 'sessions.js").SessionsFilesGetResult, "root" | "source">',
-    "session-input",
+    "session",
   ],
 ];
 
@@ -230,28 +223,24 @@ async function main() {
       return value;
     }`;
   for (const group of [
-    "activity",
+    "session",
     "approvals",
-    "session-input",
-    "transcript",
     "history-state",
     "sender-identity",
     "board",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
-    // Share repeated shapes only within each existing lazy boundary.
-    const shareSchemaFunctions = ["activity", "approvals", "session-input"].includes(group);
+    // Session activity, inputs and transcript checks ship in the same shared boot chunk.
+    // Intern their repeated shapes together; leave independently loaded groups separate.
+    const shareSchemaFunctions = group === "session" || group === "approvals";
     const compiled = await compileStandaloneValidators(
       selected.map(([name, schema]) => ({
         name: `is${name}`,
-        schema:
-          name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
-            ? Intern(schema)
-            : schema,
+        schema: name === "ChatHistoryState" ? Intern(schema) : schema,
       })),
       { resolveDir: repoRoot, shareSchemaFunctions, hoistSchemaFunctions: shareSchemaFunctions },
     );
-    const source = [compiled, ...(group === "activity" ? [cleaner] : [])].join("\n");
+    const source = [compiled, ...(group === "session" ? [cleaner] : [])].join("\n");
     const result = await build({
       stdin: { contents: source, resolveDir: repoRoot, loader: "js" },
       bundle: true,
@@ -274,7 +263,7 @@ async function main() {
     const declaration = selected
       .map(([name, , type]) => `export function is${name}(value: unknown): value is ${type};`)
       .concat(
-        group === "activity"
+        group === "session"
           ? ["export function cleanAgentActivityItem(value: unknown): unknown;"]
           : [],
       )

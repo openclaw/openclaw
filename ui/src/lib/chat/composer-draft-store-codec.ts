@@ -1,5 +1,5 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
-import { isSessionPermissionMode } from "../protocol-validators.generated/session-input.js";
+import { isSessionPermissionMode } from "../protocol-validators.generated/session.js";
 import type {
   DurableComposerDraft,
   DurableComposerDraftAttachment,

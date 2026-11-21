@@ -13,7 +13,7 @@ import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import {
   isSessionNarrationEvent,
   isSessionObserverDigest,
-} from "../lib/protocol-validators.generated/activity.js";
+} from "../lib/protocol-validators.generated/session.js";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
