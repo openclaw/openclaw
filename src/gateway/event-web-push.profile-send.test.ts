@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   identity: vi.fn(),
   preferences: vi.fn(),
+  prepareAttempts: 1,
 }));
 
 vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
@@ -18,6 +19,10 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   withCurrentDevicePairingSnapshot: (async (_stateDir, prepare, preparePublication) => {
     if (preparePublication) {
       await preparePublication();
+    }
+    // Simulates an owner that discards earlier preparations for a fresher snapshot.
+    for (let attempt = 1; attempt < mocks.prepareAttempts; attempt += 1) {
+      prepare(mocks.pairing());
     }
     return prepare(mocks.pairing())?.start();
   }) satisfies typeof import("../infra/device-pairing-worker.js").withCurrentDevicePairingSnapshot,
@@ -101,6 +106,7 @@ const expectSend = (expected: object) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.prepareAttempts = 1;
   mocks.hasSubscriptions.mockResolvedValue(true);
   mocks.sender.mockResolvedValue(mocks.send);
   mocks.profiles.mockResolvedValue({ readCurrentIdentity: mocks.identity, release: () => {} });
@@ -164,39 +170,44 @@ describe("profile-targeted send", () => {
     expectSend({ subscriptions: [active] });
   });
 
-  it("counts category, mute, quiet-hours and agent-filter suppression as skipped", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.UTC(2026, 10, 21, 12, 0));
-    try {
-      const delivered = makeSubscription("bob-delivered", "bob");
-      setRecipients(
-        delivered,
-        makeSubscription("bob-category-off", "bob", {
-          categories: { agentFinished: false },
-        }),
-        makeSubscription("bob-muted", "bob", { enabled: false }),
-        makeSubscription("bob-quiet", "bob", {
-          quietHours: {
-            enabled: true,
-            startMinute: 11 * 60,
-            endMinute: 13 * 60,
-            timeZone: "UTC",
-          },
-        }),
-        makeSubscription("bob-other-agent", "bob", { agentIds: ["ops"] }),
-      );
+  it.each([1, 2])(
+    "counts category, mute, quiet-hours and agent-filter suppression as skipped once (%i preparations)",
+    async (attempts) => {
+      mocks.prepareAttempts = attempts;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.UTC(2026, 10, 21, 12, 0));
+      try {
+        const delivered = makeSubscription("bob-delivered", "bob");
+        setRecipients(
+          delivered,
+          makeSubscription("bob-category-off", "bob", {
+            categories: { agentFinished: false },
+          }),
+          makeSubscription("bob-muted", "bob", { enabled: false }),
+          makeSubscription("bob-quiet", "bob", {
+            quietHours: {
+              enabled: true,
+              startMinute: 11 * 60,
+              endMinute: 13 * 60,
+              timeZone: "UTC",
+            },
+          }),
+          makeSubscription("bob-other-agent", "bob", { agentIds: ["ops"] }),
+        );
 
-      await expect(sendToBob({ agentId: "research" })).resolves.toEqual({
-        sent: 1,
-        failed: 0,
-        skipped: 4,
-        pruned: 0,
-      });
-      expectSend({ subscriptions: [delivered] });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await expect(sendToBob({ agentId: "research" })).resolves.toEqual({
+          sent: 1,
+          failed: 0,
+          skipped: 4,
+          pruned: 0,
+        });
+        expect(mocks.send).toHaveBeenCalledOnce();
+        expectSend({ subscriptions: [delivered] });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps caller text off Private lock screens", async () => {
     const identified = makeSubscription("bob-identified", "bob", { label: "Desk" });
