@@ -127,6 +127,16 @@ describe("resolveMcpLoopbackScopedTools", () => {
       expect(toolNames(scoped)).toEqual(expected);
     },
   );
+
+  it("propagates exact grant names as a construction cap while policy expressions keep full construction", async () => {
+    await resolveExact(scopeParams({ toolsAllow: ["write"] }));
+    const exact = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(exact?.constructionToolsAllow).toEqual(["write"]);
+
+    await resolvePolicy(scopeParams({ toolsAllow: ["write"] }));
+    const policy = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(policy?.constructionToolsAllow).toBeUndefined();
+  });
 });
 
 describe("McpLoopbackToolCache", () => {

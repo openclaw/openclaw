@@ -341,6 +341,11 @@ async function constructMcpLoopbackTools(
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
     toolsAllow,
+    // Exact grants carry literal tool names, so they double as a construction
+    // cap: a plugin that cannot supply any granted name is never loaded. Policy
+    // expressions may reference groups or plugin ids whose expansion this
+    // construction-time allowlist cannot express, so they keep full construction.
+    constructionToolsAllow: mode === "exact" ? toolsAllow : undefined,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
