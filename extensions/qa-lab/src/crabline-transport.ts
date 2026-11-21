@@ -537,6 +537,23 @@ export async function createQaCrablineTransportAdapter(params: {
               },
             },
           };
+        } else if (selection.channel === "matrix") {
+          // Smoke rooms are ordinary groups. They used to get replies only
+          // because two members counted as a direct message.
+          const matrix = config.channels?.matrix;
+          channels = {
+            matrix: {
+              ...matrix,
+              groups: {
+                ...matrix?.groups,
+                "*": {
+                  ...matrix?.groups?.["*"],
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          };
         } else {
           if (selection.channel !== "telegram") {
             return config as QaTransportGatewayConfig;
