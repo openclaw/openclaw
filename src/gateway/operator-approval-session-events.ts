@@ -122,7 +122,8 @@ export function createOperatorApprovalSessionEventRuntime(params: {
               client,
               ...readOperatorApprovalRequestSource(record),
               prepared: prepareProjectedApprovalSessionAccess({
-                cfg: getRuntimeConfig(), client,
+                cfg: getRuntimeConfig(),
+                client,
                 projection: params.getSessionRowProjection?.(),
               }),
             }) && canAccessOperatorApproval({ client, binding: record })),

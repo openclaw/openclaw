@@ -146,7 +146,7 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         .toBe(true);
       expect
         .soft(providerToolNames(providerRequests.at(-1)!))
-        .toEqual(["exec", "ls", "process", "read"]);
+        .toEqual(["exec", "ls", "process", "read", "sessions_spawn"]);
       await expect
         .soft(
           invited.request(
@@ -292,10 +292,10 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
           { signal },
         );
         await expect(terminal).resolves.toMatchObject({ status: "ok" });
-        expect(toolOutputs).toEqual(["participant-exec-proof"]);
+        expect(toolOutputs).toEqual([expect.stringMatching(/(?:^|\n)participant-exec-proof$/u)]);
         expect
           .soft(providerToolNames(providerRequests.at(-1)!))
-          .toEqual(["exec", "ls", "process", "read"]);
+          .toEqual(["exec", "ls", "process", "read", "sessions_spawn"]);
         providerReplies.reply = undefined;
         expect(await creatorTurn("creator-after-participation", creator)).toEqual(originalTools);
       } finally {

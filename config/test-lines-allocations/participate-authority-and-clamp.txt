@@ -1,7 +1,7 @@
 # Participate epic, measured against the branch merge-base with origin/main.
-# Reconciled against 0e44574217ec7b4ed55c001ddf70a422699a1c01, the actual
-# merge-base after the feature's follow-on repairs, rather than a narrowed stage.
-# The whole feature adds 7,575 net test lines; all allocation records total 7,175
+# Reconciled against 39dabcb06b86877a72eab393f8f5f118bf2b8194, the actual
+# merge-base after rebase2, rather than a narrowed stage.
+# The whole feature adds 7,643 net test lines; all allocation records total 7,243
 # above the ordinary 400-line allowance. Stage B itself adds 1,622 lines and has
 # its own 1,222-line excess record. This corrects the earlier accumulated feature
 # budget, not a production or test assertion exemption. The additional cases

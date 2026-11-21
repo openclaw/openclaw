@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   ApprovalChannelReviewer,
@@ -39,6 +38,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 import { assertValidParams, type Validator } from "./validation.js";
 
 export {
+  bindApprovalReviewerDeviceIds,
   listVisiblePendingApprovalRequests,
   resolvePendingApprovalRecord,
   respondPendingApprovalLookupError,
@@ -103,16 +103,6 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
-}
-
-export function bindApprovalReviewerDeviceIds<TPayload>(params: {
-  record: ExecApprovalRecord<TPayload>;
-  deviceIds?: readonly string[] | null;
-}): void {
-  const deviceIds = normalizeUniqueTrimmedStringList(params.deviceIds);
-  if (deviceIds.length > 0) {
-    params.record.approvalReviewerDeviceIds = deviceIds;
-  }
 }
 
 export function respondApprovalStorageUnavailable(params: {
@@ -616,7 +606,10 @@ export async function handleApprovalResolve<
   // Admission: resolving needs invite access to the approval's session, checked once here.
   if (
     !params.authority.isCurrent() ||
-    !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot))
+    !(
+      canResolveParticipationExecApproval(resolved.snapshot, params.client) ??
+      retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot))
+    )
   ) {
     respondUnknownOrExpiredApproval(params.respond);
     return;

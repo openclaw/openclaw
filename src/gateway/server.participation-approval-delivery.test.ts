@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "./exec-approval-manager.test-support.js";
@@ -51,6 +52,7 @@ it("delivers live participation approval requests and resolutions only to the cr
   const fixture = await createPreparedTestApprovalManager(test);
   await fixture.run(() =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      setRuntimeConfigSnapshot({});
       const { manager } = fixture;
       const entries = audience();
       const clients = new GatewayClientRegistry();
@@ -321,6 +323,7 @@ it("selects entitled exec records before unrelated reviewers can exhaust replay"
   const fixture = await createPreparedTestApprovalManager(test);
   await fixture.run(() =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      setRuntimeConfigSnapshot({});
       const { manager } = fixture;
       const entries = audience();
       const ordinary = manager.create({ command: "ordinary", sessionKey }, 60_000);
@@ -378,6 +381,47 @@ it("selects entitled exec records before unrelated reviewers can exhaust replay"
         expect(replay.isCurrent()).toBe(true);
         replay.release();
       }
+    }),
+  );
+});
+
+it("delivers child approval to its original creator with an invited-only role", async (test) => {
+  const fixture = await createPreparedTestApprovalManager(test);
+  await fixture.run(() =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      setRuntimeConfigSnapshot({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "invited",
+            definitions: {
+              invited: {
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+                sessions: { others: "invited" },
+              },
+            },
+          },
+        },
+      });
+      const creator = await ensureCanonicalUserProfileForEmail("creator@approval.test");
+      const { manager } = fixture;
+      const entries = audience();
+      entries[0]!.client.authenticatedUserProfile = dispatchProfile(creator.id);
+      const clients = new GatewayClientRegistry();
+      entries.forEach(({ client }) => clients.add(client));
+      const context = createGatewayRequestContext(
+        makeContextParams({ clients, execApprovalManager: manager }),
+      );
+      const record = manager.create(
+        { command: "echo child", agentId: "main", sessionKey: "agent:main:subagent:child" },
+        60_000,
+      );
+      record.participation = { ...binding, creatorProfileId: creator.id, creatorOnly: true };
+      await manager.register(record, 60_000);
+      expect([...context.getApprovalClientConnIds!({ approvalKind: "exec", record })]).toEqual([
+        "creator",
+      ]);
     }),
   );
 });
