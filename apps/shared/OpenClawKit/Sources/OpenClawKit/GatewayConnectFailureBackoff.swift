@@ -29,7 +29,10 @@ struct GatewayConnectFailureBackoff {
             self.reset()
             return
         }
-        let delayMs = pendingDeviceTokenRetry ? min(self.milliseconds, 250) : self.milliseconds
+        // Only the rejection that grants a device-token retry earns the short delay; a transport
+        // failure while that retry stays pending backs off like any other.
+        let grantsDeviceTokenRetry = pendingDeviceTokenRetry && error is GatewayConnectAuthError
+        let delayMs = grantsDeviceTokenRetry ? min(self.milliseconds, 250) : self.milliseconds
         let clock = ContinuousClock()
         self.retryNotBefore = clock.now.advanced(by: .milliseconds(Int64(delayMs.rounded(.up))))
         self.milliseconds = min(self.milliseconds * 2, 30000)
