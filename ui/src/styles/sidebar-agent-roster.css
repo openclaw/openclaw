@@ -50,39 +50,17 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-roster-session-filter {
-  min-width: 0;
-  max-width: 50%;
   margin-inline-start: auto;
 }
 
 .sidebar-session-group-actions.sidebar-roster-session-filter__trigger {
-  width: auto;
-  min-width: var(--sidebar-session-group-action-size);
-  max-width: 100%;
-  padding-inline: 4px;
   opacity: 1;
   pointer-events: auto;
 }
 
-.sidebar-roster-session-filter__trigger > .oc-menu-item__label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .sidebar-roster-session-filter__trigger--active {
   background: var(--bg-hover);
-  color: var(--text);
-}
-
-.sidebar-roster-session-filter__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-roster-session-filter__name:empty {
-  display: none;
+  color: var(--accent);
 }
 
 .sidebar-roster-session-filter .oc-menu {

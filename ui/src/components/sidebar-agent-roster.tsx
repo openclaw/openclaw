@@ -313,14 +313,7 @@ export function SidebarAgentRoster(props: {
                             sessionAgentFilterId() !== null,
                         },
                       ]}
-                      trigger={
-                        <>
-                          <span class="sidebar-roster-session-filter__name">
-                            {sessionAgentFilterName()}
-                          </span>
-                          <Icon name="listFilter" />
-                        </>
-                      }
+                      trigger={<Icon name="listFilter" />}
                       placement="bottom-end"
                       lazy
                       items={sessionAgentFilterItems()}

@@ -106,11 +106,13 @@ describe("AppSidebar agent roster", () => {
     expect(sessionKeys(sidebar)).toEqual([pin, forge]);
     expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
     expect(context.agentSelection.state.selectedId).toBe("main");
-    expect(trigger.textContent).toBe("Forge");
+    expect(trigger.textContent).toBe("");
+    expect(trigger.getAttribute("aria-description")).toBe("Forge");
     await select("agent:recent");
     expect(sessionKeys(sidebar)).toEqual([pin]);
     expect(section.textContent).toContain("No matching sessions for this agent.");
     await select("all");
+    expect(trigger.hasAttribute("aria-description")).toBe(false);
     expect(sessionKeys(sidebar)).toHaveLength(16);
     expect(sessionKeys(sidebar)).not.toContain(forge);
   });
