@@ -135,14 +135,13 @@ logs retain the raw diagnostic; log exports apply their normal redaction.
 Missing or ambiguous edit anchors are input errors. Correct the patch or edit
 after inspecting the current file. Code Mode never automatically retries failed
 guest code or nested tool calls; earlier actions in the cell may have completed.
-After three consecutive identical failed calls, the agent's always-on
-[tool-error guard](/tools/loop-detection#repeated-tool-errors) blocks that exact
-action and gives the model one opportunity to change its approach. Repeating the
-blocked action ends the turn with a recorded, visible diagnostic. When no plugin
-middleware matches the tool, Code Mode's changing telemetry counters do not reset
-this failure streak; changed error results, changed arguments, and successful
-calls do. Matching middleware can change the result in place; its final result is
-compared in full, including retained telemetry.
+The agent's [tool repeat guard](/tools/loop-detection#how-it-works) is on by
+default. It compares consecutive model tool calls by tool name and canonical
+arguments, regardless of success, failure, or changing telemetry. The third identical call
+still runs and receives a note asking the model to change its approach. The
+twentieth does not run; OpenClaw ends the turn with `tool_repeat_limit` and a
+visible diagnostic. A different call or new user input resets the count. Tools
+that declare `repeatable`, including Code Mode `wait`, are exempt.
 
 Node worker heap exhaustion reports `runtime_unavailable` with the configured
 heap allowance and guidance to paginate results or retain less guest data.
