@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -5,12 +6,14 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { prepareSandboxMountSources } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
-import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { runWorkspaceFilesystemOperation } from "../workspace-filesystem.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { ensureSandboxWorkspace } from "../workspace.js";
-import type { PreparedSandboxWorkspaceSelection, ResolveSandboxContextParams } from "./context.js";
+import type { prepareLocalSandboxWorkspace } from "./local-workspace.js";
 import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
+import type { resolveSandboxSession } from "./session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
@@ -19,8 +22,16 @@ const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
 );
 
 export async function ensureSandboxWorkspaceLayout(
-  params: ResolveSandboxContextParams,
-  selected: PreparedSandboxWorkspaceSelection,
+  params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    skillsSnapshot?: SkillSnapshot;
+    execOverrides?: ExecPolicyOverrides;
+    assertCurrent?: () => void;
+  },
+  selected: NonNullable<Awaited<ReturnType<typeof resolveSandboxSession>>> & {
+    localWorkspace?: Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>;
+  },
   guard?: WorkspaceStateGuard,
   lifetime?: DisposableStack,
 ): Promise<{

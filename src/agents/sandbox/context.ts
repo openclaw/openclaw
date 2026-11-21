@@ -72,10 +72,6 @@ export type ResolveSandboxContextParams = {
   preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
-export type PreparedSandboxWorkspaceSelection = Awaited<
-  ReturnType<typeof prepareSandboxWorkspaceSelection>
->;
-
 type ResolvedSandboxSession = NonNullable<Awaited<ReturnType<typeof resolveSandboxSession>>>;
 
 function assertSandboxSessionSecretOwnerAvailable(
