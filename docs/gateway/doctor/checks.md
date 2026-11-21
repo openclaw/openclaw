@@ -20,7 +20,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Native filesystem (`fs-safe`) and process (`proc-safe`) helper status. Missing helpers report the library's diagnostic reason and repair guidance; explicitly disabled native mode is informational.
     - Windows AppContainer child-pipe support. With libuv older than 1.53.0, child commands fail promptly instead of hanging. Run OpenClaw outside the AppContainer or use a Node build with libuv 1.53.0 or newer.
     - Problem-only skill and plugin notes; healthy inventory stays in `openclaw skills check` and `openclaw plugins list`.
-    - Runtime tool schema checks report failing MCP servers and continue with the remaining checks. If subprocess cleanup cannot be confirmed, Doctor retains the server findings and adds a cleanup diagnostic; inspect or stop the affected MCP processes before rerunning Doctor.
+    - Runtime tool schema checks report recognized remote MCP network, authentication, and deadline failures as warnings (`mcp-service-unavailable`), so these outages do not fail an error-threshold Doctor gate. Local stdio startup failures, malformed catalogs, protocol errors, and unknown failures remain errors. Generic connection closures and legacy SSE POST failures without a typed HTTP status are not downgraded. If subprocess cleanup cannot be confirmed, Doctor retains the server findings and adds an error diagnostic; inspect or stop the affected MCP processes before rerunning Doctor.
     - During updates, Doctor defers MCP connections and records each enabled server with a follow-up command. Core tool schemas are still checked. Run `openclaw doctor --lint --only core/doctor/runtime-tool-schemas` after the update to inspect MCP tools.
 
   </Accordion>
