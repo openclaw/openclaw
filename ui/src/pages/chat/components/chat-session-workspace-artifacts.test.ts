@@ -11,7 +11,7 @@ import {
 import { createSidebarContentRecorder } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
-  openSessionWorkspaceManagedArtifact,
+  sessionWorkspaceFileLinkProps,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
@@ -110,7 +110,16 @@ describe("session workspace artifacts", () => {
       }
       return content;
     };
-    return { artifact, request, state, fetchMock, url: `/mount${url}`, loadedContent };
+    const { onOpenManagedArtifact } = sessionWorkspaceFileLinkProps(state, undefined, undefined);
+    return {
+      artifact,
+      request,
+      state,
+      fetchMock,
+      url: `/mount${url}`,
+      loadedContent,
+      onOpenManagedArtifact,
+    };
   }
 
   async function createBinaryArtifact() {
@@ -148,7 +157,7 @@ describe("session workspace artifacts", () => {
     const fixture = createArtifactHost("application/json", "", { id: managedId });
     fixture.state.connected = false;
     const show = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+    fixture.onOpenManagedArtifact(managedHref);
     expect(show).toHaveBeenCalledWith({
       message: "Reconnect to open this attachment.",
       severity: "error",
@@ -164,7 +173,7 @@ describe("session workspace artifacts", () => {
     createSessionWorkspaceProps(fixture.state).onOpenArtifact(managedId);
     await fixture.loadedContent();
     const original = fixture.state.sessionWorkspaceState!.previews[0]!;
-    openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+    fixture.onOpenManagedArtifact(managedHref);
     const linked = fixture.state.sessionWorkspaceState!.previews.at(-1)!;
     await linked.readResult;
     expect(fixture.state.sessionWorkspaceState!.previews).toEqual([original]);
@@ -186,7 +195,7 @@ describe("session workspace artifacts", () => {
           : condition === "malformed"
             ? managedHref.replace("/full", "/invalid")
             : managedHref;
-      expect(openSessionWorkspaceManagedArtifact(fixture.state, href)).toBe(true);
+      expect(fixture.onOpenManagedArtifact(href)).toBe(true);
       const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
       await preview.readResult;
       expect(preview.content).toMatchObject({
@@ -199,9 +208,7 @@ describe("session workspace artifacts", () => {
       expect(
         fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
       ).toEqual([]);
-      expect(
-        openSessionWorkspaceManagedArtifact(fixture.state, `https://other.test${managedHref}`),
-      ).toBe(false);
+      expect(fixture.onOpenManagedArtifact(`https://other.test${managedHref}`)).toBe(false);
     },
   );
 
@@ -219,7 +226,7 @@ describe("session workspace artifacts", () => {
         await metadata.promise;
         return { artifacts: [fixture.artifact] };
       });
-      openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
+      fixture.onOpenManagedArtifact(managedHref);
       const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
       await started.promise;
       if (retirement === "close") {
