@@ -29,6 +29,10 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -73,8 +77,12 @@ function createCurrentSourceMessageTool(
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+const turnCapabilities: string[] = [];
 
 afterEach(() => {
+  for (const token of turnCapabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
   clearRuntimeConfigSnapshot();
 });
 
@@ -82,6 +90,16 @@ describe("WebChat message tool internal source reply", () => {
   it.each([
     { sessionKey: "agent:main:dashboard:cli", currentChannelProvider: "webchat", delivers: true },
     { sessionKey: "agent:main:webchat:dm:cli", currentChannelProvider: "webchat", delivers: true },
+    {
+      sessionKey: "agent:main:telegram:direct:123:thread:123:456",
+      currentChannelProvider: "webchat",
+      delivers: true,
+    },
+    {
+      sessionKey: "agent:main:discord:channel:123",
+      currentChannelProvider: "webchat",
+      delivers: true,
+    },
     {
       sessionKey: "agent:main:telegram:direct:123",
       currentChannelProvider: "telegram",
@@ -104,6 +122,13 @@ describe("WebChat message tool internal source reply", () => {
           );
           const scope = { agentId: "main", sessionKey, sessionId, storePath };
           await replaceSessionEntry(scope, { sessionId, updatedAt: 2 });
+          const token = mintMessageActionTurnCapability({
+            ...scope,
+            runId,
+            toolContext: { currentChannelProvider },
+            expiresWithRun: true,
+          });
+          turnCapabilities.push(token);
           const tool = createCurrentSourceMessageTool({
             agentSessionKey: sessionKey,
             runSessionKey: sessionKey,
@@ -111,6 +136,7 @@ describe("WebChat message tool internal source reply", () => {
             agentId: "main",
             runId,
             currentChannelProvider,
+            messageActionTurnCapability: token,
           });
           const send = tool.execute("current-progress", {
             action: "send",

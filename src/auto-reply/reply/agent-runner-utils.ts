@@ -387,6 +387,7 @@ export function mintReplyMessageActionTurnCapability(
       runId,
       sessionKey,
       sessionId: context.sessionId,
+      toolContext: { currentChannelProvider: "webchat" },
       assertDashboardReadCurrent: dashboard?.assertCurrent,
       promptReactionSource:
         promptSource && recorder ? { source: promptSource, recorder } : undefined,
