@@ -84,8 +84,11 @@ to a Gateway without the presence capability omit the tool.
 To query the same snapshot from the CLI:
 
 ```bash
-openclaw gateway call presence.query --params '{"action":"person","person":"me","include":["devices"]}' --json
+openclaw presence query --action person --person me --include devices --json
 ```
+
+Operators who still need the raw RPC can use
+`openclaw gateway call presence.query --params '…' --json`.
 
 ## Presence fields (what shows up)
 

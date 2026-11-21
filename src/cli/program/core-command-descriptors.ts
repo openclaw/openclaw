@@ -36,6 +36,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
     parentDefaultHelp: true,
   }),
   command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),
+  command("presence", "Query people and devices presence via the Gateway", true),
   command(
     "database",
     "Inspect database compatibility, manage ownership, and port database stores",
