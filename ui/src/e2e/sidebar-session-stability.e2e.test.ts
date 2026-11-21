@@ -165,8 +165,8 @@ suite.define(() => {
           const geometry = () =>
             child.evaluate((el) => {
               const title = el.querySelector(".sidebar-recent-session__name")!;
-              const { x, y, width, height } = title.getBoundingClientRect();
-              return [x, y, width, height, el.getBoundingClientRect().height];
+              const { x, y, width: titleWidth, height } = title.getBoundingClientRect();
+              return [x, y, titleWidth, height, el.getBoundingClientRect().height];
             });
           const running = await geometry();
           const frameProbe = await child.evaluateHandle((el) => {
