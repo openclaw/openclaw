@@ -33,6 +33,7 @@ import {
   beginSessionEffect,
   captureSessionTarget,
   getSessionMutationCount,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
 import {
   retireSessionControllerInput,
@@ -937,3 +938,67 @@ it.each([
     }
   },
 );
+
+it("Stop from the source's own cleanup does not wait out the queued drain", async () => {
+  const target = await seedExecutionTarget("self-source-drain", "original-revision");
+  const { owner, releaseTail, execution, registration } = await holdExecution(target);
+  let pending: ReturnType<typeof killSessionSubagentRuns> | undefined;
+  try {
+    emitAgentEvent({
+      runId: target.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "completed" },
+      },
+    });
+    await fixture.settle();
+    const entry = expectDefined(subagentRuns.get(target.runId), "terminal child");
+    expect(entry.execution.status).toBe("terminal");
+    // The Stop runs inside the source's own raw cleanup: the held settlement IS
+    // the caller's input. Joining it deadlocks the pair until the drain deadline.
+    pending = withSessionControllerSource(owner.input, () =>
+      killSessionSubagentRuns({
+        cfg: getRuntimeConfig(),
+        sessionKey: entry.requesterSessionKey,
+        agentId: "main",
+      }),
+    );
+    const settled = createDeferred();
+    void pending.then(
+      () => settled.resolve(),
+      () => settled.resolve(),
+    );
+    // Controlled drain clock: a fast Stop settles without the fake 15 s deadline
+    // elapsing; the deadline itself never fires for an excluded self source.
+    vi.useFakeTimers();
+    let drained = false;
+    void settled.promise.then(() => {
+      drained = true;
+    });
+    try {
+      for (let advancedMs = 0; advancedMs < SESSION_CONTROLLER_DRAIN_TIMEOUT_MS; advancedMs += 50) {
+        await vi.advanceTimersByTimeAsync(50);
+        if (drained) {
+          break;
+        }
+      }
+      expect(drained).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    const result = await pending;
+    expect(result).toMatchObject({ status: "ok" });
+    // The excluded self source must never reach the drain deadline: no queued
+    // drain error is recorded, matching the issue's post-fix expectation.
+    const drainError = result.status === "error" ? result.error : "";
+    expect(drainError).not.toContain("drain deadline");
+  } finally {
+    releaseTail.resolve();
+    await Promise.allSettled([pending, execution]);
+    registration.cleanup();
+    await fixture.settle();
+    expectIdle();
+  }
+});
