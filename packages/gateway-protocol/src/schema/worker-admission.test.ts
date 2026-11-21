@@ -24,7 +24,12 @@ import {
 } from "../index.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
 import { accepts as checkSchema } from "./schema.test-support.js";
+import { validateWorkerExecApprovalParams as validateExecApproval } from "./worker-exec-approval.js";
 import { WorkerGatewayToolResultSchema as GatewayToolResult } from "./worker-gateway-tool.js";
+import {
+  validateWorkerGatewayToolCancelParams as validateGatewayToolCancel,
+  validateWorkerGatewayToolInvokeParams as validateGatewayToolInvoke,
+} from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
   validateWorkerInferenceEventFrame as validateInferenceEvent,
@@ -461,6 +466,56 @@ describe("worker protocol schemas", () => {
         timestamp: 2,
       }),
       false,
+    );
+    // The exported runtime validators route through the generated predicates:
+    // the widened consumers must admit the long ID after inference accepted it.
+    check(
+      validateGatewayToolInvoke,
+      {
+        generation: "g-1",
+        toolId: "tool-1",
+        toolCallId: longId,
+        arguments: { value: 1 },
+      },
+      true,
+    );
+    check(validateGatewayToolCancel, { generation: "g-1", toolCallId: longId }, true);
+    check(
+      validateLive,
+      {
+        runEpoch: 2,
+        lastAckedSeq: 0,
+        seq: 1,
+        runId: "r",
+        event: {
+          kind: "tool",
+          payload: {
+            name: "probe",
+            toolCallId: longId,
+            phase: "result",
+            meta: "done",
+            isError: false,
+            result: { ok: true },
+          },
+        },
+      },
+      true,
+    );
+    check(
+      validateExecApproval,
+      {
+        binding: {
+          command: "probe",
+          execCommand: "probe --run",
+          cwd: "/tmp",
+          environment: "a".repeat(64),
+          pty: false,
+        },
+        toolCallId: longId,
+        operation: "request",
+        id: "approval-1",
+      },
+      true,
     );
   });
 
