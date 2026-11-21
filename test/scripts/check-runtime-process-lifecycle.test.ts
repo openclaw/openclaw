@@ -28,13 +28,20 @@ it("requires lifecycle budgets for new and retargeted core entrypoints", () => {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     writeFileSync(join(root, file), text);
   };
-  const manifest = (entries: string) =>
+  const manifest = (entries: string, defaultExtension = ".ts") =>
     write(
       "src/infra/runtime-process-manifest.ts",
-      `export function createRuntimeProcessEntrypoints() { return { ${entries} } as const; }\n`,
+      `export function createRuntimeProcessEntrypoints() {
+        const runtimeProcessEntrypoint = (path, distPath, distExtension, sourceExtension) =>
+          ({ sourceModulePath: \u0060src/\${path}\${sourceExtension ?? "${defaultExtension}"}\u0060 }) as const;
+        const loaderFreeEntrypoint = (modulePath) =>
+          runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
+        return { ${entries} } as const;
+      }\n`,
     );
   const lifecycleFile = "scripts/runtime-process-lifecycle.json";
-  const legacy = 'existing: loaderFreeEntrypoint("infra/existing")';
+  const legacy =
+    'existing: loaderFreeEntrypoint("infra/existing"), defaulted: runtimeProcessEntrypoint("infra/defaulted")';
   const owner = "src/infra/owner.ts";
   const declaration = (expectedMiB: number | null) => ({
     whenNeeded: {
@@ -66,10 +73,20 @@ it("requires lifecycle budgets for new and retargeted core entrypoints", () => {
   expect(error).toHaveBeenLastCalledWith(
     expect.stringContaining("needs an expected memory budget"),
   );
-  write(lifecycleFile, JSON.stringify({ added: declaration(64) }));
+  const budgeted = declaration(64);
+  const twoModes = { added: { ...budgeted, queued: budgeted.whenNeeded } };
+  write(lifecycleFile, JSON.stringify(twoModes));
   git("add", ".");
   expect(main(root, ["--staged", "--base", "HEAD"])).toBe(0);
   git("commit", "-qm", "declare new launcher");
+
+  write(lifecycleFile, JSON.stringify({ added: budgeted }));
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(error).toHaveBeenLastCalledWith(
+    expect.stringContaining("added/queued was removed without changing its lifecycle owner"),
+  );
+  write(owner, "export const queued = false;\n");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
 
   write(lifecycleFile, JSON.stringify({ added: declaration(null) }));
   expect(main(root, ["--base", "HEAD"])).toBe(1);
@@ -81,10 +98,16 @@ it("requires lifecycle budgets for new and retargeted core entrypoints", () => {
   write(lifecycleFile, "{}");
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   manifest(
-    'existing: runtimeProcessEntrypoint("infra/existing"), added: runtimeProcessEntrypoint("infra/added")',
+    `${legacy.replace("loaderFreeEntrypoint", "runtimeProcessEntrypoint")}, added: runtimeProcessEntrypoint("infra/added")`,
   );
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(error).toHaveBeenLastCalledWith(
     expect.stringContaining("existing (src/infra/existing.ts) needs a launch mode"),
+  );
+  write(lifecycleFile, JSON.stringify(twoModes));
+  manifest(`${legacy}, added: runtimeProcessEntrypoint("infra/added")`, ".mts");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(error).toHaveBeenLastCalledWith(
+    expect.stringContaining("defaulted (src/infra/defaulted.mts) needs a launch mode"),
   );
 });

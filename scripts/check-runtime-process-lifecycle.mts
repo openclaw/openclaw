@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as ts from "typescript/ast";
@@ -26,15 +26,87 @@ const registrySchema = z.record(
   ),
 );
 
+function readSourceProjection(factory: ts.Block) {
+  const helpers = factory.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => statement.declarationList.declarations);
+  const getHelper = (name: string) => {
+    const helper = helpers.find(
+      (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name,
+    )?.initializer;
+    if (!helper || !ts.isArrowFunction(helper) || ts.isBlock(helper.body)) {
+      throw new Error(`Expected a static ${name} helper in the core runtime manifest.`);
+    }
+    return { parameters: helper.parameters, body: unwrapExpression(helper.body) };
+  };
+  const core = getHelper("runtimeProcessEntrypoint");
+  const projection = ts.isObjectLiteralExpression(core.body)
+    ? core.body.properties
+        .filter(ts.isPropertyAssignment)
+        .find((property) => getPropertyNameText(property.name) === "sourceModulePath")?.initializer
+    : undefined;
+  if (
+    !projection ||
+    !ts.isTemplateExpression(projection) ||
+    projection.templateSpans.length !== 2
+  ) {
+    throw new Error("Expected the core helper to project a literal source path and extension.");
+  }
+  const [modulePath, suffix] = projection.templateSpans;
+  const extension = suffix!.expression;
+  const defaultParameter = core.parameters[3]?.initializer;
+  if (
+    !ts.isIdentifier(modulePath!.expression) ||
+    modulePath!.expression.text !== core.parameters[0]?.name.getText() ||
+    !ts.isBinaryExpression(extension) ||
+    extension.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
+    !ts.isIdentifier(extension.left) ||
+    extension.left.text !== core.parameters[3]?.name.getText() ||
+    !ts.isStringLiteral(extension.right) ||
+    (defaultParameter && !ts.isStringLiteral(defaultParameter))
+  ) {
+    throw new Error("Cannot read the core runtime helper's source path projection.");
+  }
+  const loaderFree = getHelper("loaderFreeEntrypoint");
+  if (
+    !ts.isCallExpression(loaderFree.body) ||
+    !ts.isIdentifier(loaderFree.body.expression) ||
+    loaderFree.body.expression.text !== "runtimeProcessEntrypoint"
+  ) {
+    throw new Error("Expected the loader-free helper to call the core runtime helper.");
+  }
+  const [forwardedPath, , , forwardedExtension] = loaderFree.body.arguments;
+  if (
+    !forwardedPath ||
+    !ts.isIdentifier(forwardedPath) ||
+    forwardedPath.text !== loaderFree.parameters[0]?.name.getText() ||
+    !forwardedExtension ||
+    !ts.isStringLiteral(forwardedExtension)
+  ) {
+    throw new Error("Cannot read the loader-free runtime helper's source path projection.");
+  }
+  const defaultExtension = defaultParameter?.text ?? extension.right.text;
+  return (helper: string, path: string, sourceExtension?: string) => {
+    const extension =
+      helper === "loaderFreeEntrypoint"
+        ? forwardedExtension.text
+        : (sourceExtension ?? defaultExtension);
+    return (
+      projection.head.text + path + modulePath!.literal.text + extension + suffix!.literal.text
+    );
+  };
+}
+
 function readCoreEntrypoints(source: ts.SourceFile) {
   const factory = source.statements
     .filter(ts.isFunctionDeclaration)
     .find((statement) => statement.name?.text === "createRuntimeProcessEntrypoints");
   const result = factory?.body?.statements.find(ts.isReturnStatement)?.expression;
   const entries = result && unwrapExpression(result);
-  if (!entries || !ts.isObjectLiteralExpression(entries)) {
+  if (!factory?.body || !entries || !ts.isObjectLiteralExpression(entries)) {
     throw new Error("Expected a static core runtime entrypoint manifest.");
   }
+  const sourcePath = readSourceProjection(factory.body);
   const targets = new Map<string, string>();
   for (const property of entries.properties) {
     if (!ts.isPropertyAssignment(property) || !ts.isCallExpression(property.initializer)) {
@@ -57,9 +129,7 @@ function readCoreEntrypoints(source: ts.SourceFile) {
         `Cannot identify the source for core runtime entrypoint ${name ?? "<unnamed>"}.`,
       );
     }
-    const sourceExtension =
-      extension?.text ?? (helper.text === "loaderFreeEntrypoint" ? ".mjs" : ".ts");
-    targets.set(name, `src/${modulePath.text}${sourceExtension}`);
+    targets.set(name, sourcePath(helper.text, modulePath.text, extension?.text));
   }
   return targets;
 }
@@ -71,6 +141,23 @@ function containsGitFile(root: string, ref: string, file: string): boolean {
       encoding: "utf8",
     }).trim() === file
   );
+}
+
+function lifecycleOwnerChanged(
+  root: string,
+  base: string,
+  staged: boolean,
+  owner: string,
+): boolean {
+  const result = spawnSync(
+    "git",
+    ["--literal-pathspecs", "diff", "--quiet", ...(staged ? ["--cached"] : []), base, "--", owner],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`Could not compare lifecycle owner ${owner} against ${base}.`);
+  }
+  return result.status === 1;
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)): number {
@@ -117,11 +204,20 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)): number
     for (const [name, target] of after) {
       const retargeted = before.get(name) !== target;
       const previousModes = Object.hasOwn(previousRegistry, name) ? previousRegistry[name]! : null;
-      const modes = Object.entries(Object.hasOwn(registry, name) ? registry[name]! : {});
-      if ((retargeted || previousModes) && modes.length === 0) {
+      const modes = Object.hasOwn(registry, name) ? registry[name]! : {};
+      if ((retargeted || previousModes) && Object.keys(modes).length === 0) {
         failures.push(`${name} (${target}) needs a launch mode in ${registryPath}.`);
       }
-      for (const [mode, { memory }] of modes) {
+      // A mode can retire while its entrypoint still serves other launchers.
+      // Require the prior owner to change with that retirement.
+      for (const [mode, { owner }] of Object.entries(previousModes ?? {})) {
+        if (!Object.hasOwn(modes, mode) && !lifecycleOwnerChanged(root, base, args.staged, owner)) {
+          failures.push(
+            `${name}/${mode} was removed without changing its lifecycle owner ${owner}.`,
+          );
+        }
+      }
+      for (const [mode, { memory }] of Object.entries(modes)) {
         const previouslyUnmeasured =
           previousModes &&
           Object.hasOwn(previousModes, mode) &&
