@@ -39,6 +39,8 @@ export const AGENT_AUTH_CELLS = {
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
 export const SHARED_AUTH_CELL_KEYS = { store: "authProfiles.store", state: "authProfiles.state" };
 export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
+// Separate from the location record so older readers can still parse that record.
+export const SHARED_AUTH_AUTHORIZATION_ORIGIN_KEY = "auth.sharedAuthorizationOrigin";
 
 function authProfileTableName(
   target: "store" | "state",
