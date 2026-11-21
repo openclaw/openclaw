@@ -116,6 +116,22 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
+export function makeUpdateRefusal({ mode, root }: UpdateInstallSurface) {
+  return (
+    status: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status,
+    mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
+}
+
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
