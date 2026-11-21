@@ -186,6 +186,47 @@ describe("balanced JSON extraction", () => {
   );
 
   it.each(["\n", "\r\n", "\r"])(
+    "retains original wrapper ownership after a stray closer or hidden opener (%j)",
+    (newline) => {
+      const inline = '{"inline":true}';
+      const next = '{"next":true}';
+      for (const warning of [`warning: [expected } near ${inline}]`, `warning: [prose ${inline}`]) {
+        const source = `${warning}${newline}${next}`;
+        for (const view of [source, source.replace("[", " ")]) {
+          const options = { ...strictRecovery, strictJson: { source } };
+          expect(extractBalancedJsonFragments(view, options)).toEqual(fragmentsAt(source, [next]));
+          expect(extractBalancedJsonPrefix(view, options)).toEqual(fragmentsAt(source, [next])[0]);
+          expect(extractBalancedJsonFragments(view, { ...options, openers: ["{"] })).toEqual(
+            fragmentsAt(source, [inline, next]),
+          );
+        }
+      }
+    },
+  );
+
+  it("keeps eligible descendants when a valid selected ancestor is not emitted", () => {
+    const child = '{"ok":true}';
+    const source = `warning: [\ndetails: [\n${child}\n]`;
+    for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+      expect(extractBalancedJsonFragments(source, options)).toEqual(fragmentsAt(source, [child]));
+    }
+    const parent = `[\n${child}\n]`;
+    expect(extractBalancedJsonFragments(parent, strictRecovery)).toEqual(
+      fragmentsAt(parent, [parent]),
+    );
+  });
+
+  it("retains deep wrapper ownership across repeated unmatched closers", () => {
+    const inline = '{"inline":true}';
+    const next = '{"next":true}';
+    const depth = 4096;
+    const source = "[".repeat(depth) + "}".repeat(depth) + inline + "\n" + next + "]".repeat(depth);
+    expect(extractBalancedJsonFragments(source, strictRecovery)).toEqual(
+      fragmentsAt(source, [next]),
+    );
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
     "applies accepted framing to recovery eligibility in masked and unmasked views (%j)",
     (newline) => {
       const prefix = `warning: [${newline}`;
