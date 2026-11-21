@@ -263,6 +263,94 @@ describe("Beam receiver", () => {
     expect(store.values.size).toBe(0);
   });
 
+  it("accepts a grokbot payload for viewing and Team continuation, and rejects unknown sources", async () => {
+    const store = memoryStore();
+    const endpoint = await serve(store, {
+      resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }),
+    });
+    const beamId = "abcdef0123456789abcdef0123456789";
+    const upload = sampleUpload({
+      beamId,
+      source: "GrokBot",
+      title: "Grok Bot handoff",
+      sourceModel: { provider: "xAI", model: "grok-4" },
+      items: [
+        { type: "userMessage", text: "Share this Grok Bot conversation." },
+        { type: "agentMessage", text: "Ready to continue in Team." },
+      ],
+    });
+    const published = (await (await postUpload(endpoint, upload)).json()) as {
+      publicationId: string;
+    };
+    expect(published).toMatchObject({
+      ok: true,
+      beamId,
+      url: "/beam/grok-bot-handoff-abcdef012345",
+    });
+    expect(published.publicationId).toMatch(/^[a-f0-9]{32}$/);
+    expect(await store.get(beamId)).toMatchObject({
+      source: "grokbot",
+      title: "Grok Bot handoff",
+      sourceModel: { provider: "xai", model: "grok-4" },
+      items: upload.items,
+    });
+
+    const catalog = createBeamSessionCatalog(store);
+    const params = { agentId: "main", hostId: "gateway", threadId: beamId };
+    expect(
+      (await catalog.list({ agentId: "main", search: "grokbot" }))[0]?.sessions[0],
+    ).toMatchObject({
+      threadId: beamId,
+      name: "Grok Bot handoff",
+      source: "grokbot",
+      canContinue: false,
+      continuationUnavailableReasonCode: "source-handoff-required",
+    });
+    const transcript = await catalog.read(params);
+    expect(transcript.items.map(({ type, text }) => [type, text])).toEqual([
+      ["agentMessage", "Ready to continue in Team."],
+      ["userMessage", "Share this Grok Bot conversation."],
+    ]);
+
+    const release = await postUpload(endpoint, { ...upload, handoffId: published.publicationId });
+    expect(release.status).toBe(200);
+    await expect(
+      catalog.copyToGatewaySession?.({ ...params, assertCurrent() {} }),
+    ).resolves.toMatchObject({
+      displayName: "Grok Bot handoff",
+      preferredModel: "xai/grok-4",
+      continuation: { agentId: "main", reservedNow: true },
+    });
+    const frozen = await store.get(beamId);
+    const late = await postUpload(
+      endpoint,
+      sampleUpload({
+        beamId,
+        source: "grokbot",
+        title: "Later local turn",
+        updatedAt: "2026-08-01T00:00:00Z",
+      }),
+    );
+    expect(late.status).toBe(409);
+    expect(await store.get(beamId)).toEqual(frozen);
+
+    for (const source of [
+      "Grok Bot",
+      "unknown source",
+      "not-a-source?",
+      "",
+      "x".repeat(33),
+      "grok/bot",
+    ]) {
+      expect(
+        (await postUpload(endpoint, sampleUpload({ source, beamId: otherBeamId }))).status,
+      ).toBe(400);
+    }
+    expect(await store.get(otherBeamId)).toBeUndefined();
+    expect((await postUpload(endpoint, sampleUpload({ source: "codex" }))).status).toBe(200);
+    expect((await store.get(sampleUpload().beamId))?.source).toBe("codex");
+  });
+
   it("closes a declared oversized upload without waiting for its body", async () => {
     const store = memoryStore();
     const endpoint = await serve(store);

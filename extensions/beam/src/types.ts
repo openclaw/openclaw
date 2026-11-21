@@ -123,6 +123,8 @@ export function parseBeamUpload(
   if (!beamId || !/^[a-f0-9]{32}$/i.test(beamId)) {
     return { ok: false, error: "beamId must be a 32-character hex id" };
   }
+  // Skill uploads use claude, codex, or grokbot. Mirror uploads use the catalog
+  // id, so any other short identifier stays valid and the object schema stays closed.
   const source = readBoundedString(value.source, 32);
   if (!source || !/^[a-z0-9._-]+$/i.test(source)) {
     return { ok: false, error: "source must be a short identifier" };
