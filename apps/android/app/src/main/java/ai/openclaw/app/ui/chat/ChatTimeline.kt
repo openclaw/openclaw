@@ -50,6 +50,8 @@ internal sealed class ChatTimelineItem {
     val toolKeys: List<String> = tools.mapIndexed { index, tool -> tool.toolCallId ?: "anonymous:$index" },
     val liveTools: Map<String, ChatPendingToolCall> = emptyMap(),
     val settledToolKeys: Set<String> = emptySet(),
+    /** Live calls keep their transcript scope when completed replies split disclosures. */
+    val toolScope: String = disclosureKey,
   ) : ChatTimelineItem()
 
   data class QuestionPrompt(
@@ -115,6 +117,15 @@ internal fun prepareChatHistory(
 ): PreparedChatHistory {
   val toolScopes = toolScopes(messages)
   val rows = buildTranscriptTimeline(messages, toolScopes)
+  val workSpans = prepareCompletedWorkSpans(rows, messages, sessionKey, mainSessionKey)
+  workSpans.forEachIndexed { index, span ->
+    if (workSpans.getOrNull(index - 1)?.turnIndex == span.turnIndex) {
+      for (rowIndex in span.start until span.endExclusive) {
+        val group = rows[rowIndex] as? ChatTimelineItem.ToolActivity ?: continue
+        rows[rowIndex] = group.copy(disclosureKey = "${group.disclosureKey}:worked:${span.key}")
+      }
+    }
+  }
   val latestUser =
     rows.asReversed().firstNotNullOfOrNull { item ->
       (item as? ChatTimelineItem.Message)?.message?.takeIf {
@@ -140,7 +151,7 @@ internal fun prepareChatHistory(
         append(":turnBoundary=")
         append(latest?.turnBoundary ?: false)
       },
-    workSpans = prepareCompletedWorkSpans(rows, messages, sessionKey, mainSessionKey),
+    workSpans = workSpans,
     toolScope = messages.indexOfLast { it.startsToolScope() }.takeIf { it >= 0 }?.let { toolScopes[it] } ?: "root",
     toolScopesByRun = messages.mapIndexedNotNull { index, message -> message.runId?.let { it to toolScopes[index] } }.distinctBy { it.first }.toMap(),
   )
@@ -227,9 +238,9 @@ internal fun ChatMessage.isForwardedBoundary(): Boolean =
 private fun buildTranscriptTimeline(
   messages: List<ChatMessage>,
   toolScopes: List<String>,
-): List<ChatTimelineItem> {
+): MutableList<ChatTimelineItem> {
   val toolsByMessage = projectTranscriptToolActivity(messages)
-  return buildList {
+  return mutableListOf<ChatTimelineItem>().apply {
     val completedTools = mutableListOf<TranscriptTool>()
     var completedToolsKey: String? = null
     var completedToolsTurnBoundary = false
