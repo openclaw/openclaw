@@ -503,8 +503,7 @@ function ensureAgentSchema(
           db,
           pathname,
           getOpenClawAgentMigrationSchema(previousVersion),
-          "legacy",
-          true,
+          { legacyParticipants: true, allowStartupIndexRepair: true },
         );
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);

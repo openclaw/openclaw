@@ -317,16 +317,19 @@ async function migrateAgentDatabase(params: {
       });
     };
     assertMediaSchemaMigration();
-    const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
+    const schemaContract = {
+      version: userVersion,
+      legacyParticipants: userVersion < OPENCLAW_AGENT_SCHEMA_VERSION,
+    };
     const schemaSql = getOpenClawAgentMigrationSchema(userVersion);
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
         integrity: { check: params.integrityCheck ?? "quick" },
         validateAfterRepair: () =>
-          assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode),
+          assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaContract),
       });
     }
-    assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
+    assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaContract);
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
     if (mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database)) {

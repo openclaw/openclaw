@@ -73,13 +73,9 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  return assertOpenClawAgentSchemaContains(
-    database,
-    options.pathname,
-    OPENCLAW_AGENT_SCHEMA_SQL,
-    "current",
-    options.allowStartupIndexRepair,
-  );
+  return assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+    allowStartupIndexRepair: options.allowStartupIndexRepair,
+  });
 }
 
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */

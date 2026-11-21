@@ -52,8 +52,7 @@ export async function repairDoctorSessionWindowOrphans(
     database,
     pathname,
     getOpenClawAgentMigrationSchema(schemaVersion),
-    "current",
-    true,
+    { version: schemaVersion, allowStartupIndexRepair: true },
   );
   database.exec("PRAGMA foreign_keys = ON;");
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
