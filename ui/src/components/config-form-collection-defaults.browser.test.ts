@@ -82,7 +82,7 @@ describe("config form collection defaults", () => {
       reject: true,
     });
 
-    expect(container.textContent).toContain("1 item");
+    expect(container.querySelectorAll(".cfg-array__item")).toHaveLength(1);
     expect(input(container).value).toBe("custom");
 
     onPatch.mockClear();
@@ -90,7 +90,7 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).not.toContain("Using default:");
     expect(container.querySelector(".settings-row__desc")).toBeNull();
-    expect(container.textContent).toContain("2 items");
+    expect(container.querySelectorAll(".cfg-array__item")).toHaveLength(2);
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((field) => field.value)).toEqual(["", ""]);
     expect(inheritedInputs.map((field) => field.placeholder)).toEqual(["Default: a", "Default: b"]);

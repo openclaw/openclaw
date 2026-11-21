@@ -7,19 +7,26 @@ import { showToast } from "../../lib/toast.ts";
 
 async function copyAgentId(id: string) {
   const copied = await copyToClipboard(id);
-  showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+  showToast({
+    severity: copied ? "success" : "error",
+    message: t(copied ? "common.copied" : "common.copyFailed"),
+  });
 }
 
 // Holds the selected agent's actions. New agent and Refresh join them on the phone.
 export function AgentsPageMenu(props: {
   agentId: string | null;
+  canCreateAgent: boolean;
+  canSetDefault: boolean;
+  canDeleteAgent: boolean;
   defaultLabel: string;
   defaultDisabled: boolean;
   pinLabel: string;
+  deleteDisabled: boolean;
+  onDelete: (agentId: string) => void;
   showPhoneActions: boolean;
   createLabel: string;
   createDisabled: boolean;
-  createDisabledReason?: string;
   onCreate: () => void;
   refreshLabel: string;
   refreshDisabled: boolean;
@@ -29,22 +36,33 @@ export function AgentsPageMenu(props: {
 }) {
   const id = createUniqueId();
   const items = (): MenuEntry[] => [
-    ...(props.showPhoneActions
+    ...(props.showPhoneActions && props.canCreateAgent
       ? [
           {
             id: "create",
             label: props.createLabel,
             disabled: props.createDisabled,
-            focusableWhenDisabled: Boolean(props.createDisabledReason),
-            details: props.createDisabledReason,
           },
         ]
       : []),
     ...(props.agentId
       ? [
           { id: "copy", label: t("agents.copyId") },
-          { id: "default", label: props.defaultLabel, disabled: props.defaultDisabled },
+          ...(props.canSetDefault
+            ? [{ id: "default", label: props.defaultLabel, disabled: props.defaultDisabled }]
+            : []),
           { id: "pin", label: props.pinLabel },
+          ...(props.canDeleteAgent
+            ? [
+                {
+                  id: "delete",
+                  label: t("common.delete"),
+                  icon: <Icon name="trash" />,
+                  variant: "danger" as const,
+                  disabled: props.deleteDisabled,
+                },
+              ]
+            : []),
         ]
       : []),
     ...(props.showPhoneActions
@@ -74,6 +92,8 @@ export function AgentsPageMenu(props: {
           props.onSetDefault(agentId);
         } else if (agentId && item.id === "pin") {
           props.onTogglePinned(agentId);
+        } else if (agentId && item.id === "delete") {
+          props.onDelete(agentId);
         }
       }}
     />

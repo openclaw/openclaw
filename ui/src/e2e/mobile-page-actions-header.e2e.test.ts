@@ -17,7 +17,6 @@ const PAGES = [
   { path: "usage", trigger: ".usage-phone-actions__trigger", item: "Refresh" },
   { path: "meetings", trigger: ".transcripts-page-menu__trigger", item: "Refresh" },
   { path: "logs", trigger: "button.logs-toolbar__button[title='More actions']", item: "Refresh" },
-  { path: "activity?view=live", trigger: ".activity-live-actions__trigger", item: "Expand all" },
   { path: "settings/agents/main/overview", trigger: ".agents-page-menu__trigger", item: "Refresh" },
   { path: "settings/skills", trigger: ".skill-library-search__icon", item: "Search skills" },
 ] as const;
@@ -81,9 +80,9 @@ suite.define(() => {
     );
   });
 
-  it("keeps the menu on the page from 601px, where the header does not float", async () => {
+  it("keeps the menu on the page from 641px, where the header does not float", async () => {
     await suite.withPage(
-      { ...createControlUiE2eContextOptions(), viewport: { width: 601, height: 800 } },
+      { ...createControlUiE2eContextOptions(), viewport: { width: 641, height: 800 } },
       async ({ page }) => {
         await install(page);
         await page.goto(`${suite.server.baseUrl}meetings`);

@@ -25,10 +25,10 @@ export async function ensureChannelSetupPluginInstalled(
     beforePersistentEffect?: () => Promise<void>;
   },
 ): Promise<
-  Pick<OnboardingInstallResult, "cfg" | "installed" | "status"> &
+  Pick<OnboardingInstallResult, "cfg" | "installed" | "status" | "error"> &
     Partial<Pick<OnboardingInstallResult, "pluginId">>
 > {
-  const result = await ensureOnboardingPluginInstalled({
+  return await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
       pluginId: params.entry.pluginId ?? params.entry.id,
@@ -42,6 +42,7 @@ export async function ensureChannelSetupPluginInstalled(
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    ...(params.failureOutput ? { failureOutput: params.failureOutput } : {}),
     ...(params.autoConfirmSingleSource !== undefined
       ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
       : {}),
@@ -49,12 +50,6 @@ export async function ensureChannelSetupPluginInstalled(
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
-  return {
-    cfg: result.cfg,
-    installed: result.installed,
-    pluginId: result.pluginId,
-    status: result.status,
-  };
 }
 
 /** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */

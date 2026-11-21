@@ -11,6 +11,7 @@ import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
+import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -45,14 +46,17 @@ export async function prepareReplySourceAdmission(params: {
   await recorder.resolveMessage();
   assertCurrent();
   const ownsCustody = !recorder.getPendingInputMessage?.() && !recorder.hasPersisted();
+  let admissionFailure: unknown;
   const release = ownsCustody
-    ? async () => {
-        try {
-          recorder.finishPendingInput?.("cancelled");
-        } finally {
-          await recorder.waitForPendingInputSettlement?.();
-        }
-      }
+    ? () =>
+        settleUserTurnPendingInput(
+          recorder,
+          operation.abortSignal,
+          admissionFailure,
+          false,
+          "cancelled",
+          operation.turnKind === "queued_followup",
+        )
     : undefined;
   try {
     if (ownsCustody && getReplyOperationSessionTarget(operation)) {
@@ -76,6 +80,7 @@ export async function prepareReplySourceAdmission(params: {
     assertCurrent();
     return release;
   } catch (error) {
+    admissionFailure = error;
     await release?.();
     throw error;
   }
@@ -145,7 +150,11 @@ export async function enqueueReplySourceAdmission(params: {
   }
   const enqueued = params.enqueue();
   if (!enqueued && staged) {
-    recorder?.finishPendingInput?.("cancelled");
+    // Terminal overflow already records its own cause. Retryable capacity pressure
+    // leaves the accepted row and its live owner with the mailbox.
+    if (recorder?.isPendingInputConsumed?.()) {
+      recorder.releasePendingInput?.();
+    }
     await recorder?.waitForPendingInputSettlement?.();
   }
   return enqueued;

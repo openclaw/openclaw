@@ -4,7 +4,7 @@ import {
   titleForRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginSettingsIdFromPath } from "../app-route-paths.ts";
+import { pathForRoute, pluginSettingsIdFromPath, skillPageFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -22,7 +22,7 @@ export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): Naviga
 }
 
 /** The page one level up, or null when this page is already a top-level section. */
-export function settingsParentRoute(
+function settingsParentRoute(
   routeId: NavigationRouteId,
   pathname = "",
   basePath = "",
@@ -30,12 +30,15 @@ export function settingsParentRoute(
   if (routeId === "plugin-settings" && pluginSettingsIdFromPath(pathname, basePath)) {
     return "plugin-settings";
   }
+  if (routeId === "skill-settings" && skillPageFromPath(pathname, basePath)) {
+    return "skill-settings";
+  }
   const owner = settingsNavigationOwnerRoute(routeId);
   return owner === routeId ? null : owner;
 }
 
-/** Where the phone header's Back lands; plugin details step through their own levels. */
-export function settingsBackTarget(
+/** The location one level up for Back and Escape, including plugin detail subviews. */
+export function settingsParentTarget(
   routeId: NavigationRouteId,
   location: { pathname: string; search: string } | undefined,
   basePath = "",

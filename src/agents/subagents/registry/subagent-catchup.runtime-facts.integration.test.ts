@@ -118,7 +118,7 @@ it("reads a cold private envelope without changing delivery or processing receip
   });
   assert(receipt?.completeAsync, "Expected a private processing completion owner");
   await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   await resetSubagentRegistryForTests({ persist: false });
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();

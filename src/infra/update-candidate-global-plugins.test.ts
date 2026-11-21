@@ -12,9 +12,14 @@ import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([false, true])(
-  "rehearses an unrecorded global memory plugin (linked=%s)",
-  async (linked) => {
+it.each([
+  { linked: false, skipped: false },
+  { linked: true, skipped: false },
+  // The host skips this package but preserves its config; the candidate must match.
+  { linked: false, skipped: true },
+])(
+  "rehearses an unrecorded global memory plugin (linked=$linked, skipped=$skipped)",
+  async ({ linked, skipped }) => {
     const root = dirs.make("candidate-global-plugin-");
     const stateDir = path.join(root, "source-state");
     const locator = path.join(stateDir, "extensions", "memory-example");
@@ -33,7 +38,10 @@ it.each([false, true])(
       JSON.stringify({
         name: "memory-example",
         type: "module",
-        openclaw: { extensions: ["./index.js"] },
+        openclaw: {
+          extensions: ["./index.js"],
+          ...(skipped ? { compat: { pluginApi: "not a range" } } : {}),
+        },
       }),
     );
     await fs.writeFile(

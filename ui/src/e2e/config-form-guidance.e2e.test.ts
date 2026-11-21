@@ -14,26 +14,8 @@ import {
 
 const suite = createConfigSuite("Control UI config form guidance mocked Gateway E2E");
 
-const proof = configProof("config-form-guidance");
-
-function notificationStatusConfigMocks() {
-  const config = { ui: { prefs: { theme: "claw" } } };
-  return {
-    "config.get": configSnapshot(config, "notification-status-e2e", true),
-    "config.schema": configSchema(
-      objectSchema("", {
-        ui: objectSchema("UI", {
-          prefs: objectSchema("Prefs", { theme: { type: "string", title: "Theme" } }),
-        }),
-      }),
-      { "ui.prefs.theme": { advanced: false } },
-    ),
-  };
-}
-
 const withPage = pageRunner(suite, settingsPageOptions);
-
-const capture = proof.capture;
+const { capture } = configProof("config-form-guidance");
 
 suite.define(() => {
   it("renders every accepted branch of a transform input schema", async () => {
@@ -58,18 +40,20 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/advanced`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/advanced`))?.status()).toBe(200);
 
       await page.getByRole("button", { name: "Core" }).click();
       await page.getByRole("button", { name: "Meta", exact: true }).click();
 
       const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
-      await expect.poll(() => policyRow.getByRole("radio").count()).toBe(4);
-      await expect.poll(() => policyRow.getByText("Open", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("Allowlist", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("Disabled", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("Allowall", { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() =>
+          policyRow
+            .locator("select option")
+            .allTextContents()
+            .then((labels) => labels.map((label) => label.trim())),
+        )
+        .toEqual(expect.arrayContaining(["Open", "Allowlist", "Disabled", "Allowall"]));
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);
@@ -89,6 +73,7 @@ suite.define(() => {
 
   it("keeps the one advanced disclosure browser-local", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const config = { ui: { prefs: { theme: "claw" } } };
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -116,8 +101,7 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/appearance`))?.status()).toBe(200);
       await page.getByRole("tab", { name: "UI", exact: true }).click();
 
       const disclosure = page.locator("details.config-advanced-disclosure");
@@ -139,7 +123,7 @@ suite.define(() => {
 
       await disclosure.locator(":scope > summary").click();
       await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
-      await page.waitForTimeout(750);
+      await page.clock.runFor(750);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
@@ -149,12 +133,23 @@ suite.define(() => {
 
   it("keeps a settled autosave quiet on Notifications", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
+      const config = { ui: { prefs: { theme: "claw" } } };
       const gateway = await installMockGateway(page, {
-        methodResponses: notificationStatusConfigMocks(),
+        methodResponses: {
+          "config.get": configSnapshot(config, "notification-status-e2e", true),
+          "config.schema": configSchema(
+            objectSchema("", {
+              ui: objectSchema("UI", {
+                prefs: objectSchema("Prefs", { theme: { type: "string", title: "Theme" } }),
+              }),
+            }),
+            { "ui.prefs.theme": { advanced: false } },
+          ),
+        },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}settings/appearance`))?.status()).toBe(200);
       await page.getByRole("tab", { name: "UI", exact: true }).click();
 
       const themeInput = page
@@ -164,21 +159,22 @@ suite.define(() => {
       await expect.poll(() => themeInput.count()).toBe(1);
       await themeInput.fill("knot");
       await gateway.waitForRequest("config.set");
-      await page.getByRole("button", { name: "Apply changes", exact: true }).click();
+      const apply = page.getByRole("button", { name: "Apply changes", exact: true });
+      await expect.poll(() => page.clock.runFor(1_000).then(() => apply.count())).toBe(1);
+      await page.clock.resume();
+      await apply.click();
       await gateway.waitForRequest("config.apply");
 
       await page.getByRole("link", { name: "Notifications", exact: true }).click();
       await page.getByRole("heading", { name: "Push notifications", exact: true }).waitFor();
 
-      const section = page.locator("#settings-communications-notifications");
+      const statusRow = page
+        .locator("#settings-communications-notifications .settings-row")
+        .filter({ has: page.getByText("Status", { exact: true }) });
       await expect.poll(() => page.locator(".config-toolbar").count()).toBe(0);
       await expect.poll(() => page.getByText("Saved", { exact: true }).count()).toBe(0);
-      await expect
-        .poll(() => section.locator(".settings-section__header .settings-status").count())
-        .toBe(1);
-      await expect
-        .poll(() => section.locator(".settings-section__header").textContent())
-        .toContain("Ready");
+      await expect.poll(() => statusRow.locator(".settings-status").count()).toBe(1);
+      await expect.poll(() => statusRow.textContent()).toContain("Ready");
 
       await capture(page, "05-notifications-ready-aligned.png", true);
     });

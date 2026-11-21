@@ -7,7 +7,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { matchQuery } from "../lib/text-match.ts";
-import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
+import { PluginArtTile } from "../pages/plugins/presentation.tsx";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";

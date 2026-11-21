@@ -109,6 +109,7 @@ suite.define(() => {
           source: "skill",
           scope: "both",
           acceptsArgs: true,
+          skillReferenceable: true,
           skillModelVisible: true,
           textAliases: [`/${alice.entry.name}`],
         },
@@ -191,7 +192,7 @@ suite.define(() => {
       expect(await item("release-notes").count()).toBe(1);
       await waitForControlUiProofSurface(menuPanel, [
         readAction,
-        menu.getByText("Alice's library", { exact: true }),
+        menu.getByText("Alice’s library", { exact: true }),
       ]);
       const actionBounds = await menuPanel.evaluate((node) =>
         node.getBoundingClientRect().toJSON(),
@@ -219,8 +220,31 @@ suite.define(() => {
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(alice.content);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Retained revision", { exact: true }).count()).toBe(0);
-      const panel = page.locator(".skill-reader-dialog");
-      expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      const panel = page.locator(".skill-library-dialog");
+      const details = panel.locator("details");
+      const summary = details.locator("summary");
+      await summary.scrollIntoViewIfNeeded();
+      const chevron = await summary.locator("svg").boundingBox();
+      expect(chevron?.width).toBe(15);
+      expect(chevron?.height).toBe(15);
+      expect((await summary.boundingBox())?.height).toBe(48);
+      await summary.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => details.getAttribute("open")).not.toBeNull();
+      expect(await details.getByText(alice.entry.skillId, { exact: true }).isVisible()).toBe(true);
+      await page.keyboard.press("Space");
+      await expect.poll(() => details.getAttribute("open")).toBeNull();
+      await page.emulateMedia({ forcedColors: "active" });
+      expect(await summary.evaluate((node) => getComputedStyle(node).outlineStyle)).toBe("solid");
+      expect(await summary.evaluate((node) => getComputedStyle(node).outlineColor)).not.toBe(
+        "rgba(0, 0, 0, 0)",
+      );
+      await page.emulateMedia({ forcedColors: "none" });
+      expect(
+        await panel.evaluate(
+          (node) => node.clientWidth > 0 && node.scrollWidth <= node.clientWidth + 1,
+        ),
+      ).toBe(true);
       expect(await getRequests("skills.library.activate")).toHaveLength(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
 
@@ -247,7 +271,7 @@ suite.define(() => {
       await expect.poll(() => menu.locator('[data-value^="library-selected:"]').count()).toBe(0);
       await item("Add from libraries").waitFor();
       await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation });
-      const notice = page.getByRole("status").filter({ hasText: /updated for the next turn/u });
+      const notice = page.getByRole("status").filter({ hasText: /updated for the next reply/u });
       await notice.waitFor();
       await notice.getByRole("button", { name: "Dismiss", exact: true }).click();
 

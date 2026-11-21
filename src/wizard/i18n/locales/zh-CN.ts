@@ -332,7 +332,7 @@ export const zh_CN = {
       quickstartKeepRunningQuestion: "让 OpenClaw 在后台持续运行？",
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
-      quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",
+      quickstartBackground: "如需以后让网关在后台持续运行，请运行：{command}",
       quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
       quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
       quickstartGatewayPending:
@@ -476,6 +476,8 @@ export const zh_CN = {
       testAiProgress: "正在用真实 completion 测试 AI 访问…",
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
+      utilityOnlyNote: "请为 agent 对话选择提供商，或选择暂时跳过。",
+      utilityOnlyTitle: "选择 agent 的模型",
       whatSetup: "你想设置什么？",
       workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
       workspaceConflictNotice:
@@ -1093,6 +1095,8 @@ export const zh_CN = {
     channelsPrimer: {
       approveWith: "批准配对：{command}",
       docs: "文档：{link}",
+      credentialStorage:
+        "直接输入受支持的凭据会将其保存到共享密钥库。Gateway 运行时，从 CLI 执行此操作需要本地 Gateway 管理员权限。如果没有该权限，请在频道支持的情况下使用现有的密钥引用，或先停止 Gateway 再输入凭据。",
       inboundSafety: "入站 DM 安全默认使用配对：未知发送者会先获得配对码。",
       multiUserDm:
         '多用户 DM 请隔离会话：{command}（多账号频道也可用 "per-account-channel-peer"）。',

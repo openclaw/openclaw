@@ -2,13 +2,13 @@
  * Assertions for unified model catalog provider contract tests.
  */
 import { expect } from "vitest";
+import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
   OpenClawPluginApi,
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogProviderPlugin,
 } from "../plugin-entry.js";
-import { createCapturedPluginRegistration } from "../plugin-test-runtime.js";
 
 type RegistrablePlugin = {
   register(api: OpenClawPluginApi): void;

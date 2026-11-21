@@ -227,7 +227,7 @@ suite.define(() => {
 
       await page
         .getByRole("alert")
-        .getByText("Could not store this message for reconnect.", { exact: false })
+        .getByText("Couldn’t save this message.", { exact: false })
         .waitFor({ timeout: 10_000 });
       await row.waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);

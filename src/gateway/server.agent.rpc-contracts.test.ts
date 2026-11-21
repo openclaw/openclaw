@@ -62,10 +62,17 @@ test("preserves a session-only WebChat reply across ordered final response and r
         frame.type === "res" &&
         frame.id === "agent-contract" &&
         (frame.payload?.status === "accepted") === accepted,
-    ).then((frame) => {
-      orderedResponses.push(frame);
-      return frame;
-    });
+    ).then(
+      (frame) => {
+        orderedResponses.push(frame);
+        return frame;
+      },
+      (cause: unknown) => {
+        throw new Error(`Gateway agent RPC ${accepted ? "accepted" : "terminal"} response`, {
+          cause,
+        });
+      },
+    );
   const acceptedPromise = waitForResponse(true);
   const terminalPromise = waitForResponse(false);
 

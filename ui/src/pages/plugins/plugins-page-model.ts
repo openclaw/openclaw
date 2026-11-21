@@ -3,6 +3,7 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
+  PluginDiscoveryEntry,
   PluginListResult,
   PluginInstallRequest,
   PluginsInspectResult,
@@ -25,7 +26,17 @@ export type PluginsPageDetail = {
 
 export type PluginsPageCatalogDetail = {
   id: string;
+  preview?: PluginCatalogIdentity;
   result: PluginDiscoveryDetailResult | null;
+  error?: string;
+};
+
+export type PluginCatalogIdentity = {
+  id: string;
+  catalog: Pick<
+    PluginDiscoveryEntry["catalog"],
+    "name" | "summary" | "author" | "official" | "imageUrl"
+  >;
 };
 
 export function createPluginsPageState(): {
@@ -74,13 +85,18 @@ export function mergePluginCatalogItem(
 export function pluginMutationBlockedReason(params: {
   connected: boolean;
   hasAdminAccess: boolean;
+  actorKind: "member" | "browser";
   mutationAllowed: boolean | undefined;
 }): string | null {
   if (!params.connected) {
     return t("pluginsPage.connectToChange");
   }
   if (!params.hasAdminAccess) {
-    return t("pluginsPage.adminRequired");
+    return t(
+      params.actorKind === "member"
+        ? "pluginsPage.adminAccessRequired"
+        : "pluginsPage.adminRequired",
+    );
   }
   return params.mutationAllowed === false ? t("pluginsPage.changesDisabled") : null;
 }

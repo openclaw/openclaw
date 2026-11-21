@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store-runtime.js";
 import {
   persistAuthProfileBatch,
@@ -24,12 +27,15 @@ import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import { cronInferenceCheck } from "../../../flows/doctor-cron-checks.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import * as grants from "../../../gateway/operator-approval-store.js";
 import * as snapshots from "../../../infra/sqlite-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -208,6 +214,7 @@ it.each(["model", "provider", "session"] as const)(
       });
       const run = async (stored: CronStoredJob) => {
         const inference = await prepareCronRunInference({
+          job: stored,
           cfg,
           binding: stored.inferenceBinding,
           agentDir: state.agentDir(),
@@ -228,7 +235,7 @@ it.each(["model", "provider", "session"] as const)(
                   timeoutMs: 1000,
                   trigger: "cron",
                   config: cfg,
-                  ...inference?.runParams,
+                  ...inference?.runParams("openai"),
                 },
                 provider: "openai",
                 modelId: "gpt-5.5",
@@ -280,6 +287,157 @@ it.each(["model", "provider", "session"] as const)(
     });
   },
 );
+
+it("records shadow-Doctor bindings that can run against the live credential databases", async () => {
+  await withAccounts(async (live) => {
+    const cfg = await configure(live);
+    await saveProfiles(oauthProfile("openai:default", "synthetic-access"));
+    const expected = await captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      model: "openai/gpt-5.5@openai:default",
+    });
+    await saveJobs(live.statePath("cron", "jobs.json"), legacyJob("carried-over"));
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    const repaired = await withOpenClawTestState({ label: "upgrade-shadow" }, async (shadow) => {
+      await fs.cp(live.stateDir, shadow.stateDir, { recursive: true });
+      await shadow.writeConfig(config(shadow));
+      await doctor.withDoctorConfigMaintenance(async () => {
+        await using ctx = await doctor.prepareDoctorContext(shadow.configPath, {
+          options: { repair: true, nonInteractive: true, stateUpgradeLiveStateDir: live.stateDir },
+        });
+        await runLegacyCronHealth(ctx);
+      });
+      const [job] = await readJobs(shadow.statePath("cron", "jobs.json"));
+      expect(job?.inferenceBinding?.authorizationId).toBe(expected?.authorizationId);
+      if (!job?.inferenceBinding) {
+        throw new Error("Shadow Doctor did not record the carried-over job's account");
+      }
+      return job;
+    });
+    setRuntimeConfigSnapshot(cfg);
+    const inference = await prepareCronRunInference({
+      job: repaired,
+      cfg,
+      binding: repaired.inferenceBinding,
+      agentDir: live.agentDir(),
+    });
+    try {
+      expect(inference).toBeDefined();
+      expect(() => inference?.assertCandidate("openai", false)).not.toThrow();
+    } finally {
+      inference?.dispose();
+    }
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+it("recovers only an old upgrade's path-bound jobs, without rerunning or reenabling them", async () => {
+  await withAccounts(async (state) => {
+    const cfg = await configure(state);
+    const profileId = "openai:default";
+    await saveProfiles(apiProfile(profileId, "fixture-key"));
+    const current = await captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      model: `openai/gpt-5.5@${profileId}`,
+    });
+    if (!current) {
+      throw new Error("Expected a stored profile binding");
+    }
+    const oldRoot = state.statePath(".upgrade-example-123-456", "state");
+    const old = await captureAuthProfileAuthorization({
+      cfg,
+      profileId,
+      agentDir: state.agentDir(),
+      publishedStateDir: oldRoot,
+      assertCurrent() {},
+    });
+    const broken = { ...current, authorizationId: old.authorizationId };
+    old.dispose();
+    expect(broken).not.toEqual(current);
+    const store = state.statePath("cron", "jobs.json");
+    const job = { ...legacyJob("missed"), enabled: false, inferenceBinding: broken };
+    const refused = await prepareCronRunInference({
+      job,
+      cfg,
+      agentDir: state.agentDir(),
+      binding: broken,
+    });
+    try {
+      expect(() => refused?.assertCandidate("openai", false)).toThrow(/replaced/);
+    } finally {
+      refused?.dispose();
+    }
+    await saveJobs(
+      store,
+      job,
+      { ...job, id: "healthy", inferenceBinding: current },
+      { ...job, id: "unrelated", inferenceBinding: { ...broken, authorizationId: "f".repeat(64) } },
+    );
+    const before = await readJobs(store);
+    await doctor.withDoctorConfigMaintenance(async () => {
+      const withoutReceipt = await migrate(cfg);
+      expect(withoutReceipt.changes).toEqual([]);
+      expect(withoutReceipt.warnings).toEqual([
+        expect.stringMatching(/\(missed\).*no usable upgrade receipt/i),
+        expect.stringMatching(/\(unrelated\).*no usable upgrade receipt/i),
+      ]);
+      expect(withoutReceipt.warnings[0]).toContain("openclaw models auth list --agent main");
+      expect(withoutReceipt.warnings[0]).toContain(
+        "openclaw automations edit missed --model 'openai/gpt-5.5@<profileId>'",
+      );
+      expect(await readJobs(store)).toEqual(before);
+      await state.writeJson(".upgraded-example.json", {
+        appVersion: "example",
+        ops: [
+          {
+            kind: "replace",
+            live: state.statePath("state", "openclaw.sqlite"),
+            next: join(oldRoot, "state", "openclaw.sqlite"),
+          },
+        ],
+      });
+      expect((await migrate(cfg, false)).changes).toEqual([]);
+      const repaired = await migrate(cfg);
+      expect(repaired.changes.join("\n")).toContain("missed");
+      expect(repaired.warnings).toEqual([
+        expect.stringMatching(/\(unrelated\).*no usable upgrade receipt/i),
+      ]);
+      expect((await migrate(cfg)).changes).toEqual([]);
+    });
+    const after = await readJobs(store);
+    expect(after.map((row) => row.id)).toEqual(before.map((row) => row.id));
+    for (const [index, row] of before.entries()) {
+      expect(after[index]).toEqual(row.id === job.id ? { ...row, inferenceBinding: current } : row);
+    }
+    const inference = await prepareCronRunInference({
+      job,
+      cfg,
+      agentDir: state.agentDir(),
+      binding: after.find((row) => row.id === job.id)?.inferenceBinding,
+    });
+    try {
+      expect(inference).toBeDefined();
+      inference?.assertCandidate("openai", false);
+    } finally {
+      inference?.dispose();
+    }
+    await upsertAuthProfileWithLockOrThrow(apiProfile(profileId, "fixture-replacement"));
+    await saveJobs(store, job);
+    await doctor.withDoctorConfigMaintenance(async () => {
+      const replaced = await migrate(cfg);
+      expect(replaced.changes).toEqual([]);
+      expect(replaced.warnings).toEqual([
+        expect.stringMatching(/\(missed\).*no usable upgrade receipt/i),
+      ]);
+    });
+    expect((await readJobs(store))[0]?.inferenceBinding).toEqual(broken);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
 
 it("adopts canonical SQLite jobs during update Doctor without pinning inherited models or rewriting existing bindings", async () => {
   await withAccounts(async (state) => {
@@ -465,10 +623,13 @@ it("warns that an unbound job whose default moved to a stored account is refused
     const storePath = state.statePath("cron", "jobs.json");
     await saveJobs(storePath, legacyJob("hourly"));
     await doctor.withDoctorConfigMaintenance(async () => {
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
+      const runtime = createNonExitingRuntime();
+      const findings = await cronInferenceCheck.detect({ cfg, mode: "lint", runtime });
+      expect(findings).toContainEqual(
+        expect.objectContaining({ requirement: "cron-inference-account" }),
+      );
       contains(
-        preview.warnings.join("\n"),
+        findings.map((finding) => finding.message).join("\n"),
         "Automation hourly (hourly): retain openai:manual for openai/gpt-5.5",
         "Its runs are refused until it records this account",
         "openclaw doctor --fix",
@@ -476,6 +637,83 @@ it("warns that an unbound job whose default moved to a stored account is refused
     });
   });
 });
+
+it.each(["native", "stored", "native-default", "stored-default", "pinned-native", "incompatible"])(
+  "diagnoses CLI account selection without adoption: %s",
+  async (scenario) => {
+    await withAccounts(async (state) => {
+      const model = "anthropic/claude-opus-4-6";
+      const profile = scenario === "native-default" ? "anthropic:claude-cli" : "anthropic:work";
+      const cfg = config(state, {
+        systemAgent: { agentId: "main" },
+        model: scenario.endsWith("default") ? `${model}@${profile}` : model,
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      });
+      cfg.plugins = { allow: ["anthropic"], slots: { memory: "none" } };
+      cfg.session = { reset: { mode: "idle", idleMinutes: 1 } };
+      await configure(state, cfg);
+      if (scenario !== "native" && scenario !== "incompatible") {
+        await saveProfiles(
+          scenario === "stored-default"
+            ? apiProfile(profile, "synthetic-key")
+            : {
+                profileId: "anthropic:token",
+                credential: { type: "token", provider: "anthropic", token: "synthetic-token" },
+              },
+        );
+      }
+      await saveProfiles(apiProfile("openai:work", "synthetic-openai-key"));
+      const sessionKey = "agent:main:selection";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "selection",
+          updatedAt: 1,
+          ...(scenario === "incompatible"
+            ? { authProfileOverride: "openai:work", authProfileOverrideSource: "user" as const }
+            : { cliSessionBindings: { "claude-cli": { sessionId: "native-resume" } } }),
+        },
+      );
+      const originalSession = loadSessionEntry({ agentId: "main", sessionKey });
+      const job: CronStoredJob = {
+        ...makeAccountJob(
+          scenario,
+          scenario === "stored" || scenario === "native" ? undefined : model,
+        ),
+        ...(["pinned-native", "incompatible"].includes(scenario)
+          ? { sessionTarget: `session:${sessionKey}` }
+          : {}),
+      };
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveJobs(storePath, job);
+      await doctor.withDoctorConfigMaintenance(async () => {
+        const findings = await cronInferenceCheck.detect({
+          cfg,
+          mode: "lint",
+          runtime: createNonExitingRuntime(),
+        });
+        const result = await migrate(cfg);
+        expect(result.changes).toEqual([]);
+        expect(findings.map((finding) => finding.message)).toEqual(result.warnings);
+        if (scenario === "stored" || scenario === "stored-default") {
+          expect(result.warnings).toHaveLength(1);
+          contains(
+            result.warnings[0]!,
+            scenario,
+            "claude-cli",
+            "never borrow a stored account",
+            `openclaw automations edit ${scenario} --model ${model}@${scenario === "stored" ? "anthropic:token" : profile}`,
+          );
+        } else {
+          expect(result.warnings).toEqual([]);
+        }
+        expect(await readJobs(storePath)).toEqual([job]);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(originalSession);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+      });
+    });
+  },
+);
 
 it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withAccounts(async (state) => {
@@ -583,9 +821,18 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
         (entry) => entry.id === "malformed",
       );
       expect(malformedBefore?.definition?.sessionTarget).toBe("session:");
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
-      expect(preview.warnings.join("\n")).toContain("openclaw doctor --fix");
+      const findings = await cronInferenceCheck.detect({
+        cfg,
+        mode: "lint",
+        runtime: createNonExitingRuntime(),
+      });
+      const preview = findings.map((finding) => finding.message).join("\n");
+      contains(
+        preview,
+        "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
+        "Also eligible: openai:b",
+        "openclaw doctor --fix",
+      );
       expect(await readJobs(storePath)).toEqual(original);
       const result = await migrate(cfg);
       const warnings = result.warnings.join("\n");

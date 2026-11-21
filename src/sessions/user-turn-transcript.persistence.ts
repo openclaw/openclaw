@@ -8,11 +8,11 @@ import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
   PersistUserTurnTranscriptParams,
-  PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptTarget,
   UserTurnTranscriptTargetResolver,
@@ -125,6 +125,12 @@ export async function persistUserTurnTranscript(
           idempotencyLookup: "scan",
           workerPreparation: {
             beforeFreshMessageCommit: params.beforeFreshMessageCommit,
+            prepareMentionInvitation: params.prepareMentionInvitation
+              ? (candidate) =>
+                  isUserMessage(candidate)
+                    ? params.prepareMentionInvitation?.(candidate)
+                    : undefined
+              : undefined,
             prepareMessageAfterIdempotencyCheck: (candidate) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 // SAFETY: Preparation receives the typed user message above; goal preparation only adds metadata.

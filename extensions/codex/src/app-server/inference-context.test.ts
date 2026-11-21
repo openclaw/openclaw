@@ -77,6 +77,30 @@ const rejectsMetadata = (...args: Parameters<typeof readCodexInferenceMetadata>)
   expect(() => readCodexInferenceMetadata(...args)).toThrow("metadata disagrees");
 
 describe("native inference context", () => {
+  it("keeps sampling settings within their admitted generation", async () => {
+    const { context, controller, register, prepare } = fixture();
+    const bounded = await context.register({
+      threadId: "bounded",
+      text: "",
+      signal: controller.signal,
+      assertCurrent: () => {},
+      retainPrefix: false,
+      streamParams: { maxTokens: 37, temperature: 0 },
+    });
+    const ordinary = await register("", "ordinary");
+    expect(prepare(request("bounded", bounded.generation)).body).toMatchObject({
+      max_output_tokens: 37,
+      temperature: 0,
+    });
+    const untouched = request("ordinary", ordinary.generation);
+    expect(prepare(untouched).body).toBe(untouched);
+    const replacement = await register("", "bounded");
+    expect(() => prepare(request("bounded", bounded.generation))).toThrow("current admitted");
+    expect(prepare(request("bounded", replacement.generation)).body).not.toHaveProperty(
+      "max_output_tokens",
+    );
+  });
+
   it("reconciles native body and HTTP metadata and rejects conflicting attribution", () => {
     const nested = {
       ...identity,

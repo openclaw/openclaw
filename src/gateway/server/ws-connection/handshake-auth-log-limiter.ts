@@ -33,6 +33,34 @@ export class HandshakeAuthLogLimiter {
       params.mode ?? "?",
       params.authProvided,
     ].join("|");
+    return this.logSuffix(key, nowMs);
+  }
+
+  nativeAuthUnavailableLogSuffix(
+    params: {
+      code: number;
+      reason: string;
+      remoteAddr?: string;
+      origin?: string;
+      userAgent?: string;
+    },
+    nowMs?: number,
+  ): string | undefined {
+    if (params.code !== 4008 || params.reason !== "native authorization unavailable") {
+      return "";
+    }
+    // Peer-reported diagnostics are not native identity or authorization evidence.
+    // Reconnects change connection ids and source ports, not this bounded group.
+    const key = JSON.stringify([
+      "native-auth-unavailable",
+      params.remoteAddr ?? "?",
+      params.origin ?? "?",
+      params.userAgent ?? "?",
+    ]);
+    return this.logSuffix(key, nowMs);
+  }
+
+  private logSuffix(key: string, nowMs?: number): string | undefined {
     const now = nowMs ?? Date.now();
     const entry = this.entries.get(key);
     if (!entry) {

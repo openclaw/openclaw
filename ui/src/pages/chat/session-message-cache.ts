@@ -79,6 +79,7 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
     lastRunId: row.lastRunId,
     status: row.status,
     runtimeMs: row.runtimeMs,
+    abortedLastRun: row.abortedLastRun,
     contextTokens: row.contextTokens,
     sessionId: row.sessionId,
     archived: row.archived,
@@ -99,6 +100,10 @@ export type ChatComposerSnapshot = Pick<
     GatewaySessionRow,
     "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
   > & {
+    contextWindowDisplay?: Pick<
+      GatewaySessionRow,
+      "contextWindow" | "contextWindowDefault" | "contextWindows"
+    >;
     defaultPermissionMode?: GatewaySessionRow["permissionMode"];
     speed?: ChatFastModePresentation;
   };

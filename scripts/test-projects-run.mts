@@ -23,13 +23,14 @@ import {
   resolveLocalFullSuiteProfile,
   shouldContinueVitestFailures,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   mergeVitestExitCodes,
   vitestInfrastructureExitCode,
 } from "./lib/vitest-outcome.mts";
 import { resolveCiVitestPlanConcurrency, runVitestPlans } from "./lib/vitest-plan-scheduling.mts";
-import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import {
   createVitestReportOwner,
@@ -39,6 +40,9 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  selectVitestWorkerPreset,
+  shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   createShardTimingSample,
@@ -523,7 +527,31 @@ export async function runTestProjects(
       ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
     );
     if (compiled.length) {
-      workers = createVitestWorkerRun(baseEnv, getVitestWorkerDescriptor());
+      const supportsPreset = (selection: typeof shouldUseRuntimeOnlyVitestWorkers) =>
+        compiled.every(
+          ({ spec, cliArgs, execution }) =>
+            execution &&
+            execution.options.root === undefined &&
+            execution.options.dir === undefined &&
+            execution.options.project === undefined &&
+            execution.options.run !== false &&
+            selection(
+              spec.config,
+              cliArgs,
+              spec.env,
+              execution.options.testNamePattern,
+              spec.includePatterns ?? undefined,
+            ),
+        );
+      workers = createVitestWorkerRun(
+        baseEnv,
+        getVitestWorkerDescriptor(),
+        selectVitestWorkerPreset(
+          supportsPreset(shouldUseRuntimeOnlyVitestWorkers),
+          supportsPreset(shouldUseToolingOnlyVitestWorkers),
+          getVitestWorkerDescriptor()?.preset,
+        ),
+      );
       for (const { spec } of compiled) {
         spec.workerRun = workers;
       }

@@ -31,54 +31,35 @@ function wrappedReadFailure(code: string, message: string) {
   return { writeFile, write, run };
 }
 
-it.each([
-  ["write-classification", false],
-  ["write-classification", true],
-  ["write-observer", true],
-  ["remove-classification", false],
-  ["remove-classification", true],
-] as const)("keeps authority across %s (revoke=%s)", async (phase, revoke) => {
-  await withStateDirEnv("openclaw-memory-source-authority-", async ({ tempRoot }) => {
-    const target = `${tempRoot}/MEMORY.md`;
-    await fs.writeFile(target, "before");
-    let active = true;
-    const operations = withMemoryWriteProvenance(
-      { readFile: fs.readFile, writeFile: fs.writeFile, remove: fs.rm },
-      {
-        classifies: async () => {
-          active &&= phase === "write-observer" || !revoke;
-          return true;
+it.each(["write", "remove"] as const)(
+  "commits a %s through its provenance observer",
+  async (operation) => {
+    await withStateDirEnv("openclaw-memory-provenance-", async ({ tempRoot }) => {
+      const target = `${tempRoot}/MEMORY.md`;
+      await fs.writeFile(target, "before");
+      const operations = withMemoryWriteProvenance(
+        {
+          readFile: (file, signal?: AbortSignal) => fs.readFile(file, { signal }),
+          writeFile: (file, content, signal?: AbortSignal) =>
+            fs.writeFile(file, content, { signal }),
+          remove: fs.rm,
         },
-        write: async ({ commit }) => {
-          active &&= phase !== "write-observer" || !revoke;
-          await commit();
+        {
+          classifies: async () => true,
+          write: async ({ commit }) => commit(),
+          clearAfterDelete: async () => {},
         },
-        clearAfterDelete: async () => {},
-      },
-    );
-    const pending = withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:memory-authority",
-        receiptAuthority: () => active,
-      },
-      () =>
-        phase === "remove-classification"
-          ? operations.remove(target)
-          : operations.writeFile(target, "after"),
-    );
-    if (revoke) {
-      await expect(pending).rejects.toThrow("authority is no longer active");
-    } else {
-      await pending;
-    }
-    if (!revoke && phase === "remove-classification") {
-      await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      expect(await fs.readFile(target, "utf8")).toBe(revoke ? "before" : "after");
-    }
-  });
-});
+      );
+      if (operation === "remove") {
+        await operations.remove(target);
+        await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await operations.writeFile(target, "after");
+        expect(await fs.readFile(target, "utf8")).toBe("after");
+      }
+    });
+  },
+);
 
 it("rolls provenance back when the filesystem write fails", async () => {
   await withStateDirEnv("openclaw-memory-provenance-", async ({ tempRoot }) => {

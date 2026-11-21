@@ -38,6 +38,7 @@ import {
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
+import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import type { ChatPaneProps } from "./chat-pane-inputs.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
@@ -460,6 +461,24 @@ describe("chat page split layout host", () => {
     window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
     const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
+    Object.assign(navigation.context.gateway.snapshot, {
+      phase: "connected",
+      client: {
+        request: vi.fn(async (method: string) =>
+          method === "sessions.catalog.resolve"
+            ? null
+            : catalogList(CATALOG_KEY, [
+                {
+                  threadId: CATALOG_KEY.threadId,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: false,
+                },
+              ]),
+        ),
+      },
+    });
     page.data = {
       sessionKey: CATALOG_SESSION_KEY,
       agentId: "research",

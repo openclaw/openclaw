@@ -35,7 +35,7 @@ suite.define(() => {
           .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         const create = actions.getByRole("link", { name: "New session" });
@@ -70,13 +70,13 @@ suite.define(() => {
           width,
         );
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
         const popover = page.locator(".sessions-filter-popover:popover-open");
         await popover.waitFor();
-        await popover.getByRole("button", { name: "Filter by key, agent, label, kind…" }).waitFor();
+        await popover.getByRole("searchbox", { name: "Search sessions…" }).waitFor();
         await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
         await page.keyboard.press("Escape");
@@ -89,7 +89,7 @@ suite.define(() => {
   // Narrow phones drop the big title but keep the heading for assistive tech.
   it.each([
     [390, false],
-    [620, true],
+    [620, false],
   ])("keeps the phone list toolbar usable at %i px", async (width, visibleTitle) => {
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
@@ -105,7 +105,7 @@ suite.define(() => {
         );
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         await actions.getByRole("searchbox", { name: "Search sessions" }).waitFor();
@@ -120,7 +120,7 @@ suite.define(() => {
         );
 
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
@@ -212,7 +212,6 @@ suite.define(() => {
 
       await openFilters();
       const search = popover.locator(".sessions-filter-popover__search input");
-      await popover.locator(".header-search__toggle").click();
       await search.fill("Pinned");
       expect(await search.inputValue()).toBe("Pinned");
       await expect

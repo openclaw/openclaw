@@ -135,7 +135,7 @@ export function prepareDoctorConfigMigrationResult(
     ) {
       const { collectModelBillingRouteMigrationWarnings } =
         await import("./model-billing-route-migration.js");
-      modelBillingRouteWarnings = params.runWithCurrentPluginMetadata(params.cfg, () =>
+      modelBillingRouteWarnings = await params.runWithCurrentPluginMetadata(params.cfg, () =>
         collectModelBillingRouteMigrationWarnings({
           before: billingRouteSource,
           after: billingRouteConfig,
@@ -149,14 +149,14 @@ export function prepareDoctorConfigMigrationResult(
     if (planBound && params.pluginInventoryChanged && postSession) {
       const { preparePostSessionPluginMigration } =
         await import("../../../infra/state-migrations.plugin-plan.js");
-      const { resolveLivePluginDoctorStateMigrationInventory } =
-        await import("../../../plugins/doctor-contract-registry.js");
+      const { prepareLivePluginDoctorStateMigrationInventory } =
+        await import("../../../plugins/doctor-contract-preparation.js");
       // Installation replaces the selected owner generation after preflight. Freeze
       // that generation before session writers; never reopen a blocked handoff.
-      postSession = params.runWithCurrentPluginMetadata(params.cfg, () =>
+      postSession = await params.runWithCurrentPluginMetadata(params.cfg, async () =>
         preparePostSessionPluginMigration({
           mode: "doctor",
-          inventory: resolveLivePluginDoctorStateMigrationInventory({
+          inventory: await prepareLivePluginDoctorStateMigrationInventory({
             config: params.cfg,
             env: process.env,
           }),

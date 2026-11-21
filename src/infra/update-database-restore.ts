@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -32,6 +33,7 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import { writeDisplacedDatabaseReceipts } from "./update-displaced-database-receipt.js";
 import type { PluginCohortRecoveryBinding } from "./update-plugin-cohort-schema.js";
 
 async function existingFile(file: string) {
@@ -128,6 +130,8 @@ export async function restoreUpdateDatabaseBackup(params: {
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
   pluginCohortRecovery?: PluginCohortRecoveryBinding;
+  /** Fires before the first live database changes; a failure before it left them untouched. */
+  onLiveMutation?: () => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -204,8 +208,10 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
+          params.onLiveMutation?.();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
@@ -262,6 +268,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           sources[sources.indexOf(shared)] = { ...shared, ...prepared, snapshotPath: targetPath };
         }
         const moves: Array<{
+          databasePath: string;
           source: string;
           target: string;
           identity: NonNullable<Awaited<ReturnType<typeof existingFile>>>;
@@ -275,7 +282,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             }
             const identity = await existingFile(source);
             if (identity) {
-              moves.push({ source, target, identity });
+              moves.push({ databasePath, source, target, identity });
             }
           }
         }
@@ -309,6 +316,11 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        // Cleanup may remove these files only after a later verified update, by this receipt.
+        // Bookkeeping never blocks a rollback: without a receipt the files stay protected.
+        await writeDisplacedDatabaseReceipts(params.runId, moves).catch(() => undefined);
+        assertOwned();
+        params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();
           try {

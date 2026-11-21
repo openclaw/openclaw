@@ -135,8 +135,9 @@ vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
   resolveGatewayInstallEntrypoint: async (root: string) => `${root}/dist/index.js`,
 }));
 
-vi.mock("../../infra/gateway-owner-lease.js", () => ({
-  readGatewayOwnerLease: () =>
+vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
+  ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
+  readGatewayOwnerLeaseAsync: async () =>
     detectRespawnSupervisorMock.mock.results.at(-1)?.value
       ? undefined
       : {

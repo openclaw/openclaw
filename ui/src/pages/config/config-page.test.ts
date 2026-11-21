@@ -270,11 +270,12 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   snapshot.loading = false;
   snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
   publishConfigSource(webPush);
-  expect(buttonNamed(container, "Send test").disabled).toBe(false);
+  expect(buttonNamed(container, "Test all browsers").disabled).toBe(false);
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(
-    container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
+    container.querySelector<HTMLInputElement>('input[aria-label="Notification title prefix"]')
+      ?.value,
   ).toBe("Settings test browser");
   const unsubscribe = buttonNamed(container, "Unsubscribe");
   expect(unsubscribe.disabled).toBe(false);
@@ -674,7 +675,7 @@ it.each(["notifications", "usage"] as const)(
   },
 );
 
-it("sends Privacy & Security rows to the pages that own them", () => {
+it("sends Privacy & security rows to the pages that own them", () => {
   const navigate = vi.fn();
   const context = configContext({ navigate });
   const view = mountConfigPage(context, { pageId: "security" });

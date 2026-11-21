@@ -1,9 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolSearchConfig as AuthoredToolSearchConfig } from "../config/types.tools.js";
-import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-types.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-protocol.js";
 
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
+
+/** In `tools` mode without selectors a session lists one set; an isolated cron run has none to share. */
+export function listsFixedToolSet(c: ToolSearchConfig, on: boolean, sessionKey?: string): boolean {
+  return on && c.mode === "tools" && !c.include && !c.exclude && !isCronRunSessionKey(sessionKey);
+}
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const setting = config?.tools?.toolSearch;

@@ -37,7 +37,7 @@ const {
     : "../../src/agents/sessions/agent-session-transcript.js"
 );
 const messages: Message[] = [];
-const manager = guardSessionManager(SessionManager.inMemory(), { allowedToolNames: ["read"] });
+const manager = guardSessionManager(SessionManager.inMemory());
 for (let index = 0; index < 20; index++) {
   const reasoning: ResponsesThinkingBlock = {
     type: "thinking",

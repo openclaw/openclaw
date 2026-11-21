@@ -16,7 +16,7 @@ registerEnglishCatalog(registerSkillLibraryEnglish);
 
 afterEach(cleanupSolid);
 
-it("does not rebuild the large device inventory for unrelated config feedback", () => {
+it("does not rebuild the large device inventory for unrelated config feedback", async () => {
   let reads = 0;
   const nodes = Array.from({ length: 160 }, (_, index) => ({
     get nodeId() {
@@ -31,13 +31,16 @@ it("does not rebuild the large device inventory for unrelated config feedback", 
   const [current, setCurrent] = createSignal(createDevicesViewProps({ nodes }));
   const view = mountSolid(() => <DevicesView {...current()} />);
   flush();
-  const first = view.container.querySelector(".device-entry");
+  const first = view.container.querySelector<HTMLDetailsElement>(".device-entry")!;
   expect(first).not.toBeNull();
   reads = 0;
   setCurrent((previous) => ({ ...previous, configSaving: true }));
   flush();
   expect(view.container.querySelector(".device-entry")).toBe(first);
   expect(reads).toBe(0);
+  first.open = true;
+  await Promise.resolve();
+  flush();
   const updatedNodes = nodes.with(0, Object.assign({}, nodes[0]!, { version: "new-runtime" }));
   setCurrent((previous) => ({ ...previous, nodes: updatedNodes }));
   flush();
