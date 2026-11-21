@@ -192,3 +192,77 @@ it.each([
     expect.objectContaining({ sessionKey: params.sessionKey, text }),
   );
 });
+
+it.each([
+  {
+    name: "standalone inbound anchor",
+    sessionKey: "agent:main:slack:channel:c0example0",
+    sameChannelThreadRequired: false,
+    expected: true,
+  },
+  {
+    name: "thread-root inbound",
+    sessionKey: "agent:main:slack:channel:c0example0:thread:1700000000.000002",
+    sameChannelThreadRequired: false,
+    expected: false,
+  },
+  {
+    name: "bound thread with an unsuffixed session key",
+    sessionKey: "agent:main:slack:channel:c0example0",
+    sameChannelThreadRequired: true,
+    expected: false,
+  },
+  {
+    name: "unknown admitted thread requirement",
+    sessionKey: "agent:main:slack:channel:c0example0",
+    sameChannelThreadRequired: undefined,
+    expected: false,
+  },
+])(
+  "classifies an explicit top-level Slack send from a $name",
+  ({ sessionKey, sameChannelThreadRequired, expected }) => {
+    expect(
+      isDeliveredCurrentSourceReply({
+        action: "send",
+        channel: "slack",
+        actionParams: {
+          target: "channel:C0EXAMPLE0",
+          message: "Good night.",
+          topLevel: true,
+        },
+        cfg: {},
+        sessionKey,
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C0EXAMPLE0",
+          currentThreadTs: "1700000000.000002",
+          currentMessageId: "1700000000.000002",
+          sameChannelThreadRequired,
+        },
+        deliveredPayload: {
+          result: {
+            receipt: { primaryPlatformMessageId: "1700000000.000004" },
+          },
+        },
+      }),
+    ).toBe(expected);
+  },
+);
+
+it.each([
+  ["171.222", true],
+  ["171.999", false],
+] as const)(
+  "classifies delivered Slack thread %s without discarding its reply anchor",
+  (threadId, expected) => {
+    expect(
+      isDeliveredCurrentSourceReply(
+        source("slack", "C123", {
+          actionParams: { target: "C123", threadId: "171.222", message: "thread reply" },
+          toolContext: { currentThreadTs: "171.222", sameChannelThreadRequired: false },
+          deliveredPayload: { receipt: { threadId } },
+        }),
+      ),
+    ).toBe(expected);
+  },
+);

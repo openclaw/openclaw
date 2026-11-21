@@ -248,6 +248,41 @@ describe("message-tool-only source replies", () => {
     },
   );
 
+  const sourceSessionKey = "agent:main:slack:channel:c0example0";
+  it.each<[string, string, boolean, boolean]>([
+    ["standalone channel session", sourceSessionKey, false, true],
+    ["thread-root session", `${sourceSessionKey}:thread:1700000000.000002`, false, false],
+    ["bound thread with an unsuffixed session key", sourceSessionKey, true, false],
+  ])(
+    "records an explicit top-level Slack send from a %s",
+    async (_label, sessionKey, sameChannelThreadRequired, expected) => {
+      const f = fixture({
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: {},
+        currentProvider: "slack",
+        currentAccountId: "default",
+        currentChannelId: "channel:C0EXAMPLE0",
+        currentThreadId: "1700000000.000002",
+        sameChannelThreadRequired,
+        currentMessageId: "1700000000.000002",
+        sessionKey,
+      });
+      const hookResult = await f.invoke({
+        args: {
+          action: "send",
+          channel: "slack",
+          accountId: "default",
+          target: "channel:C0EXAMPLE0",
+          message: "Good night.",
+          topLevel: true,
+          final: true,
+        },
+      });
+      expect(f.onDeliveredSourceReply).toHaveBeenCalledTimes(expected ? 1 : 0);
+      expect(hookResult).toEqual(expected ? { terminate: true } : undefined);
+    },
+  );
+
   it.each([
     ["the exact source route", {}, true],
     ["the same target in another account", { accountId: "account-2" }, false],

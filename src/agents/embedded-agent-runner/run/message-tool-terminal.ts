@@ -8,6 +8,8 @@ import {
   resolveAgentAssistantTurnId,
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
+import { resolveMessageActionTurnCapability } from "../../../gateway/message-action-turn-capability.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
@@ -24,6 +26,31 @@ import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
 import { isResumingAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export function resolveMessageToolSameChannelThreadRequired(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "messageActionTurnCapability" | "runId" | "sessionId" | "sessionKey"
+  >;
+  sessionAgentId: string;
+  clientToolPreparation: { sandboxSessionKey?: string };
+}): boolean | undefined {
+  const { attempt } = params;
+  return (
+    resolveMessageActionTurnCapability({
+      token: attempt.messageActionTurnCapability,
+      agentId: params.sessionAgentId,
+      runId: attempt.runId,
+      sessionKey:
+        params.clientToolPreparation.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
+      sessionId: attempt.sessionId,
+    })?.toolContext?.sameChannelThreadRequired ??
+    (sourceTurn.readChannelSourceTurnId(attempt)
+      ? sourceTurn.readChannelSourceTurnSameThreadRequired(attempt)
+      : undefined)
+  );
+}
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
