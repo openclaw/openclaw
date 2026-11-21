@@ -33,6 +33,7 @@ import {
 } from "./user-profile-events.js";
 import { selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import {
   requireResolvedUserProfileMetadataById,
   selectResolvedUserProfileMetadataById,
@@ -385,16 +386,20 @@ export function resolveUserChannelIdentityInDatabase(
         // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
         return login.kind !== "provider" || login.provider !== "github";
       });
-      const providerLogins = executeSqliteQuerySync(
+      const providerIdentities = executeSqliteQuerySync(
         db,
         kysely
           .selectFrom("user_profile_identities")
           .select(["provider", "subject"])
           .where("profile_id", "=", profile.id)
           .where("canonical_login", "is", null),
-      )
+      ).rows;
+      const openclawIdAccountIds = providerIdentities
+        .filter((row) => row.provider === openClawIdProfileProvider)
+        .map((row) => row.subject);
+      const providerLogins = providerIdentities
         // Retired attribution rows are not authenticated provider-login aliases.
-        .rows.filter(
+        .filter(
           (row) =>
             row.provider !== "github" &&
             row.provider !== "github-attribution" &&
@@ -408,6 +413,7 @@ export function resolveUserChannelIdentityInDatabase(
       return {
         ...(authorization ? { authorization } : {}),
         profileId: profile.id,
+        ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),
         displayName: profile.display_name,
         role: profile.role ?? null,
         emails,

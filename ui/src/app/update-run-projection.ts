@@ -6,6 +6,7 @@ import {
 } from "../../../src/infra/update-run-history-projection.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
@@ -23,21 +24,69 @@ export function updateRunStepOwner(step: string): string {
   return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
 }
 
+function isServingUpdateTarget(
+  run: UpdateRunRecord,
+  { version, buildId }: UpdateRunServingIdentity,
+) {
+  const { reason, before, after, target, verification } = run;
+  const rollback = verification.rollbackOutcome?.status;
+  // Rollback can rewrite `after` with the restored package, even at the same version.
+  if (
+    (reason !== "post-update-failed" &&
+      reason !== "version-mismatch" &&
+      reason !== "build-id-mismatch") ||
+    rollback === "succeeded" ||
+    rollback === "failed" ||
+    verification.recovery?.packageRollbackVerified ||
+    (after.version && after.version !== version) ||
+    (target.version && target.version !== version) ||
+    (target.sha && target.sha !== after.sha)
+  ) {
+    return false;
+  }
+  return after.buildId
+    ? buildId === after.buildId &&
+        buildId !== before.buildId &&
+        buildId !== verification.runningBuildId
+    : reason !== "build-id-mismatch" &&
+        target.kind === "package" &&
+        Boolean(
+          version &&
+          target.version === version &&
+          verification.runningVersion &&
+          version !== verification.runningVersion &&
+          version !== before.version,
+        );
+}
+
 export function projectUpdateRun(
   run: UpdateRunRecord,
   connected = true,
   serving?: UpdateRunServingIdentity,
 ) {
   const terminal = run.status !== "running";
+  const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const targetNote =
+    historical && serving && isServingUpdateTarget(run, serving)
+      ? t("updates.run.servingTarget")
+      : null;
   const report = historical
-    ? { headline: historical, lines: [], markdown: historical }
+    ? {
+        headline: historical,
+        lines: targetNote ? [targetNote] : [],
+        markdown: targetNote ? `${historical}\n\n${targetNote}` : historical,
+      }
     : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
-    if (phase === "repairing" && !recorded && phase !== run.phase) {
+    if (
+      !recorded &&
+      phase !== run.phase &&
+      (phase === "repairing" || (repairRun && phase !== "finished"))
+    ) {
       return [];
     }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";
@@ -138,6 +187,7 @@ export function projectUpdateRun(
     })),
     detailStep: detailStep?.step,
     details,
+    historicalVerificationLabel: historical ? t("updates.run.recordedVerification") : undefined,
     oracles: managedByOcm ? [] : oracles,
   };
 }

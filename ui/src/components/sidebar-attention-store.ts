@@ -15,7 +15,7 @@ import {
   isCronInventoryInvalidation,
 } from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
-import { createInitialCronState, loadCronStatus } from "../lib/cron/state.ts";
+import { createCronReadState, readCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
@@ -39,9 +39,14 @@ import {
   type CronAttentionJob,
   buildSidebarAttentionEntries,
   cronOverdueAt,
+  compactCronAttentionJob,
 } from "./sidebar-attention-items.ts";
 import type { OpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
-import { retainedDismissals, resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import {
+  resolveSidebarHistoricalUpdateAttention,
+  resolveSidebarUpdateAttention,
+  retainedDismissals,
+} from "./sidebar-attention-update.ts";
 
 type SidebarAttentionOwner = {
   connectionRevision: number;
@@ -297,6 +302,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
+    const historicalUpdate = resolveSidebarHistoricalUpdateAttention(this.sources);
     // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
     const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
       ? null
@@ -314,7 +320,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
-      attention: [...attention, ...(this.#openClawIdAttention?.items(now) ?? [])],
+      attention: [
+        ...attention,
+        ...(historicalUpdate ? [historicalUpdate] : []),
+        ...(this.#openClawIdAttention?.items(now) ?? []),
+      ],
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
@@ -441,12 +451,15 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
               break;
             }
             refresh.requested = false;
-            const cron = createInitialCronState<CronCompactJob>({ client, connected: true });
+            const cron = createCronReadState<CronCompactJob>({ client, connected: true });
             cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
             // The Inbox consumes the whole inventory, rather than one table page.
             cron.cronJobsLimit = 200;
-            await Promise.all([loadCompactCronJobsPage(cron), loadCronStatus(cron)]);
+            const [, status] = await Promise.all([
+              loadCompactCronJobsPage(cron),
+              readCronStatus(client).catch(() => null),
+            ]);
             while (
               canRefreshCron() &&
               cron.cronJobsHasMore &&
@@ -456,27 +469,14 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
               await loadCompactCronJobsPage(cron, { append: true });
             }
             if (current()) {
-              const failed = Boolean(cron.cronJobsError || cron.cronError);
+              const failed = Boolean(cron.cronJobsError || !status);
               this.#cronRefreshNeeded ||= failed;
               this.#cronRetryAt = failed ? Date.now() + 60_000 : undefined;
               if (!cron.cronJobsError && !cron.cronJobsHasMore) {
-                this.#cronJobs = cron.cronJobs.map((job) => ({
-                  id: job.id,
-                  name: job.name,
-                  agentId: job.agentId,
-                  enabled: job.enabled,
-                  updatedAtMs: job.updatedAtMs,
-                  state: {
-                    nextRunAtMs: job.nextRunAtMs ?? undefined,
-                    lastRunAtMs: job.lastRunAtMs ?? undefined,
-                    lastRunStatus: job.lastRunStatus ?? undefined,
-                    runningAtMs: job.runningAtMs,
-                    autoDisabled: job.autoDisabled,
-                  },
-                }));
+                this.#cronJobs = cron.cronJobs.map(compactCronAttentionJob);
               }
-              if (!cron.cronError) {
-                this.#cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
+              if (status !== null) {
+                this.#cronSchedulerEnabled = status.enabled ?? null;
               }
               publishSource({
                 // Keep progress visible under sustained events, but only a fresh,
@@ -486,7 +486,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
                   !cron.cronJobsHasMore &&
                   !refresh.requested &&
                   !cron.cronJobsError &&
-                  !cron.cronError,
+                  status !== null,
                 modelAuthAgentId: null,
               });
               if (cron.cronJobsHasMore && !canRefreshCron()) {

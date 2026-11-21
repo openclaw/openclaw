@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as work from "../process/gateway-work-admission.js";
@@ -39,6 +39,10 @@ function blockedJob(id: string, nowMs: number, nextRunAtMs: number) {
 }
 
 afterEach(work.resetGatewayWorkAdmission);
+// Capacity cases fill the default run slots; no spare memory admits an extra run.
+beforeEach(() => {
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+});
 
 it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
   const t0 = Date.now();
@@ -408,5 +412,42 @@ it.each([
     await waitForCronRunQueue(state);
     stop(state);
     stop(replacement);
+  }
+});
+
+it("starts one run past the eight default slots per drain while 1 GiB is free", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  const free = vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(9));
+    // Each drain reads memory again and adds at most one run.
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(10));
+    // Under 1 GiB free, the queue keeps the rest waiting.
+    free.mockReturnValue(1024 ** 3 - 1);
+    await running.wake(state);
+    expect(started).toHaveLength(10);
+  } finally {
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
   }
 });

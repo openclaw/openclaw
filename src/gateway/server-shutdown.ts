@@ -28,7 +28,8 @@ export function createGatewayCloseSteps(
   ) => {
     const work = measureGatewayCloseStep(`restart.close.${name}`, run, [["reason", reason]]);
     if (exitAfterClose && !(await settlesWithin(work, timeoutMs))) {
-      throw new GatewayShutdownCleanupRetainedError([], `${name} resources remain after grace`);
+      // The process watchdog bounds this join; a late success must still reach database close.
+      shutdownLog.warn(`${name} resources remain after grace; waiting for cleanup`);
     }
     return await work;
   };

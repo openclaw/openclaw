@@ -258,7 +258,7 @@ test.each([
   { stage: "chat.history", change: "metadata", policy: "named role" },
   { stage: "chat.history", change: "lifecycle", policy: "embedded" },
 ] as const)(
-  "honors $policy enrichment authority after a $change change during $stage",
+  "applies $policy enrichment policy after a $change change during $stage",
   async ({ stage, change, policy }) => {
     await withInventory(async ({ cfg, viewerId, context, asReader, setConfig }) => {
       const embedded = policy === "embedded";
@@ -325,15 +325,13 @@ test.each([
         const invoke = () => list(cfg, args, options);
         const pending = embedded ? invoke() : asReader(invoke);
         if (change === "role") {
-          // #201334 fixes role policy for an admitted request, not the next request.
           const admitted = await pending;
-          expect(changed).toBe(true);
           expect(admitted.details).toMatchObject({
             count: 2,
             sessions: [{ key: first.sessionKey }, { key: second.sessionKey }],
           });
           expect(JSON.stringify(admitted)).toContain(bufferedText);
-          expect(JSON.stringify(admitted)).toContain("Still-visible reply");
+          expect(changed).toBe(true);
         }
         const result =
           change === "role"

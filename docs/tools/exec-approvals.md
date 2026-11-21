@@ -34,6 +34,23 @@ Node execution still checks the target policy before dispatch: caller
 requires approval even when the caller requests `full` / `off`.
 </Note>
 
+## Who can review session approvals
+
+A noncreator collaborator whose resolved Gateway role has
+`sessions.others: "invited"` and who holds a session membership can list or resolve
+only approvals raised by their own profile's turns, while the session remains
+readable. This restriction does not apply to creators, administrators, role-wide
+`view`, `suggest`, or `write` teammates, or legacy device-based approvers. Existing
+approval scopes and reviewer/device bindings still govern every caller.
+
+The Gateway records the initiating profile from authenticated turn authority,
+not tool arguments or an approval request payload. Older or unattributed
+approvals do not qualify as an invitee's own requests; their visibility to other
+callers is unchanged. The restriction covers exec, plugin, and system-agent
+requests, generic lookup and history, session events and replay, and approval
+notifications. Server-authenticated channel routes retain their separate
+reviewer custody checks; an invitation never lets an agent approve its own action.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:

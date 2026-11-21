@@ -7,7 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
-import { gitReleaseSlot, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
+import { resolveGitReleasePrefix, servingGitReleaseSlot } from "../../infra/git-release-paths.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -482,7 +483,11 @@ export async function updateGitInstall(params: {
     }
     return snapshot;
   };
-  const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
+  // A Git release takes no database image and migrates at Gateway start, whose
+  // upgrade owns its own space; only a checkout updated in place is checked here.
+  const checksSnapshot = params.gitReleases !== true;
+  const snapshotBeforeClone =
+    params.switchToGit && checksSnapshot ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
     return failed(
       "snapshot-capacity-insufficient",
@@ -529,12 +534,13 @@ export async function updateGitInstall(params: {
           params.assertCurrent?.();
         },
         inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
-        beforeGitStaging: params.switchToGit
-          ? undefined
-          : async () => ({
-              step: await checkSnapshot(),
-              failureReason: "snapshot-capacity-insufficient",
-            }),
+        beforeGitStaging:
+          params.switchToGit || !checksSnapshot
+            ? undefined
+            : async () => ({
+                step: await checkSnapshot(),
+                failureReason: "snapshot-capacity-insufficient",
+              }),
         publishGitCheckout,
         gitArtifactStorageRoot,
         validateCandidate: params.validateCandidate,
@@ -671,10 +677,19 @@ export async function gatewayServiceOwnsGitInstall(
       process.env,
       timeoutMs,
     );
-    const slot = gitReleaseSlot(resolveGitReleasePrefix());
+    const slot = servingGitReleaseSlot(resolveGitReleasePrefix());
     const release = await inspectManagedGatewayServiceBeforeUpdate({ root: slot, state });
     if (release.kind === "owned") {
       return true;
+    }
+    // On macOS the Gateway's handoff cannot rebind its own LaunchAgent. Even an
+    // independent update must not convert using another selection as the running
+    // checkout: the release runner would use it as the verified predecessor.
+    if (
+      process.platform === "darwin" &&
+      (process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" || readPackageReleaseSlotSync(slot))
+    ) {
+      return false;
     }
     const checkout = await inspectManagedGatewayServiceBeforeUpdate({ root, state });
     return shouldRestart && checkout.kind === "owned" && checkout.refreshDefinition;
