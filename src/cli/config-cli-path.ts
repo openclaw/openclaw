@@ -272,6 +272,9 @@ export function setAtPath(
       if (index === undefined) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
+      if (index > current.length) {
+        throw new Error(formatOutOfRangeArrayIndexError(index, current.length));
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -296,6 +299,9 @@ export function setAtPath(
     if (index === undefined) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
+    if (index > current.length) {
+      throw new Error(formatOutOfRangeArrayIndexError(index, current.length));
+    }
     current[index] = value;
     return;
   }
@@ -303,6 +309,14 @@ export function setAtPath(
     throw new Error(`Cannot set "${last}" (parent is not an object)`);
   }
   (current as Record<string, unknown>)[last] = value;
+}
+
+function formatOutOfRangeArrayIndexError(index: number, length: number): string {
+  const nextStep =
+    length === 0
+      ? "Use index 0 to append the first item."
+      : `Use an index from 0 to ${length - 1} to update an existing item, or index ${length} to append.`;
+  return `Array index ${index} is out of range for an array of length ${length}. ${nextStep}`;
 }
 
 function modelArrayIds(value: unknown): Set<string> | null {

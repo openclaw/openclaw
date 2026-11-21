@@ -16,6 +16,51 @@ function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<stri
   return value;
 }
 
+describe("setAtPath array indexes", () => {
+  it("rejects an out-of-range leaf index without creating holes", () => {
+    const root = { items: ["a", "b"] };
+
+    expect(() => setAtPath(root, ["items", "5"], "z")).toThrow(
+      "Array index 5 is out of range for an array of length 2. Use an index from 0 to 1 to update an existing item, or index 2 to append.",
+    );
+    expect(root.items).toEqual(["a", "b"]);
+  });
+
+  it("rejects an out-of-range intermediate index without creating holes", () => {
+    const root = { items: ["a", "b"] };
+
+    expect(() => setAtPath(root, ["items", "5", "name"], "z")).toThrow(
+      "Array index 5 is out of range for an array of length 2. Use an index from 0 to 1 to update an existing item, or index 2 to append.",
+    );
+    expect(root.items).toEqual(["a", "b"]);
+  });
+
+  it("suggests the first index when appending to an empty array", () => {
+    const root: { items: unknown[] } = { items: [] };
+
+    expect(() => setAtPath(root, ["items", "2"], "z")).toThrow(
+      "Array index 2 is out of range for an array of length 0. Use index 0 to append the first item.",
+    );
+    expect(root.items).toEqual([]);
+  });
+
+  it("appends at the current array length", () => {
+    const root = { items: ["a", "b"] };
+
+    setAtPath(root, ["items", "2"], "c");
+
+    expect(root.items).toEqual(["a", "b", "c"]);
+  });
+
+  it("creates nested values at index zero in an empty array", () => {
+    const root: { items: unknown[] } = { items: [] };
+
+    setAtPath(root, ["items", "0", "name"], "new");
+
+    expect(root.items).toEqual([{ name: "new" }]);
+  });
+});
+
 describe("parseConfigSetValue", () => {
   it.each([
     { member: "fallbacks", value: ["backup"] },
