@@ -9,6 +9,7 @@ import { parseReasoningTagAt } from "../../packages/markdown-core/src/reasoning-
 import {
   addReplyPayloadMediaFailures,
   appendReplyMediaFailures,
+  setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -526,6 +527,11 @@ export function createStreamRendering({
       replyToCurrent,
     };
     addReplyPayloadMediaFailures(payload, mediaFailures);
+    if (options?.finalReply !== undefined) {
+      // Only message_end supplies the complete parsed reply. Other final flushes
+      // can belong to a single content item or an interrupted provider operation.
+      setReplyPayloadMetadata(payload, { assistantTranscriptAggregate: true });
+    }
     const emittedBlockSourceRange =
       chunk === blockReplyText &&
       cleanedText === chunk &&

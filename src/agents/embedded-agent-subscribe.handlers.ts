@@ -1,6 +1,7 @@
 /**
  * Dispatches serialized embedded-agent subscription events to specific handlers.
  */
+import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   type AgentAssistantSourceReceipt,
@@ -76,7 +77,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       !isSubscribeTranscriptOnlyOpenClawAssistantMessage(evt.message)
     ) {
       if (evt.type === "message_start" || !assistantSource) {
-        assistantSource = {};
+        assistantSource = { itemId: randomUUID() };
         assistantReplyToId = resolveAssistantReplySource(
           ctx.params.getUserTranscriptContexts?.(),
           ctx.params.messageChannel,
