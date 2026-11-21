@@ -19,9 +19,10 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
-const onboarding = { search: "?onboarding=1" };
-export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
-  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+// The fixture Gateway advertises agent:main:main as the selected agent's main session.
+export const agentChat = expect.objectContaining({ pathname: "/openclaw/chat/main" });
+export const waitForAgentChat = (context: Pick<ApplicationContext, "navigate">) =>
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat", agentChat));
 
 export const missingWizardError = () =>
   new GatewayRequestError({

@@ -140,8 +140,8 @@ suite.define(() => {
 
           await button(dialog.locator("openclaw-modal-actions"), decision).click();
           if (decision === "Yes") {
-            await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-            await page.getByText("Your reviewed model is ready.", { exact: true }).waitFor();
+            await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+            expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
           } else {
             if (decision === "No") {
               await dialog

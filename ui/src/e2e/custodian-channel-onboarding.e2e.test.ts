@@ -1,4 +1,4 @@
-// Control UI tests cover the first-run model-to-channel onboarding handoff.
+// Control UI tests cover the onboarding assistant's channel nudge after first-run model setup.
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
@@ -111,6 +111,10 @@ suite.define(() => {
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
         await providerChoice.click();
         await gateway.waitForRequest("openclaw.setup.activate.start");
+        // A verified primary model opens the agent's chat; the onboarding
+        // assistant remains available through its explicit route.
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
         await waitForControlUiRoute(page, {
           pathname: "/custodian",
           routeId: "custodian",
