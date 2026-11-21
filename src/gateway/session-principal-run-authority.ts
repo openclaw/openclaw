@@ -18,6 +18,8 @@ export async function prepareSessionParticipationRun(params: {
   agentId: string;
   entry?: SessionEntry;
   turnCeiling?: ParticipationCeiling;
+  preserveRecordedSource?: true;
+  recoveredOperatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
 }) {
   const ceiling = intersectParticipationCeilings(
@@ -34,6 +36,8 @@ export async function prepareSessionParticipationRun(params: {
     context: params.context,
     profileId: ceiling.profileId,
     participationCeiling: ceiling,
+    preserveRecordedSource: params.preserveRecordedSource,
+    recoveredOperatorAuthority: params.recoveredOperatorAuthority,
     agentId: ceiling.source.agentId,
     sessionKey: ceiling.sessionKey,
     sessionId: ceiling.source.sessionId,

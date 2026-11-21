@@ -22,6 +22,7 @@ const grandchildTask = "Return the participant's isolated grandchild result.";
 const childResult = "PRIVATE_PARTICIPANT_CHILD_RESULT_61c1";
 const grandchildResult = "PRIVATE_PARTICIPANT_GRANDCHILD_RESULT_8b4e";
 const ownerPrompt = "Run the creator's independent subsequent turn.";
+const resetPrompt = "Continue the reset participant child with its original ceiling.";
 const participantTools = ["read", "sessions_spawn"];
 
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
@@ -104,6 +105,9 @@ it("carries a real invitee's native child and grandchild ceiling through private
             }
             reply(response, "Child accepted.");
           }
+        } else if (body.includes(resetPrompt)) {
+          record("child-reset");
+          reply(response, "Reset child complete.");
         } else if (body.includes(childTask)) {
           if (body.includes(grandchildResult)) {
             record("child-completion");
@@ -262,6 +266,45 @@ it("carries a real invitee's native child and grandchild ceiling through private
         expect(JSON.stringify(parentEvents)).not.toContain(childResult);
         expect(JSON.stringify(parentEvents)).not.toContain(grandchildResult);
         expect(JSON.stringify(events.guest)).not.toContain(childResult);
+        await sender.request(
+          "sessions.reset",
+          { agentId: "main", key: child.childSessionKey },
+          { signal },
+        );
+        const resetDelivered = createDeferred();
+        const observeReset = () => {
+          if (
+            listSubagentRunsForRequester(parent.key).some(
+              (run) => run.runId === "native-child-reset" && run.delivery?.status === "delivered",
+            )
+          ) {
+            resetDelivered.resolve();
+          }
+        };
+        const stopReset = subscribeSubagentRunChanges("persistence", observeReset);
+        try {
+          await sender.request(
+            "chat.send",
+            {
+              agentId: "main",
+              sessionKey: child.childSessionKey,
+              message: resetPrompt,
+              idempotencyKey: "native-child-reset",
+            },
+            { signal },
+          );
+          await wait("native-child-reset");
+          observeReset();
+          await withinTest(resetDelivered.promise, signal);
+        } finally {
+          stopReset();
+        }
+        expect(
+          requests.findLast((request) => request.phase === "parent-completion")?.tools,
+        ).toEqual(participantTools);
+        expect(requests.filter((request) => request.phase === "child-reset")).toEqual([
+          { phase: "child-reset", tools: participantTools },
+        ]);
         await sender.request(
           "session.members.setAccess",
           { agentId: "main", sessionKey: parent.key, identityId: carol.id, access: "read" },

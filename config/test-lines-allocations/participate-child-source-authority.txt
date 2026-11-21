@@ -1,4 +1,4 @@
-1075
+1222
 # Child participation needs independent persistence/reset, live invitation/source,
 # host-bound native spawn, real Gateway every-turn, completion-steering, and
 # repeated model-policy intersection proofs. The final cutover also covers native
@@ -7,3 +7,10 @@
 # These cover separate authority boundaries; helper-only proof missed the actual
 # prepared-run writer admission and the active-owner steering path.
 # Timings are retained in the item7-stageb-* evidence logs; CI timings pending.
+# Final Astra review added 105 owning regression lines: deleted native child rows
+# cannot recreate owner turns; reset/second native turns keep completion custody;
+# restart intersects its captured model policy and rejects unavailable sources.
+# Both P1s failed before repair; the reset proof exposed a third real capture gap.
+# The correction review adds 42 lines proving a current reset generation can
+# complete beside retained historical generations, with stale-only custody denied
+# and actual native requester delivery observed instead of only model execution.

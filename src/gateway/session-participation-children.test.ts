@@ -13,6 +13,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeAgentTurnSession } from "./agent-turn/agent-turn-source-admission.js";
 import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { revokeSessionParticipation } from "./session-participation-lifetime.js";
@@ -206,3 +207,53 @@ it("admits only an exact host-bound child launch, keeping generic agent unavaila
     ).resolves.toBeUndefined();
   });
 });
+
+it.each(["captured", "unavailable"] as const)(
+  "keeps the interrupted participant's %s operator source during restart",
+  async (sourceKind) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async ({ stateDir }) => {
+        const f = await fixture();
+        f.cfg.agents = { defaults: { model: "fixture/a" } };
+        f.role.modelPolicy = { allow: ["fixture/a"] };
+        setRuntimeConfigSnapshot(f.cfg);
+        const recovery = await recoveryFixture(stateDir, f.profileId, {
+          config: f.cfg,
+          device: pairedOperator(),
+          scopes: f.role.scopes,
+        });
+        f.role.modelPolicy = { allow: ["fixture/a", "fixture/b"] };
+        setRuntimeConfigSnapshot(f.cfg);
+        const preparation = prepareSessionSystemTurnAuthority({
+          context: recovery.context,
+          ...f.child,
+          sessionId: f.entry!.sessionId,
+          preserveRecordedSource: true,
+          operatorSource:
+            sourceKind === "captured"
+              ? { kind: "gateway", snapshot: recovery.snapshot }
+              : { kind: "unavailable" },
+        });
+        if (sourceKind === "unavailable") {
+          await expect(preparation.then((result) => result?.release())).rejects.toThrow(
+            "cannot be recovered",
+          );
+          return;
+        }
+        const restored = (await preparation)!;
+        try {
+          expect(restored.authority.participationCeiling).toEqual(f.ceiling);
+          expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
+            true,
+          );
+          expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(
+            false,
+          );
+        } finally {
+          restored.release();
+        }
+      },
+    );
+  },
+);
