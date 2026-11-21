@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectRequestCount,
@@ -248,4 +255,90 @@ suite.define(() => {
       },
     );
   });
+
+  it.skipIf(!expectUploadSurface)(
+    "stages a pasted clipboard image in the chat terminal composer and submits only on Send",
+    async () => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const sessionKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            sessions: [
+              createControlUiSessionRow(sessionKey, "Paste image chat", 1_790_000_000_000),
+            ],
+            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open", "terminal.upload"],
+            methodResponses: {
+              "terminal.upload": { path: "/tmp/openclaw-terminal-upload/pasted.png", size: 3 },
+            },
+            terminalEnabled: true,
+          });
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await waitForControlUiGatewayReady(page);
+          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+          await openChatSidePanelType(pane, "Terminal");
+          // The embedded chat terminal opens on its session picker; pick the
+          // already-owned session so the composer mounts in the embedded panel.
+          const embedded = pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
+          await embedded.locator(".tp-session.is-current").click();
+          const composer = embedded.locator("form.tp-composer input");
+          await composer.waitFor({ state: "visible" });
+
+          // A text-only paste stays on the native input path: no upload, no preventDefault.
+          const textPastePrevented = await composer.evaluate((input) => {
+            const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
+            Object.defineProperty(paste, "clipboardData", {
+              value: {
+                items: [{ type: "text/plain", getAsFile: () => null }],
+                getData: () => "echo hi",
+              },
+            });
+            input.dispatchEvent(paste);
+            return paste.defaultPrevented;
+          });
+          expect(textPastePrevented).toBe(false);
+          expect(await gateway.getRequests("terminal.upload")).toHaveLength(0);
+
+          await composer.fill("cat");
+
+          // A real clipboard paste carrying a PNG image file through the shipped
+          // composer input: the upload owner admits it instead of the input.
+          await composer.evaluate((input) => {
+            const transfer = new DataTransfer();
+            transfer.items.add(
+              new File([new Uint8Array([1, 2, 3])], "pasted.png", { type: "image/png" }),
+            );
+            const paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true });
+            Object.defineProperty(paste, "clipboardData", { value: transfer });
+            input.dispatchEvent(paste);
+          });
+
+          await expectRequestCount(gateway, "terminal.upload", 1, 10_000);
+          const pastedUpload = (await gateway.getRequests("terminal.upload"))[0]?.params;
+          expect(pastedUpload).toMatchObject({
+            name: "pasted.png",
+            contentBase64: "AQID",
+          });
+          const chip = embedded.locator(".tp-attachment");
+          await chip.waitFor({ state: "visible" });
+          await expect.poll(() => chip.textContent()).toContain("pasted.png");
+          // The attachment is editable before submission: the composer draft survives.
+          expect((await gateway.getRequests("terminal.input")).length).toBe(0);
+
+          await embedded.locator(".tp-composer__submit").click();
+          // Paste line plus Enter arrive as terminal.input requests only after Send.
+          await expectRequestCount(gateway, "terminal.input", 2, 10_000);
+          const sentData = (await gateway.getRequests("terminal.input"))
+            .map((request) => (request.params as { data?: string }).data ?? "")
+            .join("");
+          expect(sentData).toContain("cat /tmp/openclaw-terminal-upload/pasted.png");
+          expect(sentData).toContain("\r");
+          expect(sentData.replace("\r", "")).not.toMatch(/[\r\n]/);
+          await expect.poll(() => chip.count()).toBe(0);
+        },
+      );
+    },
+  );
 });
