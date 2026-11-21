@@ -112,7 +112,7 @@ class SessionBrowserRefreshTest {
       drainWithMainLooper {
         model.chatSessions.first { rows -> rows.any { it.key == "first" } }
         withTimeout(5_000) {
-          model.isConnected.first { it == runtime.isConnected.value }
+          model.isConnected.first { it == runtime.gatewayConnectionDisplay.value.isConnected }
           model.gatewayCatalogRevision.first { it == runtime.gatewayCatalogRevision.value }
           model.sessionBrowserRevision.first { it == runtime.chat.sessionBrowserRevision.value }
           combine(model.chatSessionOwnerAgentId, model.gatewayDefaultAgentId) { owner, fallback -> owner ?: fallback }
