@@ -1,0 +1,2 @@
+# Telegram preview retirement adds 592 regression lines across cache, draft and fan-out contracts.
+592
