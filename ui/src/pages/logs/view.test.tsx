@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
@@ -351,9 +352,10 @@ it.each(["follow", "queued-follow", "reader"] as const)(
 );
 
 it("shows whether the stream is following as the reader leaves and returns to the end", () => {
-  vi.useFakeTimers({
-    toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
-  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", clock.request);
+  vi.stubGlobal("cancelAnimationFrame", clock.cancel);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
     this: HTMLElement,
   ) {
@@ -386,6 +388,7 @@ it("shows whether the stream is following as the reader leaves and returns to th
   const frames = (count = 4) => {
     for (let index = 0; index < count; index++) {
       vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
       flush();
       stream.dispatchEvent(new Event("scroll"));
       flush();
@@ -402,6 +405,7 @@ it("shows whether the stream is following as the reader leaves and returns to th
   };
   const end = () => stream.scrollHeight - stream.clientHeight;
   const expired = () => {
+    clock.flush(performance.now());
     vi.advanceTimersByTime(250);
     flush();
   };
@@ -435,8 +439,10 @@ it("shows whether the stream is following as the reader leaves and returns to th
     expect(stream.scrollTop).toBe(readerTop);
     expect(toggle.checked).toBe(false);
 
-    // Returning to the end resumes.
-    wheelTo(end());
+    // Model the idle deadline passing before the first input frame and scroll.
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: end() - stream.scrollTop }));
+    vi.advanceTimersByTime(250);
+    scrollTo(end());
     frames(1);
     expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
     expect(toggle.checked).toBe(true);
@@ -472,6 +478,14 @@ it("shows whether the stream is following as the reader leaves and returns to th
     expect(toggle.checked).toBe(false);
     wheelTo(end());
     frames(1);
+    expect(toggle.checked).toBe(false);
+
+    // A mostly horizontal wheel in the interior may cause no vertical movement.
+    // A later programmatic return to the end must still leave the switch off.
+    scrollTo(end() - 200);
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaX: 80, deltaY: 0.25 }));
+    expired();
+    scrollTo(end());
     expect(toggle.checked).toBe(false);
 
     // A native wheel offset can arrive before the browser's coalesced scroll event.
