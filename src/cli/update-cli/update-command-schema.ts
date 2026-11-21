@@ -5,11 +5,15 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
+  addAgentInventoryPaths,
+  listIncompleteUpdateMigrations,
+  resolveAgentDirOverrideDatabasePaths,
   resolveUpdateStateContentVersion,
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
@@ -538,6 +542,7 @@ export async function captureUpdateActivationSchemas(params: {
   // failure after activation is reported as unverified state and left installed.
   // PostgreSQL state keeps its candidate-only read until a live-database
   // baseline is proven before the owning Gateway stops.
+  const agentPaths = new Set(resolveAgentDirOverrideDatabasePaths(params.env));
   const schemaVersions =
     params.candidateSchemaVersions ||
     !Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres")
@@ -546,9 +551,20 @@ export async function captureUpdateActivationSchemas(params: {
           config: params.config,
           env: params.env,
           timeoutMs: params.timeoutMs,
+          // Doctor leaves retained agent stores unmigrated; the final check excludes them too.
+          includeRetainedAgentPaths: true,
+          onInventory: (files) => addAgentInventoryPaths(agentPaths, files),
         })
       : undefined;
   const { run, candidateSchemaVersions, gatewayRestartCompletion } = params;
+  const pendingMigrations =
+    schemaVersions && candidateSchemaVersions
+      ? listIncompleteUpdateMigrations(schemaVersions, {
+          sharedPath: resolveOpenClawStateSqlitePath(params.env),
+          agentPaths,
+          candidateSchemaVersions,
+        }).filter(({ found }) => found !== null)
+      : [];
   if (
     run?.completionOwner === "gateway-restart" &&
     !gatewayRestartCompletion &&
@@ -574,5 +590,29 @@ export async function captureUpdateActivationSchemas(params: {
       );
     }
   }
-  return { previousSchemaVersions, schemaVersions };
+  return { previousSchemaVersions, schemaVersions, pendingMigrations };
+}
+
+/** Doctor migrates under exclusive maintenance, which a Gateway this update did not stop keeps. */
+export async function assertPendingMigrationsAdmitted(params: {
+  pendingMigrations: ReadonlyArray<{ path: string; expected: number; found: number | null }>;
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}): Promise<void> {
+  // Unreadable ownership leaves the decision to Doctor's own admission.
+  const owner = params.pendingMigrations.length
+    ? await readActiveGatewayLockIdentity({ env: params.env, timeoutMs: params.timeoutMs }).catch(
+        () => undefined,
+      )
+    : undefined;
+  if (!owner) {
+    return;
+  }
+  const stores = params.pendingMigrations
+    .map(({ path: file, expected, found }) => `${file} (schema ${found} -> ${expected})`)
+    .join(", ");
+  throw new UpdatePreMutationError(
+    "database-migration-owner-live",
+    `This update must migrate ${stores}, which needs exclusive access to the state, but a Gateway (PID ${owner.pid}) still owns it and this update does not stop that Gateway. Stop it through its service manager, or press Ctrl+C in its terminal, then rerun ${formatCliCommand("openclaw update", params.env)}. No package replacement was attempted.`,
+  );
 }

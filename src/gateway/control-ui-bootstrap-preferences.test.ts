@@ -25,7 +25,6 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   using jsonSchema = vi.spyOn(OpenClawSchema, "toJSONSchema");
   const config: OpenClawConfig = {
     ui: { prefs: { locale: "de" } },
-    gateway: { controlUi: { experimental: { templates: true } } },
     tts: {
       provider: "openai",
       maxTextLength: 1234,

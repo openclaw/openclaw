@@ -23,6 +23,10 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+The 30-minute idle delivery deadline does not discard a result waiting behind its
+recorded blocker while that execution still belongs to the live requester. When
+the turn ends or yields, normal completion admission resumes. Dead or unknown
+blockers retain the expiry notice path.
 An ordinary requester run ending or a later follow-up taking over does not discard
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
@@ -95,6 +99,16 @@ Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
 precedence; cancellation does not revive work those owners have closed.
+
+If Gateway shutdown aborts the requester while a completed child's delivery is in
+flight, an unconsumed result remains pending for startup recovery. A result already
+committed to the requester keeps its receipt and is not delivered again. An
+unconfirmed channel send retains its ambiguous outcome.
+This includes private continuation turns. A consumed private result stays in the
+requester's saved model context even if shutdown aborts the turn before it replies.
+Eligible root requesters resume through normal restart recovery. Spawned requesters
+are not independently resumed; their next turn reads the saved result without
+another completion delivery.
 
 By default, delivery depends on requester depth:
 
