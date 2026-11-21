@@ -68,6 +68,8 @@ describe("formatApprovalRequest club replay explanation", () => {
     expect(stored).toContain(
       "The message is answered as an unverified group DM sender, never as ~nec.",
     );
+    expect(stored).toContain("Approval grants no direct DM access.");
+    expect(stored).toContain("Blocking only dismisses this request; no ship is blocked.");
     expect(stored).not.toContain("will not be answered");
 
     const suppressed = formatApprovalRequest(
@@ -79,7 +81,7 @@ describe("formatApprovalRequest club replay explanation", () => {
       }),
     );
     expect(suppressed).toContain(
-      "The message is not kept, so it will not be answered; have ~nec send it again in a normal direct message to get a reply.",
+      "The message is not kept, so approval only dismisses this request; it will not be answered.",
     );
     expect(suppressed).not.toContain("The message is answered");
   });
