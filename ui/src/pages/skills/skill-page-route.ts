@@ -14,7 +14,7 @@ import { skillPageForLocation, skillsRouteLocation } from "./route-location.ts";
 type Surface = "discovery" | "settings";
 
 /** Which skill page the address names, and the ways to open and leave one. */
-export function createSkillPageRoute(options: {
+function createSkillPageRoute(options: {
   context: ApplicationContext;
   surface: () => Surface;
   scope: () => { agentId: string | null };
@@ -71,7 +71,7 @@ export function createSkillPageRoute(options: {
  * A skill's page reads what it shows on its own: the card for an installed skill, the registry
  * detail for a ClawHub skill. Each read is scoped to the connection, agent and revision.
  */
-export function createSkillPageReads(options: {
+function createSkillPageReads(options: {
   page: () => SkillPageRef | null;
   scope: () => {
     client: GatewayBrowserClient | null;
