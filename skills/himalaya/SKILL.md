@@ -35,7 +35,7 @@ Use `himalaya` for IMAP/SMTP email from shell.
 
 ```bash
 himalaya --version
-himalaya account configure
+himalaya configure
 ```
 
 Config path: `~/.config/himalaya/config.toml`.
