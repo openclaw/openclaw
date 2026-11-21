@@ -13,6 +13,10 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import {
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
@@ -163,7 +167,14 @@ export async function prepareReplyAgentTurn<TConfigured>(
       (source) => source.operatorAuthority === operatorAuthority,
     );
     for (const source of sources) {
-      await prepareFollowupRunOperatorAuthority(source);
+      const context = getInProcessGatewayRequestContext(params.defaults.resolveGatewayContext) ?? {
+        getRuntimeConfig:
+          source.readAdmissionConfig ?? (() => selectLiveRuntimeConfig(source.run.config)),
+        resolveGatewayContext:
+          params.defaults.resolveGatewayContext ??
+          getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
+      };
+      await prepareFollowupRunOperatorAuthority(source, context);
     }
     operatorAuthority = authoritySource?.operatorAuthority ?? params.queued.operatorAuthority;
     params.queued.operatorAuthority = operatorAuthority;

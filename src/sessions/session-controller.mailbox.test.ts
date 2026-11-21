@@ -1,4 +1,5 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
@@ -215,7 +216,7 @@ describe("controller mailbox scheduling", () => {
     async (owner) => {
       let failure: Error | undefined;
       const signal = new AbortController().signal;
-      const authority = {
+      const authority = createTestOperatorAuthority({
         profileId: "queued-person",
         scopes: ["operator.write"],
         signal,
@@ -224,7 +225,7 @@ describe("controller mailbox scheduling", () => {
             throw failure;
           }
         },
-      };
+      });
       const input = reserveSource(owner === "adapter" ? { adapter: { authority } } : {});
       const run = source("keep this queued message");
       if (owner === "run") {

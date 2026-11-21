@@ -204,7 +204,7 @@ it("releases model authority when its retained work closes during acquisition", 
   expect(sourceHolds).toBe(0);
 });
 
-it("guards retained unknown-model work through policy introduction and releases once", async () => {
+it("keeps retained unknown-model work admitted through policy introduction and releases once", async () => {
   const current: { policy?: AdmittedRunOperatorAuthority["modelPolicy"] } = {};
   let holds = 0;
   const listeners = new Set<() => void>();
@@ -244,8 +244,8 @@ it("guards retained unknown-model work through policy introduction and releases 
   for (const listener of listeners) {
     listener();
   }
-  expect(retained.signal?.aborted).toBe(true);
-  expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
+  expect(retained.signal?.aborted).toBe(false);
+  expect(() => retained.assertCurrent()).not.toThrow();
   retained.release();
   retained.release();
   expect([holds, listeners.size]).toEqual([0, 0]);

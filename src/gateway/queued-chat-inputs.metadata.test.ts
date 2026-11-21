@@ -432,15 +432,10 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
   if (!demoted) {
     throw new Error("Expected the second accepted queued input");
   }
-  const secondCapture = await captureSessionQueuedInputsForRestart(retained.target);
-  secondCapture.preserve();
-  demoted.finish("interrupted", "restart-unrecoverable");
+  demoted.relinquish();
   await demoted.settled?.();
   setUserProfileRole(profile.id, "writer");
-  await continueSessionQueuedInputs(fixture.context, retained.target, {
-    ...retained,
-    queuedInputIds: secondCapture.queuedInputIds,
-  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(dispatched).toHaveLength(2);
   expect(dispatched[1]?.replyOptions?.operatorAuthority?.scopes).toEqual(["operator.write"]);

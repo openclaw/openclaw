@@ -11,6 +11,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertBoundGatewayAccessDecision } from "../plugins/gateway-access-policy-registration.js";
 import type {
+  GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
 } from "../plugins/gateway-access-policy.types.js";
@@ -86,6 +87,8 @@ type GatewayOperatorAccessSource = {
   openclawIdAccountIds?: readonly string[];
   /** Attested connection or retained source; never inferred from profile identities. */
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+  /** Original uninterrupted grant; null proves independence, omission captures current access. */
+  grant?: GatewayAccessGrantRef | null;
 };
 
 export function hasGatewayOperatorAccessPolicies(
@@ -237,6 +240,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     openclawIdAccountIds: profile.openclawIdAccountIds,
   };
   const policies = currentAccessPolicies();
+  if (options.grant && !policies.some(({ pluginId }) => pluginId === options.grant?.pluginId)) {
+    throw new GatewayOperatorAccessUnavailableError();
+  }
   if (
     !options.requireLivePolicySet &&
     policies.length === 0 &&
@@ -252,6 +258,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     options,
   );
   const requiredPlugin = role.policy?.accessPolicyPlugin;
+  if (options.grant !== undefined && requiredPlugin && requiredPlugin !== options.grant?.pluginId) {
+    throw new GatewayOperatorAccessDeniedError("policy-set-changed");
+  }
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError("policy-unavailable");
   }
@@ -297,11 +306,26 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     assertProfileCurrent();
     let requiredPolicyConfirmed = !requiredPlugin;
     authorities = policies.flatMap(({ policy, pluginId }) => {
-      const authority = policy.authorize({
+      const input = {
         config,
         profile: pluginProfile(profile, role.assignedRole),
         requiredByRole: pluginId === requiredPlugin,
-      });
+      };
+      let authority: PluginGatewayAccessAuthority | undefined;
+      if (options.grant && pluginId === options.grant.pluginId) {
+        // Without resume, the owner's current authorization may legitimately name a new grant.
+        authority = policy.resume
+          ? policy.resume({ ...input, grantId: options.grant.grantId })
+          : policy.authorize(input);
+        if (!authority || (policy.resume && authority.grantId !== options.grant.grantId)) {
+          throw new GatewayOperatorAccessDeniedError("grant-revoked");
+        }
+      } else {
+        authority = policy.authorize(input);
+        if (options.grant !== undefined && authority) {
+          throw new GatewayOperatorAccessDeniedError("policy-set-changed");
+        }
+      }
       if (authority && pluginId === requiredPlugin) {
         requiredPolicyConfirmed = true;
       }

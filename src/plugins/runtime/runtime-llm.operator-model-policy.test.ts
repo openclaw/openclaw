@@ -539,21 +539,16 @@ describe("operator model policy on plugin completions", () => {
   );
 
   it.each(["restricted", "unrestricted"] as const)(
-    "aborts only a removed in-flight model from an initially %s source",
+    "preserves admitted models and siblings from an initially %s source while denying the next start",
     async (initial) => {
       let policy =
         initial === "restricted"
           ? preparePolicy(["test-provider/model-a", "test-provider/model-b"])
           : undefined;
-      const observers = new Set<() => void>();
       const authority = createTestOperatorAuthority({
         ...operatorSource,
         get modelPolicy() {
           return policy;
-        },
-        onModelPolicyChanged: (listener) => {
-          observers.add(listener);
-          return () => observers.delete(listener);
         },
       });
       const firstStarted = createDeferredCore();
@@ -599,12 +594,12 @@ describe("operator model policy on plugin completions", () => {
       try {
         await waitForWork(started.promise, Promise.all([first, second]));
         policy = preparePolicy(["test-provider/model-b"]);
-        observers.forEach((listener) => listener());
-        expect(signals.get("model-a")?.aborted).toBe(true);
+        expect(signals.get("model-a")?.aborted).toBe(false);
         expect(signals.get("model-b")?.aborted).toBe(false);
         expect(() => authority.assertCurrent()).not.toThrow();
+        await expectDenied(run("model-a"), expect.stringContaining("cannot use this model"));
         finishA.resolve();
-        await expectDenied(first, expect.stringContaining("cannot use this model"));
+        await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
         finishB.resolve();
         await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
       } finally {
@@ -613,7 +608,6 @@ describe("operator model policy on plugin completions", () => {
         await Promise.allSettled([first, second]);
         await work.drain();
       }
-      expect(observers.size).toBe(0);
     },
   );
   it.each([

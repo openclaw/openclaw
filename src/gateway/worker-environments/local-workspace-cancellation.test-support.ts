@@ -505,7 +505,7 @@ export async function proveStoppedSandboxAuthority(
                   context,
                   client: createSyntheticPluginRuntimeClient({
                     operatorRunAuthority: captured.authority,
-                    scopes: captured.authority.scopes,
+                    scopes: [...captured.authority.scopes],
                   }),
                 }).then((next) => next?.release()),
               ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);

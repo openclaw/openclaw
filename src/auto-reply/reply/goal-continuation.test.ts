@@ -243,7 +243,7 @@ describe("Goal continuation eligibility", () => {
       });
     }
     if (mode !== "no-authority" && mode !== "local-no-authority") {
-      f.params.base.operatorAuthority = {
+      f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
         assertCurrent: () => {
@@ -251,7 +251,7 @@ describe("Goal continuation eligibility", () => {
             throw new Error("operator revoked");
           }
         },
-      };
+      });
     }
     if (mode === "worker-required") {
       f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };

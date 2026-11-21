@@ -159,7 +159,7 @@ describe("CLI model-routing receipt authority", () => {
     },
   );
 
-  it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
+  it("checks the logical model initially and preserves admitted dispatch across policy changes", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };
     let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
     const source = createTestOperatorAuthority({
@@ -209,7 +209,7 @@ describe("CLI model-routing receipt authority", () => {
         policy: { allow: [] },
         manifestPlugins: [],
       });
-      expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
+      expect(context.params.assertCurrent).not.toThrow();
     } finally {
       admission.close();
     }

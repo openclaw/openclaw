@@ -35,7 +35,7 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   profileId: "requester",
   scopes: ["operator.admin"],
   requesterOwner: true,
-  assertCurrent: vi.fn(),
+  assertCurrent() {},
 };
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {

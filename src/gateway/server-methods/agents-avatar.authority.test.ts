@@ -99,33 +99,16 @@ async function generate(
   return respond;
 }
 
-it("returns a preview through the real handler and isolated completion owner", async () => {
-  const dispatch = vi.fn(async () => ({
-    assistant: {
-      ...isolatedAssistant([{ type: "text", text: JSON.stringify(design) }]),
-      provider: "test-provider",
-      model: "allowed",
-    },
-  }));
-  utility.route.mockResolvedValue({
-    selection: {
-      selectedHarnessId: "test-harness",
-      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
-    },
-  });
-  const respond = await generate(operator().authority);
-  expect(dispatch).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ name: "Garden Keeper", svg: expect.stringContaining("<svg") }),
-    undefined,
-  );
-});
-
 it.each(["device", "model"] as const)(
-  "does not dispatch to the provider after %s authority is revoked during route preparation",
+  "retains the device fence and admitted model policy during route preparation (%s)",
   async (kind) => {
-    const dispatch = vi.fn();
+    const dispatch = vi.fn(async () => ({
+      assistant: {
+        ...isolatedAssistant([{ type: "text", text: JSON.stringify(design) }]),
+        provider: "test-provider",
+        model: "allowed",
+      },
+    }));
     const access = operator();
     let deviceCurrent = true;
     let firstRoute = true;
@@ -146,21 +129,35 @@ it.each(["device", "model"] as const)(
       };
     });
     const respond = await generate(access.authority, () => deviceCurrent);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: kind === "device" ? "UNAVAILABLE" : "FORBIDDEN",
-      }),
-    );
-    expect(dispatch).not.toHaveBeenCalled();
+    if (kind === "device") {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+    } else {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ name: "Garden Keeper", svg: expect.stringContaining("<svg") }),
+        undefined,
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await generate(access.authority)).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      expect(dispatch).toHaveBeenCalledOnce();
+    }
   },
 );
 
-it("does not retry or publish after model access is revoked during the first completion", async () => {
+it("does not retry or publish after device authority is revoked during the first completion", async () => {
   const access = operator();
+  let deviceCurrent = true;
   const dispatch = vi.fn(async () => {
-    access.revokeModel();
+    deviceCurrent = false;
     return {
       assistant: {
         ...isolatedAssistant([{ type: "text", text: "invalid design" }]),
@@ -175,11 +172,11 @@ it("does not retry or publish after model access is revoked during the first com
       harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
     },
   });
-  const respond = await generate(access.authority);
+  const respond = await generate(access.authority, () => deviceCurrent);
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
+    expect.objectContaining({ code: "UNAVAILABLE" }),
   );
   expect(dispatch).toHaveBeenCalledOnce();
 });

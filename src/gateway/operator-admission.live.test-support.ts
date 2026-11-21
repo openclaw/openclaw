@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { assert, expect, vi } from "vitest";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
@@ -26,26 +25,23 @@ import {
 } from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { runOpenAiCompatibleAgentCommand } from "./openai-compatible-agent-run.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
-import {
-  setOpenClawIdMemberAccountLookup,
-  setOpenClawIdTunnelPrincipalLookup,
-  setOpenClawIdTunnelPrincipalResolver,
-} from "./openclaw-id/tunnel-principal.js";
 import {
   PROXY_USER,
   WRITER,
   type LiveAdmissionKind,
   type LiveAdmissionProducer,
 } from "./operator-admission.contracts.test-support.js";
-import { prepareAdmissionOperator } from "./operator-admission.credentials.test-support.js";
+import {
+  prepareAdmissionOcidPeer,
+  prepareAdmissionOperator,
+} from "./operator-admission.credentials.test-support.js";
 import { runCronAdmissionCase } from "./operator-admission.cron.test-support.js";
 import {
   isLiveCredentialKind,
   prepareLiveCredentialProducer,
 } from "./operator-admission.live-credentials.test-support.js";
 import { prepareRemoteIngressProducer } from "./operator-admission.remote.test-support.js";
-import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
+import type { AdmissionFixture } from "./operator-admission.table.test-support.js";
 import * as operatorRun from "./operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
@@ -69,33 +65,6 @@ type History = {
     items: Array<{ runId: string; state: string; endCause?: string; message: unknown }>;
   };
 };
-
-export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
-  c.claw = await linkedClaw();
-  c.peerKey = c.claw.w1;
-  if (c.row.credential !== "ocid-owner") {
-    c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(173));
-    expect(
-      await c.claw.authority.submit(
-        await c.claw.sign({
-          op: "add",
-          account_id: c.id,
-          role: "operator",
-          peer_keys: [c.peerKey],
-          invite_id: null,
-        }),
-        "tunnel",
-      ),
-    ).toMatchObject({ ok: true });
-    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id });
-    await setCanonicalUserProfileRole(profile.id, "operator");
-  }
-  const authority = c.claw.authority;
-  setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
-  setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
-  setOpenClawIdMemberAccountLookup((id) => id === c.id);
-  return c.peerKey;
-}
 
 async function prepareLiveProducer(
   kind: Exclude<

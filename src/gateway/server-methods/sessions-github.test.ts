@@ -12,7 +12,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { getUserProfileDisplay } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { rejectGitHubPublicationSelection } from "../github-publication-failure.js";
+import {
+  GitHubPublicationRequesterUnavailableError,
+  rejectGitHubPublicationSelection,
+} from "../github-publication-failure.js";
 import type { GitHubPublicationCoordinator } from "../github-publication.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";

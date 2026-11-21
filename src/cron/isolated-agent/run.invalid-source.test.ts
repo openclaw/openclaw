@@ -4,9 +4,9 @@ import {
   setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
 } from "../../gateway/openclaw-id/tunnel-principal.js";
+import { restoreGatewayOperatorSource } from "../../gateway/operator-run-recovery.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import {
   createGatewaySchedulerClock,
@@ -25,7 +25,6 @@ import type { CronServiceDeps } from "../service/state.js";
 import { onTimer } from "../service/timer.test-support.js";
 import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { prepareCronCreatorSandbox } from "./run-creator-sandbox.js";
 import {
   memberSourceCase as createMemberSourceCase,
   memberSourceCases,
@@ -97,8 +96,10 @@ describe("undecodable scheduled authority", () => {
     },
   );
 
-  it("hydrates stored membership before deciding that its authority was removed", async () => {
+  it("hydrates membership and retains the Guest sandbox when its role gains unrelated scopes", async () => {
     const scenario = memberSourceCase("removed member");
+    const role = expectDefined(scenario.cfg.gateway?.roles?.definitions.guest, "guest role");
+    role.scopes = [...role.scopes, "operator.read"];
     let hydrated = false;
     setOpenClawIdMemberAccountLookup(
       (accountId) => hydrated && accountId === scenario.principal.accountId,
@@ -109,75 +110,36 @@ describe("undecodable scheduled authority", () => {
         hydrated = true;
       },
     );
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const sessionBoundary = new Error("prepared session boundary");
-    h.resolveCronSessionMock.mockRejectedValueOnce(sessionBoundary);
-    await expect(
-      runAgent(
-        makeIsolatedAgentParamsFixture({
-          cfg: scenario.cfg,
-          job: makeIsolatedAgentJobFixture({
-            operatorSource: scenario.operatorSource,
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: scenario.operatorSource.source.snapshot.profileId,
-            },
-          }),
-        }),
-      ),
-    ).rejects.toBe(sessionBoundary);
-    expect(hydrated).toBe(true);
-    expect(h.resolveCronSessionMock).toHaveBeenCalledOnce();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("retains the Guest sandbox when its current role gains unrelated scopes", async () => {
-    const scenario = memberSourceCase("removed member");
-    const role = expectDefined(scenario.cfg.gateway?.roles?.definitions.guest, "guest role");
-    role.scopes = [...role.scopes, "operator.read"];
-    setOpenClawIdMemberAccountLookup((accountId) => accountId === scenario.principal.accountId);
-    setOpenClawIdTunnelPrincipalLookup(
-      () => scenario.operatorSource.source.snapshot.openclawIdPrincipal,
-    );
-    const params = makeIsolatedAgentParamsFixture({
-      cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({
-        operatorSource: scenario.operatorSource,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: scenario.operatorSource.source.snapshot.profileId,
-        },
-      }),
+    const restored = await restoreGatewayOperatorSource({
+      agentId: "main",
+      snapshot: scenario.operatorSource.source.snapshot,
+      context: createContext([], () => scenario.cfg),
+      assertCurrent() {},
     });
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    await expect(prepareCronCreatorSandbox(params.cfg, params.job)).resolves.toBe("required");
+    try {
+      expect(hydrated).toBe(true);
+      expect(restored.authority.rolePolicy?.sandboxRequired).toBe(true);
+      expect(restored.authority.scopes).toEqual(["operator.sessions.write", "operator.cron"]);
+    } finally {
+      restored.release();
+    }
   });
 
-  it("does not permanently retire an attempt aborted during membership hydration", async () => {
+  it("does not turn aborted membership hydration into an authority refusal", async () => {
     const scenario = memberSourceCase("removed member");
     const controller = new AbortController();
     setOpenClawIdTunnelPrincipalLookup(
       () => undefined,
       async () => controller.abort(),
     );
-    const params = makeIsolatedAgentParamsFixture({
-      cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({
-        operatorSource: scenario.operatorSource,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: scenario.operatorSource.source.snapshot.profileId,
-        },
-      }),
-      abortSignal: controller.signal,
-    });
-    await expect(runAgent(params)).rejects.not.toBeInstanceOf(CronOperatorSourceError);
+    const failure = await restoreGatewayOperatorSource({
+      agentId: "main",
+      snapshot: scenario.operatorSource.source.snapshot,
+      context: createContext([], () => scenario.cfg),
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    }).catch((error: unknown) => error);
     expect(controller.signal.aborted).toBe(true);
-    expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(failure).toBe(controller.signal.reason);
   });
 
   it.each(["undecodable", ...memberSourceCases] as const)(

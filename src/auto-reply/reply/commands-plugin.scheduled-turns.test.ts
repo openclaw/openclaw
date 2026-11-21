@@ -411,7 +411,9 @@ describe("native scheduled command execution", () => {
         release.resolve();
         await run;
       }
-      expect(await fixture.assistantOutputs()).toContain("late occurrence output");
+      expect(await fixture.assistantOutputs()).toEqual([
+        [{ type: "text", text: "late occurrence output" }],
+      ]);
     });
   });
   it("refuses a same-metadata plugin reload before command or input acceptance", async () => {

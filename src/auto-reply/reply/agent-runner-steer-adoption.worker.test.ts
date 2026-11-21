@@ -71,7 +71,7 @@ it.each([false, true])(
       const cancellation = new AbortController();
       const failure = new Error("internal SDK assertion failure");
       run.abortSignal = cancellation.signal;
-      run.operatorAuthority = {
+      const authority = createTestOperatorAuthority({
         profileId: "steering-requester",
         scopes: ["operator.write"],
         signal: new AbortController().signal,
@@ -83,14 +83,15 @@ it.each([false, true])(
             throw failure;
           }
         },
-      };
+      });
+      run.operatorAuthority = authority;
       const followup = vi.fn(async () => {});
       try {
         await expect(
           runActiveReplySteer(createSteerParams(key, run, operation, { runFollowup: followup })),
         ).rejects.toBe(failure);
         const input = run.controllerInput!;
-        expect(run.operatorAuthority.signal?.aborted).toBe(false);
+        expect(authority.signal?.aborted).toBe(false);
         if (!cancelled) {
           expect(input.retirementRequested).toBeUndefined();
           expect(input.phase).toBe("waiting");

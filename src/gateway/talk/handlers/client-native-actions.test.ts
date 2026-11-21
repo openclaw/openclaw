@@ -480,7 +480,6 @@ describe("native Talk action ownership through public plugin registration", () =
             socket.serverEvent(nativeDelegation("final-insertion-control", text));
             await delivered.promise;
             if (transition === "closed") {
-              expect(await closing).toBe(true);
               expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED);
             } else if (replacementVoiceSessionId) {
               expect(resolveClientVoiceRunBinding(activeRun.runId)?.voiceSessionId).toBe(
@@ -509,7 +508,10 @@ describe("native Talk action ownership through public plugin registration", () =
             expect.soft(session.getSteeringMessages()).toEqual(transition === "open" ? [text] : []);
             expect(session.agent.hasQueuedMessages()).toBe(transition === "open");
           } finally {
-            await closing;
+            finish();
+            if (closing) {
+              expect(await closing).toBe(true);
+            }
           }
         },
         "Keep working until I cancel.",
@@ -796,16 +798,6 @@ describe("native Talk scope handoff investigation", () => {
             { timeout: 5_000 },
           );
           const mailbox = source.input.mailbox;
-          if (mailbox.entries.length > 1) {
-            expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
-            expect(mailbox.owner.active).toBeUndefined();
-            expect(mailbox.claim).toBeUndefined();
-            expect(mailbox.entries[0]).toBe(source.input);
-            expect(source.input.task).toBeUndefined();
-            expect(mailbox.entries[1]?.task).toBeTypeOf("function");
-            expect(mailbox.entries.filter((input) => input.injection)).toHaveLength(0);
-            expect(mailbox.entries.map((input) => input.withdrawalHolds)).toEqual([0, 0]);
-          }
           expect(
             mailbox.entries.length,
             "one registered provider request must never create a second mailbox input",

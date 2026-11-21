@@ -41,7 +41,6 @@ function operator(initial?: Partial<ModelPolicy>) {
       manifestPlugins: [],
     });
   let policy = prepare(initial ?? {});
-  const listeners = new Set<() => void>();
   const authority = createTestOperatorAuthority({
     profileId: "isolated-reader",
     scopes: ["operator.write"],
@@ -49,19 +48,11 @@ function operator(initial?: Partial<ModelPolicy>) {
     get modelPolicy() {
       return policy;
     },
-    onModelPolicyChanged: initial
-      ? (listener) => {
-          listeners.add(listener);
-          return () => void listeners.delete(listener);
-        }
-      : undefined,
   });
   return {
     authority,
-    listeners,
     setPolicy(this: void, overrides: Partial<ModelPolicy>) {
       policy = prepare(overrides);
-      listeners.forEach((listener) => listener());
       return policy;
     },
   };
@@ -120,8 +111,8 @@ beforeEach(() => {
   });
 });
 
-it("keeps revocation latched after restoration without cancelling the source or sibling", async () => {
-  const { authority, listeners, setPolicy } = operator({
+it("keeps admitted completions and siblings alive while the next start uses current policy", async () => {
+  const { authority, setPolicy } = operator({
     allow: ["test-provider/model-a", "test-provider/model-b"],
   });
   mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
@@ -153,14 +144,13 @@ it("keeps revocation latched after restoration without cancelling the source or 
     await waitForStart(started.promise, first, second);
     setPolicy({ allow: ["test-provider/model-b"] });
     expect([signals.get("model-a")?.aborted, signals.get("model-b")?.aborted]).toEqual([
-      true,
+      false,
       false,
     ]);
-    const restored = setPolicy({ allow: ["test-provider/model-a", "test-provider/model-b"] });
-    expect(restored?.allows({ provider: "test-provider", model: "model-a" })).toBe(true);
     expect(() => authority.assertCurrent()).not.toThrow();
+    await expect(runPluginCompletion(authority, "model-a")).rejects.toMatchObject(denied);
     finishA.resolve();
-    await expect(first).rejects.toMatchObject(denied);
+    await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
     finishB.resolve();
     await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
   } finally {
@@ -169,7 +159,6 @@ it("keeps revocation latched after restoration without cancelling the source or 
     await Promise.allSettled([first, second]);
     await work.drain();
   }
-  expect(listeners.size).toBe(0);
 });
 it.each(["host", "harness"] as const)(
   "rejects a denied model resolved during %s preparation",

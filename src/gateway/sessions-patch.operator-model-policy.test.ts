@@ -150,6 +150,10 @@ describe("session model patches under operator policy", () => {
         undefined,
         undefined,
       ]);
+    } else if (change === "model-policy") {
+      assert(result.ok);
+      expect(result.validateModelSelection?.()).toBeUndefined();
+      expect(await value.project(model)).toMatchObject({ ok: false, error: denied });
     } else {
       expect(result).toMatchObject({
         ok: false,
@@ -208,7 +212,7 @@ describe("session model patches under operator policy", () => {
     }
   });
 
-  it("retains the exact selected-model guard until the write commits", async () => {
+  it("keeps the admitted model selection but fences a retired source before commit", async () => {
     const value = fixture();
     const result = await value.project("chosen");
     expect(result).toMatchObject({
@@ -218,6 +222,8 @@ describe("session model patches under operator policy", () => {
     assert(result.ok);
     expect(result.validateModelSelection?.()).toBeUndefined();
     value.tighten();
-    expect(result.validateModelSelection?.()).toMatchObject(denied);
+    expect(result.validateModelSelection?.()).toBeUndefined();
+    value.revoke();
+    expect(result.validateModelSelection?.()).toMatchObject({ code: "FORBIDDEN" });
   });
 });

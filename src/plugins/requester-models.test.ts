@@ -81,7 +81,7 @@ it("omits model authority when requester or exact session authority is missing a
   expect(() =>
     createPluginRequesterModels({
       ...requester(),
-      authority: { profileId: "forged", scopes: [], assertCurrent() {} },
+      authority: { canonicalIdentity: null, profileId: "forged", scopes: [], assertCurrent() {} },
     }),
   ).toThrow("must be issued by the host");
 });

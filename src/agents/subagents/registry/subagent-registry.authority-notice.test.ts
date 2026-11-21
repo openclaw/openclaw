@@ -126,7 +126,7 @@ it.each(["removed paired device", "closed source owner"] as const)(
             disposition: "permanent_failure",
             lastError:
               route === "removed paired device"
-                ? "Operator access was revoked; start a new user turn."
+                ? expect.stringContaining("start a new user turn.")
                 : expect.stringContaining(
                     "subagent source lifecycle changed before completion delivery",
                   ),

@@ -6,6 +6,7 @@ import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-to
 import { removePairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   ADMIN,
   ORIGIN,

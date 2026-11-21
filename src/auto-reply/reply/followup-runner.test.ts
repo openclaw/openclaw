@@ -511,17 +511,18 @@ describe("createFollowupRunner", () => {
     new GatewayOperatorAccessUnavailableError(),
     new Error("internal SDK assertion failure"),
   ])("defers an unrecorded authority refusal without a failure notice (%s)", async (failure) => {
-    turn.queued.operatorAuthority = {
+    const authority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
       assertCurrent() {
         throw failure;
       },
-    };
+    });
+    turn.queued.operatorAuthority = authority;
     const deliver = attachSource(turn);
     state.admit.mockImplementationOnce(async () => {
-      turn.queued.operatorAuthority!.assertCurrent();
+      authority.assertCurrent();
     });
 
     await expect(createRunner()(turn.queued)).rejects.toBe(failure);
@@ -529,7 +530,7 @@ describe("createFollowupRunner", () => {
     expect(state.execute).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
     expect(state.completeLifecycle).not.toHaveBeenCalled();
-    expect(turn.queued.operatorAuthority.signal?.aborted).toBe(false);
+    expect(authority.signal?.aborted).toBe(false);
   });
 
   it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {

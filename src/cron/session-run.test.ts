@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
@@ -134,11 +135,11 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
 
 function restoredSource(): RestoredGatewayOperatorAuthority {
   return {
-    authority: {
+    authority: createTestOperatorAuthority({
       profileId: "requester",
       scopes: ["operator.read"],
-      assertCurrent: vi.fn(() => {}),
-    },
+      assertCurrent() {},
+    }),
     authenticatedUserProfile: {
       profileId: "requester",
       displayName: null,

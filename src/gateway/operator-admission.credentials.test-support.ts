@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import https from "node:https";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assert, expect, vi } from "vitest";
+import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { expectOwnerGated } from "../agents/agent-tools.turn-authority.test-support.js";
 import * as attemptTools from "../agents/embedded-agent-runner/run/attempt-tool-prepare.js";
@@ -20,18 +21,21 @@ import {
 } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { removePairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import * as tailscale from "../infra/tailscale.js";
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
+import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   ADMIN,
   ADMIN_USER,
@@ -42,12 +46,37 @@ import {
   type Row,
 } from "./operator-admission.contracts.test-support.js";
 import * as admission from "./operator-admission.js";
-import { prepareAdmissionOcidPeer } from "./operator-admission.live.test-support.js";
 import type { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
-import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
+
+export async function prepareAdmissionOcidPeer(c: AdmissionCase) {
+  c.claw = await linkedClaw();
+  c.peerKey = c.claw.w1;
+  if (c.row.credential !== "ocid-owner") {
+    c.peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(173));
+    expect(
+      await c.claw.authority.submit(
+        await c.claw.sign({
+          op: "add",
+          account_id: c.id,
+          role: "operator",
+          peer_keys: [c.peerKey],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: c.id });
+    await setCanonicalUserProfileRole(profile.id, "operator");
+  }
+  const authority = c.claw.authority;
+  setOpenClawIdTunnelPrincipalResolver((key) => authority.resolvePeer(key));
+  setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
+  setOpenClawIdMemberAccountLookup((id) => id === c.id);
+  return c.peerKey;
+}
 
 export function observeAdmissionFixture(fixture: AdmissionFixture) {
   const enqueue = queueLifecycle.markFollowupRunEnqueued;
@@ -177,9 +206,9 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
   const followup = queueLifecycle.prepareFollowupRunOperatorAuthority;
   const followupAdmission = vi
     .spyOn(queueLifecycle, "prepareFollowupRunOperatorAuthority")
-    .mockImplementation(async (run) => {
+    .mockImplementation(async (run, context) => {
       try {
-        await fixture.preparingFollowup.run(run, () => followup(run));
+        await fixture.preparingFollowup.run(run, () => followup(run, context));
       } catch (error) {
         const c = fixture.current;
         if (
@@ -642,44 +671,4 @@ export async function revokeAdmissionSource(fixture: AdmissionFixture, c: Admiss
       return;
   }
   await fixture.publish(next, c.signal);
-}
-
-export async function replayAdmissionInput(
-  fixture: AdmissionFixture,
-  c: AdmissionCase,
-  originSourceJson: string,
-) {
-  assert(fixture.kernel);
-  const context = fixture.kernel.gatewayRequestContext;
-  const generationState = context.sharedGatewaySessionGenerationState;
-  if (c.scenario === "generation-unavailable") {
-    const source = decodeQueuedOperatorRecoverySource(JSON.parse(originSourceJson));
-    assert(source.kind === "gateway");
-    expect(source.snapshot.sharedGeneration).toEqual(expect.any(String));
-    assert(generationState);
-    context.sharedGatewaySessionGenerationState = undefined;
-  }
-  try {
-    const deferred = await c.wait(
-      runWithGatewayIndependentRootWorkAdmission(
-        () =>
-          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-            queuedInputs.continueSessionQueuedInputs(context, c.target, {
-              signal: c.signal,
-              assertCurrent: () => c.signal.throwIfAborted(),
-            }),
-          ),
-        "test:accepted-input-drain",
-        c.signal,
-      ),
-    );
-    if (deferred) {
-      expect(deferred.error).toBeInstanceOf(GatewayOperatorAccessUnavailableError);
-    }
-    return deferred;
-  } finally {
-    if (c.scenario === "generation-unavailable") {
-      context.sharedGatewaySessionGenerationState = generationState;
-    }
-  }
 }

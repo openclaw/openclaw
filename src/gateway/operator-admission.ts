@@ -433,7 +433,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           : resolvePreparedGatewayOperatorAccessAuthority(
               { ...profile, role: profile.assignedRole, isCurrent: () => true },
               config,
-              { openclawIdPrincipal: principal },
+              { openclawIdPrincipal: principal, grant: gateway ? gateway.grant : grant },
             );
       access?.assertCurrent();
       grant = access?.gatewayAccessGrant ?? null;

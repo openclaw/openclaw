@@ -57,7 +57,10 @@ import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import { createChatSendPendingInputAdmission } from "./chat-send-work-admission.js";
+import {
+  createChatSendPendingInputAdmission,
+  prepareChatSendInputAuthorization,
+} from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -74,16 +77,10 @@ export async function handleChatSendWithStorage(
   options?: ChatSendInternalOptions,
   storage?: { release(): void; retain(): void },
 ): Promise<void> {
-  const {
-    req,
-    respond,
-    context,
-    client,
-    hasCurrentClientAuthority,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = handlerOptions;
-  const releaseSessionAuthorization =
+  const { req, respond, context, client, hasCurrentClientAuthority, sessionMutationCommitGuard } =
+    handlerOptions;
+  let { sessionMutationAuthorization } = handlerOptions;
+  let releaseSessionAuthorization =
     sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
@@ -185,6 +182,8 @@ export async function handleChatSendWithStorage(
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   let setupFailure: unknown;
   try {
+    ({ authorization: sessionMutationAuthorization, release: releaseSessionAuthorization } =
+      await prepareChatSendInputAuthorization(handlerOptions, setup, releaseSessionAuthorization));
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
       if (sessionRoutingChanged(context.getRuntimeConfig())) {

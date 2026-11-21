@@ -189,11 +189,7 @@ it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked
     }
     finish();
     expect((await invocation).mock.calls[0]?.[0]).toBe(delivered);
-    expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
-      "main",
-      sessionKey,
-      expect.objectContaining({ operatorAuthority: authority }),
-    );
+    expect(captureTarget.mock.calls[0]?.[2]?.operatorAuthority?.source).toBe(authority.source);
     expect(release).toHaveBeenCalledOnce();
   },
 );

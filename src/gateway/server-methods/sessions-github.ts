@@ -319,7 +319,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       sessionMutationAuthorization?.assertCurrent();
       using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
         agentId,
-        assertCurrent: sessionMutationAuthorization?.assertAdmittedSourceCurrent,
         fields:
           params.workspacePath === undefined
             ? undefined

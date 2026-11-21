@@ -222,6 +222,7 @@ function prepareRequesterPolicy(
       resolveGatewayOperatorAccessAuthority(current.profile.profileId, config, {
         requireLivePolicySet: true,
         openclawIdPrincipal: principal,
+        grant: snapshot.grant,
       })?.assertCurrent();
     } catch (error) {
       if (error instanceof GatewayOperatorAccessDeniedError) {
@@ -543,8 +544,7 @@ export async function prepareGitHubPublicationTaskRequester(
     ) {
       throw new GitHubPublicationRequesterUnavailableError();
     }
-    // Transfer the admitted publication, not a new role admission. Bind the task's
-    // exact recipient and generation while the original request finishes.
+    // Transfer admitted policy; the prepared session owns physical/incarnation fences.
     const signal = AbortSignal.any([lifetime.signal, original.signal]);
     const requester: GitHubPublicationRequesterV2 = Object.freeze({
       version: 2,
@@ -557,9 +557,6 @@ export async function prepareGitHubPublicationTaskRequester(
         identity?.readCurrentFacts(snapshot.grant?.aliasBindingIds);
         const target = preparedSession.readCurrent(getCommittedRuntimeConfig()).target.entry;
         if (
-          target.sessionId !== entry.sessionId ||
-          (target.lifecycleRevision ?? null) !== (entry.lifecycleRevision ?? null) ||
-          target.archivedAt !== undefined ||
           !isDeepStrictEqual(target.createdActor, entry.createdActor) ||
           !isDeepStrictEqual(target.owner, entry.owner)
         ) {

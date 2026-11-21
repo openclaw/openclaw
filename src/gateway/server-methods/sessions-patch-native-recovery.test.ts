@@ -110,7 +110,7 @@ it.each([false, true])(
   },
 );
 
-it("retains exact native runtimes and rechecks operator policy at commit", async () => {
+it("retains admitted native policy and checks runtime availability at commit", async () => {
   harness.nativeModelPolicySupport = "exact";
   expect(
     (await prepare(unrestricted(), true, cfg, { operatorAuthority: operatorAuthority(true) })).ok,
@@ -130,8 +130,14 @@ it("retains exact native runtimes and rechecks operator policy at commit", async
   assert(result.ok);
   expect(result.validate?.()).toBeUndefined();
   policy = { models: [], allows: () => true };
+  expect(result.validate?.()).toBeUndefined();
+  expect(await prepare(unrestricted(), true, cfg, { operatorAuthority: authority })).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("cannot enforce your operator role") },
+  });
+  validate.mockReturnValue("Selected runtime retired");
   expect(result.validate?.()).toMatchObject({
-    message: expect.stringContaining("cannot enforce your operator role"),
+    message: "Selected runtime retired",
   });
 });
 

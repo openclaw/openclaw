@@ -510,10 +510,13 @@ it.each([
         idempotencyKey: "repair-publication",
       }),
     );
-    if (!inlineRevocation) {
+    if (inlineRevocation) {
+      // Publication already started, but revoked browsers cannot receive its disclosure frame.
+      expect(response).toEqual({});
+    } else {
       expect(response.ok, JSON.stringify(response)).toBe(true);
+      publication = asRecord(response.payload);
     }
-    publication = asRecord(response.payload);
   }
   if (inlineRevocation) {
     if (mode === "direct-inline-device") {
@@ -527,8 +530,7 @@ it.each([
       }),
       "native request receipt",
     );
-    expect(receipt.status).toBe("published");
-    expect(publication).toMatchObject({ status: "published", headCommit: pr.head.sha });
+    expect(receipt).toMatchObject({ status: "published", head_commit: pr.head.sha });
     expect(writes.length).toBeGreaterThan(0);
     return;
   }

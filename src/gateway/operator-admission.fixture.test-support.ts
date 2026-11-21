@@ -15,8 +15,11 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -49,12 +52,12 @@ import {
 import {
   observeAdmissionFixture,
   prepareAdmissionOperator,
-  replayAdmissionInput,
   revokeAdmissionSource,
 } from "./operator-admission.credentials.test-support.js";
 import { runLiveAdmissionCase } from "./operator-admission.live.test-support.js";
 import { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import * as queuedInputs from "./queued-chat-inputs.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -291,7 +294,39 @@ async function durableDrain(fixture: AdmissionFixture, c: AdmissionCase) {
   ) {
     await revokeAdmissionSource(fixture, c);
   }
-  const deferred = await replayAdmissionInput(fixture, c, stored.origin_source_json);
+  assert(fixture.kernel);
+  const context = fixture.kernel.gatewayRequestContext;
+  const generationState = context.sharedGatewaySessionGenerationState;
+  if (c.scenario === "generation-unavailable") {
+    const source = decodeQueuedOperatorRecoverySource(JSON.parse(stored.origin_source_json));
+    assert(source.kind === "gateway");
+    expect(source.snapshot.sharedGeneration).toEqual(expect.any(String));
+    assert(generationState);
+    context.sharedGatewaySessionGenerationState = undefined;
+  }
+  let deferred;
+  try {
+    deferred = await c.wait(
+      runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+            queuedInputs.continueSessionQueuedInputs(context, c.target, {
+              signal: c.signal,
+              assertCurrent: () => c.signal.throwIfAborted(),
+            }),
+          ),
+        "test:accepted-input-drain",
+        c.signal,
+      ),
+    );
+    if (deferred) {
+      expect(deferred.error).toBeInstanceOf(GatewayOperatorAccessUnavailableError);
+    }
+  } finally {
+    if (c.scenario === "generation-unavailable") {
+      context.sharedGatewaySessionGenerationState = generationState;
+    }
+  }
   if (["owner-unavailable", "pairing-unavailable", "generation-unavailable"].includes(c.scenario)) {
     assert(deferred, "An unavailable owner must defer, not refuse or consume accepted work");
     const retained = (await readSessionQueuedInputPage(c.target)).rows.find(

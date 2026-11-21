@@ -328,7 +328,7 @@ describe("operator access cancellation", () => {
     }),
   );
 
-  it("refuses new work from a demoted nonrecoverable request without aborting that request", async () => {
+  it("narrows a demoted nonrecoverable request at its next start without aborting it", async () => {
     await withCancellationFixture(async (f) => {
       const profile = ensureProfileForEmail("plugin-request@example.test");
       setUserProfileRole(profile.id, "worker");
@@ -360,11 +360,15 @@ describe("operator access cancellation", () => {
         });
         setUserProfileRole(profile.id, "reader");
         invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
-        await expect(
-          captureGatewayOperatorContinuation({ client: continuation, context: f.context }),
-        ).rejects.toThrow();
+        const narrowed = expectDefined(
+          await captureGatewayOperatorContinuation({ client: continuation, context: f.context }),
+          "read-only continuation",
+        );
+        using _ = { [Symbol.dispose]: narrowed.release };
+        expect(narrowed.authority.scopes).toEqual(["operator.read"]);
         const next = await f.register("demoted-continuation");
-        await expect(next.retain(undefined, continuation)).rejects.toThrow();
+        const retained = await next.retain(undefined, continuation);
+        expect(retained.authority?.scopes).toEqual(["operator.read"]);
         expect(request.authority.signal?.aborted).toBe(false);
         expect(request.authority.assertCurrent).not.toThrow();
       } finally {

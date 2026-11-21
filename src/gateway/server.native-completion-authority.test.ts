@@ -311,16 +311,25 @@ describe("native completion final-effect authority", () => {
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
       const settleRequests = trackRequests(context);
-      const stage = pendingInputs.stageSessionPendingInput;
-      vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementationOnce(
-        async (...args) => {
+      if (change === "requester-replaced") {
+        const stage = pendingInputs.stageSessionPendingInput;
+        vi.spyOn(pendingInputs, "stageSessionPendingInput").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            // Hold before acquiring the writer so a requester replacement can commit.
+            await resume.promise;
+            return await stage(...args);
+          },
+        );
+      }
+      agentCommandMock.mockImplementation(async (input) => {
+        if (change === "operator-revoked") {
+          // Pending-input staging precedes operator admission; hold the started command.
           entered.resolve();
-          // Hold before acquiring the writer so a requester replacement can commit.
           await resume.promise;
-          return await stage(...args);
-        },
-      );
-      agentCommandMock.mockImplementation((input) => receiveCompletion(input as AgentCommandOpts));
+        }
+        return receiveCompletion(input as AgentCommandOpts);
+      });
       const delivery = completion.deliver();
       try {
         await reachBoundary(entered.promise, delivery);

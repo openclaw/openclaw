@@ -1,3 +1,4 @@
+import type { OperatorAdmissionContext } from "../../../gateway/operator-admission.js";
 import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
@@ -6,7 +7,6 @@ import {
   isOperatorAuthorityUnavailable,
 } from "../../../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
-import { getInProcessGatewayRequestContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
 import {
@@ -151,7 +151,10 @@ export function retireFollowupRunCancellation(run: FollowupRun): void {
   run.turnAdoptionLifecycle?.onCancellationRetired?.();
 }
 /** Restore a selected queued requester before execution preparation captures its caps. */
-export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Promise<void> {
+export async function prepareFollowupRunOperatorAuthority(
+  run: FollowupRun,
+  context: OperatorAdmissionContext,
+): Promise<void> {
   const state = run.controllerClaim?.custody ?? run.controllerInput?.custody;
   if (!state?.enqueued || state.adopted || !run.operatorAuthority) {
     return;
@@ -160,10 +163,6 @@ export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Pro
     throw new Error("Input completed before source adoption");
   }
   try {
-    const context = getInProcessGatewayRequestContext();
-    if (!context) {
-      throw new GatewayOperatorAccessUnavailableError();
-    }
     const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
     const restored = await restoreGatewayQueuedOperatorRecovery({
       context,
@@ -172,6 +171,9 @@ export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Pro
       liveAuthority: run.operatorAuthority,
       operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
       assertCurrent: () => {
+        if (context.resolveGatewayContext && !context.resolveGatewayContext()) {
+          throw new GatewayOperatorAccessUnavailableError();
+        }
         if (state.completed) {
           throw new Error("Input completed before source adoption");
         }

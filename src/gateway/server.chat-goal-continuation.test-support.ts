@@ -11,7 +11,10 @@ import {
 } from "../agents/bash-tools.exec-notify.js";
 import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -234,9 +237,11 @@ export function registerGoalAutomaticContinuationCases(
     Object.assign(process, { notifyOnExitEmptySuccess: true });
     const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
     const caller = { agentId, sessionKey, requesterOrigin };
-    await withGatewayToolCallerIdentity(
-      silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-      () => prepareExecExitNotification(process, false, false),
+    await withoutGatewayToolCallerIdentity(() =>
+      withGatewayToolCallerIdentity(
+        silent ? { ...caller, sessionEventDelivery: false as const } : caller,
+        () => prepareExecExitNotification(process, false, false),
+      ),
     );
     addSession(process);
     try {

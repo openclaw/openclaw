@@ -120,16 +120,6 @@ describe("ACP operator model ceiling", () => {
       ["fixture/allowed", undefined, "fixture/denied"],
       false,
     ],
-    [
-      "applied model revoked after admission while the requested model stays allowed",
-      [
-        "fixture/allowed",
-        (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
-        "fixture/applied",
-        { allow: ["fixture/allowed", "fixture/applied"] },
-      ],
-      false,
-    ],
   ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
     const { outcome, runtimeState } = await run(...args);
     expect(outcome).toBeInstanceOf(Error);
@@ -140,9 +130,13 @@ describe("ACP operator model ceiling", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("executes a qualified allowed model and keeps the existing pre-prompt guard", async () => {
-    const before = vi.fn();
-    const { outcome, runtimeState } = await run("fixture/allowed", before);
+  it("keeps the admitted applied-model ceiling through the pre-prompt guard", async () => {
+    const before = vi.fn<NonNullable<Parameters<typeof run>[1]>>((changePolicy) =>
+      changePolicy({ allow: ["fixture/allowed"] }),
+    );
+    const { outcome, runtimeState } = await run("fixture/allowed", before, "fixture/applied", {
+      allow: ["fixture/allowed", "fixture/applied"],
+    });
     expect(outcome).toBeUndefined();
     expect(before).toHaveBeenCalledOnce();
     expect(runtimeState.runTurn).toHaveBeenCalledOnce();
