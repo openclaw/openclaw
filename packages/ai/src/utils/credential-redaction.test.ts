@@ -179,3 +179,14 @@ it("does not read credential discriminators when only media projection is enable
   });
   expect(credentialReads).toBe(0);
 });
+
+it("redacts credential headers behind a long id-like run in linear time", () => {
+  const run = "-a".repeat(32_000);
+  const started = performance.now();
+  expect(redactDiagnosticText(run)).toBe(run);
+  expect(redactDiagnosticText(`${run}-token: abc123`)).toBe(`${run}-token: <redacted>`);
+  expect(performance.now() - started).toBeLessThan(500);
+  expect(redactDiagnosticText("x-api-key : sk-1\napi_token:v")).toBe(
+    "x-api-key: <redacted>\napi_token: <redacted>",
+  );
+});

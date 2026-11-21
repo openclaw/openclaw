@@ -126,6 +126,20 @@ describe("resolveRunFailoverDecision", () => {
   ] as const)("assistant: %j", (params, expected) => {
     expect(resolveAssistantDecision(params)).toEqual(expected);
   });
+
+  it("checks a retired model id behind a long id-like run in linear time", () => {
+    const decide = (errorMessage: string) =>
+      resolveAssistantDecision({
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        errorMessage,
+      });
+    const run = "-a".repeat(32_000);
+    const started = performance.now();
+    expect(decide(`${run} was retired at 2026-09-25`)).toEqual(fallback("model_not_found"));
+    expect(decide(run)).not.toEqual(fallback("model_not_found"));
+    expect(performance.now() - started).toBeLessThan(500);
+  });
 });
 
 describe("mergeRetryFailoverReason", () => {
