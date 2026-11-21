@@ -44,14 +44,13 @@ import {
   retainSqliteDatabaseWriteScopesForPath as retainScopes,
   retireSqliteDatabaseWriteScopes as retireScopes,
   prepareSqliteDatabaseCleanClose as prepareCleanClose,
-  readSqliteDatabaseCleanCloseAsync,
   prepareSqliteDatabaseAdmissionAsync as prepareAdmission,
   invalidateSqliteDatabaseCleanClose as invalidateCleanClose,
   readSqliteDatabaseIntegrityVerification as readIntegrity,
   recordSqliteDatabaseIntegrity as recordIntegrity,
   readSqliteDatabaseWriteTokenForPath as pathToken,
   retireSqliteDatabaseAdmissionForPath as retireAdmission,
-  retainSqliteDatabaseAdmissionLocation as retainLocation,
+  retainPreparedSqliteDatabaseAdmissionLocation as retainPreparedLocation,
   revokeSqliteDatabaseAdmissions as revokeAdmissions,
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
@@ -289,8 +288,8 @@ it("retires the final closed handle's facts while preserving open siblings and d
     using open = vi.spyOn(fs, "openSync");
     using read = vi.spyOn(fs, "readFileSync");
     using lstat = vi.spyOn(fs, "lstatSync");
-    retainLocation(location, original.physicalIdentity);
-    retainLocation(location, original.physicalIdentity);
+    expect(retainPreparedLocation(location, original.physicalIdentity)).toBe(true);
+    expect(retainPreparedLocation(location, original.physicalIdentity)).toBe(true);
     expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
     expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
     for (const probe of [stat, fstat, realpath, open, read, lstat]) {
@@ -346,15 +345,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
     readSqliteCleanCloseSeal(location, fstatSync(original.descriptor, { bigint: true }))
       ?.verifiedAt,
   ).toBe(verifiedAt);
-  const sealRequest = { location, expectedIdentity: original.physicalIdentity, assertCurrent() {} };
-  await expect(readSqliteDatabaseCleanCloseAsync(sealRequest)).resolves.toBe(true);
-  await prepareAdmission(sealRequest);
+  await prepareAdmission({
+    location,
+    expectedIdentity: original.physicalIdentity,
+    assertCurrent() {},
+  });
   const prepared = recordsFor(location)[0]!;
   expect(prepared.generationId).not.toBe(readmitted.generationId);
   expect(prepared.descriptor).toBe(original.descriptor);
   expect(readIntegrity(location)).toEqual({ verifiedAt: reverifiedAt });
-  invalidateCleanClose(location);
-  await expect(readSqliteDatabaseCleanCloseAsync(sealRequest)).resolves.toBe(false);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
 });
@@ -450,10 +449,10 @@ it("keeps the prior prepared receipt when a competing writer refuses the native 
   peer.exec("ROLLBACK");
 });
 
-it("releases a connection reference when initial admission exchange fails", () => {
+it("releases a connection reference when initial admission exchange fails", async () => {
   const location = path.join(tempDirs.make("sqlite-admission-open-failure-"), "proof.sqlite");
   createDatabase(location).close();
-  retainLocation(location);
+  await prepareAdmission({ location, assertCurrent() {} });
   try {
     expect(() =>
       withExchange(

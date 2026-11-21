@@ -11,7 +11,6 @@ import {
   type TranscriptAppendRefusal,
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
   classifyGatewayStorageFailure,
@@ -360,7 +359,6 @@ describe("shared-state worker error transport", () => {
       causeType: Error,
     },
     { error: new GatewayStateOwnerContentionError(path), fields: { databasePath: path } },
-    { error: new GatewayLockNamespaceError({ pid: 42 }, path), fields: {} },
     {
       error: new SandboxStateOwnerRequiredError(syntaxCause),
       fields: { code: "GATEWAY_STATE_OWNER_REQUIRED", cause: { message: syntaxCause.message } },

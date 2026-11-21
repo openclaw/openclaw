@@ -75,30 +75,10 @@ const descriptors = createSqliteDatabaseDescriptorOwner(seals);
 export const {
   prepareOwnedSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmissionAsync,
-  retainSqliteDatabaseAdmissionLocation,
   retainPreparedSqliteDatabaseAdmissionLocation,
   prepareSqliteDatabaseAdmission,
 } = descriptors;
 const { pathAdmission } = descriptors;
-
-/** Sample the owner's current seal only after asynchronously revalidating the physical file. */
-export async function readSqliteDatabaseCleanCloseAsync(
-  params: Pick<
-    Parameters<typeof prepareSqliteDatabaseAdmissionAsync>[0],
-    "location" | "expectedIdentity" | "assertCurrent"
-  >,
-): Promise<boolean> {
-  const identity = await prepareSqliteDatabaseAdmissionAsync(params);
-  params.assertCurrent();
-  const record = state.registry.forLocation(params.location);
-  return (
-    record !== undefined &&
-    identity !== undefined &&
-    record.physicalIdentity.key === identity.key &&
-    record.physicalIdentity.birthtime === identity.birthtime &&
-    readSqliteDatabaseGeneration(record, "sealPresent") === 1
-  );
-}
 
 /** Independent readers have no writer-fact relay; retain facts only with their native readers. */
 export const useConnectionScopedSqliteDatabaseAdmissionFacts = (): void =>

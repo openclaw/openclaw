@@ -7,11 +7,9 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
-import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
@@ -126,25 +124,6 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       }
       const { command } = input;
       if (command.type === "admit") {
-        if (command.inspectLiveOwner) {
-          try {
-            return {
-              ok: true,
-              type: "admit",
-              liveOwner: hasVerifiedLiveSqliteOwner(input.databasePath),
-            };
-          } catch (error) {
-            if (!(error instanceof GatewayLockNamespaceError)) {
-              throw error;
-            }
-            // A namespace refusal is a valid observation, not a broken reader.
-            return {
-              ok: true,
-              type: "admit",
-              liveOwner: { message: error.message, error: encodeOpenClawStateWorkerError(error) },
-            };
-          }
-        }
         if (input.exportPostgresSnapshot) {
           if (!channel) {
             throw new Error("PostgreSQL discovery snapshot requires its retained receiver");

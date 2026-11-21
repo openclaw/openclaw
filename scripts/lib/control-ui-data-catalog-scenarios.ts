@@ -46,11 +46,10 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
+function createDataCatalogInventory(revision = 1) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    // Browsing measures available plugins alongside a full, separate installed inventory.
-    catalogId: `${uninstalledIndex === undefined ? "installed-data-catalog" : "data-catalog"}-${suffix(index)}`,
+    catalogId: `installed-data-catalog-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
     packageName: `@synthetic/installed-data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
@@ -61,34 +60,28 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
     state: "enabled",
     removable: true,
   }));
-  const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => {
-    const installed = uninstalledIndex !== undefined && index !== uninstalledIndex;
-    return {
-      id: `data-catalog-${suffix(index)}`,
-      catalog: {
-        name: plugin.name,
-        summary: plugin.description,
-        author: "synthetic-publisher",
-        official: index % 3 === 0,
-        categories: ["tools"],
-        downloads: inventorySize - index,
-        latestVersion: "1.0.0",
-      },
-      local: {
-        pluginId: installed ? plugin.id : undefined,
-        present: installed,
-        installed,
-        enabled: installed,
-        state: installed ? "enabled" : "not-installed",
-        action: installed ? "manage" : "install",
-      },
-    };
-  });
+  // Browsing hides installed plugins; keep discovery separate from the Settings inventory.
+  const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
+    id: `data-catalog-${suffix(index)}`,
+    catalog: {
+      name: plugin.name,
+      summary: plugin.description,
+      author: "synthetic-publisher",
+      official: index % 3 === 0,
+      categories: ["tools"],
+      downloads: inventorySize - index,
+      latestVersion: "1.0.0",
+    },
+    local: {
+      present: false,
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      action: "install",
+    },
+  }));
   return {
-    plugins:
-      uninstalledIndex === undefined
-        ? plugins
-        : plugins.filter((_plugin, index) => index !== uninstalledIndex),
+    plugins,
     entries,
   };
 }
@@ -109,11 +102,8 @@ function catalogPage(
   };
 }
 
-function createDataCatalogFixture(
-  revision = 1,
-  uninstalledIndex?: number,
-): InteractionFixtureOverrides {
-  const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
+function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
+  const { plugins, entries } = createDataCatalogInventory(revision);
   const groups: ToolsCatalogResult["groups"] = Array.from(
     { length: toolGroupCount },
     (_, groupIndex) => ({
@@ -1001,10 +991,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     explicitOnly: true,
     route: pathForRoute("plugins"),
     expected: "Catalog search works before installed inventory permits installation.",
-    fixtureOverrides: () => createDataCatalogFixture(1, 900),
-    prepare: async (page) => {
-      await page.getByText("Everything here is already installed.", { exact: true }).waitFor();
-    },
+    prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
     run: async (page) => {
       const search = page.getByRole("searchbox", { name: "Search plugins" });
       if (!(await search.isEditable())) {
@@ -1038,7 +1025,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         inventoryLoadingVisible,
         inventoryReadyAtMs: await page.evaluate(() => performance.now()),
         matchingPlugins: 100,
-        installedPlugins: inventorySize - 1,
+        installedPlugins: inventorySize,
       };
     },
   },

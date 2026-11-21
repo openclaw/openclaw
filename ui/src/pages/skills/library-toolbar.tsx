@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, lazy, Loading, Show } from "solid-js";
+import { createMemo, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -12,26 +12,6 @@ type SkillLibraryNavigationProps = {
   onSearch: () => void;
   onWorkshop: () => void;
 };
-
-// Only the Settings library menu uses the phone header's action slot.
-const FloatingHeaderActions = lazy(
-  () => import("../../components/solid/floating-header-actions.tsx"),
-  {
-    export: "FloatingHeaderActions",
-  },
-);
-
-export function SkillLibraryPageActions(
-  props: SkillLibraryNavigationProps & { library: SkillLibraryModel },
-) {
-  const menu = () => <SkillLibraryPageMenu {...props} />;
-  // Loading the phone action slot must not suspend the inventory or its editable filter.
-  return (
-    <Loading fallback={menu()}>
-      <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>
-    </Loading>
-  );
-}
 
 export function SkillLibraryNavigation(props: SkillLibraryNavigationProps) {
   return (

@@ -8,8 +8,8 @@ import {
   Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { registerModelProviderAuthEnglish } from "../i18n/locales/en-model-provider-auth.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { initialWizardValue, type ModelSetupWizardState } from "../pages/model-setup/state.ts";
@@ -22,7 +22,7 @@ import "../styles/model-setup.css";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerModelSetupEnglish();
-registerEnglishCatalog(registerModelProviderAuthEnglish);
+registerEnglishCatalog(registerSettingsEnglish);
 
 export function createWizardLogin(options: {
   getClient: () => GatewayBrowserClient | null;

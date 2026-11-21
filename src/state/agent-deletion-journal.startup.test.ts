@@ -189,7 +189,6 @@ it("rejects stale journal absence when deletion arrives during native read clean
             selected = true;
             return {
               startValidateFresh: (...args) => owned.startValidateFresh(...args),
-              inspectLiveOwner: (...args) => owned.inspectLiveOwner(...args),
               async startRead(...args) {
                 const outcome = await owned.startRead(...args);
                 expect(outcome).toMatchObject({

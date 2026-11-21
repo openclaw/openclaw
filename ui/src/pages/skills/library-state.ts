@@ -18,6 +18,11 @@ import type {
   SkillsLibraryMutateParams,
   SkillsLibraryUploadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_FILES,
+} from "../../../../packages/gateway-protocol/src/skill-library-limits.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
@@ -575,23 +580,13 @@ export function createSkillLibrary(
       }
       await perform(async () => {
         assertUploadsEnabled(config());
-        const slug = data.importSlug;
-        // Reading the inventory does not need file-upload validation.
-        const {
-          SKILL_LIBRARY_MAX_BUNDLE_BYTES,
-          SKILL_LIBRARY_MAX_FILE_BYTES,
-          SKILL_LIBRARY_MAX_FILES,
-        } = await import("../../../../packages/gateway-protocol/src/schema/skill-library.ts");
-        if (!gateway.isCurrent(connection)) {
-          return;
-        }
-        assertUploadsEnabled(config());
         const [archiveFile] = files;
         if (archiveFile && files.length === 1 && archiveFile.name.toLowerCase().endsWith(".zip")) {
           if (!data.list?.profileId) {
             throw new Error(t("skillLibrary.signIn"));
           }
           const client = connection.client;
+          const slug = data.importSlug;
           const uploadConfig = config();
           assertUploadsEnabled(uploadConfig);
           if (archiveFile.size < 1 || archiveFile.size > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {

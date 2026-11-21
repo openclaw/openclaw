@@ -357,7 +357,6 @@ it.each(["unchanged", "revoked"] as const)(
               held = true;
               return {
                 startValidateFresh: (...args) => owned.startValidateFresh(...args),
-                inspectLiveOwner: (...args) => owned.inspectLiveOwner(...args),
                 startClose: () => owned.startClose(),
                 async startRead(...args) {
                   const result = await owned.startRead(...args);

@@ -162,17 +162,21 @@ export function renderPublisherIdentity(options: {
   name?: string;
   handle?: string;
   official?: boolean;
+  catalogOfficial?: boolean;
 }): JSX.Element | undefined {
-  const { name, handle, official } = options;
-  if (!name && !handle) {
+  const { name, handle, official, catalogOfficial } = options;
+  if (!name && !handle && !catalogOfficial) {
     return undefined;
   }
   return (
     <div class="plugin-catalog-detail__publisher">
-      <span class="plugin-catalog-detail__publisher-name">
-        {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
-        {official ? renderPluginOfficialBadge() : undefined}
-      </span>
+      {catalogOfficial ? renderPluginOfficialBadge() : undefined}
+      {name || handle ? (
+        <span class="plugin-catalog-detail__publisher-name">
+          {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
+          {official ? renderPluginOfficialBadge() : undefined}
+        </span>
+      ) : undefined}
       {name ? renderPluginAuthor(handle) : undefined}
     </div>
   );
@@ -423,7 +427,6 @@ export function renderPluginMetadata(
                 <a
                   class="plugin-metadata__link plugin-metadata__repository"
                   href={repository.href}
-                  aria-label={repository.name}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

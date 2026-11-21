@@ -24,7 +24,6 @@ import {
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
 import { SqliteJsonlReadBudgetExceededError } from "../infra/sqlite-jsonl-budget-error.js";
 import {
@@ -170,9 +169,6 @@ export function identifyError(error: Error) {
       missingTables: [...error.missingTables],
     };
   }
-  if (error instanceof GatewayLockNamespaceError) {
-    return { type: "gateway-lock-namespace" as const };
-  }
   if (error instanceof GatewayStateOwnerContentionError) {
     return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
@@ -264,8 +260,6 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new AggregateError([], node.message);
     case "auth-profile-store-unreadable":
       return new AuthProfileStoreUnreadableError(node.databasePath);
-    case "gateway-lock-namespace":
-      return new GatewayLockNamespaceError({});
     case "state-owner-contention":
       return new GatewayStateOwnerContentionError(node.databasePath);
     case "ownership-metadata":

@@ -11,9 +11,6 @@ export function createMockStateReadSource(transport: {
     own: () => () => {},
     createTransport: () => ({
       startValidateFresh: async () => {},
-      inspectLiveOwner: async () => {
-        throw new Error("Unexpected live owner inspection on mock transport");
-      },
       startRead: async (...args) => await transport.read(...args),
       startClose: async () => await transport.close(),
     }),

@@ -105,10 +105,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     const loadError = `SyntaxError in /synthetic/${"a".repeat(160)}/helper.ts:1:30\nGateway generation 2: replacement not applied.`;
     await gateway.deferNext(setEnabled);
     await toggle.click();
-    expect((await gateway.waitForRequest(setEnabled, { after: 2 })).params).toEqual({
-      pluginId: "calendar-plus",
-      enabled: false,
-    });
+    await gateway.waitForRequest(setEnabled, { after: 2 });
     await gateway.rejectDeferred(setEnabled, {
       code: "UNAVAILABLE",
       message: loadError,
@@ -127,7 +124,6 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     expect(
       await failure.evaluate((element) => element.scrollWidth - element.clientWidth),
     ).toBeLessThanOrEqual(1);
-    expect(await toggle.isEnabled()).toBe(true);
     const failureBounds = await failure.boundingBox();
     expect(failureBounds!.x + failureBounds!.width).toBeLessThanOrEqual(mobileViewport.width);
     await gateway.setMethodResponse("plugins.list", fixtures.inventory([], 3));

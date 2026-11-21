@@ -24,8 +24,12 @@ describeControlUiE2e("plugin install button progress", () => {
 
   it("shows a catalog card as installed when its install succeeds", async () => {
     const evidence = createControlUiE2eArtifactDir("plugin-install-card-settle");
+    const featuredCalendar = {
+      ...calendarDiscoveryPlugin,
+      catalog: { ...calendarDiscoveryPlugin.catalog, featured: true },
+    };
     const { page, gateway } = await setupPluginPage({
-      "plugins.catalog.browse": { items: [calendarDiscoveryPlugin] },
+      "plugins.catalog.browse": { items: [featuredCalendar] },
     });
     await page.emulateMedia({ colorScheme: "dark" });
     const installed = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
@@ -35,7 +39,6 @@ describeControlUiE2e("plugin install button progress", () => {
     );
     const install = cards.first().getByRole("button", { name: "Install Calendar Plus" });
     await install.waitFor();
-    const cardCount = await cards.count();
     await gateway.deferNext("plugins.install");
     await install.click();
     await gateway.waitForRequest("plugins.install");
@@ -54,7 +57,9 @@ describeControlUiE2e("plugin install button progress", () => {
       restartRequired: false,
     });
     await gateway.waitForRequest("plugins.catalog.browse", { after: 1 });
-    await expect.poll(() => cards.locator(".plugin-catalog-card__status").count()).toBe(cardCount);
+    await expect
+      .poll(() => cards.locator(".plugin-catalog-card__status").count())
+      .toBe(await cards.count());
     expect(await cards.locator(".plugin-install-action__button").count()).toBe(0);
     expect(await gateway.getRequests("plugins.list")).toHaveLength(lists);
     if (captureUiProof) {
@@ -65,7 +70,7 @@ describeControlUiE2e("plugin install button progress", () => {
     await gateway.resolveDeferred("plugins.catalog.browse", {
       items: [
         {
-          ...calendarDiscoveryPlugin,
+          ...featuredCalendar,
           local: {
             present: true,
             installed: true,
@@ -77,7 +82,23 @@ describeControlUiE2e("plugin install button progress", () => {
         },
       ],
     });
-    expect(await cards.locator(".plugin-catalog-card__status").count()).toBe(cardCount);
+    expect(await cards.locator(".plugin-catalog-card__status").count()).toBe(await cards.count());
+
+    const featured = page.locator('[data-catalog-section="featured"]');
+    await featured.getByRole("button", { name: "View all" }).click();
+    await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
+    const results = page.locator(".plugin-catalog-grid--results");
+    await results.getByText("Installed", { exact: true }).waitFor();
+    expect(await results.getByRole("heading", { name: "Calendar Plus" }).count()).toBe(1);
+    expect(await results.getByRole("button", { name: /Install/iu }).count()).toBe(0);
+    expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+    if (captureUiProof) {
+      await page.screenshot({ path: `${evidence}/featured-view-all.png` });
+    }
+    // The fresh page has no remembered install. Its local inventory still takes precedence.
+    await page.reload();
+    await featured.getByText("Installed", { exact: true }).waitFor();
+    expect(await featured.getByRole("button", { name: /Install/iu }).count()).toBe(0);
   });
 
   it.each([
@@ -251,9 +272,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await expectText(button, "Installing");
           expect(await card.isVisible()).toBe(true);
           expect(await applying.count()).toBe(1);
-          expect(
-            await page.getByRole("switch", { name: "Calendar Plus", exact: true }).count(),
-          ).toBe(0);
+          expect(await enabled.count()).toBe(0);
           expect(await pluginButton("Uninstall").count()).toBe(0);
         }
         await capture("runtime", [1440, 390]);

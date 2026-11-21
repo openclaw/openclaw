@@ -16,7 +16,6 @@ import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -47,18 +46,12 @@ function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawSt
   if (reply.ok) {
     return { value: reply };
   }
-  return {
-    error: decodeReadError(reply),
-    sourceAdmitted: reply.sourceAdmitted === true,
-  };
-}
-
-function decodeReadError(
-  reply: Pick<Extract<OpenClawStateReadReply, { ok: false }>, "message" | "error">,
-) {
   const error = new Error(reply.message);
   retainOpenClawStateWorkerErrorPayload(error, reply.error);
-  return hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+  return {
+    error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+    sourceAdmitted: reply.sourceAdmitted === true,
+  };
 }
 
 type ReadOperation = { close(): Promise<void> };
@@ -235,15 +228,13 @@ class StateReadSource {
 
   constructor(readonly state: ReadRuntime) {}
 
+  /** Adopts the producer's command; borrowed mutable inputs must be captured by that producer. */
   createTransport(
     command: OpenClawStateReadCommand,
     onChunk?: OpenClawStateReadOptions["onChunk"],
     onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     awaitedOnly = false,
-  ): Pick<
-    StateReadTransport,
-    "startValidateFresh" | "inspectLiveOwner" | "startRead" | "startClose"
-  > {
+  ): Pick<StateReadTransport, "startValidateFresh" | "startRead" | "startClose"> {
     return new StateReadTransport(command, this, onChunk, onChunkAsync, awaitedOnly);
   }
 
@@ -274,7 +265,6 @@ type ReadTask = ReturnType<ReadPool["runTask"]>;
 
 // Methods are shared; cancellation, command bytes, and failed cleanup remain per read.
 class StateReadTransport {
-  private readonly capturedCommand: OpenClawStateReadCommand;
   private readonly tasks = new Map<ReadTask, { retire: boolean }>();
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -282,15 +272,12 @@ class StateReadTransport {
   private chunksDrained: (() => void) | undefined;
 
   constructor(
-    command: OpenClawStateReadCommand,
+    private readonly capturedCommand: OpenClawStateReadCommand,
     private readonly source: StateReadSource,
     private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
-  ) {
-    // Immutable owner snapshots can cross preparation waits without another private copy.
-    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
-  }
+  ) {}
 
   private async closeTask(task: ReadTask): Promise<void> {
     await task.close(this.tasks.get(task)?.retire ? { retire: true } : undefined);
@@ -440,18 +427,16 @@ class StateReadTransport {
     }
   }
 
-  private async checkAdmission(
+  async startValidateFresh(
     context: OpenClawStateWorkerContext,
     authority: OpenClawStateReadAuthority,
-    inspectLiveOwner: boolean,
-  ) {
+  ): Promise<void> {
     const run = this.startRun(
       context,
       context.admission.databasePath,
-      !inspectLiveOwner,
-      inspectLiveOwner ? { type: "admit", inspectLiveOwner: true } : { type: "admit" },
+      true,
+      { type: "admit" },
       authority,
-      inspectLiveOwner ? context.admission.identity.key : undefined,
     );
     const read = await run.result;
     if ("error" in read) {
@@ -459,26 +444,6 @@ class StateReadTransport {
     }
     authority.assertCurrent();
     await this.closeTask(run.task);
-    return read.value;
-  }
-  async startValidateFresh(
-    context: OpenClawStateWorkerContext,
-    authority: OpenClawStateReadAuthority,
-  ) {
-    await this.checkAdmission(context, authority, false);
-  }
-  async inspectLiveOwner(
-    context: OpenClawStateWorkerContext,
-    authority: OpenClawStateReadAuthority,
-  ) {
-    const reply = await this.checkAdmission(context, authority, true);
-    if (reply.type !== "admit" || reply.liveOwner === undefined) {
-      throw new Error("Shared-state reader returned no live-owner observation");
-    }
-    if (typeof reply.liveOwner !== "boolean") {
-      throw decodeReadError(reply.liveOwner);
-    }
-    return reply.liveOwner;
   }
   async startRead(
     source: OpenClawStateReadLocation,
