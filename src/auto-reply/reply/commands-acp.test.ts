@@ -731,6 +731,7 @@ describe("/acp command", () => {
       sessionKey: defaultAcpSessionKey,
       reason: "manual-close",
       allowBackendUnavailable: true,
+      discardPersistentState: true,
       clearMeta: true,
     });
     expectMockCallFields(hoisted.sessionBindingUnbindMock, {
