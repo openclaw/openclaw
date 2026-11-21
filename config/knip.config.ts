@@ -767,6 +767,9 @@ const rootEntries = [
   // PR #174294 stages the local credential owner without activating production consumers.
   // Remove this audit root when the client credential cutover wires those consumers.
   "src/infra/client-credential-store.ts!",
+  // PR #202654 stages the restricted writer transport ahead of its Session Share handlers.
+  // Remove this audit root when they consume prepareGatewayPublicationTransportV1.
+  "src/gateway/publication-reader.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
