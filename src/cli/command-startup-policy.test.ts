@@ -41,6 +41,11 @@ it("defers gateway installs with a runtime expectation", () => {
 
 it("maps the static skip policy to config admission", () => {
   expect(resolvePolicy("config file").skipConfigGuard).toBe(true);
+  expect(resolvePolicy("update backup-cli verify")).toMatchObject({
+    skipConfigGuard: true,
+    loadPlugins: false,
+    suppressDoctorStdout: true,
+  });
 });
 it("uses process env banner suppression when startup env is omitted", () => {
   vi.stubEnv("OPENCLAW_HIDE_BANNER", "1");
