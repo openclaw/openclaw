@@ -87,7 +87,7 @@ function createMaintenanceTimerDeps(
 ) {
   return {
     ...createGatewayMaintenanceStateForTest({ restartRunningChannels }),
-    logHealth: { info: vi.fn(), error: vi.fn() },
+    logHealth: { debug: vi.fn(), info: vi.fn(), error: vi.fn() },
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
 }
@@ -507,7 +507,7 @@ describe("startGatewayMaintenanceTimers", () => {
     vi.spyOn(process, "cpuUsage").mockReturnValue({ user: 0, system: 0 });
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const restartRunningChannels = vi.fn(async () => true);
-    const logHealth = { info: vi.fn(), error: vi.fn() };
+    const logHealth = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
     let inspectionFails = true;
     const timers = startGatewayMaintenanceTimers({
       ...createMaintenanceTimerDeps(restartRunningChannels),
@@ -618,6 +618,28 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
     await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
     expect(deps.worktreeGc).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports idle worktree cleanup at debug and completed removals at info", async () => {
+    vi.useFakeTimers();
+    const deps = createMaintenanceTimerDeps();
+    const empty = { ...deps.worktreeGcResult, limitsSatisfied: true };
+    deps.worktreeGc
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce({ ...empty, removed: ["archived-worktree"] });
+    const timers = startGatewayMaintenanceTimers(deps);
+    try {
+      await vi.advanceTimersByTimeAsync(2);
+      const idleSummary = expect.stringContaining("Managed worktree cleanup completed: removed 0");
+      expect(deps.logHealth.debug).toHaveBeenCalledWith(idleSummary);
+      expect(deps.logHealth.info).not.toHaveBeenCalledWith(idleSummary);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(deps.logHealth.info).toHaveBeenCalledWith(
+        expect.stringContaining("Managed worktree cleanup completed: removed 1"),
+      );
+    } finally {
+      await stopMaintenanceTimers(timers);
+    }
   });
 
   it("records partial managed worktree cleanup in health logs", async () => {

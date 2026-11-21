@@ -47,7 +47,7 @@ export function createGatewayMaintenanceStateForTest(params?: {
     getHealthVersion: () => params?.healthVersion ?? 1,
     refreshGatewayHealthSnapshot: async () =>
       params?.healthSummary ?? ({ ok: true } as HealthSummary),
-    logHealth: { info: () => {}, error: () => {} },
+    logHealth: { debug: () => {}, info: () => {}, error: () => {} },
     channelManager: createSnapshotManager(
       { discord: { default: { running: true } } },
       { captureAccountRestart: () => params?.restartRunningChannels ?? (async () => true) },
