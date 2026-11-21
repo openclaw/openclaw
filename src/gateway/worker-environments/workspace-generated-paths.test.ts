@@ -42,24 +42,23 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
-  ".npm/_cacache",
-  ".npm/_logs",
-  ".cache/pip",
-  ".cache/uv",
+  ...["_cacache", "_logs"].map((name) => `.npm/${name}`),
+  ...["pip", "uv", "bun-transpiler", "vitest"].map((name) => `.cache/${name}`),
+  ".cache/openclaw/bun",
+  ".cache/ms-playwright",
+  ".cache/convex/binaries",
   ".pnpm-store",
   ".bun/install/cache",
-  ".cargo/registry",
-  ".cargo/git",
+  ...["registry", "git"].map((name) => `.cargo/${name}`),
   ".gradle/caches",
+  ".local/share/NuGet/http-cache",
+  ".local/share/NuGet/v3-cache",
+  ".nuget/packages",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
-  ".cache/openclaw/bun",
-  ".cache/ms-playwright",
-  ".cache/bun-transpiler",
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-workers",
-  ".cache/vitest",
   ".artifacts/dist-artifacts.lock",
 ];
 const generatedPaths = [

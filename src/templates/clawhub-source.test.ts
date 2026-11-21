@@ -52,6 +52,7 @@ vi.mock("./reader.js", () => ({
 
 import {
   listClawHubTemplates,
+  prefetchClawHubSource,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
   readClawHubTemplatesOverview,
@@ -285,41 +286,104 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
-  it("projects an overview in one HTTP read, retaining featured order and category ranking", async () => {
-    const official = { ...officialPackage(), stats: { installs: 20 } };
-    const community = { ...communityPackage(), stats: { installs: 1 } };
-    const impostor = officialPackage("@other/impostor");
+  it.each([
+    { optIn: undefined, marker: true }, // A plain overview ignores an unsolicited certificate.
+    { optIn: false, marker: true },
+    { optIn: true, marker: undefined }, // Legacy or over-budget registry: only shelves are known.
+    { optIn: true, marker: "true" },
+  ])(
+    "keeps the bounded overview when optIn=$optIn and marker=$marker",
+    async ({ optIn, marker }) => {
+      const official = { ...officialPackage(), stats: { installs: 20 } };
+      const community = { ...communityPackage(), stats: { installs: 1 } };
+      const impostor = officialPackage("@other/impostor");
+      const extra = officialPackage("@openclaw/extra");
+      const items = [community, impostor, official, extra];
+      const fetch = vi.fn(async (_input: unknown) =>
+        Response.json({
+          complete: true,
+          completeCategoryEntries: marker,
+          featured: items,
+          sections: [{ category: "research", items }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const overview = await readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        limit: 2,
+        timeoutMs: 1234,
+        ...(optIn === undefined ? {} : { includeCategoryEntries: optIn }),
+      });
+      expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
+        personalPackageName,
+        packageName,
+      ]);
+      expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
+        packageName,
+        personalPackageName,
+      ]);
+      expect(overview?.sections[0]).not.toHaveProperty("additionalEntries");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(fetch.mock.calls[0]?.[0])).toBe(
+        "https://registry.example/api/v1/templates/overview?limit=2" +
+          (optIn ? "&include=categoryEntries" : ""),
+      );
+      expect(mocks.list).not.toHaveBeenCalled();
+    },
+  );
+
+  it("splits each certified category after filtering, last-valid de-duplication and ranking", async () => {
+    const older = { ...officialPackage(), stats: { installs: 100 } };
+    const current = { ...older, displayName: "Current release", stats: { installs: 7 } };
+    const community = { ...communityPackage(), stats: { installs: 20 } };
+    const tie = { ...officialPackage("@openclaw/zebra"), stats: { installs: 7 } };
+    const items = [older, tie, community, current, { ...older, ownerHandle: "impostor" }];
     const fetch = vi.fn(async (_input: unknown) =>
       Response.json({
         complete: true,
-        featured: [community, impostor, official],
-        sections: [{ category: "research", items: [community, impostor, official] }],
+        completeCategoryEntries: true,
+        featured: [current, community],
+        sections: [
+          { category: "research", items },
+          { category: "coding", items: [current] },
+        ],
       }),
     );
     vi.stubGlobal("fetch", fetch);
     const overview = await readClawHubTemplatesOverview({
       baseUrl: "https://registry.example",
-      limit: 8,
-      timeoutMs: 1234,
+      limit: 1,
+      includeCategoryEntries: true,
     });
-    expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
-      personalPackageName,
-      packageName,
-    ]);
-    expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
-      packageName,
-      personalPackageName,
-    ]);
+    expect(overview).toMatchObject({
+      featured: [{ packageName }],
+      sections: [
+        {
+          category: "research",
+          entries: [{ packageName: personalPackageName }],
+          additionalEntries: [
+            { packageName, displayName: "Current release", installs: 7 },
+            { packageName: "@openclaw/zebra", installs: 7 },
+          ],
+        },
+        { category: "coding", entries: [{ packageName }], additionalEntries: [] },
+      ],
+    });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(String(fetch.mock.calls[0]?.[0])).toBe(
-      "https://registry.example/api/v1/templates/overview?limit=8",
+      "https://registry.example/api/v1/templates/overview?limit=1&include=categoryEntries",
     );
-    expect(mocks.list).not.toHaveBeenCalled();
+    mocks.list.mockResolvedValueOnce(listPage(items));
+    const category = await listClawHubTemplates({ category: "research" });
+    const research = overview?.sections[0];
+    expect([...(research?.entries ?? []), ...(research?.additionalEntries ?? [])]).toEqual(
+      category,
+    );
   });
 
   it.each([
     { status: 404, body: {}, fallback: true },
-    { status: 200, body: { complete: false }, fallback: true },
+    { status: 200, body: { complete: false, completeCategoryEntries: true }, fallback: true },
     { status: 200, body: { complete: true, featured: [] }, fallback: false },
     ...[401, 403, 429, 500].map((status) => ({ status, body: {}, fallback: false })),
   ])(
@@ -329,7 +393,10 @@ describe("public ClawHub Template catalog", () => {
         Response.json(body, { status, headers: { "retry-after": "61" } }),
       );
       vi.stubGlobal("fetch", fetch);
-      const result = readClawHubTemplatesOverview({ baseUrl: "https://registry.example" });
+      const result = readClawHubTemplatesOverview({
+        baseUrl: "https://registry.example",
+        includeCategoryEntries: true,
+      });
       if (fallback) {
         await expect(result).resolves.toBeUndefined();
       } else {
@@ -436,7 +503,7 @@ describe("public ClawHub Template catalog", () => {
       scheduledJobs: 1,
       contents: {
         skills: [{ excerpt: "Citation check" }],
-        automations: [{ name: "Daily briefing", enabled: false }],
+        automations: [{ name: "Daily briefing", enabled: false, message: "Prepare the briefing" }],
       },
     });
   });
@@ -772,6 +839,52 @@ describe("verified ClawHub Template source", () => {
     }
     expect(mocks.trust).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves from registry reads an Add started earlier, without reading them again", async () => {
+    const { stateDir } = await prepareResolverFixture();
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+    await prefetched.claim();
+    const reads = [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+      (read) => read.mock.calls.length,
+    );
+    expect(reads).toEqual([1, 1, 1, 1]);
+    expect(mocks.extract).not.toHaveBeenCalled();
+
+    await expect(
+      resolveSource({
+        mode: "apply",
+        stateDir,
+        prefetched,
+        run: async (source) => source.source.name,
+      }),
+    ).resolves.toMatchObject({ value: packageName });
+    expect(
+      [mocks.detail, mocks.artifact, mocks.trust, mocks.download].map(
+        (read) => read.mock.calls.length,
+      ),
+    ).toEqual(reads);
+    expect(mocks.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the archive of registry reads that no Add went on to use", async () => {
+    await prepareResolverFixture();
+    const cleanup = vi.fn(async () => undefined);
+    const archive = await mocks.download();
+    mocks.download.mockClear();
+    mocks.download.mockResolvedValue({ ...archive, cleanup });
+    const prefetched = prefetchClawHubSource({
+      coordinate: { packageName, version },
+      mode: "apply",
+    });
+
+    await prefetched.discard();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.extract).not.toHaveBeenCalled();
   });
 
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {

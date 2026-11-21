@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -13,9 +14,16 @@ import {
 } from "../../infra/package-update-activation-journal.js";
 import { readReleasedPackageActivationReceipt } from "../../infra/package-update-activation-status.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import {
+  captureNamespacedStateLeaseProcessOwner,
+  ranInEarlierHostBoot,
+} from "../../infra/state-lease-process-owner.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  verifyGitUpdateRecovery,
+} from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
@@ -24,14 +32,17 @@ import {
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import {
+  hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
-  needsPostCoreRepair,
+  inspectNewerRecoveryHistory,
+  updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   isAbandonedUpdateRun,
   isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
 import {
   assertUpdateRecoveryAdmission,
@@ -42,7 +53,9 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { gitCleanCheckArgs } from "../../infra/update-runner-git-commands.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -77,6 +90,84 @@ function hasPackageRecoveryAuthority(installKey: string): boolean {
   } catch {
     return true;
   }
+}
+
+/**
+ * A checkout's version cannot show whether a killed update had replaced its build,
+ * so its cohort settles like a package's only while the checkout still holds exactly
+ * the build that update recorded activating: that commit, no local changes, and a
+ * build made from it with that build ID. Returns why not, or undefined.
+ */
+async function inspectGitActivation(
+  root: string,
+  run: UpdateRunRecord,
+  { from, to }: PluginCohortRecoveryPair["reservation"],
+  timeoutMs: number,
+): Promise<string | undefined> {
+  const activation = run.origin.gitActivation;
+  if (!activation) {
+    return " that did not record which build it activated";
+  }
+  if (activation.buildId !== to.buildId || activation.previousBuildId !== from.buildId) {
+    return " whose recorded build does not match its plugin recovery";
+  }
+  // Settlement tells the two cores apart by version and build ID alone.
+  if (from.version === to.version && from.buildId === to.buildId) {
+    return " whose build has the same version and build ID as the build it replaced";
+  }
+  // Read-only probes must not refresh the checkout's index or fetch a partial clone's
+  // objects. Older Git ignores GIT_NO_LAZY_FETCH, so every transport is denied too.
+  const { gitReadOnlyEnvironment } = await import("../../infra/git-exec.js");
+  const git = (argv: string[]) =>
+    runCommandWithTimeout(argv, {
+      cwd: root,
+      timeoutMs,
+      env: gitReadOnlyEnvironment(argv.slice(1), {
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_ALLOW_PROTOCOL: "",
+      }),
+    });
+  const head = await git(["git", "-C", root, "rev-parse", "HEAD"]);
+  if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
+    return ", and the checkout is no longer at the commit that update activated";
+  }
+  // The updater's own clean check, showing untracked files whatever the local config says.
+  const clean = gitCleanCheckArgs(root);
+  clean.splice(clean.indexOf("--porcelain") + 1, 0, "--untracked-files=normal");
+  const status = await git(clean);
+  if (status.code !== 0 || status.stdout.trim()) {
+    return ", and the checkout has local changes";
+  }
+  // The check the updater itself trusts before restarting a checkout's Gateway.
+  const build = await verifyGitUpdateRecovery({ root, sha: activation.sha });
+  if (!build.serviceRestartSafe) {
+    return ", and its build is missing, incomplete or not built from the checked-out commit";
+  }
+  return build.buildId === activation.buildId
+    ? undefined
+    : ", and its build is not the one that update activated";
+}
+
+/**
+ * Every process the run recorded as its driver ran on this host in an earlier boot,
+ * so none of them and none of their children survive. A run that lost a driver's
+ * identity, or that a managed helper adopted, keeps the lease store's proof. Its
+ * history must also have gone quiet before this boot began: a clone sharing the host
+ * name, machine identity and state directory boots on its own, and its live updater
+ * keeps writing.
+ */
+function ranBeforeRestart(run: UpdateRunRecord): boolean {
+  const drivers = [run.origin.driver, ...(run.origin.previousDrivers ?? [])];
+  if (
+    !drivers[0] ||
+    run.origin.managedHandoff ||
+    hasUnrecordedUpdateRunDriver(run) ||
+    updateRunLastActivity(run) >= Date.now() - os.uptime() * 1000
+  ) {
+    return false;
+  }
+  const current = captureNamespacedStateLeaseProcessOwner().namespace;
+  return drivers.every((driver) => driver !== undefined && ranInEarlierHostBoot(driver, current));
 }
 
 /**
@@ -205,7 +296,8 @@ export async function settleManagedHandoffPluginCohort(
  * with repair's settlement when no operator judgement is needed: update history
  * shows a command-line update whose driver exited, and the update lease store still
  * holds that driver's lease, so claiming the installation proves its processes and
- * their children gone. When that update had replaced the installed version without
+ * their children gone. When a restart emptied that store, a recorded earlier boot of
+ * this host proves the same. When that update had replaced the installed version without
  * confirming it, had begun rolling back on it, or left the Gateway stopped, this
  * update then finishes it as repair does before deciding anything about its own
  * core; a stopped Gateway only when this update would restart it anyway. Inspect
@@ -277,35 +369,31 @@ export async function inspectInterruptedUpdateRecovery(
       const history = listUpdateRuns({ limit: 100 }, options);
       const since = getUpdateRun(pair.cohort.runId, options)?.createdAtMs ?? 0;
       const stop = findUpdateGatewayStop(history);
+      // Repair's own rule: post-core work since the killed run, unproven past a page that ends after it.
+      const { postCoreRuns, incomplete } = inspectNewerRecoveryHistory(since, history);
       const others = new Set(
-        history
-          .filter(
+        [
+          ...history.filter(
             (run) =>
               run.status === "running" ||
-              (!isAcknowledgedAbandonedUpdateRun(run) &&
-                (isAbandonedUpdateRun(run) ||
-                  (run.status === "failed" &&
-                    run.createdAtMs >= since &&
-                    needsPostCoreRepair(run)))),
-          )
-          .map((run) => run.runId),
+              (isAbandonedUpdateRun(run) && !isAcknowledgedAbandonedUpdateRun(run)),
+          ),
+          ...postCoreRuns,
+        ].map((run) => run.runId),
       );
       if (stop?.started === false) {
         others.add(stop.runId);
       }
       others.delete(pair.cohort.runId);
-      // A full page cannot show that nothing older still owes recovery.
-      return others.size || history.length === 100
+      return others.size || incomplete
         ? refuse(
             `Other update history also needs repair${others.size ? ` (${[...others].join(", ")})` : ""}.`,
           )
         : undefined;
     };
     /** What the installation and update history say; read again under the claim. */
-    const inspectHistory = () => {
-      if (installKind !== "package") {
-        // A checkout can hold the new sources under the old version and build identity,
-        // so nothing here shows whether that update had replaced the installed core.
+    const inspectHistory = async () => {
+      if (installKind !== "package" && installKind !== "git") {
         return refuse("It was left by an update of a source checkout.");
       }
       if (resolveUpdateInstallRoot(pair.cohort.installKey) !== installKey) {
@@ -331,6 +419,13 @@ export async function inspectInterruptedUpdateRecovery(
           `Wait for it to finish; if it has stopped, run ${repair}, then retry ${update}.`,
         );
       }
+      const checkout =
+        installKind === "git"
+          ? await inspectGitActivation(root, run, pair.reservation, options.busyTimeoutMs)
+          : undefined;
+      if (checkout) {
+        return refuse(`It was left by an update of a source checkout${checkout}.`);
+      }
       if (findUpdateGatewayStop([run])?.started !== false) {
         return run;
       }
@@ -342,7 +437,7 @@ export async function inspectInterruptedUpdateRecovery(
           )
         : (refuseOtherRecovery() ?? run);
     };
-    const history = inspectHistory();
+    const history = await inspectHistory();
     if (history instanceof Error) {
       return { pair, refuse, inspectHistory, refuseOtherRecovery, refused: history };
     }
@@ -361,17 +456,22 @@ export async function inspectInterruptedUpdateRecovery(
       holder !== false &&
       holder.pid === driver.pid &&
       holder.startIdentity === driver.startIdentity;
+    // A restart empties the temporary lease store, but also ends every process of the boot.
+    const rebooted = !recorded && held.kind === "absent" && ranBeforeRestart(history);
     return {
       pair,
       refuse,
       inspectHistory,
       refuseOtherRecovery,
+      databasePath,
       store,
-      refused: recorded
-        ? undefined
-        : refuse(
-            "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
-          ),
+      rebooted,
+      refused:
+        recorded || rebooted
+          ? undefined
+          : refuse(
+              "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
+            ),
     };
   };
   // A failed inspection changes nothing: admission then reports what it finds itself.
@@ -379,7 +479,9 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, store } = inspected;
+  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
+    inspected;
+  const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -405,16 +507,25 @@ export async function inspectInterruptedUpdateRecovery(
           owner: _owner,
           ...claimedStore
         } = captureUpdateCommandExecutorAuthority(ownership);
-        if (claimed !== installKey || !isDeepStrictEqual(claimedStore, store)) {
+        // After a restart the claim's store is a new one at the same place; the earlier
+        // boot is the proof.
+        const sameStore = rebooted
+          ? databasePath !== undefined &&
+            claimedStore.databasePath === fs.realpathSync(databasePath)
+          : isDeepStrictEqual(claimedStore, store);
+        if (claimed !== installKey || !sameStore) {
           throw refuse("The update lease store changed while this update was starting.");
         }
         if (!(await pendingRecovery())) {
           // Another command settled it between the inspection and this claim.
           return "settled" as const;
         }
-        const history = inspectHistory();
+        const history = await inspectHistory();
         if (history instanceof Error) {
           throw history;
+        }
+        if (rebooted && !ranBeforeRestart(history)) {
+          throw refuse("The update's recorded processes changed while this update was starting.");
         }
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;

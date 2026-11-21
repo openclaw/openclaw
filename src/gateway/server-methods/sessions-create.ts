@@ -43,7 +43,6 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { isAttendedSessionCreator } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
@@ -175,19 +174,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
     const sessionCreation = attributeAgentToolSessionCreation(preparedCreation, toolRequester);
-    const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const handleAuthorityError = (error: unknown): undefined => {
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
       }
-      return authority.handleClosedError(error);
+      throw error;
     };
     const assertSessionCreateCurrent = Object.assign(
       bindGatewayDeviceRevocation(() => {
         requestAuthority.assertCurrent();
         assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
-        authority.commitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
         assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
       }, hasCurrentClientAuthority),
@@ -310,7 +307,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     deviceFolderAuthority.assertCurrent = preparedFolder?.value.assertCurrent;
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
-    const requestedProjectId = normalizeOptionalString(p.projectId);
+    let requestedProjectId = normalizeOptionalString(p.projectId);
     const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
@@ -340,9 +337,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
-    if (!authority.ensureActive()) {
-      return;
-    }
     const existingTargetEntry = explicitlyRequestedKey
       ? (
           await loadGatewaySessionEntryReadOnlyInWorker({
@@ -357,11 +351,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const requestedProject = await resolveRequestedSessionProject(cfg, p, client);
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client, {
+      cwd: requestedExecNode ? undefined : requestedCwd,
+      existingTargetEntry,
+    });
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
+    requestedProjectId = requestedProject.value.projectId;
     const projectRoot = requestedProject.value.root;
     if (requestedProject.value.worktree || requestedProjectGitUrl) {
       p.worktree = true;
@@ -553,7 +551,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         fork: p.fork,
         forkFrom: p.forkFrom,
         emitCommandHooks: p.emitCommandHooks,
-        assertRuntimeCurrent: authority.commitGuard,
       }),
       succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
@@ -593,9 +590,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       },
       afterCreate: async (session) => {
-        if (!authority.hasActive()) {
-          return;
-        }
         await prepareRequiredWorkerCreatedSession({
           requiredProfile,
           pendingWorktree: Boolean(preparedWorktree?.pendingWorktree),

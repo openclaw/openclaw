@@ -94,6 +94,25 @@ describe("summarizeToolGroup", () => {
     ).toBe("Ran commands, read files, searched, waited for agents, asked questions");
   });
 
+  it.each([
+    ["completed", "completed", "Changed files"],
+    ["completed", "running", "Changing files"],
+    ["failed", "failed", "File changes"],
+    [undefined, undefined, "File changes · Outcome unknown"],
+  ] as const)(
+    "combines edit and write work without losing its state (%s, %s)",
+    (editStatus, writeStatus, expected) => {
+      const actions = [
+        prepared("edit", "Edit", { name: "edit", status: editStatus }),
+        prepared("write", "Write", { name: "write", status: writeStatus }),
+      ];
+      expect(summarizeToolGroup(actions)).toBe(expected);
+      expect(summarizeToolGroup([prepared("read", "Read", { name: "read" }), ...actions])).toBe(
+        "Read files, " + expected[0]!.toLowerCase() + expected.slice(1),
+      );
+    },
+  );
+
   it("has no activity label when all prepared work is quiet", () => {
     expect(summarizeToolGroup([])).toBe(
       summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),

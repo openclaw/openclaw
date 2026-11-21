@@ -77,6 +77,23 @@ function pendingRepository(preference: NewSessionPreference) {
   return { ...fixture, discovery };
 }
 
+it("shows and submits New worktree for a restored managed clone folder", async () => {
+  const { state, request, readPreference } = createRepositoryFixture();
+  const folder = "/workspace/managed-clone";
+  readPreference.mockReturnValue({ workspace: "/workspace", folder, worktree: false });
+  request.mockImplementation(async (method) =>
+    method === "fs.listDir" ? { path: folder, entries: [] } : { ...GIT, requiresWorktree: true },
+  );
+
+  state.adoptAgentDefaults();
+  await repositoryReady(state);
+
+  expect(state.currentCheckoutUnavailableReason).toBe(
+    "Use an isolated worktree for this project and agent",
+  );
+  expect(createParams(state, "Inspect the clone")).toMatchObject({ cwd: folder, worktree: true });
+});
+
 const cloudProfile: DraftCloudProfile = {
   id: "aws",
   providerId: "crabbox",
@@ -111,12 +128,14 @@ describe("DraftPlaceState repository selection", () => {
   it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },
     { source: "registered", redacted: true, current: false, savedWorktree: false },
+    { source: "registered", redacted: false, current: true, savedWorktree: true },
     { source: "workspace", redacted: true, current: true, savedWorktree: true },
   ] as const)(
     "restores permitted $source checkout (redacted=$redacted)",
     async ({ source, redacted, current, savedWorktree }) => {
       const f = createRepositoryFixture();
       const eligibility = createDeferred<{ current: boolean; worktree: boolean }>();
+      const branches = createDeferred<WorktreesBranchesResult>();
       const projectId = source === "workspace" ? "workspace:main" : "registered";
       const project = {
         id: projectId,
@@ -128,9 +147,7 @@ describe("DraftPlaceState repository selection", () => {
       vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
       f.readPreference.mockReturnValue({ projectId, worktree: savedWorktree });
       f.request.mockImplementation(async (method) =>
-        method === "projects.checkoutOptions"
-          ? eligibility.promise
-          : { repositoryStatus: "git", branches: [] },
+        method === "projects.checkoutOptions" ? eligibility.promise : branches.promise,
       );
       const settled = nextChange(f.changed, () => f.state.worktree && f.state.worktreeAvailable());
       f.state.adoptAgentDefaults();
@@ -138,6 +155,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(f.state.folderSubmissionBlocked()).toBe(true);
       eligibility.resolve({ current, worktree: true });
       await settled;
+      expect(f.state.repositoryState.checkoutPending).toBe(false);
       expect(f.state).toMatchObject({
         worktree: true,
         currentCheckoutUnavailableReason: current
@@ -154,6 +172,7 @@ describe("DraftPlaceState repository selection", () => {
         worktree: true,
         message: "Keep my prompt",
       });
+      branches.resolve({ repositoryStatus: "git", branches: [] });
     },
   );
 

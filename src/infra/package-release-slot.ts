@@ -8,6 +8,7 @@ import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   packageReleaseGlobalRoot,
+  packageReleasePrefixOfRoot,
   PACKAGE_RELEASES_DIR,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
@@ -208,9 +209,10 @@ export async function switchPackageReleaseLink(params: {
   }
   await syncDirectoryIfSupported(globalRoot);
   // Retention counts a release's age from when the link stopped naming it.
-  const deselected = path.resolve(globalRoot, params.expected.target);
-  const deselectedPrefix = path.dirname(path.dirname(path.dirname(deselected)));
-  if (packageReleaseGlobalRoot(deselectedPrefix) === path.dirname(deselected)) {
+  const deselectedPrefix = packageReleasePrefixOfRoot(
+    path.resolve(globalRoot, params.expected.target),
+  );
+  if (deselectedPrefix) {
     const now = new Date();
     await fs.utimes(deselectedPrefix, now, now).catch(() => {});
   }

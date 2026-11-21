@@ -75,6 +75,10 @@ export type ProvisionCopyDetails = {
   unreportedFiles?: number;
   unreportedBytes?: number;
   reflinkFallbackReason?: string;
+  reflinkFallbackRootHash?: string;
+  reflinkFallbackPrefixHash?: string;
+  reflinkFallbackErrno?: "EOPNOTSUPP" | "EINVAL" | "EXDEV" | "unknown";
+  reflinkFallbackProbeErrno?: "EOPNOTSUPP" | "EINVAL" | "EXDEV" | "unknown" | "clone-succeeded";
   spawnCount: number;
   spawnMs: number;
   childMs: number;
@@ -90,7 +94,11 @@ export type FsSafeCopyReply =
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }
-  | { type: "written"; workspaceEvidence?: WorktreeWorkerAuthority["workspaceEvidence"] }
+  | {
+      type: "written";
+      cloneWriteBytes?: number;
+      workspaceEvidence?: WorktreeWorkerAuthority["workspaceEvidence"];
+    }
   | {
       type: "provisioned";
       paths: string[];

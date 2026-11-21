@@ -63,7 +63,7 @@ function parseDays(field: string | undefined): number[] | null {
 }
 
 /** Days as cron writes them: `*`, runs of three or more as ranges, the rest listed. */
-export function formatDays(days: readonly number[]): string {
+function formatDays(days: readonly number[]): string {
   const sorted = [...new Set(days)].toSorted((a, b) => a - b);
   if (sorted.length === 0 || sorted.length === ALL_DAYS.length) {
     return "*";

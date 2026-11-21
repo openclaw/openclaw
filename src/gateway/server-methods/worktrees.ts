@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -14,10 +16,13 @@ import {
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
-import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
+import { resolveRecordedProjectByRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
@@ -81,6 +86,37 @@ function captureWorktreeMutationGuard(
   }
 }
 
+/** Repository roots a write-scoped client may name; other host paths need operator.admin. */
+async function resolveWriteScopedRepoRoot(
+  repoRoot: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const containment = await resolveWorkspacePathContainment(repoRoot, cfg);
+  // A stored project row authorizes its canonical repo root for write-scoped clients.
+  return containment?.path ?? (await resolveRecordedProjectByRoot(repoRoot))?.repoRoot;
+}
+
+/**
+ * Admits a live managed worktree as a source checkout for a write-scoped client that could
+ * create one from the same repository. Session-owned worktrees stay with their conversation,
+ * so naming a path never borrows another chat's work.
+ */
+export async function resolveWriteScopedManagedWorktree(
+  requestedPath: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const canonicalPath = path.isAbsolute(requestedPath)
+    ? await fs.realpath(requestedPath).catch(() => undefined)
+    : undefined;
+  const record = canonicalPath
+    ? await readLiveRegistryWorktreeByPath(captureWorktreeRunEndContext(process.env), canonicalPath)
+    : undefined;
+  if (!record || record.ownerKind === "session") {
+    return undefined;
+  }
+  return (await resolveWriteScopedRepoRoot(record.repoRoot, cfg)) ? record.path : undefined;
+}
+
 async function resolveAuthorizedRepoRoot(
   repoRoot: string,
   opts: Parameters<GatewayRequestHandlers[string]>[0],
@@ -89,12 +125,10 @@ async function resolveAuthorizedRepoRoot(
   if (scopes.includes(ADMIN_SCOPE)) {
     return repoRoot;
   }
-  const containment = await resolveWorkspacePathContainment(
+  const authorizedRoot = await resolveWriteScopedRepoRoot(
     repoRoot,
     opts.context.getRuntimeConfig(),
   );
-  // A stored project row authorizes its canonical repo root for write-scoped clients.
-  const authorizedRoot = containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
   if (authorizedRoot) {
     return authorizedRoot;
   }
@@ -259,7 +293,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = opts.context.getRuntimeConfig();
-    const result = await runGitReadOperation(
+    const branches = runGitReadOperation(
       {
         type: "repository.branches",
         input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
@@ -282,7 +316,13 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         },
       },
     );
-    respond(true, result, undefined);
+    const [result, clone] = await Promise.all([
+      branches,
+      params.includeRepositoryStatus
+        ? resolveRecordedProjectByRoot(repoRoot, { source: "cloned" })
+        : undefined,
+    ]);
+    respond(true, clone ? { ...result, requiresWorktree: true } : result, undefined);
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
     const { respond, context } = opts;

@@ -1,4 +1,5 @@
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { hasErrnoCode } from "../../infra/errno.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
@@ -20,6 +21,13 @@ while IFS= read -r target; do
   IFS= read -r sources || exit 1
   set --
   for source in $sources; do set -- "$@" "/proc/self/fd/3/$source"; done
+  case "$target" in
+    \\?*)
+      target=\${target#?}
+      LC_ALL=C cp -L --reflink=always "$1" "/proc/self/fd/3/$target/.reflink-probe" 2>&1 && printf 'reflink probe: yes\\n'
+      printf '.\\n'
+      continue ;;
+  esac
   LC_ALL=C cp $debug -L --reflink=auto --preserve=timestamps -t "/proc/self/fd/3/$target" "$@" || exit
   printf '.\\n'
 done`;
@@ -27,7 +35,8 @@ done`;
 export function createProvisionCopyCommand(
   procFd: number,
   sourceFd: number,
-  details?: ProvisionCopyDetails,
+  details: ProvisionCopyDetails | undefined,
+  sourceRoot: string,
 ) {
   const spawnStarted = performance.now();
   const child = childProcess.spawn("/bin/sh", ["-c", command, "provision-copy", String(sourceFd)], {
@@ -101,7 +110,7 @@ export function createProvisionCopyCommand(
         throw error;
       }
     },
-    async copy(target: number, sources: readonly { fd: number; bytes: number }[]) {
+    async copy(target: number, sources: readonly { fd: number; bytes: number; path: string }[]) {
       const started = performance.now();
       if (details) {
         details.batchCount++;
@@ -129,8 +138,31 @@ export function createProvisionCopyCommand(
             const bytes = `${kind}Bytes` as const;
             details[files] = (details[files] ?? 0) + 1;
             details[bytes] = (details[bytes] ?? 0) + source.bytes;
-            if (kind === "copied") {
-              details.reflinkFallbackReason ??= method;
+            if (kind === "copied" && details.reflinkFallbackReason === undefined) {
+              details.reflinkFallbackReason = method;
+              const hash = (value: string) =>
+                createHash("sha256").update(value).digest("hex").slice(0, 16);
+              details.reflinkFallbackRootHash = hash(sourceRoot);
+              details.reflinkFallbackPrefixHash = hash(source.path.split("/")[0]!);
+              const errno = (value: string | undefined) =>
+                value?.endsWith("Operation not supported")
+                  ? ("EOPNOTSUPP" as const)
+                  : value?.endsWith("Invalid argument")
+                    ? ("EINVAL" as const)
+                    : value?.endsWith("Invalid cross-device link")
+                      ? ("EXDEV" as const)
+                      : ("unknown" as const);
+              details.reflinkFallbackErrno = errno(method);
+              if (method === "unsupported") {
+                // Older cp discards errno. One clone-only probe retains descriptor custody;
+                // its result is separate because a retry cannot prove the original errno.
+                details.reflinkFallbackProbeErrno = "unknown";
+                stdin.write(`?${target}\n${source.fd}\n`);
+                await receive(".", (line) => {
+                  details.reflinkFallbackProbeErrno =
+                    line === "reflink probe: yes" ? "clone-succeeded" : errno(line);
+                });
+              }
             }
           }
         }

@@ -413,9 +413,10 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+  it("preserves native exec output and refusal diagnostics", async ({ onTestFinished }) => {
     const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
-    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const stdout = "  review-ready\n \n";
+    await writeFile(join(state.workspaceDir, "input.txt"), stdout);
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
     const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
@@ -451,7 +452,7 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(results[1]).toMatchObject({
       status: "completed",
-      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+      value: { status: "completed", exitCode: 0, aggregated: stdout },
     });
     expect(results[2]).toMatchObject({
       status: "completed",
@@ -468,6 +469,67 @@ describe("Code Mode agent-loop error recovery", () => {
     expectRecovered(agent);
     expectToolCalls(3, shell);
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
+  });
+
+  it("delivers a steer before a required nested shell finishes and resumes its exact result", async ({
+    onTestFinished,
+  }) => {
+    const { state, shell } = await nativeExecFixture("steer-held-shell", onTestFinished);
+    const started = join(state.workspaceDir, "started");
+    const release = join(state.workspaceDir, "release");
+    const command = nodeCommand(`const fs = require("node:fs");
+      const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
+        if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
+      });
+      const timer = setTimeout(() => watcher.close(), 10000);
+      fs.appendFileSync(${JSON.stringify(started)}, "started");`);
+    const correction = "Check this before the command finishes.";
+    let session!: AgentSession;
+    const observed: Context[] = [];
+    const run = runCodeModeAgent({
+      hiddenTools: [shell],
+      embeddedSession: true,
+      execInput: {
+        code: `return (await exec({command:${JSON.stringify(command)}})).aggregated;`,
+        awaitResults: true,
+      },
+      programs: [
+        "exec",
+        async (context) => {
+          observed.push(context);
+          await writeFile(release, "finish");
+          const result = readToolResultDetails(
+            context.messages.findLast((m) => m.role === "toolResult"),
+          );
+          expect(result).toMatchObject({
+            status: "waiting",
+            reason: "steering",
+            runId: expect.any(String),
+          });
+          return { wait: true, runId: String(result?.runId) };
+        },
+      ],
+      configureAgent(_agent, harness) {
+        session = harness.session!;
+      },
+    });
+    await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+      timeout: 15000,
+    });
+    const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
+      waitForTranscriptCommit: true,
+    });
+    const { agent } = await run;
+    await receipt;
+    expect(observed[0]?.messages.slice(-2)).toMatchObject([
+      { role: "toolResult", details: { status: "waiting" } },
+      { role: "user", content: [{ type: "text", text: correction }] },
+    ]);
+    expect(
+      readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+    ).toMatchObject({ status: "completed", value: "original result\n" });
+    expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+    expect(await readFile(started, "utf8")).toBe("started");
   });
 
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {

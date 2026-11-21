@@ -183,9 +183,79 @@ it.for(["archived", "replaced", "reset"] as const)(
           expect.stringContaining("Restart completion recovery failed"),
         );
         expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
-        expect(() => subagentRuns.runWithCompletionAuthority(child, () => undefined)).toThrow(
-          "Subagent completion requester store was retired",
-        );
+      } finally {
+        subagentRuns.delete(child.runId);
+      }
+    }),
+);
+
+// A completion wake starts parent work, so only the scope the requester's work belongs to may
+// recover it: its shutdown marker's scope, else the scope its latest run started under.
+it.for([
+  { stored: "token-a", marker: undefined, startup: "token-a", recovers: true },
+  { stored: "token-a", marker: undefined, startup: "token-b", recovers: false },
+  { stored: undefined, marker: undefined, startup: "token-b", recovers: false },
+  { stored: "token-b", marker: "token-a", startup: "token-b", recovers: false },
+  { stored: undefined, marker: undefined, startup: undefined, recovers: true },
+] as const)(
+  "recovers completion custody of work from scope $marker/$stored only at startup scope $startup",
+  ({ stored, marker, startup, recovers }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const person = ensureGatewayOwnerProfile("Restart custody owner");
+      const target = {
+        agentId: "main",
+        physicalAgentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      const sessionKey = "agent:main:dashboard:scoped-requester";
+      const entry: InternalSessionEntry = {
+        sessionId: "scoped-requester",
+        lifecycleRevision: "original-revision",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: person.id },
+      };
+      replaceSessionEntrySync({ ...target, sessionKey }, entry);
+      // Private restart evidence belongs to an existing incarnation.
+      replaceSessionEntrySync(
+        { ...target, sessionKey },
+        {
+          ...entry,
+          ...(stored ? { lifecycleRestartScope: stored } : {}),
+          ...(marker ? { resumeAfterRestart: { scope: marker } } : {}),
+        },
+      );
+      const child = createSubagentRunRecord({
+        runId: "scoped-completion",
+        childSessionKey: "agent:main:subagent:scoped-child",
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        requesterStorePath: target.storePath,
+        completionRequesterSessionId: entry.sessionId,
+        completionRequesterLifecycleRevision: entry.lifecycleRevision,
+        expectsCompletionMessage: true,
+        spawnMode: "session",
+        completionTarget: "parent",
+        endedAt: 1,
+        delivery: { status: "pending" },
+      });
+      subagentRuns.set(child.runId, child);
+      subagentRuns.retireCompletionAuthority(child);
+      vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", startup);
+      try {
+        const params = {
+          context: createContext(),
+          signal: new AbortController().signal,
+          log: { warn: vi.fn() },
+        };
+        params.context.resolveGatewayContext = () => params.context;
+        const stores = await prepareRestartStores(params, [target]);
+        expect(stores?.[0]?.entries.map((row) => row.entry.lifecycleRestartScope)).toEqual([
+          stored,
+        ]);
+        await prepareRestartCompletionCustody(params, stores![0]!);
+        expect(params.log.warn).not.toHaveBeenCalled();
+        expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(!recovers);
       } finally {
         subagentRuns.delete(child.runId);
       }

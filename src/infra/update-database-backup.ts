@@ -32,7 +32,7 @@ import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
-import { UpdateStateDatabaseOwnerSchema } from "./update-candidate-paths.js";
+import { UpdateStateDatabaseOwnerSchema, recoveryOwner } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
   parseUpdateStateInspectionWorker,
@@ -53,6 +53,7 @@ import {
 import {
   createOnlineUpdateCapture,
   prepareUpdateDatabaseBackupDirectory,
+  resolveOnlineCapturePrune,
   type OnlineCaptureInput,
 } from "./update-database-backup-online.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
@@ -204,7 +205,7 @@ async function canonicalDatabaseInventory(
         canonical = resolvePathViaExistingAncestorSync(spelling);
         missing.add(canonical);
       }
-      for (const owner of database.owners ?? []) {
+      for (const owner of database.owners?.flatMap(recoveryOwner) ?? []) {
         const entry = { path: canonical, ...owner };
         owners.set(JSON.stringify(entry), entry);
       }
@@ -258,7 +259,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
-    input,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
@@ -358,6 +358,7 @@ export async function createUpdateDatabaseBackupInProcess(
           ),
         );
         const online = createOnlineUpdateCapture(input, engines);
+        const prune = resolveOnlineCapturePrune(input, directory);
         if (
           [...engines.values()].some((engine) => engine.engine === "postgres") &&
           !(input.postgresOffline || input.postgresOnline) &&
@@ -451,7 +452,7 @@ export async function createUpdateDatabaseBackupInProcess(
               config: input.config,
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
-              ...(schemaCapture ? { carrier: "postgres-schema" as const } : {}),
+              ...(schemaCapture ? { carrier: "postgres-schema" as const, prune } : {}),
               observe: input.postgresOnline,
             });
             postgres = { ...engine, exportDirectory };
@@ -475,7 +476,7 @@ export async function createUpdateDatabaseBackupInProcess(
               sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
-                `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+                `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${sourcePath}`,
               );
             }
           }
@@ -506,14 +507,13 @@ export async function createUpdateDatabaseBackupInProcess(
           );
         }
         await inspectRestorableDatabaseFiles(inventory.present, identities, input.stopped);
-        const onlineResult = await online.finish();
         return {
           directory,
           databases,
           missingPaths: inventory.missing,
           sourcePaths: inventory.sourcePaths,
           sourceGenerations,
-          ...onlineResult,
+          ...(await online.finish()),
           ...(input.originalCaptureSourcePaths
             ? { originalCaptureSourcePaths: [...originalCaptureSources] }
             : {}),

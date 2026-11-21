@@ -8,7 +8,11 @@ import type { SessionEventReceipt } from "../auto-reply/reply/session-event-cont
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntry,
+  readLatestSessionTranscriptReport,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,6 +53,56 @@ import {
   persistRunningSessionsForRestart,
 } from "./session-restart-resume.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+
+it.for(["current-writer", undefined] as const)(
+  "logs the interrupted writer (%s), not a historical run, with the refusal notice",
+  (runId) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:unavailable-source",
+        sessionId: "unavailable-source",
+      };
+      replaceSessionEntrySync(target, {
+        sessionId: "unavailable-source",
+        updatedAt: 1,
+      });
+      replaceSessionEntrySync(target, {
+        ...loadExactSessionEntry(target)!.entry,
+        activeWriterRunId: runId,
+        lastRunId: "historical-run",
+        resumeAfterRestart: {
+          operatorSource: { kind: "unavailable", reason: "no-auth-method" },
+        },
+      });
+      const warn = vi.fn();
+      await resumeMarkedSessions({
+        context: createContext([], () => cfg),
+        signal: new AbortController().signal,
+        log: { warn },
+      });
+      const refusal = "Error: Queued operator authority cannot be recovered; submit a new request.";
+      expect(warn).toHaveBeenCalledWith(
+        `Skipped restart resume for ${target.sessionKey}: ${refusal} ${JSON.stringify({
+          sessionId: "unavailable-source",
+          runId,
+          admissionStage: "principal",
+          operatorRecoveryUnavailableReason: "no-auth-method",
+        })}`,
+      );
+      const report = await readLatestSessionTranscriptReport(target, ["run-failed-before-reply"]);
+      expect(report).toMatchObject({
+        ok: true,
+        value: {
+          content: `The Gateway restarted, but this run could not resume. ${refusal} Resolve this error, then send a new message to continue.`,
+          details: { error: refusal },
+        },
+      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+    }),
+);
 
 it.for(["aborted", "draining"] as const)(
   "retains restart custody while admission is %s by another restart",
@@ -466,6 +520,7 @@ it("recovers a current owner certificate independently of the linked profile's r
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     try {
       const person = ensureProfileForEmail("restart-owner@example.test");
+      setUserProfileRole(person.id, "reader");
       const fixture = await recoveryFixture(stateDir, person.id, {
         config: cfg,
         scopes: ["operator.read", "operator.write"],
@@ -482,9 +537,19 @@ it("recovers a current owner certificate independently of the linked profile's r
       try {
         expect(restored.authority.scopes).toEqual(["operator.read", "operator.write"]);
         expect(restored.authority.profileId).toBe(person.id);
+        expect(restored.authority.rolePolicy).toBeUndefined();
+        setUserProfileRole(person.id, null);
         restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(() => restored.authority.assertCurrent()).toThrow();
+        expect(restored.authority.assertCurrent).not.toThrow();
+        expect(restored.authority.reauthorize).toThrow();
+        await expect(
+          prepareSessionSystemTurnAuthority({
+            context: fixture.context,
+            ...fixture.target,
+            operatorSource: { kind: "gateway", snapshot: fixture.snapshot },
+          }),
+        ).rejects.toThrow();
       } finally {
         restored.release();
       }

@@ -416,19 +416,117 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
-            "Viewed image avatar-previews.png",
-          );
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Viewed 3 images");
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
-        expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+        expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);
         if (expanded) {
-          expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(1);
+          expect(
+            harness.view.textContent!.match(
+              order === "image only" ? /Viewed 3 images/g : /Viewed image/g,
+            ),
+          ).toHaveLength(1);
         }
         expectCount(".chat-message-image", expanded ? 6 : 3);
       }
     },
   );
+
+  it("groups adjacent successful image inspections without losing their original details", async () => {
+    let timestamp = 0;
+    const inspect = (id: string, count = 1, runId = "images", isError = false) => [
+      createAssistantMessage([createToolCall(id, "view_image", { path: `/tmp/${id}.png` })], {
+        timestamp: ++timestamp,
+        runId,
+      }),
+      createToolResultMessage(
+        id,
+        "view_image",
+        [
+          { type: "text", text: isError ? "Image unavailable" : "Inspection completed" },
+          ...Array.from({ length: isError ? 0 : count }, (_, index) => ({
+            type: "image",
+            data: "cG5n",
+            mimeType: "image/png",
+            alt: `${id}-${index}`,
+          })),
+        ],
+        { timestamp: ++timestamp, runId, isError },
+      ),
+    ];
+    const onOpenSidebar = vi.fn();
+    const onToggle = vi.fn();
+    const show = async (messages: TestMessage[], expanded = false) => {
+      renderActivityGroup(groupsOf(buildItems({ messages })), {
+        showReasoning: false,
+        isToolMessageExpanded: () => expanded,
+        onToggleToolMessageExpanded: onToggle,
+        onOpenSidebar,
+      });
+      await settleToolBridges(harness.view);
+    };
+    const first = inspect("first");
+    const second = inspect("second", 2);
+    await show([...first, ...second]);
+    expect(harness.view.textContent).toContain("Viewed 3 images");
+    expectCount(".chat-message-image", 0);
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle).toHaveBeenCalledOnce();
+    const disclosureId = onToggle.mock.calls[0]![0];
+    await show([...first, ...second], true);
+    expectCount(".chat-message-image", 3);
+    expect(harness.view.textContent).not.toContain("Inspection completed");
+    const detailButtons = harness.view.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="Open tool details in side panel"]',
+    );
+    expect(detailButtons).toHaveLength(2);
+    detailButtons[1]!.click();
+    expect(onOpenSidebar.mock.calls[0]![0]).toMatchObject({
+      kind: "tool-output",
+      card: { args: { path: "/tmp/second.png" } },
+    });
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, true]);
+
+    // The first call remains the disclosure owner before a second result arrives.
+    await show(first);
+    requireElement(".chat-tool-msg-summary", HTMLButtonElement).click();
+    expect(onToggle.mock.calls.at(-1)).toEqual([disclosureId, false]);
+
+    const command = [
+      createAssistantMessage([createToolCall("command", "exec", { command: "true" })], {
+        timestamp: ++timestamp,
+        runId: "images",
+      }),
+      createToolResultMessage("command", "exec", "done", {
+        timestamp: ++timestamp,
+        runId: "images",
+        details: { exitCode: 0 },
+      }),
+    ];
+    for (const barrier of [
+      command,
+      [
+        createAssistantMessage("Checking another view.", {
+          timestamp: ++timestamp,
+          runId: "images",
+        }),
+      ],
+      inspect("failed", 0, "images", true),
+      [
+        createAssistantMessage(
+          [createToolCall("pending", "view_image", { path: "/tmp/pending.png" })],
+          { timestamp: ++timestamp, runId: "images" },
+        ),
+      ],
+    ]) {
+      await show([...first, ...barrier, ...inspect("after")]);
+      expect(harness.view.textContent).not.toMatch(/Viewed \d+ images/);
+      expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(2);
+    }
+    await show([...first, ...inspect("different-run", 1, "another-run")]);
+    expect(harness.view.textContent).not.toContain("Viewed 2 images");
+  });
 
   it.each([false, true])("names subagent lifecycle rows (tool search: %s)", async (dispatched) => {
     // Tool search records each call twice: the dispatch envelope and the nested call

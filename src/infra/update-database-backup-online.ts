@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PostgresCapturePrune } from "../snapshot/database-backup-core.worker.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 
@@ -29,6 +30,23 @@ export type OnlineCaptureInput = {
    */
   reuse?: OnlineCapture;
 };
+
+/** Both capture passes share the online root that protects their server copies. */
+export function resolveOnlineCapturePrune(
+  input: OnlineCaptureInput & { backupRoot: string },
+  directory: string,
+): PostgresCapturePrune | undefined {
+  const captureId =
+    (input.postgresOnline || input.reuse) &&
+    /^online-([a-f0-9-]+)$/u.exec(path.basename(input.backupRoot))?.[1];
+  return captureId
+    ? {
+        directoryPrefix: path.join(path.dirname(directory), "online-"),
+        captureId,
+        directorySuffix: ".databases",
+      }
+    : undefined;
+}
 
 /** The capture under ownership writes into its online capture's directory; others create theirs. */
 export async function prepareUpdateDatabaseBackupDirectory(

@@ -7,12 +7,10 @@ import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { assertReadableGitMetadata } from "./schema-preflight.js";
 import {
   normalizeTag,
-  parseUpdateTimeoutMs,
   readPackageVersion,
   resolveGitInstallDir,
   UpdatePreMutationError,
@@ -157,6 +155,11 @@ export async function executeMutableUpdate(
   let databaseCapture: Awaited<ReturnType<typeof rollbackCapture.capture>>;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
+    // Before the cohort, so every cohort a killed checkout update leaves names its build.
+    const gitActivation = await transaction.readGitActivation?.();
+    if (gitActivation) {
+      await recordPhase("activating", { origin: { gitActivation } });
+    }
     databaseCapture = await rollbackCapture.capture(transaction, ownedManagedUpdateContext);
   };
   let schemaVersions: UpdateStateSchemaVersion[] | undefined;
@@ -474,13 +477,12 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
     if (!servicePrepared) {
       // PostgreSQL stores are captured before the Gateway stops (#196154).
       await rollbackCapture.captureOnline(env);
-      assertExecutionCurrent();
     }
     await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
     await prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
     await recordPhase("activating");
@@ -513,13 +515,10 @@ export async function executeMutableUpdate(
     });
     if (originalRun) {
       // The run's database capture follows activation; refuse while nothing has changed.
-      await assertUpdatePostgresCaptureOwnership({
-        config,
-        env,
-        waitMs: parseUpdateTimeoutMs(opts.waitForGatewayStop, "--wait-for-gateway-stop"),
-        notice: (message) => defaultRuntime[opts.json ? "error" : "log"](message),
-        assertCurrent: assertExecutionCurrent,
-      });
+      await assertUpdatePostgresCaptureOwnership(
+        { config, env },
+        { opts, assertCurrent: assertExecutionCurrent },
+      );
       assertExecutionCurrent();
     }
     const postStopStep: UpdateStepResult = {
@@ -708,6 +707,12 @@ export async function executeMutableUpdate(
     result,
     failure,
     mutationStarted,
+    // A Git release starts nothing from the candidate before its restart. A package
+    // candidate opens state only through its Doctor or the --no-restart boot check.
+    // The in-place Git runner rewrites the serving checkout, so it stays conservative.
+    candidateOpenedState:
+      params.gitRelease !== true &&
+      (params.updateInstallKind !== "package" || doctorEntered || !params.shouldRestart),
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,

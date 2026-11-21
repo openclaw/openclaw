@@ -6,7 +6,7 @@ import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { valid } from "semver";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { listBundleDependencies } from "../../../scripts/lib/package-bundle-dependencies.mts";
 import {
   collectPatchedMcpArtifactErrors,

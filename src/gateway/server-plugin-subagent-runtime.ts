@@ -223,13 +223,19 @@ export function createGatewaySubagentRuntime(
       throw new Error("Plugin session fork requires an active Gateway binding.");
     }
     const assertConversationAccess = (cfg: OpenClawConfig) => {
-      const origin =
-        scope?.pluginOrigin ??
-        getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId)?.origin ??
-        "config";
-      if (!resolveConversationAccessAllowed(origin, cfg.plugins?.entries?.[pluginId]?.hooks)) {
+      const loaded = getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId);
+      const origin = scope?.pluginOrigin ?? loaded?.origin ?? "config";
+      if (
+        !resolveConversationAccessAllowed(
+          origin,
+          cfg.plugins?.entries?.[pluginId]?.hooks,
+          loaded?.trust?.conversationAccessAccepted,
+        )
+      ) {
         throw new Error(
-          `Plugin session fork requires plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
+          `Plugin session fork requires conversation access: declare contracts.conversationAccess ` +
+            `["read"] and approve the plugin's capabilities, or set ` +
+            `plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
         );
       }
     };

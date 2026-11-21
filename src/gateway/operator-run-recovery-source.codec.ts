@@ -100,10 +100,27 @@ const channelSnapshotSchema = z.strictObject({
   scopes: handshakeRecoverySnapshotSchema.shape.scopes,
   modelPolicy: handshakeRecoverySnapshotSchema.shape.modelPolicy,
 });
+const recoveryUnavailableReasonSchema = z.enum([
+  "remote-ingress-no-source",
+  "unauthenticated",
+  "no-auth-method",
+  "no-grant",
+  "device-no-token",
+  "shared-auth-no-generation",
+  "model-policy",
+  "channel-model-policy",
+  "decode-failed",
+  "no-source",
+]);
+export type OperatorRecoveryUnavailableReason = z.infer<typeof recoveryUnavailableReasonSchema>;
+
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),
   z.strictObject({ kind: z.literal("channel"), snapshot: channelSnapshotSchema }),
-  z.strictObject({ kind: z.literal("unavailable") }),
+  z.strictObject({
+    kind: z.literal("unavailable"),
+    reason: recoveryUnavailableReasonSchema.optional(),
+  }),
 ]);
 
 /** Private accepted-input basis; only its current input owner may restore authority. */

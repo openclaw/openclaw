@@ -40,7 +40,6 @@ import {
 import {
   chatSubmitState,
   createChatPaneSendActions,
-  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
@@ -52,12 +51,10 @@ import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
+import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import {
-  openSessionWorkspaceFile,
-  openSessionWorkspaceManagedArtifact,
-} from "./components/chat-session-workspace.ts";
+import { sessionWorkspaceFileLinkProps } from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -142,10 +139,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       agentsLoaded: this.context.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
-      modelSelectionPolicy: state.chatModelSelectionPolicy,
-      catalogRetired: state.chatModelCatalogRetired,
-      catalogInitialized: state.chatModelCatalogInitialized,
-      catalogError: state.chatModelCatalogError,
+      modelCatalogState: readChatModelCatalogState(state),
+      modelAuthStatusResult: state.modelAuthStatusResult,
       onSetup: () => this.context.navigate("model-setup"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
@@ -577,9 +572,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
-      onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      ...sessionWorkspaceFileLinkProps(state, selectedSession, composerControls?.permissionPicker),
       onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
-      onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
@@ -601,7 +595,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      ...createChatPaneRunRecoveryActions(state, {
+      ...this.runRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived
           ? undefined

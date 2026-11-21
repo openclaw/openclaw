@@ -23,6 +23,11 @@ import {
 } from "./postgres-generation.js";
 
 type Anchor = Pick<PostgresExportEnvelope["source"], "engine" | "storeId" | "namespace">;
+export type PostgresCapturePrune = {
+  directoryPrefix: string;
+  captureId: string;
+  directorySuffix?: ".databases";
+};
 
 export async function captureDatabaseArtifact(file: string) {
   await using handle = await fs.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -164,7 +169,7 @@ export async function capturePostgresSchema(params: {
   descriptor: PortDescriptor;
   anchor: Anchor;
   directory: string;
-  prune?: { directoryPrefix: string; captureId: string };
+  prune?: PostgresCapturePrune;
   assertCurrent: () => void;
   observeSource?: Parameters<typeof materializeDatabasePort>[0]["observeSource"];
 }): Promise<PostgresExportEnvelope> {
@@ -294,7 +299,7 @@ export async function discardPostgresNamespace(client: Client, namespace: string
 /** Drop marked captures of this store whose directory under the prefix is gone. */
 export async function pruneOrphanedPostgresCaptures(
   client: Client,
-  params: { storeId: string; directoryPrefix: string },
+  params: { storeId: string } & Pick<PostgresCapturePrune, "directoryPrefix" | "directorySuffix">,
 ) {
   // Installs sharing a database may run as separate roles; only schemas this role may drop are read.
   const marked = await client.query<{ schema: string; note: string }>(
@@ -319,7 +324,7 @@ export async function pruneOrphanedPostgresCaptures(
       continue;
     }
     // Only a generated ID may extend the trusted local prefix; comments never select a path.
-    const directory = `${params.directoryPrefix}${capture.captureId}.postgres.bak`;
+    const directory = `${params.directoryPrefix}${capture.captureId}${params.directorySuffix ?? ".postgres.bak"}`;
     if (await fs.lstat(directory).catch(ignoreMissingPath)) {
       continue;
     }

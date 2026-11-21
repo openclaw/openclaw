@@ -127,9 +127,10 @@ export async function createUpdateCommandRollbackCapture(
         context,
         assertCurrent,
         online,
+        onOnlineAdopted: () => {
+          online = undefined;
+        },
       });
-      // Adopted only once the run's backup owns it; a failed capture leaves it to discardOnline().
-      online = undefined;
       if (captured.backup) {
         captured.backup.pluginCohortRecovery = {
           runId: pair.cohort.runId,

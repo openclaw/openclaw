@@ -35,10 +35,12 @@ import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/plugin-metadata-sta
 import {
   captureDatabaseArtifact,
   capturePostgresSchema,
+  discardPostgresNamespace,
   exportPostgresBackup,
   observePostgresSnapshot,
+  pruneOrphanedPostgresCaptures,
   restorePostgresBackup,
-  discardPostgresNamespace,
+  type PostgresCapturePrune,
 } from "./database-backup-core.worker.js";
 import {
   readSnapshotExportEnvelope,
@@ -97,8 +99,8 @@ export async function capturePostgresBackupInWorker(params: {
   gitIdentity?: GitBackupIdentity;
   /** Keep an exact capture on its server; omit it for the portable SQLite export. */
   carrier?: "postgres-schema";
-  /** Doctor owns local directory retention; other captures retire through their manifest. */
-  prune?: { directoryPrefix: string; captureId: string };
+  /** Identifies the local directory that protects this server capture from orphan cleanup. */
+  prune?: PostgresCapturePrune;
   /** Also return the generation and reuse digest read inside the capture's own snapshot. */
   observe?: boolean;
 }): Promise<CapturedPostgresBackup> {
@@ -121,6 +123,15 @@ export async function capturePostgresBackupInWorker(params: {
     params.config,
     anchor,
     async (client, baseDescriptor) => {
+      // Online update directories protect running captures and retained recovery points alike.
+      // Sweep earlier online captures before copying, outside the stopped window.
+      if (params.observe && params.prune?.directorySuffix) {
+        await pruneOrphanedPostgresCaptures(client, {
+          storeId: anchor.storeId,
+          directoryPrefix: params.prune.directoryPrefix,
+          directorySuffix: params.prune.directorySuffix,
+        });
+      }
       const descriptor = await admitDatabasePortDescriptor(
         { engine: "postgres", db: client, namespace: anchor.namespace },
         baseDescriptor,

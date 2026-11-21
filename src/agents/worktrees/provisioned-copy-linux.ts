@@ -236,7 +236,12 @@ export async function copyProvisionedPathsLinux(
     check();
     options.assertCurrent?.();
     check();
-    command = createProvisionCopyCommand(proc.fd, sourceRootHandle.fd, options.copyDetails);
+    command = createProvisionCopyCommand(
+      proc.fd,
+      sourceRootHandle.fd,
+      options.copyDetails,
+      sourceRoot.rootReal,
+    );
     const fallbackReason = await command.ready();
     if (fallbackReason) {
       if (options.copyDetails) {

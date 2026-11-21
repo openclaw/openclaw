@@ -58,11 +58,12 @@ export type WorktreeCleanupOwnerPolicy = {
   beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
-  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">>;
   readOwnerState?: (
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
   ) => "active" | "retired" | "idle" | "other";
+  readOwnerActivityAt?: (ownerId: string) => number | undefined;
   withOwnerCleanup?: <T>(
     record: ManagedWorktreeRecord,
     run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
@@ -236,7 +237,7 @@ export function createWorktreeGcRemoval(context: {
   progress: WorktreeGcProgress;
   policy: WorktreeCleanupOwnerPolicy;
   expiresBefore: number;
-  classifyOwner?: WorktreeCleanupOwnerPolicy["readOwnerState"];
+  ownerCensus?: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt">;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   remove: (
@@ -497,7 +498,7 @@ export function createWorktreeGcRemoval(context: {
         let retiredOwner = false;
         try {
           const deferred = worktreeCleanupProtection(record, now, policy.retryDeferred);
-          if (deferred) {
+          if (deferred && record.gcRetry?.stage !== "nested-repository") {
             progress.protect("idle", record.id, deferred);
             continue;
           }
@@ -521,14 +522,30 @@ export function createWorktreeGcRemoval(context: {
           if (record.removedAt !== undefined || !expiresWhenIdle) {
             continue;
           }
-          retiredOwner =
-            record.ownerId !== undefined &&
-            context.classifyOwner?.(record.ownerKind, record.ownerId) === "retired";
+          const ownerState =
+            record.ownerId === undefined
+              ? undefined
+              : context.ownerCensus?.readOwnerState?.(record.ownerKind, record.ownerId);
+          retiredOwner = ownerState === "retired";
+          if (ownerState === "active") {
+            progress.protect("idle", record.id, "owner is active");
+            continue;
+          }
           // Stable per-checkout jitter spreads a busy day's seven-day expiry
           // across an extra hour without ever shortening retention.
           const idleJitterMs =
             createHash("sha256").update(record.id).digest().readUInt32BE(0) % 3_600_000;
-          if (retiredOwner || record.lastActiveAt + idleJitterMs < context.expiresBefore) {
+          const ownerActivityAt =
+            record.ownerKind === "session" && record.ownerId !== undefined
+              ? context.ownerCensus?.readOwnerActivityAt?.(record.ownerId)
+              : undefined;
+          // A terminal run status still belongs to a resumable conversation.
+          const lastActiveAt = Math.max(
+            record.lastActiveAt,
+            Number.isFinite(ownerActivityAt) ? (ownerActivityAt ?? 0) : 0,
+          );
+          const idle = lastActiveAt + idleJitterMs < context.expiresBefore;
+          if (retiredOwner || idle) {
             // Capacity eviction and idle cleanup share one decision per record per pass.
             if (!progress.start(record.id)) {
               continue;
@@ -547,7 +564,7 @@ export function createWorktreeGcRemoval(context: {
             // Wait outside owner/checkout custody; removal still acquires and
             // validates live authority after admission.
             await policy.beforeRemoval?.(record);
-            await withOwnerCleanup(record, async (withOwnerMutation) => {
+            const result = await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
               return context.remove({
                 ...ownerGuard(record, assertOwnerCurrent),
@@ -558,7 +575,9 @@ export function createWorktreeGcRemoval(context: {
                   : {}),
               });
             });
-            progress.result.removed.push(record.id);
+            if (result.removed) {
+              progress.result.removed.push(record.id);
+            }
           }
         } catch (error) {
           await withOwnerCleanup(record, (withOwnerMutation) =>

@@ -2,6 +2,7 @@ import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
 function nextResize(element: Element): Promise<void> {
@@ -69,7 +70,11 @@ it.each([
         offsetState,
         renderer: { columnElement: column, queueAfterCommit: () => {} },
         initialRange: { pending: false },
-        prependAnchor: { messageKey: null },
+        prependAnchor: new TranscriptPrependAnchor(
+          new Map(),
+          () => {},
+          () => false,
+        ),
         headerHeight: 0,
         scrollElement: viewport,
         contentElement: content,

@@ -18,6 +18,8 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  /** Stable checkout owner, independent of a command's selected working directory. */
+  scratchRoot?: string;
   hasCronTool?: boolean;
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;

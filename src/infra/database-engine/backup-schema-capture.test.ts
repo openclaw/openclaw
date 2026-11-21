@@ -6,8 +6,14 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { expect, it, vi } from "vitest";
 import "./backup-worker.test-support.js";
+import {
+  updateFinishCommand,
+  updateMigrateCommand,
+} from "../../cli/update-cli/update-command-migrate.js";
 import { backupDoctorPostgresMigration } from "../../commands/doctor-postgres-migration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as doctor from "../../flows/doctor-health.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   capturePostgresSchema,
   pruneOrphanedPostgresCaptures,
@@ -27,6 +33,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import * as updateDatabaseBackup from "../update-database-backup.js";
 import { agentPortProvider } from "./agent-port.js";
 import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { crashCaptureAtCommit } from "./backup-schema-capture-crash.test-support.js";
@@ -172,6 +179,52 @@ it.skipIf(!connection)(
         expect(await schemaExists(client, manifest.schema)).toBe(false);
       },
     ),
+);
+
+it.skipIf(!connection)("retires server captures through supervised migrate and finish", () =>
+  withSeededWorkboard(
+    async ({ state, client, namespace, namespaces, storeId, anchorPath, config }) => {
+      await state.writeConfig({
+        ...config,
+        database: {
+          ...config.database,
+          postgres: { ...config.database?.postgres, recoveryCaptures: "server" },
+        },
+      });
+      const doctorRun = vi.spyOn(doctor, "runDoctorHealthFlow").mockResolvedValue();
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const capture = vi
+        .spyOn(updateDatabaseBackup, "createUpdateDatabaseBackup")
+        .mockImplementationOnce(createUpdateDatabaseBackupWithFixtureTransport);
+      try {
+        const backupRoot = state.path("supervised-update");
+        await updateMigrateCommand(backupRoot);
+        const receipt = JSON.parse(await fs.readFile(`${backupRoot}.receipt.json`, "utf8"));
+        const backup = updateDatabaseBackup.UpdateDatabaseBackupSchema.parse(receipt.backup);
+        const entry = backup.databases.find((item) => item.path === anchorPath);
+        assert(entry?.exportDirectory);
+        const manifest = await verifyMatchedPostgresBackup(entry.exportDirectory, "exact", {
+          storeId,
+          namespace,
+        });
+        expect(manifest.carrier).toBe("postgres-schema");
+        assert(manifest.schema);
+        namespaces.add(manifest.schema);
+        expect(await schemaExists(client, manifest.schema)).toBe(true);
+        expect(await fs.readdir(entry.exportDirectory)).not.toContain("database.sqlite");
+        await updateFinishCommand(backupRoot);
+        expect(await schemaExists(client, manifest.schema)).toBe(false);
+        expect(await schemaExists(client, namespace)).toBe(true);
+        await expect(fs.stat(backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
+        await updateFinishCommand(backupRoot);
+        expect(output.mock.lastCall?.[0]).not.toHaveProperty("warning");
+      } finally {
+        capture.mockRestore();
+        output.mockRestore();
+        doctorRun.mockRestore();
+      }
+    },
+  ),
 );
 
 it.skipIf(!connection).each(["before", "after"] as const)(
@@ -380,6 +433,38 @@ it.skipIf(!connection)(
         expect(await schemaExists(client, schema), schema).toBe(true);
       }
       expect(await prunePostgresSchemaCaptures(anchorPath, config, prefix)).toEqual([]);
+    }),
+);
+
+it.skipIf(!connection)(
+  "reaps removed online capture roots and keeps retained PostgreSQL captures",
+  () =>
+    withSeededWorkboard(async ({ state, client, namespaces, anchorPath, config }) => {
+      const capture = async () => {
+        const backup = await createUpdateDatabaseBackupWithFixtureTransport({
+          backupRoot: state.path(`online-${randomUUID()}`),
+          stateDir: state.stateDir,
+          config,
+          env: state.env,
+          postgresOnline: true,
+          postgresSchemaCaptures: true,
+        });
+        const entry = backup.databases.find((database) => database.path === anchorPath);
+        assert(entry?.exportDirectory);
+        const manifest = await verifyMatchedPostgresBackup(entry.exportDirectory, "exact");
+        assert(manifest.schema);
+        namespaces.add(manifest.schema);
+        return { root: backup.directory, schema: manifest.schema };
+      };
+      const orphan = await capture();
+      const retained = await capture();
+      await fs.rm(orphan.root, { recursive: true });
+
+      const latest = await capture();
+
+      expect(await schemaExists(client, orphan.schema)).toBe(false);
+      expect(await schemaExists(client, retained.schema)).toBe(true);
+      expect(await schemaExists(client, latest.schema)).toBe(true);
     }),
 );
 

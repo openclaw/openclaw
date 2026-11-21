@@ -61,6 +61,16 @@ waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
 success, failure, cancellation, and timeout. Match the event's session and run
 identity before updating plugin state. These helpers grant no execution authority.
 
+## Reply session initialization conflicts
+
+Use `isReplySessionInitConflictError(error)` from
+`openclaw/plugin-sdk/reply-runtime` to recognize an exhausted reply-session
+initialization conflict. Core owns classification, including errors serialized
+across runtime boundaries; plugins should not match the error text themselves.
+Channels can send a terminal busy notice or record intentional delivery-policy
+suppression before completing the inbound event. If notice delivery fails, keep
+the event retryable through the channel's durable ingress owner.
+
 ## Module loading and host identity
 
 Declare plugin entries in `package.json` under `openclaw.extensions`, import
@@ -171,7 +181,8 @@ the Control UI and never delivers a reply. Cache reuse is not guaranteed:
 compaction, images and one-shot payload hooks can still change bytes, so use the
 returned cache-read usage to measure actual reuse.
 
-Conversation access is required through
+Conversation access is required: approved through the plugin's capability review
+when its manifest declares `contracts.conversationAccess: ["read"]`, or set with
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
 bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
@@ -751,6 +762,10 @@ The experimental mixed-mode configuration is described in
 
 External stores continue using `resolveDatabaseEngineInput(config)`, which follows
 `database.engine` independently of the built-in family overrides.
+For PostgreSQL stores, `openclaw database port` and the built-in backup and restore
+commands cover only the registered database families listed in the
+[PostgreSQL operator guide](/gateway/postgresql#support-matrix). Plugins using
+private PostgreSQL stores need their own migration, backup, and restore procedures.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -1039,6 +1054,17 @@ Do not use this error for an ordinary upstream 401/403 or an unverified diagnost
 code. Those remain provider failures. A code string alone does not establish a
 deployment-policy denial.
 
+## Harness runtime updates
+
+A native harness whose own runtime is too old for the requested model can return
+`AgentHarnessRuntimeUpdateRequiredError` from
+`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+name the update. The host records the code `harness_update_required` in the
+run's failure notice, and Control UI then offers **Start a new session**, which
+starts a session on the OpenClaw harness that asks the agent to perform the
+update. OpenClaw never installs or updates the runtime itself. Preserve the
+Error object through terminal emission, as for request-policy denials.
+
 ## Harness execution identity
 
 The harness host's closure-bound `preparedEnvironment()` returns non-secret
@@ -1078,7 +1104,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.

@@ -6,12 +6,18 @@ import type {
 
 export type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
 
-export type DiagnosticToolAwaiting = Readonly<{
-  kind: "bridge";
-  method: string;
-  deadlineAtMs: number | null;
-  elapsedMs: number;
-}>;
+export type DiagnosticToolAwaiting =
+  | Readonly<{
+      kind: "bridge";
+      method: string;
+      deadlineAtMs: number | null;
+      elapsedMs: number;
+    }>
+  | Readonly<{
+      kind: "exec";
+      phase: "preparing" | "running";
+      deadlineSource: "default" | "explicit" | "none";
+    }>;
 
 export type SessionWatchdogWait = {
   close: () => void;

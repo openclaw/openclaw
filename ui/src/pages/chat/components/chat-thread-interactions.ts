@@ -152,6 +152,8 @@ export type ChatThreadProps = Omit<
     announceTranscript?: boolean;
     loading: boolean;
     restoring?: boolean;
+    /** First-turn content was already shown by New Session; never replace it with history placeholders. */
+    initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
@@ -180,6 +182,7 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onStartNewSession?: (runId: string, summary: string) => void;
     failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
@@ -206,6 +209,9 @@ export type ChatThreadProps = Omit<
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
+    /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
+    onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
     onHistoryIntent?: (event: Event) => void;

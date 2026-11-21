@@ -412,6 +412,13 @@ export type LearnContributionRegistration = {
   contribution: LearnContribution;
 };
 
+/** A passive memory backend the selected slot owner may open through its provider runtime. */
+export type MemoryBackendRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  providerRuntime: MemoryProviderRuntime;
+};
+
 export type MemoryPluginCapabilityRegistration = {
   pluginId: string;
   capability: MemoryPluginCapability;

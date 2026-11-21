@@ -14,6 +14,7 @@ export class SessionWatchdogError extends Error {
       toolName: string;
       toolCallId: string;
       elapsedMs: number;
+      explicitDeadline: boolean;
       awaiting?: readonly DiagnosticToolAwaiting[];
     }[],
     assessment?: ReplyBackendTurnAssessment & { durationMs: number },

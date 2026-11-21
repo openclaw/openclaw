@@ -29,7 +29,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
@@ -58,6 +57,7 @@ import {
   proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
+import { registerLocalWorkspaceReconciliationTests } from "./local-workspace-reconciliation.test-support.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
   proveConcurrentWorkspacePreparation,
@@ -327,7 +327,7 @@ it.each([false, true])("settles command checkpoints (parent disposed: %s)", asyn
 });
 
 it.each(["operator", "gateway"] as const)(
-  "rejects canonical checkpoint writes after original %s authority ends",
+  "settles admitted checkpoints until original %s authority closes",
   async (authority) => {
     const { proveStoppedSandboxAuthority } =
       await import("./local-workspace-cancellation.test-support.js");
@@ -335,13 +335,14 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
-it("denies guest filesystem writes after role revocation and a late involvement receipt", async ({
-  signal,
-}) => {
-  const { proveStoppedSandboxAuthority } =
-    await import("./local-workspace-cancellation.test-support.js");
-  await proveStoppedSandboxAuthority(owner, "guest-involvement", signal);
-});
+it.for(["guest-involvement", "guest-role-involvement"] as const)(
+  "keeps committed guest receipts without overriding role admission or source abort (%s)",
+  async (revoke, { signal }) => {
+    const { proveStoppedSandboxAuthority } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedSandboxAuthority(owner, revoke, signal);
+  },
+);
 
 it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));
@@ -608,8 +609,7 @@ it.each(["archive", "interrupted eviction"] as const)(
 it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
-it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
+registerLocalWorkspaceReconciliationTests(() => ({ owner, root, repo, canonical }), checkpointLog);
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
