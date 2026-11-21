@@ -14,10 +14,11 @@ export function indexQuestionPrompts(prompts: readonly QuestionPrompt[] | undefi
 /** Resolved summaries retain their original run; pending questions stay in the composer. */
 export function projectResolvedQuestionPrompts(
   prompts: readonly QuestionPrompt[] | undefined,
+  resetAt: number,
   resolveBounds: (runId: string) => TurnInsertionBounds | undefined,
 ): ChatProjection[] {
   return (prompts ?? []).flatMap((prompt) =>
-    prompt.status === "pending"
+    prompt.status === "pending" || prompt.createdAtMs < resetAt
       ? []
       : [
           {

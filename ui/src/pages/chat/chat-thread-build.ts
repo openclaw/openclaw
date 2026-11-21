@@ -184,6 +184,9 @@ export function buildChatItems(
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
+  // Question summaries and notices live only in this browser. The latest reset
+  // divider ends the transcript they belong to, so earlier ones leave with it.
+  let resetAt = -Infinity;
   const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
@@ -263,6 +266,7 @@ export function buildChatItems(
       if (typeof marker.id !== "string") {
         facts?.indexedDividers.push(msg);
       }
+      resetAt = Math.max(resetAt, normalized.timestamp ?? resetAt);
       items.push(buildResetDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
@@ -499,8 +503,9 @@ export function buildChatItems(
     }
     for (const notice of props.guardianNotices ?? []) {
       if (
-        notice.permissionMissing &&
-        recordedPermissions.has(JSON.stringify(notice.permissionMissing))
+        notice.timestamp < resetAt ||
+        (notice.permissionMissing &&
+          recordedPermissions.has(JSON.stringify(notice.permissionMissing)))
       ) {
         continue;
       }
@@ -574,7 +579,7 @@ export function buildChatItems(
   }
 
   projections.push(
-    ...projectResolvedQuestionPrompts(props.questionPrompts, resolveProjectionBounds),
+    ...projectResolvedQuestionPrompts(props.questionPrompts, resetAt, resolveProjectionBounds),
   );
 
   const visibleText = trimAccumulatedStreamPrefix(
