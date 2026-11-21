@@ -3,6 +3,11 @@ import { modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 export const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 export const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
 export const UNADVERTISED = { advertise: false } as const;
+export const DEPRECATED_STEER_ALIAS = {
+  ...UNADVERTISED,
+  description:
+    "Deprecated alias for chat.send queueMode interrupt; removal per protocol deprecation policy.",
+} as const;
 export const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
 export const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
 export const MODEL_CATALOG_READ = {
