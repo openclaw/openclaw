@@ -78,6 +78,7 @@ export const SessionStatusOutputSchema = Type.Object(
           ),
           notices: Type.Optional(Type.Array(Type.String())),
           error: Type.Optional(Type.String()),
+          grantedScopes: Type.Optional(Type.Array(Type.String())),
         },
         { additionalProperties: false },
       ),
