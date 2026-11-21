@@ -525,9 +525,6 @@ function maybeEmitFailureAlert(
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
-  // The plain notice always goes out first, so a repair turn that fails, is cancelled or
-  // stays silent cannot leave the user without it.
-  params.deferredNotifications.push(alert);
   // Destination selectors express alert-only intent; policy or mode-only overrides
   // still go to the owner conversation. Do not infer intent from resolved routes.
   const hasJobFailureDestination = [
@@ -541,8 +538,8 @@ function maybeEmitFailureAlert(
         route.threadId !== undefined ||
         route.accountId !== undefined),
   );
-  // The owner agent may follow up on the notice: fix the workspace, or ask for what it needs.
-  // A recurring job's stop notice needs no repair: the job will not run until resumed.
+  // The owner agent may follow up once the notice has settled: fix the job, or ask for what
+  // it needs. A recurring job's stop notice needs no repair: it will not run until resumed.
   if (
     !hasJobFailureDestination &&
     params.autoDisabled?.reason !== "consecutive-failures" &&
@@ -552,18 +549,15 @@ function maybeEmitFailureAlert(
     hasFailureRepairOwner(params.job) &&
     (terminal || isJobEnabled(params.job))
   ) {
-    params.deferredNotifications.push({
-      kind: "failure-repair",
-      job,
-      text: buildCronFailureRepairBrief({
-        job: params.job,
-        consecutiveErrors: params.consecutiveCount,
-        error: params.error,
-        errorReason: params.errorReason,
-        notice: alert.payload.text ?? "",
-      }),
+    alert.repair = buildCronFailureRepairBrief({
+      job: params.job,
+      consecutiveErrors: params.consecutiveCount,
+      error: params.error,
+      errorReason: params.errorReason,
+      notice: alert.payload.text ?? "",
     });
   }
+  params.deferredNotifications.push(alert);
   return "queued";
 }
 

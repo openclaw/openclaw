@@ -84,10 +84,11 @@ type CronFailureAlertNotification = {
   payload: ReplyPayload;
   runAtMs?: number;
   route: CronFailureAlertRoute;
+  /** The owner repair request, started only after the notice settles. */
+  repair?: string;
 };
 
 export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
   | { kind: "auto-disabled"; job: CronNotificationJob; text: string }
-  | { kind: "failure-repair"; job: CronNotificationJob; text: string }
   | CronFailureAlertNotification
 );

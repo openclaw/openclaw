@@ -47,10 +47,12 @@ it.each(["current", "owner session"] as const)(
   "notifies the owning conversation when a conversation-bound job's trigger fails (%s)",
   async (target) => {
     await withOwnerConversation(async ({ storePath, cfg, transcript }) => {
+      // The service clock moves to the slot; the global clock does not survive the first case.
+      let nowMs = Date.now();
       let delivery: Promise<void> | undefined;
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
-        nowMs: () => Date.now(),
+        nowMs: () => nowMs,
         storePath,
         cronEnabled: true,
         log: createNoopLogger(),
@@ -88,7 +90,7 @@ it.each(["current", "owner session"] as const)(
           payload: { kind: "agentTurn", message: "check" },
           delivery: { mode: "announce" },
         });
-        vi.setSystemTime(job.state.nextRunAtMs!);
+        nowMs = job.state.nextRunAtMs!;
         await cron.run(job.id, "due");
         await vi.waitFor(() => expect(delivery).toBeDefined(), { timeout: 30_000 });
         await delivery;

@@ -166,6 +166,28 @@ describe("CronService failure repair", () => {
   );
 
   it(
+    "starts the owner follow-up only after the failure notice has settled",
+    repairCase(async (f) => {
+      let settle!: () => void;
+      f.sendCronFailureAlert.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+      );
+      const job = await f.addJob("slow notice", owned);
+      await f.cron.run(job.id, "force");
+      await vi.waitFor(() => expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(1));
+      for (let tick = 0; tick < 20; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(f.runCronFailureRepair).not.toHaveBeenCalled();
+      settle();
+      await vi.waitFor(() => expect(f.runCronFailureRepair).toHaveBeenCalledTimes(1));
+    }),
+  );
+
+  it(
     "sends each new failure to the owner, repeats the same one daily, and rearms after recovery",
     repairCase(async (f) => {
       const job = await f.addJob("gmail sync", {
@@ -541,9 +563,8 @@ describe("CronService failure repair", () => {
       );
       expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
       expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
-      expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
-        "failure-alert",
-        "failure-repair",
+      expect(deferredNotifications).toMatchObject([
+        { kind: "failure-alert", repair: expect.any(String) },
       ]);
     });
 
@@ -552,7 +573,7 @@ describe("CronService failure repair", () => {
       [
         "unschedulable cron",
         { schedule: { kind: "cron", expr: "0 0 30 2 *" } },
-        ["failure-alert", "failure-repair"],
+        ["failure-alert+repair"],
       ],
     ])("does not hold %s", (_name, overrides, expected) => {
       const { job, deferredNotifications } = applyError(overrides, {
@@ -560,7 +581,12 @@ describe("CronService failure repair", () => {
       });
       expect(job.state.consecutiveErrors).toBe(2);
       expect(job.state.nextRunAtMs).toBeUndefined();
-      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+      expect(
+        deferredNotifications.map(
+          (notification) =>
+            notification.kind + ("repair" in notification && notification.repair ? "+repair" : ""),
+        ),
+      ).toEqual(expected);
     });
   });
 
@@ -572,9 +598,8 @@ describe("CronService failure repair", () => {
     { name: "script", payload: { kind: "script", script: "json({})" } },
   ])("requests repair for a $name job", ({ payload }) => {
     const { deferredNotifications } = applyError({ payload }, { error: "boom" });
-    expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
-      "failure-alert",
-      "failure-repair",
+    expect(deferredNotifications).toMatchObject([
+      { kind: "failure-alert", repair: expect.any(String) },
     ]);
   });
 });
