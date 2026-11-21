@@ -143,6 +143,15 @@ talk-back, it selects the virtual microphone in the call and unmutes only once
 Slack reports it as the input, so the host's physical microphone never goes
 live; `transcribe` stays muted. The camera stays off.
 
+A huddle link can pass through Slack's desktop-app page and a **Join a huddle?**
+prompt. The adapter continues in the browser only when the page links to the
+requested huddle, and answers the prompt only for an active huddle. Slack then
+opens the huddle in a separate window; the adapter controls the preview,
+microphone, and camera there, while membership is still proven by the channel
+tab. That window is reachable only when OpenClaw's Join opened it, so a huddle
+window opened by hand or before a page reload is not controlled. Chrome may
+also ask to open the Slack desktop app; leave that prompt alone or cancel it.
+
 | Reason                        | Action                                                                                                                |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `slack-login-required`        | Sign the OpenClaw Chrome profile into the dedicated Slack account, then retry.                                        |
