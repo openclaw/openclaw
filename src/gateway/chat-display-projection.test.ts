@@ -604,6 +604,32 @@ it("retains complete structured tool previews and tool arguments under a smaller
   expect(projected).toEqual(messages);
 });
 
+it("keeps a plain-text tool result under maxChars whole instead of applying the tool cap", () => {
+  // A log tail is not a JSON document, so no truncated prefix of it can parse;
+  // the structured-preview check must not demote it to `toolResultMaxChars`.
+  const logTail = Array.from(
+    { length: 60 },
+    (_, i) => `line ${i}: build artifact checksum 0x${(i * 7919).toString(16)}`,
+  ).join("\n");
+  expect(logTail.length).toBeGreaterThan(2_000);
+  expect(logTail.length).toBeLessThan(8_000);
+  const messages = [{ role: "toolResult", toolCallId: "log", content: [text(logTail)] }];
+  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
+    messages,
+  );
+});
+
+it("still applies the tool cap to a plain-text tool result above maxChars", () => {
+  const logTail = Array.from({ length: 300 }, (_, i) => `line ${i}: build artifact checksum`).join(
+    "\n",
+  );
+  expect(logTail.length).toBeGreaterThan(8_000);
+  const messages = [{ role: "toolResult", toolCallId: "log", content: [text(logTail)] }];
+  const projected = sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 });
+  const shown = (projected[0] as { content: Array<{ text: string }> }).content[0]!.text;
+  expect(shown).toBe(logTail.slice(0, 2_000));
+});
+
 const user = userRow("hello", { seq: 1 });
 const failed = assistant([], {
   stopReason: "error",
