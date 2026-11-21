@@ -54,4 +54,28 @@ export const authFormatCases = [
     },
     expected: reason("format"),
   },
+  // openclaw-1azg: a rejected tool definition ended the turn with reason=unknown
+  // next=none. Every fallback candidate is offered the same tool set, so the
+  // failure is deterministic and must be reported as the tool-definition fault
+  // it is rather than as an unexplained dead turn.
+  {
+    id: "structured-tool-input-schema-top-level-union",
+    source: structuredSource,
+    signal: {
+      provider: "anthropic",
+      message:
+        "API Error: 400 tools.2.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level",
+    },
+    expected: reason("format"),
+  },
+  {
+    id: "structured-tool-input-schema-rejected",
+    source: structuredSource,
+    signal: {
+      provider: "anthropic",
+      errorType: "invalid_request_error",
+      message: "tools.7.custom.input_schema: unexpected keyword",
+    },
+    expected: reason("format"),
+  },
 ] satisfies readonly FailoverClassificationCorpusRow[];
