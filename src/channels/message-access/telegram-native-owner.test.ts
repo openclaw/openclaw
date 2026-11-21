@@ -118,7 +118,7 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
         writes += 1;
         return {
           providerId: "openai",
-          methodId: "device-code",
+          methodId: "oauth",
           authRefresh: "refreshed",
           profiles: [],
         };
@@ -126,7 +126,7 @@ it.each([false, true])("checks live owner authority during login (revoke=%s)", (
       onResult: () => notified.resolve(),
     });
     try {
-      await driver.invoke({ command: "login", match: "openai/openai-device-code" });
+      await driver.invoke({ command: "login", match: "openai/openai" });
       expect(calls).toBe(1);
       if (revoke) {
         setUserProfileRole(admins[0]!.profile.id, "member");
