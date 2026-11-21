@@ -91,10 +91,15 @@ If service inspection times out, repair names the stalled probe or inspection
 phase. An unavailable manager does not mean the Gateway was started manually.
 Repair reports any verified Gateway owner and known service definition, leaves
 that definition unchanged, and keeps Doctor and plugin maintenance pending when
-the Gateway still owns the state. Stop the managed Gateway with
+the Gateway still owns the state. From an independent operator shell outside
+triage and the Gateway service, stop the managed Gateway with
 `openclaw gateway stop` (or `systemctl --user stop openclaw-gateway` for the default
 systemd user service), then run `openclaw update repair` again. Keep the same
-profile and state-directory overrides for both commands.
+profile and state-directory overrides for both commands. Never stop the Gateway
+from a fixing subtree that the stop would cancel.
+If that scope cannot be verified, keep read-only diagnosis or safe offline artifact
+repair in triage and report the independent maintenance step instead. Preserve
+ownership refusals and later operator stops; do not bypass them.
 
 Run `openclaw update repair` from a terminal outside the Gateway process tree,
 not through the Gateway agent's exec tool: stopping that service would kill the
