@@ -48,6 +48,12 @@ vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
   registerPreparedModelRuntimePublicationListener: mocks.registerModelListener,
 }));
+const createModelVisibilityPolicy = vi.hoisted(() => vi.fn());
+vi.mock("../agents/model-visibility-policy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-visibility-policy.js")>();
+  createModelVisibilityPolicy.mockImplementation(actual.createModelVisibilityPolicy);
+  return { ...actual, createModelVisibilityPolicy };
+});
 vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../skills/runtime/refresh.js")>()),
   registerSkillsChangeListener: mocks.registerSkillsListener,
@@ -291,6 +297,44 @@ it("retires model choices at its config commit before pending metadata settles",
   }
   broadcast.mockClear();
   publishOperatorRoleConfigChange(ownedContext);
+  expect(broadcast).not.toHaveBeenCalled();
+});
+
+it("rebuilds only changed agents' selection policies at a config commit", async () => {
+  const broadcast = vi.fn();
+  const entries = Object.fromEntries(
+    Array.from({ length: 466 }, (_, index) => [`agent-${index}`, {}]),
+  );
+  let committedConfig: OpenClawConfig = { agents: { entries } };
+  const { requestContext } = await attachLifecycle({
+    broadcast,
+    getCommittedRuntimeConfig: () => committedConfig,
+  });
+  const commit = (next: OpenClawConfig) => {
+    committedConfig = next;
+    createModelVisibilityPolicy.mockClear();
+    publishOperatorRoleConfigChange(requestContext);
+    return createModelVisibilityPolicy.mock.calls.map(([params]) => params.agentId);
+  };
+  const thinkingOnly = commit({
+    agents: { entries: { ...entries, "agent-7": { thinkingDefault: "high" } } },
+  });
+  // The changed agent and the implicit default, which reads the whole roster.
+  expect(thinkingOnly).toEqual([undefined, undefined, "agent-7", "agent-7"]);
+  expect(broadcast).not.toHaveBeenCalled();
+  // Duplicate aliases resolve last-wins, so reordering the map changes the selection.
+  for (const order of ["a/m b/m", "b/m a/m"]) {
+    const models = Object.fromEntries(order.split(" ").map((ref) => [ref, { alias: "pick" }]));
+    const agent = { thinkingDefault: "high" as const, models, modelPolicy: { allow: ["pick"] } };
+    expect(commit({ agents: { entries: { ...entries, "agent-7": agent } } })).toContain("agent-7");
+    expectMetadataBroadcast(broadcast, { modelSelectionChanged: true, commandsChanged: false });
+    broadcast.mockClear();
+  }
+  const sharedChange = commit({
+    ...committedConfig,
+    agents: { ...committedConfig.agents, defaults: { thinkingDefault: "low" } },
+  });
+  expect(sharedChange).toHaveLength(2 * 467);
   expect(broadcast).not.toHaveBeenCalled();
 });
 

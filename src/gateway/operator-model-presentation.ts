@@ -71,12 +71,30 @@ export function modelSelectionPoliciesMatch(
       return false;
     }
   }
+  const { entries: previousEntries = {}, ...previousAgents } = previous.agents ?? {};
+  const { entries: nextEntries = {}, ...nextAgents } = next.agents ?? {};
+  // A named agent's policy reads only shared config and its own entry; roster order
+  // decides duplicate normalized ids. The implicit default reads the whole roster.
+  // Compare serialized order: duplicate model aliases resolve last-wins.
+  const sameInputs = (before: unknown, after: unknown) =>
+    JSON.stringify(before) === JSON.stringify(after);
+  const sharedInputsMatch = sameInputs(
+    { ...previous, agents: { ...previousAgents, entries: Object.keys(previousEntries) } },
+    { ...next, agents: { ...nextAgents, entries: Object.keys(nextEntries) } },
+  );
   const agentIds = new Set([
     undefined,
-    ...Object.keys(previous.agents?.entries ?? {}),
-    ...Object.keys(next.agents?.entries ?? {}),
+    ...Object.keys(previousEntries),
+    ...Object.keys(nextEntries),
   ]);
   for (const agentId of agentIds) {
+    if (
+      sharedInputsMatch &&
+      agentId !== undefined &&
+      sameInputs(previousEntries[agentId], nextEntries[agentId])
+    ) {
+      continue;
+    }
     const policy = (cfg: OpenClawConfig) => {
       const model = resolveDefaultModelForAgent({ cfg, agentId, manifestPlugins });
       return createModelVisibilityPolicy({
