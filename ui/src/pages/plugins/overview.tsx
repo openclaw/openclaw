@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import {
   PLUGIN_UI_CAPABILITIES,
   type PluginUiCapability,
@@ -461,7 +461,7 @@ export function renderPluginMetadata(
 
 type PluginCapabilityRow = {
   icon?: () => JSX.Element;
-  name: string;
+  name: JSX.Element;
   description?: string;
   onOpen?: () => void;
   trailing?: JSX.Element;
@@ -482,16 +482,18 @@ function PluginCapabilityRowText(props: { value: PluginCapabilityRow }) {
 }
 
 function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron: boolean }) {
-  return props.value.trailing || props.chevron ? (
-    <div class="settings-row__control oc-settings-row-control">
-      {props.value.trailing}
-      {props.chevron ? (
-        <span class="settings-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      ) : undefined}
-    </div>
-  ) : undefined;
+  return (
+    <Show when={props.chevron || props.value.trailing}>
+      <div class="settings-row__control oc-settings-row-control">
+        {props.value.trailing}
+        {props.chevron ? (
+          <span class="settings-row__chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
+          </span>
+        ) : undefined}
+      </div>
+    </Show>
+  );
 }
 
 export function renderPluginCapabilitySection(
