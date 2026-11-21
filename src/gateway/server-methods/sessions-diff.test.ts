@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as worktreeRegistry from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -499,6 +500,47 @@ describe("loadSessionDiff", () => {
         unavailableReason: "unknown_commit",
         files: [],
       });
+    }
+  });
+
+  it("reports Restore guidance for removed review worktrees while retaining owner checks", async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const stateRoot = tempDir("openclaw-retired-review-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+    const id = randomUUID();
+    const sessionKey = "agent:main:s1";
+    try {
+      openOpenClawStateDatabase();
+      seedRepo({ "base.txt": "base\n" }, "base");
+      repoGit("update-ref", "refs/remotes/origin/main", revision());
+      repoGit("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      const acceptedBase = revision();
+      repoGit("checkout", "-qb", "task");
+      const worktree = { id, repoRoot, branch: "task" };
+      await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
+      mockSession(repoRoot, { worktree });
+      write("task.txt", "authored change\n");
+      expect(filePaths(await readDiff())).toEqual(["task.txt"]);
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+        store.update(store.get()!, { session_id: "other" }),
+      );
+      await expect(readDiff()).rejects.toThrow(/workspace.*incarnation/i);
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+        store.update(store.get()!, { session_id: "s1" }),
+      );
+      const removedMessage = /worktree was removed.*Use Restore in Settings > Worktrees/;
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: 0 });
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: undefined });
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) => store.delete(store.get()!));
+      expect(filePaths(await readDiff())).toEqual(["task.txt"]);
+      await worktreeRegistry.deleteRegistryWorktree(process.env, id);
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      await drainGlobalSingletonLifecycleState("restart");
     }
   });
 
