@@ -432,3 +432,34 @@ it.each([
     );
   },
 );
+
+it("preserves the explicit owner through injected summary preparation", async () => {
+  await withSummaryFixture({ api: "openai-completions" }, async (cfg, state, requests) => {
+    cfg.agents!.entries!.tenant = { model: { primary: `${provider}/agent-model` } };
+    await state.writeConfig(cfg);
+    let release = async () => {};
+    try {
+      const result = await summarizeText(
+        { ...summaryRequest(cfg), agentId: "tenant" },
+        {
+          async prepareSimpleCompletionModel(params) {
+            const prepared = await acquireSimpleCompletionModelWithSelection(
+              { cfg, agentId: params.agentId },
+              () => ({ selection: { provider: params.provider, modelId: params.modelId } }),
+            );
+            if (!("error" in prepared)) {
+              release = async () => await prepared[Symbol.asyncDispose]();
+            }
+            return prepared;
+          },
+          completeWithPreparedSimpleCompletionModel,
+          requireApiKey,
+        },
+      );
+      expect(result.summary).toBe("materialized:plain");
+      expect(requests).toEqual(["plain"]);
+    } finally {
+      await release();
+    }
+  });
+});
