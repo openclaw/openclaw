@@ -114,6 +114,7 @@ async function main() {
   function checkpoint() {
     try {
       save();
+      return undefined;
     } catch (error) {
       summary.checkpointError ??= String(error);
       summary.status = "failed";
@@ -142,6 +143,7 @@ async function main() {
     const outputFds = [];
     const controller = new AbortController();
     let outputError;
+    /** @type {{ cause: unknown } | undefined} */
     let primaryError;
     let result;
     try {
@@ -201,16 +203,18 @@ async function main() {
       unjoined ||= hasUnjoinedWork(error);
       receipt.status = "failed";
       receipt.error = String(outputError ?? error);
-      if (outputError && outputError !== error) receipt.commandError = String(error);
+      if (outputError && outputError !== error) {
+        receipt.commandError = String(error);
+      }
       receipt.treeJoined = !hasUnjoinedWork(error);
-      primaryError = outputError ?? error;
+      primaryError = { cause: outputError ?? error };
     } finally {
       for (const fd of outputFds) {
         try {
           fs.closeSync(fd);
         } catch (error) {
           receipt.outputCloseError ??= String(error);
-          primaryError ??= error;
+          primaryError ??= { cause: error };
           receipt.status = "failed";
         }
       }
@@ -229,7 +233,9 @@ async function main() {
         ended.every(Boolean) &&
         sizes.every((size, index) => size === receipt.capturedOutputBytes[index]);
       const checkpointError = checkpoint();
-      primaryError ??= checkpointError;
+      if (checkpointError) {
+        primaryError ??= { cause: checkpointError };
+      }
       console.error(`[installed-terminal] command-outcome ${JSON.stringify(receipt)}`);
       if (
         receipt.status !== "completed" ||
@@ -243,7 +249,9 @@ async function main() {
         }
       }
     }
-    if (primaryError) throw primaryError;
+    if (primaryError) {
+      throw primaryError.cause;
+    }
     assert(expected === null || expected.includes(result), `${name}: unexpected exit ${result}`);
     return {
       pid: receipt.pid,
@@ -720,7 +728,9 @@ async function main() {
   async function inspectBaseline(name, tarball, commit) {
     const directory = path.join(runtime, name);
     fs.mkdirSync(directory);
-    let primaryError;
+    let identity;
+    /** @type {{ cause: unknown } | undefined} */
+    let cleanupError;
     try {
       await run(
         name,
@@ -736,23 +746,23 @@ async function main() {
         ],
         { PATH: process.env.PATH },
       );
-      const identity = readWorkerCellPackageIdentity(path.join(directory, "package"));
+      identity = readWorkerCellPackageIdentity(path.join(directory, "package"));
       assert.equal(identity.buildInfo.commit, commit);
       retainHeartbeat(name, tarball, path.join(directory, "package"), identity);
-      return identity;
-    } catch (error) {
-      primaryError = error;
-      throw error;
     } finally {
       if (!unjoined) {
         try {
           fs.rmSync(directory, { recursive: true });
         } catch (error) {
           summary.extractionCleanupError = { name, error: String(error) };
-          if (!primaryError) throw error;
+          cleanupError = { cause: error };
         }
       }
     }
+    if (cleanupError) {
+      throw cleanupError.cause;
+    }
+    return identity;
   }
   try {
     candidate = path.join(runtime, "candidate.tgz");

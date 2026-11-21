@@ -1603,7 +1603,9 @@ async function runLane(
       joinedResult = value;
     },
   }).catch((cause: unknown) => {
-    if (!settlesProducer || !joinedResult) throw cause;
+    if (!settlesProducer || !joinedResult) {
+      throw cause;
+    }
     commandError = { cause };
     return joinedResult;
   });
@@ -1660,7 +1662,9 @@ async function runLane(
       });
       publicationStatus = publication.status;
     } catch (cause) {
-      if (publicationStatus === 0) publicationStatus = null;
+      if (publicationStatus === 0) {
+        publicationStatus = null;
+      }
       publicationError = { cause };
     } finally {
       if (producerSettled && name === "installed-terminal") {
