@@ -5,7 +5,7 @@ import type {
   PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
-/** The startup wait is bounded; each published agent still owns complete runtime/auth facts. */
+/** Startup grace releases queued work; each published agent still owns complete runtime/auth facts. */
 export class PreparedModelRuntimeStartup {
   readonly #foreground = createDeferredCore();
   #stage = "previous generation completion";
@@ -14,6 +14,7 @@ export class PreparedModelRuntimeStartup {
   constructor(
     private readonly host: {
       replacement: PreparedModelRuntimeReplacement;
+      background: boolean;
       owners: () => Iterable<PreparedModelRuntimeOwner>;
       isCurrent: () => boolean;
       timeoutMs: number;
@@ -79,6 +80,10 @@ export class PreparedModelRuntimeStartup {
         this.host.warn(`background model runtime publication failed: ${String(error)}`);
       }
     });
-    return Promise.race([publication, this.release]).finally(() => clearTimeout(timer));
+    // Grace still releases the queue; background admission must await the complete publication.
+    const completion = this.host.background
+      ? publication
+      : Promise.race([publication, this.release]);
+    return completion.finally(() => clearTimeout(timer));
   }
 }
