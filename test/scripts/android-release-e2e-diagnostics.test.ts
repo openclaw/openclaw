@@ -58,6 +58,42 @@ it.each([
   }
 });
 
+it.each([
+  ["Could not resolve private-artifact: status code 503", "dependency-resolution", "503"],
+  ["Gradle build daemon disappeared unexpectedly: private-detail", "daemon", undefined],
+  ["Compilation error: private-source", "compilation", undefined],
+  ["SDK location not found: private-path", "sdk", undefined],
+  ["Unsupported class file: private-class", "java-version", undefined],
+  ["Cannot find package private-package", "module-resolution", undefined],
+  ["SSLHandshakeException: private-host", "tls", undefined],
+  ["Timeout waiting to lock private-cache", "lock", undefined],
+  ["private-failure status code 999", "unknown", undefined],
+])(
+  "retains only classified build facts from either stream: %s",
+  (output, buildFailure, buildHttpStatus) => {
+    for (const isStdout of [true, false]) {
+      const facts = commandFacts(
+        "/private/node",
+        ["private-build-script", "private-token"],
+        isStdout ? output : "private-token",
+        isStdout ? "private-token" : output,
+      );
+      expect(facts).toMatchObject({ buildFailure, buildHttpStatus });
+      expect(JSON.stringify(facts)).not.toMatch(/private|artifact|detail|source|package|host|999/u);
+    }
+  },
+);
+
+it.each(["401", "403", "404", "429", "500", "502", "503", "504", "200", "409", "999", "5030"])(
+  "allows only bounded failure status %s without copying other numbers",
+  (status) => {
+    const expected = ["200", "409", "999", "5030"].includes(status) ? undefined : status;
+    const facts = commandFacts("node", [], "", "HTTP response code: " + status + "; private-token");
+    expect(facts.buildHttpStatus).toBe(expected);
+    expect(JSON.stringify(facts)).not.toContain("private-token");
+  },
+);
+
 it("drops unknown tool, operation, output and phase names", () => {
   expect(
     commandFacts("/private/unknown-secret", ["secret"], "private-token", "private-secret"),

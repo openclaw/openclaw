@@ -1,0 +1,2 @@
+36
+# Protect fixed Android build failure categories and allowlisted HTTP statuses from both command streams, with unknown/status-suffix controls and private-output exclusion.

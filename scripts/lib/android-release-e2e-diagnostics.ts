@@ -26,6 +26,27 @@ export function androidReleaseCommandFacts(
   return {
     tool,
     operation,
+    // Stable-client build output is private too; retain only fixed failure classes.
+    buildFailure:
+      (
+        [
+          [
+            "dependency-resolution",
+            /could not resolve|could not download|could not get resource/iu,
+          ],
+          ["daemon", /daemon disappeared|unable to start the daemon|daemon.*unexpectedly/iu],
+          ["compilation", /compilation error|compilation failed|compile.*failed/iu],
+          ["sdk", /SDK location not found|failed to find.*SDK|license.*not accepted/iu],
+          ["java-version", /unsupported class file|requires Java|invalid source release/iu],
+          ["module-resolution", /cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/iu],
+          ["tls", /PKIX path building failed|SSLHandshakeException/iu],
+          ["lock", /timeout waiting to lock|could not acquire.*lock/iu],
+        ] as const
+      ).find(([, pattern]) => pattern.test(output))?.[0] ?? "unknown",
+    buildHttpStatus:
+      /(?:status code|HTTP response code)\D{0,8}(401|403|404|429|500|502|503|504)\b/iu.exec(
+        output,
+      )?.[1] ?? undefined,
     permissionDenied: /permission denied/iu.test(output),
     missingFile: /no such file or directory/iu.test(output),
     deviceOffline: /device offline/iu.test(output),
