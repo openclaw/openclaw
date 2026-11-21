@@ -414,6 +414,7 @@ describe("memory vector KNN subprocess boundary", () => {
 
   it.each([
     ["NUL-dense", 200, "\0".repeat(3000), 700, "\0".repeat(700)],
+    ["chunk-ceiling NUL-dense", 200, "\0".repeat(3000), 1600, "\0".repeat(1600)],
     ["oversized", 1, `${"x".repeat(63)}😀${"y".repeat(3 * 1024 * 1024)}`, 64, "x".repeat(63)],
   ] as const)(
     "bounds %s snippets before child serialization",
