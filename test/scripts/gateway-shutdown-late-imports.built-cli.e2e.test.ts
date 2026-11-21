@@ -38,32 +38,37 @@ function lateChunkImports(lines: string[]) {
   });
 }
 
-it("stops a built Gateway without first-importing a module after SIGTERM", async () => {
-  const log = path.join(tempDirs.make("openclaw-late-imports-"), "late-imports.jsonl");
-  instance = await createOpenClawTestInstance({
-    name: "late-imports",
-    env: {
-      NODE_OPTIONS: `--import=${probe}`,
-      OPENCLAW_TEST_LATE_IMPORT_LOG: log,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-    },
-  });
-  await instance.startGateway();
-  expect(await instance.entrypoint()).toEqual([expect.stringMatching(/^dist\/index\.m?js$/u)]);
-  // Startup work still loading at SIGTERM is not shutdown's import; stop after it settles.
-  await vi.waitFor(
-    () =>
-      expect(instance?.logs()).toMatch(
-        /startup (?:phase|trace): post-ready\.startup-maintenance \d/u,
-      ),
-    { timeout: 60_000, interval: 250 },
-  );
-  const child = instance.child;
-  await instance.stopGateway();
+// Windows stops the test Gateway with taskkill, which delivers no SIGTERM to observe.
+it.skipIf(process.platform === "win32")(
+  "stops a built Gateway without first-importing a module after SIGTERM",
+  async () => {
+    const log = path.join(tempDirs.make("openclaw-late-imports-"), "late-imports.jsonl");
+    instance = await createOpenClawTestInstance({
+      name: "late-imports",
+      env: {
+        NODE_OPTIONS: `--import=${probe}`,
+        OPENCLAW_TEST_LATE_IMPORT_LOG: log,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      },
+    });
+    await instance.startGateway();
+    expect(await instance.entrypoint()).toEqual([expect.stringMatching(/^dist\/index\.m?js$/u)]);
+    // Startup work still loading at SIGTERM is not shutdown's import; stop after it settles.
+    await vi.waitFor(
+      () =>
+        expect(instance?.logs()).toMatch(
+          /startup (?:phase|trace): post-ready\.startup-maintenance \d/u,
+        ),
+      { timeout: 60_000, interval: 250 },
+    );
+    const child = instance.child;
+    await instance.stopGateway();
 
-  expect(child?.exitCode).toBe(0);
-  // The preload observed the stop signal, so an empty log is a real result.
-  expect(existsSync(`${log}.sigterm`)).toBe(true);
-  const lines = (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean);
-  expect(lateChunkImports(lines)).toEqual([]);
-}, 240_000);
+    expect(child?.exitCode).toBe(0);
+    // The preload observed the stop signal, so an empty log is a real result.
+    expect(existsSync(`${log}.sigterm`)).toBe(true);
+    const lines = (await readFile(log, "utf8").catch(() => "")).split("\n").filter(Boolean);
+    expect(lateChunkImports(lines)).toEqual([]);
+  },
+  240_000,
+);
