@@ -153,14 +153,19 @@ COPY . .
 
 # The build stage also backs non-root live-test containers. Build contexts preserve
 # host modes, so normalize copied source readability without re-walking installed deps.
-RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +
+# Skip entries a+rX would leave unchanged: on overlayfs even a no-op chmod copies the
+# file up into the layer. Symlinks still reach chmod, which follows them (#199340).
+RUN find /app -path /app/node_modules -prune -o \
+      -type d -perm -0555 -o \
+      -type f -perm -0444 \( -perm -0111 -o ! \( -perm -0100 -o -perm -0010 -o -perm -0001 \) \) -o \
+      -exec chmod a+rX {} +
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
 RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
       if [ -d "$dir" ]; then \
-        find "$dir" -type d -exec chmod 755 {} +; \
-        find "$dir" -type f -exec chmod 644 {} +; \
+        find "$dir" -type d ! -perm 0755 -exec chmod 755 {} +; \
+        find "$dir" -type f ! -perm 0644 -exec chmod 644 {} +; \
       fi; \
     done
 

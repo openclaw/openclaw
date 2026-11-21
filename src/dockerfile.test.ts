@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
@@ -183,14 +183,89 @@ describe("Dockerfile", () => {
     },
   );
 
-  it("normalizes plugin and agent paths permissions in image layers", async () => {
-    const dockerfile = await readDockerfile();
-    expectContains(
-      dockerfile,
-      "RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \\",
-      'find "$dir" -type d -exec chmod 755 {} +',
-      'find "$dir" -type f -exec chmod 644 {} +',
+  it("normalizes source and plugin modes without chmodding unchanged entries (#199340)", async () => {
+    const dockerfile = await readDockerfile("Dockerfile", true);
+    const steps = [
+      dockerfile.match(/^RUN (find \/app -path \/app\/node_modules .*\{\} \+)$/m)?.[1],
+      dockerfile.match(/^RUN (for dir in \/app\/.* done)$/m)?.[1],
+    ];
+    const root = tempDirs.make("openclaw-dockerfile-modes-");
+    const bin = join(root, "bin");
+    const app = join(root, "app");
+    const log = join(root, "chmod.log");
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "chmod"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" >> "${log}"\nexec /bin/chmod "$@"\n`,
+      { mode: 0o755 },
     );
+    const plugin = join(app, BUNDLED_PLUGIN_ROOT_DIR, "demo");
+    const modes: Record<string, [number, number]> = {
+      "src/private": [0o700, 0o755],
+      "src/none.ts": [0o000, 0o444],
+      "src/owner.ts": [0o600, 0o644],
+      "src/script.sh": [0o744, 0o755],
+      "src/ready.ts": [0o644, 0o644],
+      "src/tool": [0o755, 0o755],
+      "src/setuid": [0o4755, 0o4755],
+      "src/target.ts": [0o600, 0o644],
+      "node_modules/dep.js": [0o600, 0o600],
+      [`${BUNDLED_PLUGIN_ROOT_DIR}/demo/sub`]: [0o700, 0o755],
+      [`${BUNDLED_PLUGIN_ROOT_DIR}/demo/index.js`]: [0o755, 0o644],
+      [`${BUNDLED_PLUGIN_ROOT_DIR}/demo/ready.js`]: [0o644, 0o644],
+    };
+    for (const entry of Object.keys(modes)) {
+      const target = join(app, entry);
+      await mkdir(dirname(target), { recursive: true });
+      if (entry.endsWith("private") || entry.endsWith("sub")) {
+        await mkdir(target);
+      } else {
+        await writeFile(target, "");
+      }
+    }
+    await symlink("target.ts", join(app, "src/link"));
+    // Children first, so a 0700/0000 parent never blocks setting the next mode.
+    for (const [entry, [mode]] of Object.entries(modes).toReversed()) {
+      await chmod(join(app, entry), mode);
+    }
+    await chmod(plugin, 0o755);
+    const runSteps = async () => {
+      await writeFile(log, "");
+      for (const step of steps) {
+        assert(step, "Dockerfile permission step is missing");
+        run(
+          "/bin/sh",
+          [
+            "-c",
+            step
+              .replaceAll("/app", app)
+              .replaceAll("${OPENCLAW_BUNDLED_PLUGIN_DIR}", BUNDLED_PLUGIN_ROOT_DIR),
+          ],
+          { PATH: `${bin}:${process.env.PATH}` },
+        );
+      }
+      return (await readFile(log, "utf8")).split("\n").filter((line) => line.startsWith("/"));
+    };
+
+    const changed = await runSteps();
+    for (const [entry, [, expected]] of Object.entries(modes)) {
+      expect.soft((await stat(join(app, entry))).mode & 0o7777, entry).toBe(expected);
+    }
+    // The symlink reaches chmod, which follows it to src/target.ts.
+    expect(changed.map((path) => path.slice(app.length + 1)).toSorted()).toEqual(
+      [
+        "src/private",
+        "src/none.ts",
+        "src/owner.ts",
+        "src/script.sh",
+        "src/target.ts",
+        "src/link",
+        `${BUNDLED_PLUGIN_ROOT_DIR}/demo/sub`,
+        `${BUNDLED_PLUGIN_ROOT_DIR}/demo/index.js`,
+      ].toSorted(),
+    );
+    // Once normalized, only the symlink reaches chmod again.
+    expect(await runSteps()).toEqual([join(app, "src/link")]);
   });
 
   it("counts primary pub keys before Docker apt fingerprint compare and dearmor", async () => {
