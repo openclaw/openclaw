@@ -7,11 +7,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxContext } from "../../agents/sandbox/context.js";
+import { isUnboundProjectSession } from "../../config/sessions/session-worktree-intent.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import type { GatewaySessionAccessAuthority } from "../session-access-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { isUnboundProjectSession, listSessionProjects } from "../session-project-move-policy.js";
+import { listSessionProjects } from "../session-project-move-policy.js";
 import { moveSessionIntoProject } from "../session-project-move.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { listCarryCheckouts, type CarrySource } from "../session-workspace-carry.js";

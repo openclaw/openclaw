@@ -1,3 +1,4 @@
 # Prompt eligibility and menu selection cover empty, registered and already-bound conversations.
 # Checkout carry covers diverged history on the host and sandbox, and rejects an unrelated branch.
-111
+# Tool and prompt tests cover the default-workspace gate and the registered project catalog.
+117

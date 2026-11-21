@@ -139,16 +139,7 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
 export function resolveOptionalToolRegistrationPolicy(
   options: OpenClawToolsOptions | undefined,
   embedded: boolean,
-): {
-  includeMessageTool: boolean;
-  scheduledWidgetExplicitlyAllowed: boolean;
-  sessionProjectExplicitlyAllowed: boolean;
-} {
-  const allowlist = mergeFactoryPolicyList(
-    options?.config?.tools?.allow,
-    options?.config?.tools?.alsoAllow,
-    options?.pluginToolAllowlist,
-  );
+): { includeMessageTool: boolean; scheduledWidgetExplicitlyAllowed: boolean } {
   const denylist = mergeFactoryPolicyList(
     options?.config?.tools?.deny,
     options?.pluginToolDenylist,
@@ -157,14 +148,15 @@ export function resolveOptionalToolRegistrationPolicy(
     includeMessageTool:
       !embedded ||
       options?.sourceReplyDeliveryMode === "message_tool_only" ||
-      isToolExplicitlyAllowedByFactoryPolicy({ toolName: "message", allowlist, denylist }),
-    // Opt-in: only an explicit tools.allow/alsoAllow entry builds session_project, so
-    // agents without a tool profile do not gain it either.
-    sessionProjectExplicitlyAllowed: isToolExplicitlyAllowedByFactoryPolicy({
-      toolName: "session_project",
-      allowlist,
-      denylist,
-    }),
+      isToolExplicitlyAllowedByFactoryPolicy({
+        toolName: "message",
+        allowlist: mergeFactoryPolicyList(
+          options?.config?.tools?.allow,
+          options?.config?.tools?.alsoAllow,
+          options?.pluginToolAllowlist,
+        ),
+        denylist,
+      }),
     scheduledWidgetExplicitlyAllowed: isToolExplicitlyAllowedByFactoryPolicy({
       toolName: "show_widget",
       allowlist: options?.runtimeToolAllowlist,

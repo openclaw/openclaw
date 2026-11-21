@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import { isUnboundProjectSession } from "../config/sessions/session-worktree-intent.js";
 import { resolveRequesterProject } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
@@ -8,7 +9,6 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import {
   canChooseSessionProject,
-  isUnboundProjectSession,
   projectRequester,
   type SessionProjectRequester,
 } from "./session-project-move-policy.js";

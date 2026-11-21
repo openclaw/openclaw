@@ -29,22 +29,6 @@ export async function listSessionProjects(cfg: OpenClawConfig, requester: Sessio
   );
 }
 
-export function isUnboundProjectSession(
-  entry: Partial<InternalSessionEntry>,
-  workspaceDir: string,
-) {
-  return !(
-    entry.worktree ||
-    entry.repositoryWorkspaceId ||
-    entry.projectId ||
-    entry.deviceFolder ||
-    entry.execNode ||
-    entry.pendingWorktree ||
-    entry.pendingProjectGitUrl ||
-    (entry.sessionRoot !== undefined && entry.sessionRoot !== workspaceDir)
-  );
-}
-
 export function canChooseSessionProject(
   cfg: OpenClawConfig,
   sessionKey: string,

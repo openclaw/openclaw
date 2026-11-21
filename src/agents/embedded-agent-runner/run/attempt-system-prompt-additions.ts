@@ -13,7 +13,10 @@ import {
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { prepareProgressCardToolForOpenClawTools } from "../../openclaw-tools.registration.js";
-import { sessionProjectGuidanceSource } from "../../session-project-guidance.js";
+import {
+  isSessionProjectMoveEligible,
+  sessionProjectGuidanceSource,
+} from "../../session-project-guidance.js";
 import { resolveUtilityModelRefForAgent } from "../../utility-model.js";
 
 const INCOGNITO_SYSTEM_PROMPT =
@@ -102,6 +105,11 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   return {
     extraSystemPrompt,
     gitCoauthorPrompt,
+    sessionProjectMoveEligible: isSessionProjectMoveEligible(
+      params.config,
+      params.agentId,
+      params.entry,
+    ),
     ...(params.entry
       ? {
           prepareSessionProjectGuidance: sessionProjectGuidanceSource({

@@ -2,35 +2,20 @@
 summary: "Let an agent move its own conversation into a registered project"
 title: "Session project"
 read_when:
-  - A conversation started without a project and now needs one to publish a pull request
-  - You are enabling the optional session_project tool
+  - A conversation started without a project and now needs one
+  - You are checking when an agent can move a conversation into a project
 ---
 
 `session_project` lets an agent move the conversation it is running in into a
 registered project. After the move, the conversation works in a managed checkout
 of that project's repository on its own branch, the same as a session created in
-the project, so `github_publish` can open a pull request from it. People no
-longer have to pick the project before they start.
+the project.
 
-The tool is off by default. Existing agents see no new tool and no prompt change
-until you enable it. In the general workspace, an agent with this tool and access to
-a registered project is prompted to list projects before coding or when the task fits
-a project.
-
-## Enable
-
-Name the tool in the agent's tool policy, and in the sandbox tool policy that
-sandboxed conversations also pass. Group entries such as `group:sessions` do not
-include it; a wildcard (`"*"`, or the `full` profile) does.
-
-```json
-{
-  "tools": {
-    "alsoAllow": ["session_project"],
-    "sandbox": { "tools": { "alsoAllow": ["session_project"] } }
-  }
-}
-```
+The tool is available by default in the agent's default workspace, subject to
+tool policy. The agent sees the registered projects the requester can use. When
+the user asks to work on a matching project, the agent moves the conversation
+before starting work. Once the conversation is bound to a project or another
+workspace, the tool is removed from its tool list.
 
 ## Actions
 

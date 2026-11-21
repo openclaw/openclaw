@@ -149,10 +149,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
           senderIsOwner: true,
         }),
       });
-    const hint = "You are in the general workspace.";
+    const hint = "You are in the default workspace";
     expect(await prompt()).not.toContain(hint);
     catalog.mockResolvedValue([workspace, website]);
-    expect(await prompt()).toContain(hint);
+    const eligible = await prompt();
+    expect(eligible).toContain(hint);
+    expect(eligible).toContain('{"id":"website","name":"Website"}');
+    expect(eligible).toContain("as your first tool call");
     expect(await prompt(website.id)).not.toContain(hint);
     expect(await prompt(undefined, [])).not.toContain(hint);
   });

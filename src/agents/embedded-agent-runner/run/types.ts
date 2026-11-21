@@ -126,6 +126,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /** Looks up move destinations under the admitted requester when the harness offers session_project. */
   prepareSessionProjectGuidance?: () => Promise<string | undefined>;
+  sessionProjectMoveEligible?: boolean;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active

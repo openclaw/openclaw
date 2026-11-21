@@ -1,3 +1,5 @@
+import type { InternalSessionEntry } from "./types.js";
+
 /** Private source selection accepted under the session creation lifecycle lock. */
 export type PendingSessionWorktree = {
   workspace?: string;
@@ -17,3 +19,19 @@ export type PendingSessionWorktree = {
     through: { generation: string | null; maxSeq: number | null };
   };
 };
+
+export function isUnboundProjectSession(
+  entry: Partial<InternalSessionEntry>,
+  workspaceDir: string,
+): boolean {
+  return !(
+    entry.worktree ||
+    entry.repositoryWorkspaceId ||
+    entry.projectId ||
+    entry.deviceFolder ||
+    entry.execNode ||
+    entry.pendingWorktree ||
+    entry.pendingProjectGitUrl ||
+    (entry.sessionRoot !== undefined && entry.sessionRoot !== workspaceDir)
+  );
+}

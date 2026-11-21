@@ -17,11 +17,11 @@ import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const DESCRIPTION =
-  "Move this conversation into a registered project, so its work happens in a managed checkout of that repository on its own branch and can be published as a pull request with github_publish. " +
+  "Move this conversation into an existing registered project and continue in its managed checkout. " +
   "list: the projects you may use. move: send a projectId from list; this turn ends, the project opens as it does for a session created in it, and the conversation resumes here in its new checkout. " +
   "Files from before the move stay in the original workspace, where earlier message links still open them. " +
   "When you already cloned this project into a folder of your workspace and worked there, pass that folder as checkout: its current commit and unsaved changes start the new checkout. Without checkout the new checkout starts from the project's default branch. " +
-  "A conversation moves only once: when it already has a project or workspace, start a new session in the project instead (sessions_spawn with visible=true and projectId). " +
+  "A conversation can move into a project only once. " +
   "Running background exec, unfinished children, an open terminal or another run of this conversation refuse the move with nothing moved; finish or stop them first.";
 
 /** The operator driving this run; owner and channel runs have none. */

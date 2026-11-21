@@ -20,6 +20,7 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
@@ -41,7 +42,6 @@ import {
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
-import { createSessionWorkspaceTools } from "./openclaw-tools.session-workspace.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
@@ -61,6 +61,8 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
+import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
+import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -79,6 +81,7 @@ import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionProjectTool } from "./tools/session-project-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -417,7 +420,7 @@ function* createOpenClawToolsSteps(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const { includeMessageTool, scheduledWidgetExplicitlyAllowed, sessionProjectExplicitlyAllowed } =
+  const { includeMessageTool, scheduledWidgetExplicitlyAllowed } =
     resolveOptionalToolRegistrationPolicy(options, embedded);
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
   // A recorded widget surface can keep authoring its durable board on internal
@@ -569,11 +572,25 @@ function* createOpenClawToolsSteps(
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    ...createSessionWorkspaceTools(options, {
-      agentId: sessionAgentId,
-      availabilityConfig,
-      sessionProjectAllowed: !embedded && Boolean(sessionKey) && sessionProjectExplicitlyAllowed,
-    }),
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubIdentityStatusTool(options)
+      : null,
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubPublishTool({
+          ...options,
+          publicationAvailable: options.githubPublicationAvailable,
+          observationOnly:
+            options.githubPublicationConfigurationAware === true &&
+            readGitHubPublicationConfiguration({
+              config: availabilityConfig ?? {},
+              agentId: sessionAgentId,
+            }) === "unconfigured",
+          preview: options.githubPublicationPreview,
+        })
+      : null,
+    !embedded && sessionKey && options?.sessionProjectMoveEligible
+      ? createSessionProjectTool(options)
+      : null,
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,

@@ -112,11 +112,7 @@ export const CORE_TOOL_DEFINITIONS = [
     ["sessions_spawn", { executionLocation: "gateway" }],
     ["github_identity_status", { profiles: ["coding"] }],
     ["github_publish", { profiles: ["coding"] }],
-    // Opt-in only: no profile or group enables it, so existing agents never see it.
-    [
-      "session_project",
-      { profiles: [], includeInSectionGroup: false, includeInOpenClawGroup: false },
-    ],
+    ["session_project"],
     ["agents_wait", { profiles: ["coding"] }],
     ["sessions_yield"],
     ["subagents"],
