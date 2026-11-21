@@ -95,8 +95,14 @@ export type WorkboardProtocolViolationInput = Pick<WorkboardCardInput, "sessionK
 export type WorkboardClaimInput = WorkboardMutationScope & {
   ttlSeconds?: unknown;
 };
+export type WorkboardReworkRequest = {
+  instructions: string;
+  expectedUpdatedAt: number;
+};
 export type WorkboardClaimOptions = {
   assertOwnerCurrent?: () => void;
+  /** Dispatcher-only. Claim and arm the new attempt at the same card revision. */
+  rework?: WorkboardReworkRequest & { requestedSessionKey: string };
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
   expectedAuthority?: {
     boardId: string;
