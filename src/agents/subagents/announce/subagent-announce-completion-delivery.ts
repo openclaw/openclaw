@@ -1,7 +1,7 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
-import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
@@ -102,7 +102,7 @@ export async function runAnnounceAgentCall(params: {
   try {
     signal.throwIfAborted();
     const dispatch = () =>
-      runOutsideAdmittedGenerationScopes(async () => {
+      runOutsideAdmittedTurnScopes(async () => {
         if (params.onBeforeDispatch) {
           await params.onBeforeDispatch();
         }

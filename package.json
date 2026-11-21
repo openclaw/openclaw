@@ -1874,6 +1874,7 @@
     "check:no-runtime-action-load-config": "node --import ./scripts/tsx.mjs scripts/check-no-runtime-action-load-config.mts",
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
+    "check:runtime-process-lifecycle": "node --import ./scripts/tsx.mjs scripts/check-runtime-process-lifecycle.mts",
     "check:runtime-sidecar-loaders": "node --import ./scripts/tsx.mjs scripts/check-runtime-sidecar-loaders.mts",
     "runtime:scripts:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs",
     "runtime:scripts:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs --check",
