@@ -241,12 +241,13 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { migrating: true, owner: true, retained: false, owned: false },
-    { migrating: true, owner: false, retained: false, owned: false },
-    { migrating: false, owner: true, retained: false, owned: false },
-    { migrating: true, owner: true, retained: true, owned: false },
-    { migrating: true, owner: true, retained: false, owned: true },
-  ])(
+    { migrating: true, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: false, retained: false, owned: "none" },
+    { migrating: false, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: true, retained: true, owned: "none" },
+    { migrating: true, owner: true, retained: false, owned: "running" },
+    { migrating: true, owner: true, retained: false, owned: "stopped" },
+  ] as const)(
     "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained, owned service=$owned)",
     async ({ migrating, owner, retained, owned }) => {
       await withTestDir({ prefix: "migration-owner-" }, async (state) => {
@@ -276,8 +277,8 @@ describe("mutable update execution", () => {
           candidateSchemaVersions: { state: 15, agent: 19 },
         });
         mocks.maybeStopService.mockResolvedValue(
-          owned
-            ? { ...inspectOrStopService("inspect"), stopped: false }
+          owned !== "none"
+            ? { ...inspectOrStopService("inspect"), stopped: false, running: owned === "running" }
             : {
                 stopped: false,
                 inspected: false,
@@ -291,7 +292,7 @@ describe("mutable update execution", () => {
 
         const execution = await execute(params);
 
-        if (migrating && owner && !retained && !owned) {
+        if (migrating && owner && !retained && owned !== "running") {
           expect(execution).toMatchObject({
             mutationStarted: false,
             result: { status: "error", reason: "database-migration-owner-live" },
