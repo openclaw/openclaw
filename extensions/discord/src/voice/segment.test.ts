@@ -77,6 +77,24 @@ defineDiscordVoiceTests((h) => {
     };
   }
 
+  it("submits the final segment transcription and Discord speaker with the agent turn", async () => {
+    const { manager, entry } = await createBatchFixture();
+    await h.receiveRecordedSpeech(manager, "Read the agenda.", entry, "333");
+
+    expect(h.agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runContext: expect.objectContaining({
+          senderId: "333",
+          channelContext: {
+            sender: { id: "333" },
+            voice: { finalizedTranscript: "Read the agenda." },
+          },
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it.each([
     ["control", "none", "miss", true],
     ["control", "none", "error", true],
