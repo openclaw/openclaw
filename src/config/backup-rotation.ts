@@ -4,8 +4,14 @@ import type fs from "node:fs";
 import path from "node:path";
 import { tempFile } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync, type ReplaceFileAtomicSyncOptions } from "@openclaw/fs-safe/atomic";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { VERSION } from "../version.js";
+import { parseConfigJson5 } from "./io.read-helpers.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { compareOpenClawVersions } from "./version.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export const CONFIG_BACKUP_COUNT = 5;
@@ -45,6 +51,7 @@ export async function prepareConfigFileWrite(
   assertCurrent?.();
   // Refuse invalid source bytes before staging them as recovery history.
   assertBeforeMutation();
+  await retainOlderReleaseConfig({ ...params, warn: params.warn ?? (() => {}) });
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
     if (params.previousRaw !== null) {
@@ -257,5 +264,44 @@ export async function createPreUpdateConfigSnapshot(params: {
       // The temp file may not exist yet; the marker reset below still allows a retry.
     }
     preUpdateConfigSnapshotsWritten.delete(snapshotKey);
+  }
+}
+
+/**
+ * A newer release keeps the file an older release wrote beside the rewritten one
+ * (`openclaw.json.pre-<version>`), outside the rotating `.bak` ring. Best effort.
+ */
+async function retainOlderReleaseConfig(params: {
+  configPath: string;
+  previousRaw: string | null;
+  fsModule: typeof fs;
+  warn: (message: string) => void;
+}): Promise<void> {
+  const { previousRaw } = params;
+  const parsed = previousRaw === null ? undefined : parseConfigJson5(previousRaw);
+  const meta = parsed?.ok && isRecord(parsed.parsed) ? parsed.parsed.meta : undefined;
+  const previousVersion = isRecord(meta) ? meta.lastTouchedVersion : undefined;
+  if (
+    previousRaw === null ||
+    typeof previousVersion !== "string" ||
+    (compareOpenClawVersions(previousVersion, VERSION) ?? 0) >= 0
+  ) {
+    return;
+  }
+  const retainedPath = `${params.configPath}.pre-${previousVersion}`;
+  const tempPath = `${retainedPath}.${randomUUID()}.tmp`;
+  const files = params.fsModule.promises;
+  try {
+    // Stage complete bytes, then link: never overwrites a kept original or exposes a partial one.
+    await files.writeFile(tempPath, previousRaw, { flag: "wx", mode: 0o600 });
+    await files.link(tempPath, retainedPath);
+  } catch (error) {
+    if (!(error instanceof Error && hasErrnoCode(error, "EEXIST"))) {
+      params.warn(
+        `Could not keep the original config at ${retainedPath}: ${formatErrorMessage(error)}`,
+      );
+    }
+  } finally {
+    await files.rm(tempPath, { force: true }).catch(() => {});
   }
 }

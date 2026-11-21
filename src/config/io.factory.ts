@@ -69,7 +69,13 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       if (resolveIsConfigReadOnly(deps.env)) {
         return false;
       }
-      if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
+      if (
+        !snapshot.exists ||
+        !snapshot.valid ||
+        // Projected older-release bytes are not valid for this release until Doctor saves them.
+        snapshot.olderReleaseMigration ||
+        typeof snapshot.raw !== "string"
+      ) {
         return false;
       }
       const polluted = collectPollutedSecretPlaceholders(snapshot.parsed);

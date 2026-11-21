@@ -609,18 +609,14 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it("restores last-known-good for malformed plugin policy values", async () => {
+  it("keeps newer settings instead of restoring last-known-good over a readable config", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local", port: 19091 },
       });
       await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
-      const lastGoodRaw = await fs.readFile(configPath, "utf-8");
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { mode: "local", port: 19092 }, plugins: { deny: "bad" } }, null, 2)}\n`,
-        "utf-8",
-      );
+      const invalidRaw = `${JSON.stringify({ gateway: { mode: "local", port: 19092 }, plugins: { deny: "bad" } }, null, 2)}\n`;
+      await fs.writeFile(configPath, invalidRaw, "utf-8");
 
       const repaired = await withEnvAsync(
         {
@@ -630,28 +626,10 @@ describe("runDoctorConfigPreflight", () => {
         () => runDoctorConfigPreflight(configRepairOptions),
       );
 
-      expect(repaired.snapshot.valid).toBe(true);
-      expect(repaired.snapshot.config.gateway?.port).toBe(19091);
-      expect(repaired.configChanged).toBe(true);
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
+      expect(repaired.snapshot.valid).toBe(false);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(invalidRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      const clobbered = entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."));
-      expect(clobbered).toHaveLength(1);
-      await expect(
-        fs.readFile(path.join(path.dirname(configPath), clobbered[0]!), "utf-8"),
-      ).resolves.toContain('"port": 19092');
-
-      const converged = await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
-        runDoctorConfigPreflight(configRepairOptions),
-      );
-      expect(converged.snapshot.valid).toBe(true);
-      expect(converged.configChanged).toBe(false);
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
-      expect(
-        (await fs.readdir(path.dirname(configPath))).filter((entry) =>
-          entry.startsWith("openclaw.json.clobbered."),
-        ),
-      ).toEqual(clobbered);
+      expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);
     });
   });
   it("repairs session keys with a legacy roster through Doctor and preserves the authored backup", async () => {

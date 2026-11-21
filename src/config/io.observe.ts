@@ -88,7 +88,8 @@ function resolveHealthyObservationChanges(params: {
   current: ConfigHealthFingerprint;
   entry: ConfigHealthEntry;
 }): Pick<ConfigHealthEntry, "lastKnownGood" | "lastObservedSuspiciousSignature"> | null {
-  if (!params.snapshot.valid) {
+  // A projected older-release config is valid only in memory; its file is not a good baseline.
+  if (!params.snapshot.valid || params.snapshot.olderReleaseMigration) {
     return null;
   }
   const changes = { lastKnownGood: params.current, lastObservedSuspiciousSignature: null };
