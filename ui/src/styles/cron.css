@@ -212,6 +212,13 @@
   white-space: nowrap;
 }
 
+.cron-detail-runtime {
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .cron-detail-meta {
   display: flex;
   align-items: center;
@@ -339,7 +346,11 @@
   background: color-mix(in srgb, var(--text) 4.5%, var(--bg-content, var(--bg)));
 }
 
-/* Clock, schedule and run controls each center on the first 30px line. */
+.cron-prompt--editing .cron-prompt__tray {
+  padding-inline-start: 10px;
+}
+
+/* Schedule and model controls align on the first line; schedule parts can wrap. */
 .cron-prompt__controls {
   display: flex;
   flex-wrap: wrap;
@@ -374,6 +385,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  min-inline-size: 0;
   padding-block: 1px;
 }
 
@@ -581,7 +593,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-inline-size: 0;
+  max-inline-size: 100%;
   min-height: 28px;
+  overflow-wrap: anywhere;
   padding: 0 8px;
   color: var(--muted);
   font-size: 13px;
@@ -603,30 +618,8 @@
   margin-inline-start: auto;
 }
 
-.cron-prompt__tray .cron-tray-segmented {
-  padding: 0;
-  border: 0;
-  background: none;
-  box-shadow: none;
-}
-
-.cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn {
-  height: 28px;
-  padding: 0 8px;
-  border-radius: calc(var(--radius-md) * 0.8);
-  color: var(--muted-strong);
-  font-size: 13px;
-}
-
-.cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn:has(> input:checked) {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  box-shadow: none;
-  color: var(--text-strong);
-}
-
-/* Errors start where the sentence's words do: past the clock, its spacing and a part's padding. */
-.cron-editor-tray-errors > .cron-error {
-  padding-inline-start: 30px;
+.cron-editor-tray-errors:not(:empty) {
+  padding: 5px 18px 0;
 }
 
 .cron-schedule-note {
@@ -1528,7 +1521,6 @@
   border: 0;
 }
 
-.cron-editor-tray-errors,
 .cron-sentence__row {
   display: contents;
 }
@@ -1565,7 +1557,6 @@
     gap: 0;
   }
 
-  .cron-prompt--editing .cron-prompt__clock,
   .cron-editor-active .cron-detail-sub {
     display: none;
   }
@@ -1608,15 +1599,6 @@
 
   .cron-editor-tray-errors {
     order: 3;
-    display: block;
-  }
-
-  .cron-editor-tray-errors:empty {
-    display: none;
-  }
-
-  .cron-editor-tray-errors > .cron-error {
-    padding-inline: 17px;
   }
 
   .cron-editor-schedule .cron-tray-pair > .cron-tray-input {

@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WithDistArtifactOwnership } from "../../../scripts/lib/runtime-artifact-contract.js";
 import { loadSourceRuntimePreparation } from "../../../scripts/lib/source-update-artifact-preflight.mts";
@@ -13,14 +11,6 @@ import { resolveCommandProcessSignal, withCommandProcessScope } from "../../proc
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 type SourceArtifactOwnership = { withDistArtifactOwnership: WithDistArtifactOwnership };
-
-export async function releaseLegacySourceLock(root: string, lock?: FileLockHandle) {
-  const consumer = path.join(root, "scripts/lib/source-update-artifact-preflight.mts");
-  // Shipped targets without the prepared-fact consumer retain their original writer.
-  if (lock && !existsSync(consumer)) {
-    await lock.release();
-  }
-}
 
 function isSourceArtifactOwnership(value: unknown): value is SourceArtifactOwnership {
   return isRecord(value) && typeof value.withDistArtifactOwnership === "function";

@@ -19,7 +19,7 @@ import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
-import { createInitialCronState } from "../../../lib/cron/state.ts";
+import { createCronReadState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
@@ -69,7 +69,7 @@ export function createSessionAutomationInventory(
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
-  let cron = createInitialCronState<CronCompactJob>();
+  let cron = createCronReadState<CronCompactJob>();
   const [receipt, setReceipt] = createSignal<{
     state: typeof cron;
     result: Promise<void>;
@@ -121,7 +121,7 @@ export function createSessionAutomationInventory(
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
     });
-    const next = createInitialCronState<CronCompactJob>({
+    const next = createCronReadState<CronCompactJob>({
       client: source?.snapshot.client ?? null,
       connected: source?.snapshot.phase === "connected",
     });

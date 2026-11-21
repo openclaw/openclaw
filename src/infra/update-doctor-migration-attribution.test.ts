@@ -30,10 +30,12 @@ import {
   repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { readExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import * as sqliteTransactions from "./sqlite-transaction.js";
@@ -499,32 +501,74 @@ it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
   },
 );
 
-it.each(["2026.9.33", "2026.9.34"])(
-  "answers the unmarked %s parent in its original format",
-  async (version) => {
+it.each([
+  { version: "2026.9.7", ownsRun: true },
+  { version: "2026.9.8", ownsRun: true },
+  { version: "2026.9.33", ownsRun: true },
+  { version: "2026.9.34", ownsRun: true },
+  { version: "2026.9.37", ownsRun: true },
+  { version: "2026.9.37", ownsRun: false },
+  { version: "2026.10.33", ownsRun: true },
+])(
+  "round-trips the $version capture through Doctor and unmarked rollback (ownsRun=$ownsRun)",
+  async ({ version, ownsRun }) => {
     const { root, env, pathname } = fixture("source.sqlite", "SELECT 1;");
-    const parent = readUpdateRunDriver();
+    const parent = readUpdateRunDriver(ownsRun ? process.pid : process.ppid);
     createUpdateRun({ trigger: "cli", before: { version }, origin: { driver: parent } }, { env });
+    // The updater closes its ledger writer before handing the inventory to Doctor.
+    await closeOpenClawStateDatabaseAsync();
+    const shared = fs.realpathSync(resolveOpenClawStateSqlitePath(env));
+    // Earlier parents can inspect a single store without requesting the shared ledger.
+    const missing = path.join(root, "missing.sqlite");
+    const paths =
+      version === "2026.9.8" || version === "2026.9.33" || version === "2026.9.34"
+        ? [pathname]
+        : [pathname, shared, missing];
+    const maintenance = await acquireGatewayLock({
+      env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    if (!maintenance) {
+      throw new Error("Test could not acquire rollback maintenance");
+    }
     try {
+      const physical = ownsRun && version !== "2026.10.33";
+      const capture = physical
+        ? Object.fromEntries(
+            paths.map((file) => [file, file === missing ? null : legacyGeneration(file)]),
+          )
+        : readUpdateDatabaseGenerations(paths);
+      const { receipt } = await withCapture(env, capture, async () => {
+        using db = new DatabaseSync(pathname);
+        migrate(db, pathname);
+      });
+      expect(receipt).toMatchObject({ unchanged: true, fromGenerations: capture });
+      expect(receipt?.generations?.[pathname]).not.toBe(capture[pathname]);
       const stagingRoot = path.join(root, "staging");
       fs.mkdirSync(stagingRoot);
       const worker = { nodeRunner: process.execPath, sourceEnv: env, stagingRoot };
-      const inspect = async () =>
-        parseUpdateStateInspectionWorker(
-          await runUpdateStateInspectionWorker({
-            ...worker,
-            input: { mode: "database-generations", paths: [pathname], stateDir: root, config: {} },
-            databases: await readUpdateStateDatabaseSizes([pathname], worker),
-          }),
-          z.record(z.string(), z.string()),
-        );
-      expect(await inspect()).toEqual({ [pathname]: legacyGeneration(pathname) });
+      const restored = parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...worker,
+          input: {
+            mode: "database-generations",
+            paths,
+            stateDir: env.OPENCLAW_STATE_DIR,
+            config: {},
+          },
+          databases: await readUpdateStateDatabaseSizes(paths, worker),
+        }),
+        z.record(z.string(), z.string().nullable()),
+      );
+      expect(restored).toEqual(receipt?.generations);
       // A candidate-produced recapture must stay current even in the old updater's run.
       expect(await readUpdateDatabaseGenerationsIsolated([pathname], { env })).toEqual(
         readUpdateDatabaseGenerations([pathname]),
       );
     } finally {
-      await closeOpenClawStateDatabaseAsync();
+      await maintenance.release();
     }
   },
 );

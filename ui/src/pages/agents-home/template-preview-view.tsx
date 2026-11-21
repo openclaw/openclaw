@@ -105,7 +105,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         <Show
           when={category()}
           fallback={
-            <span class="template-package-art template-preview__art">
+            <span class="template-art template-package-art template-preview__art">
               <TemplateArtwork src={identity()?.iconUrl} />
             </span>
           }
@@ -175,7 +175,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           {(item) => (
                             <button
                               type="button"
-                              class="template-package-row template-preview__row"
+                              class="row template-package-row template-preview__row"
                               onClick={() => setCategory(item.key)}
                             >
                               <Icon name={item.icon} />
@@ -211,7 +211,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                 {(item) => (
                                   <button
                                     type="button"
-                                    class="template-package-row template-preview__row"
+                                    class="row template-package-row template-preview__row"
                                     onClick={() => open(item.name)}
                                   >
                                     {"kind" in item && item.kind === "plugin" ? (

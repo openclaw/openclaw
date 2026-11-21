@@ -1,5 +1,6 @@
 import { onTestFinished } from "vitest";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -16,7 +17,7 @@ export async function createPublicationMemberFixture() {
   return configurePublicationMember(await createRequesterPolicyFixture());
 }
 
-export function configurePublicationMember<
+export async function configurePublicationMember<
   T extends Awaited<ReturnType<typeof createRequesterPolicyFixture>>,
 >(f: T) {
   f.config.gateway!.openclawId = { enabled: true };
@@ -35,6 +36,7 @@ export function configurePublicationMember<
   let current: OpenClawIdTunnelPrincipal | undefined = principal;
   setOpenClawIdTunnelPrincipalLookup(() => current);
   const config = requireVisitorPublicationPolicy(f);
+  await setCanonicalUserProfileRole(f.guestProfile, "operator");
   const capture = () =>
     createGitHubPublicationRequesterFixture({
       profileId: f.guestProfile,

@@ -201,7 +201,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     const exec = tool(reviewer(), "allowlist");
     const control = await exec.execute("literal-builtin", { command: ": benign; pwd" });
     expect(control.details.status).toBe("completed");
-    expect(control.details).toMatchObject({ exitCode: 0, aggregated: root });
+    expect(control.details).toMatchObject({ exitCode: 0, aggregated: `${root}\n` });
     expect(boundary.spawn.mock.calls.length).toBe(1);
     boundary.spawn.mockClear();
     const marker = path.join(root, "arithmetic-marker");
@@ -233,7 +233,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       throw new Error(`Unexpected exec status: ${allowed.details.status}`);
     }
     expect(allowed.details.exitCode).toBe(0);
-    expect(allowed.details.aggregated).toBe("static-ok");
+    expect(allowed.details.aggregated).toBe("static-ok\n");
     expect(boundary.spawn).toHaveBeenCalledOnce();
     expect(review).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
@@ -374,7 +374,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         throw new Error(`Unexpected exec status: ${result.details.status}`);
       }
       expect(result.details.exitCode).toBe(0);
-      expect(result.details.aggregated).toBe("venv-package-loaded approved.txt");
+      expect(result.details.aggregated).toBe("venv-package-loaded approved.txt\n");
     },
   );
 
@@ -438,7 +438,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       throw new Error(`Unexpected exec status: ${result.details.status}`);
     }
     expect(result.details.exitCode).toBe(0);
-    expect(result.details.aggregated).toBe("approved-content");
+    expect(result.details.aggregated).toBe("approved-content\n");
   });
 
   it("preserves startup customization for ordinary full-mode execution", async () => {
@@ -452,7 +452,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     if (result.details.status !== "completed") {
       throw new Error(`Unexpected exec status: ${result.details.status}`);
     }
-    expect(result.details.aggregated).toBe("CUSTOMIZED");
+    expect(result.details.aggregated).toBe("CUSTOMIZED\n");
   });
 
   it.each(["auto", "human-always", "current-policy"] as const)(
@@ -523,7 +523,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         if (result.details.status !== "completed") {
           throw new Error(`Unexpected exec status: ${result.details.status}`);
         }
-        expect(result.details.aggregated).toBe("approved.txt");
+        expect(result.details.aggregated).toBe("approved.txt\n");
         expect(started).toBe(1);
         expect((loadExecApprovalsReadOnly().agents?.main?.allowlist ?? []).length).toBeGreaterThan(
           0,

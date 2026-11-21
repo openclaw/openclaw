@@ -8,6 +8,7 @@ import * as transcript from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import sessionShare from "../../extensions/session-share/index.js";
 import { captureRuntimeConfigAsyncReader } from "../../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "../../src/gateway/server-methods/types.js";
@@ -99,6 +100,7 @@ it.each([false, true])(
         slots: { memory: "none" },
       },
       gateway: {
+        sessionControl: { publicationReadEnabled: true },
         auth: { mode: "token", token: "synthetic-gateway-secret" },
         tls: {
           enabled: true,
@@ -119,7 +121,8 @@ it.each([false, true])(
     await state.writeConfig(cfg);
     await captureRuntimeConfigAsyncReader()();
     const runtime = createPluginRuntime();
-    runtime.config.current = () => cfg;
+    let currentConfig = cfg;
+    runtime.config.current = () => currentConfig;
     const registry = createRuntimeTestRegistry(runtime);
     sessionShare.register(
       registry.createApi(
@@ -305,7 +308,7 @@ it.each([false, true])(
     cfg.plugins!.entries!["session-share"]!.enabled = false;
     await expect(read()).rejects.toThrow();
     cfg.plugins!.entries!["session-share"]!.enabled = true;
-    const holdRead = async (mutate: () => void | Promise<unknown>) => {
+    const holdRead = async (mutate: () => void | Promise<unknown>, disclose = false) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const original = transcript.readSessionTranscriptCatalogPage;
@@ -318,15 +321,32 @@ it.each([false, true])(
         },
       );
       const pending = read();
-      const rejected = expect(pending).rejects.toThrow();
+      const checked = disclose
+        ? expect(pending).resolves.toMatchObject({
+            items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }],
+          })
+        : expect(pending).rejects.toThrow();
       try {
         await Promise.race([entered.promise, pending]);
         await mutate();
       } finally {
         release.resolve();
       }
-      await rejected;
+      await checked;
     };
+    const publishReaderEnabled = (enabled: boolean) => {
+      currentConfig = {
+        ...cfg,
+        gateway: { ...cfg.gateway, sessionControl: { publicationReadEnabled: enabled } },
+      };
+      setRuntimeConfigSnapshot(currentConfig);
+    };
+    await holdRead(() => {
+      publishReaderEnabled(false);
+    }, true);
+    await expect(read()).rejects.toThrow();
+    publishReaderEnabled(true);
+    expect((await read()).items).toMatchObject([{ text: "SYNTHETIC_SHARED_MESSAGE" }]);
     await holdRead(() => {
       share.gatewayDeviceIds = [];
     });

@@ -126,7 +126,7 @@ export async function prepareLocalSandboxWorkspace(params: {
               beginCapture();
               phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
               try {
-                return await state.prepare();
+                return await state.prepare({ sandbox: params.sandbox });
               } finally {
                 phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
               }

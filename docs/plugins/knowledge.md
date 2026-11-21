@@ -258,6 +258,28 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 
 See [Maintenance](/plugins/knowledge/maintenance).
 
+## Lean resource policy
+
+With the Gateway's `lean` resource profile, Knowledge starts its registry,
+storage and maintenance initialization on first use rather than service startup.
+Use includes a tool call, a provider/readiness request, or a prompt hook that
+needs store facts; it is not limited to explicit human tool calls. Provisioning
+and access rules are unchanged.
+
+Watched storage stays resident so external edits keep notifying viewers across
+idle periods. Unwatched storage retires after 60 seconds with its whole operation
+lane settled, not between chunks of an upload. The registry retires after 60
+seconds with no pending RPCs. Later demand waits for retirement to finish and
+reopens the worker; the first call is slower than a warm call.
+
+Stop/restart joins maintenance initialization, active passes and schedule
+persistence. On the next first use, maintenance loads its saved schedule and
+catches up a missed pass. After activation, maintenance may visit every ready
+configured store, including stores not otherwise used during that lifetime.
+An unused lean service therefore does not run maintenance until first use.
+`standard` retains eager maintenance initialization and resident worker lifetimes.
+Knowledge does not share the core worker host.
+
 ## Scribes
 
 The **Scribes** tab starts conversations that keep a store up to date on their

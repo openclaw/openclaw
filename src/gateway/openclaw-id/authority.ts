@@ -19,7 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
   type InactivityWindows,
@@ -54,10 +53,17 @@ import { canonicalMemberProfiles, type OpenClawIdMemberProfiles } from "./member
 import { retainMemberRecoveryUses } from "./member-recovery-uses.js";
 import {
   assertMemberRoleDefined,
+  assertSandboxGrantReady,
   roleChangeDisconnects,
-  refuseUndefinedMemberRole,
+  refuseMemberRole,
 } from "./member-role-change.js";
-import { readMemberView, readOwnerView } from "./membership-views.js";
+import {
+  listAdmitted,
+  listBoundMemberTokens,
+  listOrphanedMemberTokens,
+  readMemberView,
+  readOwnerView,
+} from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
@@ -120,6 +126,7 @@ export function createOpenClawIdAuthority(
     read: readStoredClaw,
     write: writeStoredClaw,
   },
+  memberRolesEnabled: () => boolean = () => true,
 ) {
   const profiles = store.profiles ?? canonicalMemberProfiles;
   let record: StoredClaw | undefined;
@@ -139,11 +146,11 @@ export function createOpenClawIdAuthority(
       ? await upgradeToAllowlist(stored, nowSeconds())
       : stored;
     current = retainBrowserRequests(upgradeNodeCollections(current), nowSeconds());
-    current = await retainMemberRecoveryUses(stored, current, profiles);
-    if (current !== stored) {
-      await store.write(current);
+    const retained = await retainMemberRecoveryUses(stored, current, profiles, memberRolesEnabled);
+    if (retained.record !== stored) {
+      await store.write(retained.record, retained.assertCurrent);
     }
-    record = current;
+    record = retained.record;
   };
 
   // Check the live failure cell after awaits instead of retaining a narrowed pre-await value.
@@ -178,11 +185,16 @@ export function createOpenClawIdAuthority(
 
   const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
     const retained = retainBrowserRequests(candidate, nowSeconds(), record);
-    const next = await retainMemberRecoveryUses(record, retained, profiles);
+    const prepared = await retainMemberRecoveryUses(record, retained, profiles, memberRolesEnabled);
+    const next = prepared.record;
     const previous = record;
-    assertCurrent?.();
+    const assertCommitCurrent = () => {
+      prepared.assertCurrent();
+      assertCurrent?.();
+    };
+    assertCommitCurrent();
     try {
-      await store.write(next, assertCurrent);
+      await store.write(next, assertCommitCurrent);
     } catch (error) {
       // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
       // before reconciliation; no synchronous admission or later write may use a stale row.
@@ -277,6 +289,22 @@ export function createOpenClawIdAuthority(
   return {
     /** Loads the record (once); call before reading state synchronously. */
     load,
+
+    /** Completes deferred role imports in the same queue as membership writes. */
+    initializeMemberProfileRoles(): Promise<void> {
+      return serialize(async () => {
+        const current = await load();
+        if (
+          memberRolesEnabled() &&
+          current &&
+          Object.keys(current.authority?.members ?? {}).some(
+            (id) => !current.member_profile_roles?.[id],
+          )
+        ) {
+          await commit(current);
+        }
+      });
+    },
 
     /** Observes committed membership and account display changes from every writer. */
     onPeopleChanged: (listener: () => void): (() => void) =>
@@ -428,7 +456,11 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
-        assertMemberRoleDefined(input);
+        const roleChange = assertMemberRoleDefined(input);
+        await assertSandboxGrantReady(input);
+        if (roleChange && result.status === "applied") {
+          await profiles.setRole(roleChange.account_id, roleChange.role, false);
+        }
         const resolved = resolvedInvite(input);
         await commit({
           ...current,
@@ -450,7 +482,7 @@ export function createOpenClawIdAuthority(
           status: result.status,
           events: [...expiry, ...result.events, ...reconnect],
         };
-      }).catch(refuseUndefinedMemberRole);
+      }).catch(refuseMemberRole);
     },
 
     /**
@@ -461,7 +493,7 @@ export function createOpenClawIdAuthority(
       input: { cap: unknown; proofKey: Uint8Array; existingProfileId?: string },
       channel: Channel,
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -481,6 +513,7 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
+        await assertSandboxGrantReady(input.cap);
         let inviteReports = current.invite_reports;
         if (input.existingProfileId !== undefined) {
           const profile = (await profiles.inviteProfiles()).find(
@@ -511,7 +544,7 @@ export function createOpenClawIdAuthority(
         Object.assign(next, inviteReports ? { invite_reports: inviteReports } : {});
         await commit(next);
         return { ok: true, status: result.status, events: [...events, ...result.events] };
-      });
+      }).catch(refuseMemberRole);
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
@@ -593,13 +626,7 @@ export function createOpenClawIdAuthority(
 
     /** The tunnel-issued tokens bound to these device keys (from memory; load first). */
     tokensBoundTo(peerKeys: readonly string[]): DeviceTokenRef[] {
-      return (record?.token_bindings ?? [])
-        .filter((binding) => peerKeys.includes(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
+      return listBoundMemberTokens(record, peerKeys);
     },
 
     /**
@@ -608,15 +635,7 @@ export function createOpenClawIdAuthority(
      * meanwhile.
      */
     async orphanedTokens(): Promise<DeviceTokenRef[]> {
-      const current = await load();
-      const members = new Set<string>(current?.authority ? memberKeys(current.authority) : []);
-      return (current?.token_bindings ?? [])
-        .filter((binding) => !members.has(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
+      return listOrphanedMemberTokens(await load());
     },
 
     /** Drops the bindings of tokens whose revocation was confirmed. */
@@ -661,7 +680,7 @@ export function createOpenClawIdAuthority(
     /** Only this member account's devices, without owner, invite or other-account details. */
     async memberView(peerKey: string) {
       const current = await load();
-      const view = await readMemberView(current, currentPeer(peerKey));
+      const view = await readMemberView(current, currentPeer(peerKey), profiles.read);
       return record === current ? view : undefined;
     },
 
@@ -819,18 +838,4 @@ export type OpenClawIdAuthority = ReturnType<typeof createOpenClawIdAuthority>;
 // Inactivity windows with the protocol defaults filled in.
 function withDefaults(windows: Partial<InactivityWindows>): InactivityWindows {
   return { ...DEFAULT_INACTIVITY_WINDOWS, ...windows };
-}
-
-// Every listed node, member or owner device key, admitted now or not.
-function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
-  return new Set<IrohEndpointKey>([
-    ...Object.values(state.members).flatMap((member) => member.peer_keys),
-    ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
-    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
-  ]);
-}
-
-// Every candidate key that passes the protocol's admission rule at `now`.
-function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
-  return [...memberKeys(state)].filter((key) => isAdmitted(state, key, now)).toSorted();
 }

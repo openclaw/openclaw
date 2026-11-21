@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 it.each(["owner", "operator", "viewer", "guest", "unconfigured-role"])(
-  "remote sign-out enforces role admission for %s without removing membership",
+  "remote sign-out admits the current device with label %s without removing membership",
   async (role) => {
     const claw = await linkedClaw();
     const peer: IrohEndpointKey = role === "owner" ? claw.w1 : `iroh:${"cd".repeat(32)}`;
@@ -102,23 +102,12 @@ it.each(["owner", "operator", "viewer", "guest", "unconfigured-role"])(
     });
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/_openclaw-id/v1/signout`;
     try {
-      if (role !== "unconfigured-role") {
-        expect((await fetch(url)).status).toBe(405);
-      }
+      expect((await fetch(url)).status).toBe(405);
       // A body cannot select another browser: the authenticated peer owns the target.
       const response = await fetch(url, {
         method: "POST",
         body: JSON.stringify({ peerKey: otherPeer }),
       });
-      if (role === "unconfigured-role") {
-        expect(response.status).toBe(403);
-        expect(await response.json()).toMatchObject({ error: { code: "not_admitted" } });
-        expect(captureConnections).not.toHaveBeenCalled();
-        expect(closeConnections).not.toHaveBeenCalled();
-        expect(await verify()).toMatchObject({ ok: true });
-        expect(await claw.authority.resolvePeer(peer)).toMatchObject({ kind: "member", role });
-        return;
-      }
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ signedOut: true });
       expect(await verify()).toMatchObject({ ok: false });

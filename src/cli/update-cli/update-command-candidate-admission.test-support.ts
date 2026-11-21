@@ -48,7 +48,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     fetchNpmPackageTargetStatus,
     resolveGatewayInstallEntrypoint,
     listUpdateRuns,
-    updateGitCheckout,
+    updateGitRelease,
     defaultRuntime,
     ExitError,
     updateCommand,
@@ -542,7 +542,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       new ExitError(1),
     );
 
-    expectNoSideEffects(updateGitCheckout, defaultRuntime.exit);
+    expectNoSideEffects(updateGitRelease, defaultRuntime.exit);
     expectNoSideEffects(serviceStop, candidateCheck);
     expect(stages).toEqual([]);
     expect(contexts).toEqual([]);

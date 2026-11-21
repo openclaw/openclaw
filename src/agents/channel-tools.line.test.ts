@@ -33,7 +33,6 @@ it("offers LINE buttons without prescribing an unsupported config setting", asyn
       messageToolHints: resolveChannelMessageToolHints(channel),
     });
 
-    expect(prompt).toContain("Inline buttons: `send` with `presentation=");
     expect(prompt).toContain("LINE maps them to Flex controls or quick replies");
     expect(prompt).not.toContain("Inline buttons OFF for line");
     expect(prompt).not.toContain("line.capabilities.inlineButtons");

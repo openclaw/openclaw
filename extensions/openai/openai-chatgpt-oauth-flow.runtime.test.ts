@@ -650,9 +650,8 @@ describe("OpenAI Codex OAuth flow", () => {
       await vi.advanceTimersByTimeAsync(15_999);
       expect(onPrompt).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      expect(onPrompt).toHaveBeenCalledOnce();
-      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
       expect(events).toEqual(["stop", "prompt"]);
+      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
       // Setup screens show every note as a step; a local sign-in just opens the browser.
       expect(prompter.note).not.toHaveBeenCalled();
       expect(onPrompt).toHaveBeenCalledWith({

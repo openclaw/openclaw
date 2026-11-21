@@ -321,7 +321,7 @@ export async function runReleasePublishPreflight(
         "validation.manifest",
         "Validation manifest downloaded once.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
-        () => {
+        async () => {
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));
           if (!loaded) {
             throw new Error("Full Release Validation manifest artifact is missing.");
@@ -420,6 +420,7 @@ export async function runReleasePublishPreflight(
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,

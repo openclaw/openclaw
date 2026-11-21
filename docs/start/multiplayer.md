@@ -124,8 +124,13 @@ To let teammates read selected sessions from a personal Gateway without controll
 
 ### Step 5: Bound what each person can do
 
-Setting the optional `gateway.roles.default` enables named operator roles for
-authenticated profiles. Definitions alone do not enforce profile assignments.
+Configure `gateway.roles.definitions` and `gateway.roles.default` to govern all
+authenticated profiles. The default also supplies a fallback for people without
+a matching assignment. Without a default, explicit assignments govern only
+current OpenClaw ID members through their canonical linked profile, on every
+identified sign-in route. A stored identity link alone is not membership.
+Nonmembers retain their existing access and require a default for named
+`users.setRole` assignments; clearing an assignment remains allowed.
 Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5
@@ -153,15 +158,25 @@ Each role supplies a policy: which sessions they can touch, which agents they ca
 
 Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
 
+A guest's CLI stays within a session-only device grant. `openclaw gateway call` requests the session scope for session methods such as `sessions.list`, and `openclaw tui` connects with the grant itself. Until the grant is stored, a connection cannot know it: its request is refused with a scope-upgrade request that reports the approved scopes, and the CLI retries within them. The TUI stores the grant with the device token the Gateway returns, and later connections then fit it and file no request. `openclaw gateway call` stores no token, and a trusted-proxy Gateway returns none to the TUI, so behind trusted-proxy auth each connection is refused once before it retries. Methods that need a Gateway-wide scope, such as `status`, and the TUI's command list and pending approvals stay unavailable.
+
 For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
-For [OpenClaw ID members](/concepts/experimental-features#member-roles), manage roles
-on **Access** instead. Turning on OpenClaw ID installs editable `operator`,
-`viewer`, and `guest` definitions without setting a named default. Member connections
-use their membership role even without that default; another sign-in method uses
-its own policy, not a union of both roles. A missing member definition blocks
-connection. With a role catalog present, `openclaw doctor` can check local membership
-and offer to restore missing presets while the Gateway is stopped.
+[OpenClaw ID members](/concepts/experimental-features#member-roles) use that same
+profile role on every sign-in route. Invite approval and **Access → Change role**
+assign the role to their linked profile; owners and administrators can also use
+`users.setRole`. Turning on OpenClaw ID installs editable `operator`, `viewer`, and
+`guest` definitions without setting a default. Members with no resolvable role or
+no granted scopes cannot connect. Clearing an assignment exposes any configured
+mapping or default rather than disabling that fallback. Role changes disconnect
+the person's connections and stop their active runs, queued input, and child runs.
+An individual request already admitted may finish; fresh starts use current authority.
+Owner devices retain owner authority.
+
+Use `sessions.others: "invited"` when a person should see only shared sessions they
+are explicitly invited into. A session creator or administrator can select that
+person in an @mention to invite them. The person's actual profile role, agent
+allowlist, and sandbox requirement still apply.
 
 #### Coding as a guest
 

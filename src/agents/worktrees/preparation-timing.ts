@@ -181,14 +181,14 @@ export async function timeWorktreePreparationPhase<T>(
 }
 
 export async function withWorktreePreparationTiming<T>(
-  kind: "managed" | "sandbox",
+  kind: "managed" | "managed-prewarm" | "sandbox",
   run: () => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
   const start = performance.now();
   const emit = createQueuedDiagnosticPhaseEmitter();
   const current: PreparationTimingState = {
-    enabled: kind === "managed",
+    enabled: kind !== "sandbox",
     template: "unavailable",
     templateDetails: { reason: "not-requested" },
     phases: {},
