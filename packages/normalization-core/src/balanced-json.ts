@@ -13,7 +13,13 @@ type BalancedJsonOptions = {
   /** A line-start record can supersede an unmatched opener in preceding prose. */
   recoverAtLineStart?: boolean;
   /** Admit JSON syntax, optionally binding a same-coordinate discovery view to its original text. */
-  strictJson?: true | { source: string };
+  strictJson?:
+    | true
+    | {
+        source: string;
+        /** Ordered, disjoint framing spans; original string ownership takes precedence. */
+        opaqueSpans?: readonly JsonSpan[];
+      };
 };
 
 type JsonContainer = {
@@ -35,6 +41,21 @@ function extractStrictJsonFragments(
   if (source.length !== raw.length) {
     throw new RangeError("JSON discovery and source must have identical UTF-16 coordinates");
   }
+  const opaqueSpans =
+    typeof opts.strictJson === "object" ? (opts.strictJson.opaqueSpans ?? []) : [];
+  let previousEnd = -1;
+  for (const span of opaqueSpans) {
+    if (
+      !Number.isInteger(span.startIndex) ||
+      !Number.isInteger(span.endIndex) ||
+      span.startIndex <= previousEnd ||
+      span.endIndex < span.startIndex ||
+      span.endIndex >= source.length
+    ) {
+      throw new RangeError("Opaque JSON spans must be ordered, disjoint, inclusive source ranges");
+    }
+    previousEnd = span.endIndex;
+  }
   const openers = opts.openers ?? (["{", "["] as const);
   const roots: JsonContainer[] = [];
   const nodes: JsonContainer[] = [];
@@ -43,6 +64,8 @@ function extractStrictJsonFragments(
   let inString = false;
   let escaped = false;
   let lineStart = true;
+  let opaqueIndex = 0;
+  let opaqueEnd = -1;
   const pop = () => {
     const node = stack.pop()!;
     selectedDepth -= Number(node.selected);
@@ -55,8 +78,16 @@ function extractStrictJsonFragments(
       discovery === "\n" ||
       (opts.recoverAtLineStart === true && discovery === "\r") ||
       (lineStart && (discovery === " " || discovery === "\t" || discovery === "\r"));
-    // Discovery selects eligible openings, never structure or string ownership.
-    // Otherwise hidden quotes could turn a string interior into a child record.
+    const entering = opaqueSpans[opaqueIndex];
+    if (entering?.startIndex === index) {
+      // Decide at entry: a span inside a string cannot become framing after
+      // that string closes. Original bytes still participate in JSON admission.
+      if (!inString) opaqueEnd = entering.endIndex;
+      opaqueIndex++;
+    }
+    if (index <= opaqueEnd) continue;
+    // Except for declared framing, original text owns structure and strings.
+    // Hidden discovery quotes must not turn string interiors into child records.
     const char = source[index];
     if (inString) {
       if (opts.recoverAtLineStart && (char === "\n" || char === "\r")) {

@@ -1,6 +1,6 @@
 export const ANSI_OSC_INTRODUCER_PATTERN = "(?:\\x1b\\]|\\x9d)";
 export const ANSI_STRING_TERMINATOR_PATTERN = "(?:\\x1b\\\\|\\x07|\\x9c)";
-const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*${ANSI_STRING_TERMINATOR_PATTERN}`;
+const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*(${ANSI_STRING_TERMINATOR_PATTERN})?`;
 export const ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN =
   "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 
@@ -12,10 +12,28 @@ type AnsiSegment =
   | { controls: string[]; kind: "ansi"; value: string }
   | { kind: "text"; value: string };
 
-export function matchAnsiOscAt(input: string, index: number): string | undefined {
+type AnsiOscScan = {
+  bodyEnd: number;
+  value: string | undefined;
+};
+
+/** bodyEnd is the UTF-16 offset of the first excluded character (or EOF), before any terminator. */
+export function scanAnsiOscAt(input: string, index: number): AnsiOscScan | undefined {
   // Reset the sticky matcher when callers interleave segment iterators.
   ansiOscAtIndexRegex.lastIndex = index;
-  return ansiOscAtIndexRegex.exec(input)?.[0];
+  const match = ansiOscAtIndexRegex.exec(input);
+  if (!match) return undefined;
+  const terminator = match[1];
+  // On failure, nested C1 openers before bodyEnd meet the same blocking byte.
+  // A forward caller can reuse that failure without skipping the underlying text.
+  return {
+    bodyEnd: index + match[0].length - (terminator?.length ?? 0),
+    value: terminator ? match[0] : undefined,
+  };
+}
+
+export function matchAnsiOscAt(input: string, index: number): string | undefined {
+  return scanAnsiOscAt(input, index)?.value;
 }
 
 type AnsiCsiScan = {
