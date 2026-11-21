@@ -167,6 +167,7 @@ export async function injectGatewayAssistantMessage(
     // The original append already published this message.
     return ok({ messageId: appended.messageId, replayed: true });
   }
+
   const message = projectChatDisplayMessage(appended.message, {
     maxChars: resolveEffectiveChatHistoryMaxChars(),
   });
