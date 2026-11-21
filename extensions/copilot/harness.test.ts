@@ -139,11 +139,7 @@ const failed = (reason: string, rawError?: string) => ({
   reason,
   failure: { reason, ...(rawError === undefined ? {} : { rawError }) },
 });
-async function flush() {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 function isolated(
   data: Extract<SessionEvent, { type: "assistant.message" }>["data"] = {
     content: "",
@@ -153,6 +149,7 @@ function isolated(
   const session = {
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
+    rpc: { remote: { disable: vi.fn().mockResolvedValue({}) } },
     sendAndWait: vi.fn().mockResolvedValue({ type: "assistant.message", data }),
   };
   const createSession = vi.fn().mockResolvedValue(session);
@@ -431,7 +428,7 @@ describe("Copilot harness", () => {
     const add = controller.signal.addEventListener.bind(controller.signal);
     vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
       add(...args);
-      if (++registrations === 5) {
+      if (++registrations === 6) {
         queueMicrotask(() => controller.abort(new Error("cancelled at send boundary")));
       }
     });
@@ -441,7 +438,8 @@ describe("Copilot harness", () => {
       "cancelled at send boundary",
     );
     await flush();
-    expect(registrations).toBe(5);
+    expect(registrations).toBe(6);
+    expect(f.session.rpc.remote.disable).toHaveBeenCalledOnce();
     expect(f.session.sendAndWait).not.toHaveBeenCalled();
     expect(f.session.abort).toHaveBeenCalledOnce();
     expect(f.session.disconnect).toHaveBeenCalledOnce();

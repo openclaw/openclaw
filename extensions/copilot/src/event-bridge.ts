@@ -49,6 +49,9 @@ export interface SessionLike {
     history?: {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };
+    remote?: {
+      disable?: () => Promise<unknown>;
+    };
   };
   send(options: MessageOptions): Promise<string>;
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;

@@ -6,6 +6,10 @@ import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js"
 
 type Request = { id: number; method: string; params: Record<string, unknown> };
 
+/** JSON-RPC MethodNotFound: the SDK falls back from optional RPCs only on this code. */
+const METHOD_NOT_FOUND = -32601;
+class MethodNotFoundError extends Error {}
+
 /** A loopback CLI protocol peer; the client, session, and tool dispatch are the real SDK. */
 export async function createCopilotFaultPeer() {
   const sent = createDeferred<void>();
@@ -16,6 +20,8 @@ export async function createCopilotFaultPeer() {
   let socket: Socket;
   let sessionId: string;
   let previousEventId: string | null = null;
+  // Tests assert this list so a newly required RPC cannot be silently treated as optional.
+  const unsupported: string[] = [];
   const send = (value: Record<string, unknown>) => {
     const bytes = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...value }));
     socket.write(`Content-Length: ${bytes.length}\r\n\r\n`);
@@ -48,7 +54,8 @@ export async function createCopilotFaultPeer() {
         await releaseDetach.promise;
         return { success: true };
       default:
-        throw new Error(`Unexpected Copilot fixture RPC: ${request.method}`);
+        unsupported.push(request.method);
+        throw new MethodNotFoundError(`Unsupported Copilot fixture RPC: ${request.method}`);
     }
   };
   const server = createServer((connected) => {
@@ -77,7 +84,7 @@ export async function createCopilotFaultPeer() {
             send({
               id: request.id,
               error: {
-                code: -32603,
+                code: error instanceof MethodNotFoundError ? METHOD_NOT_FOUND : -32603,
                 message: error instanceof Error ? error.message : String(error),
               },
             }),
@@ -91,6 +98,7 @@ export async function createCopilotFaultPeer() {
   });
   return {
     client,
+    unsupported,
     sent: sent.promise,
     detaching: detaching.promise,
     releaseDetach: () => releaseDetach.resolve(),
