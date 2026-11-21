@@ -539,7 +539,9 @@ it.each(
         timeoutForceKillOnLeaderExit: true,
       }),
     );
-    expect(f.managed.mock.calls[0][0].args).toContain(
+    const [managedCall] = f.managed.mock.calls;
+    assert.ok(managedCall);
+    expect(managedCall[0].args).toContain(
       mode === "candidate" ? "first-hop-tarball" : "openclaw@2026.10.9",
     );
     expect(f.parse).not.toHaveBeenCalled();
@@ -562,7 +564,9 @@ it("closes the first output after the second output cannot be opened", async () 
   await f.api.settle(() => f.api.run("probe", process.execPath, [], {}));
   expect(f.managed).not.toHaveBeenCalled();
   expect(f.close).toHaveBeenCalledTimes(1);
-  expect(() => fs.fstatSync(f.close.mock.calls[0][0])).toThrow();
+  const [closedCall] = f.close.mock.calls;
+  assert.ok(closedCall);
+  expect(() => fs.fstatSync(closedCall[0])).toThrow();
   const receipt = f.checkpoint().commands.at(-1);
   expect(receipt).toMatchObject({ status: "failed", error: String(error), outputComplete: false });
   expect(receipt.exit).toBeUndefined();
