@@ -405,6 +405,13 @@ it("refreshes source and lockfile changes without rewriting unchanged files", as
 });
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
+  const rm = fs.rm;
+  using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+    if (path.basename(String(target)) === "build" && options?.recursive) {
+      throw new Error("Bulk template cleanup entered the Gateway libuv pool");
+    }
+    return rm(target, options);
+  });
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, {

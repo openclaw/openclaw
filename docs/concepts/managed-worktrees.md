@@ -425,6 +425,10 @@ accounting, including macOS clones, increment `nativeCloneUnmeasuredCount` inste
 of reporting zero. Native copies require cloning; unsupported clones fail rather
 than silently copying the tree.
 
+Bulk template cleanup and interrupted projection replacement run in a bounded
+child process, leaving the Gateway's shared filesystem threadpool available for
+session reads and writes. Cleanup still finishes before the path is reused.
+
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
