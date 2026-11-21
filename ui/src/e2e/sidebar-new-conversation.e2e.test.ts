@@ -68,11 +68,16 @@ suite.define(() => {
         expect(await create.isVisible()).toBe(true);
         // Measure both controls in the same frame while the drawer slides in.
         const alignment = await nav.evaluate((element) => {
-          const plus = element
+          const railPlus = element
             .querySelector(".sidebar-rail .sidebar-new-session")!
             .getBoundingClientRect();
           const home = element.querySelector(".sidebar-footer-bar__home")!.getBoundingClientRect();
-          return { plusX: plus.x, homeX: home.x, plusBottom: plus.bottom, homeTop: home.top };
+          return {
+            plusX: railPlus.x,
+            homeX: home.x,
+            plusBottom: railPlus.bottom,
+            homeTop: home.top,
+          };
         });
         expect(alignment.plusX).toBe(alignment.homeX);
         expect(alignment.plusBottom).toBeLessThanOrEqual(alignment.homeTop);
