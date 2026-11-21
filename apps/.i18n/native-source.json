@@ -2978,7 +2978,6 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.db0d9bbc5a8807c0","source":"Pink"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9f5817fa7a3be383","source":"Purple"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c234c420c1015fa2","source":"Red"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.dc506b382cfda1a0","source":"Session color"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bab505a46a544c8d","source":"Yellow"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatRealtimeTalk.kt","kind":"ui-call","surface":"android","id":"native.android.84d5045fa8748d1a","source":"Microphone muted"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatRealtimeTalk.kt","kind":"ui-call","surface":"android","id":"native.android.716d03348ec56be7","source":"Microphone on"},
