@@ -61,7 +61,7 @@ The detail levels are:
 
 - **Private** — generic attention text only.
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload. [Notifications sent by plugins](#notifications-sent-by-plugins) show the sender's own short title and body at this level and at **Names only**.
 
 For browser **Agent finished** alerts, **Names only** and **Detailed** include the
 current explicit session label when the event has exactly one authoritative
@@ -91,9 +91,17 @@ To check targeting, have another eligible signed-in person select you from the c
 
 Plugins and operator clients can notify one person's browsers through the
 [`push.web.send`](/plugins/sdk-runtime/gateway-and-nodes#notify-a-persons-browsers)
-Gateway method. These sends reuse an existing category, so your category
-toggles, quiet hours, agent filter, and **Private** lock-screen text apply to
-them as well. Only browsers bound to that person's profile can receive them.
+Gateway method, but only while handling an authenticated request, not from
+background events. These sends reuse the agent completion, agent question, or
+scheduled-task failure category, so your category toggles, quiet hours, agent
+filter, and lock-screen detail apply to them as well. Categories you have not
+enabled block them.
+
+Only browsers bound to your profile can receive them. With **Private** detail
+(the default) you see the category's generic text. With **Names only** or
+**Detailed**, you see the sender's sanitized title and body on one line. When
+named operator roles are on, only you or an operator with `operator.admin` can
+send to your profile.
 
 ### Use more than one Gateway on one phone
 
