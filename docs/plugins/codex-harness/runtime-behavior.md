@@ -287,12 +287,12 @@ Escalation stays scoped to work that was actually refused:
   automatic retry. Doctor removes the retired `cyberFailover.model` setting and keeps
   `mode` and `cooloffMs`; ordinary configured model fallbacks remain separate.
 
-Before `turn/start`, the request owner checks the same native client's authenticated
-ChatGPT account and its model-specific `availableAccessPrograms`. Unknown or absent Blue
-capability leaves the original refusal intact without sending a Blue request. This
-integration does not support native API-key Access requests; use the OpenClaw Responses
-runtime for Platform API-key access. Catalog metadata is a prerequisite, not permission
-to ignore a later server denial or changed account.
+Before `turn/start`, OpenClaw checks the same native client's authenticated OpenAI
+account and the selected model's `availableAccessPrograms`. Its account check accepts
+ChatGPT and API-key accounts, but either still requires the native catalog to advertise
+the requested Access program. Unknown or absent Blue capability leaves the original
+refusal intact without sending a Blue request. Catalog metadata is a prerequisite, not
+permission to ignore a later server denial or changed account.
 
 A server authorization denial is remembered for the authenticated workspace/model for
 `cooloffMs`, so sibling sessions do not repeat the failed Blue request. This process-local
