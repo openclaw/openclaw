@@ -176,7 +176,7 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   expect(left).toMatchObject({ id: right?.id, status: "ready" });
   expect(right).toMatchObject({ status: "ready" });
   expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
-  expect(mutate).toHaveBeenCalledTimes(1);
+  expect(mutate).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
   assert(left && right, "Both callers must acquire the prepared template");
   const warm = await allocation.withWorktreeMutationLease(
     { env, ...options, id: `template:${params.cacheKey}` },

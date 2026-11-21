@@ -140,7 +140,10 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation joins that build. Linux Git and native clone
+requests for the same new commit join that build. A startup send whose accepted
+base already has a ready generation uses that generation, even while a different
+commit is building. This applies to both managed and sandbox templates and keeps
+the session’s HEAD, index, and dependencies on its accepted base. Linux Git and native clone
 children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.

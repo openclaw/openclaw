@@ -294,6 +294,7 @@ export const worktreeTemplateOperations = {
         | {
             selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> & {
               now?: number;
+              validatedId?: string;
             };
           }
       ),
@@ -318,9 +319,13 @@ export const worktreeTemplateOperations = {
         return undefined;
       }
       const unpublish = "id" in input && input.unpublish;
-      // Existing readers own validation; idle generations still require the
-      // exclusive owner. Admission and unpublication share this transaction.
-      if ("selection" in input && !hasTemplateReaders(db, row.id)) {
+      // Read-only validation may run beside a newer generation's build. Atomic
+      // ready selection still excludes retirement before acquiring this reader.
+      if (
+        "selection" in input &&
+        input.selection.validatedId !== row.id &&
+        !hasTemplateReaders(db, row.id)
+      ) {
         return undefined;
       }
       if (unpublish && hasTemplateReaders(db, row.id)) {

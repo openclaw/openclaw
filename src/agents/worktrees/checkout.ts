@@ -217,7 +217,10 @@ export async function prepareManagedWorktreeTemplate(options: CheckoutOptions) {
             setWorktreePreparationTemplate(undefined, { validationFailure: "checkout-policy" });
             return false;
           }
-          return await validateWorktreeTemplateStatus(existing, git, gitOptions(templateOptions));
+          return await validateWorktreeTemplateStatus(existing, git, {
+            ...gitOptions(templateOptions),
+            env: { GIT_OPTIONAL_LOCKS: "0" },
+          });
         },
         refresh: async (existing, preparing, templateOptions) => {
           // Attribute changes can transform unchanged blobs; rebuild those trees.
