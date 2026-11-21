@@ -45,7 +45,11 @@ const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/p
 
 function isMaiImageEditModel(modelName: string): boolean {
   const normalized = normalizeOptionalLowercaseString(modelName);
-  return normalized === "mai-image-2.5" || normalized === "mai-image-2.5-flash";
+  return (
+    normalized === "mai-image-2.6" ||
+    normalized === "mai-image-2.5" ||
+    normalized === "mai-image-2.5-flash"
+  );
 }
 
 function resolveMaiImageSize(size: string | undefined): { width: number; height: number } {
@@ -151,7 +155,7 @@ export default definePluginEntry({
         }
         if (mode === "edits" && !hasMetadata && !isFoundryMaiImageModel(model)) {
           throw new Error(
-            "Microsoft Foundry MAI image edits require MAI-Image-2.5 model metadata for custom deployment names.",
+            "Microsoft Foundry MAI image edits require MAI-Image-2.5 or MAI-Image-2.6 model metadata for custom deployment names.",
           );
         }
 

@@ -235,10 +235,24 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.images[0]?.buffer.toString()).toBe("edited");
   });
 
+  it.each([false, true])("routes MAI-Image-2.6 edits (custom deployment=%s)", async (custom) => {
+    http.postMultipartRequest.mockResolvedValue(
+      imageResponse(Buffer.from("edited").toString("base64")),
+    );
+    await generateImage({
+      model: custom ? "image-deployment" : "MAI-Image-2.6",
+      cfg: buildConfig({ includeModel: custom, modelName: "MAI-Image-2.6" }),
+      inputImages: [inputImage],
+    });
+    expect(requireRequest(http.postMultipartRequest).url).toBe(
+      "https://example.services.ai.azure.com/mai/v1/images/edits",
+    );
+  });
+
   it.each([
     ["", "MAI-Image-2.5", false, "requires a deployment name"],
     ["x", "MAI-Image-2e", true, "MAI-Image-2e does not support Microsoft Foundry MAI image edits."],
-    ["prod-image", undefined, true, "edits require MAI-Image-2.5 model metadata"],
+    ["prod-image", undefined, true, "edits require MAI-Image-2.5 or MAI-Image-2.6 model metadata"],
     ["gpt-deployment", "gpt-5.4", false, 'supports MAI image deployments only, got "gpt-5.4"'],
     ["MAI-DS-R1", undefined, false, 'supports MAI image deployments only, got "MAI-DS-R1"'],
   ] as const)("rejects %s / %s before auth (edit=%s)", async (model, modelName, edit, error) => {
