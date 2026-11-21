@@ -314,6 +314,10 @@ block its own next migration's exclusive lock. Exec approvals policy, local sock
 credentials, and verified rollback attribution retain their existing checks. This
 repair requires the candidate Doctor; the installed updater needs no change.
 
+When retrying an update from a restored 2026.9.37 profile, Doctor configures
+shared-state journaling before taking the exclusive schema migration lock. This
+lets the agent maintenance worker acquire its lease after shared-state migration.
+
 Gateway cleanup preserves retired managed npm plugin generations referenced by
 absolute or home-relative paths in startup or current configuration. This keeps
 explicit executable pins working after an update without rewriting their settings.
