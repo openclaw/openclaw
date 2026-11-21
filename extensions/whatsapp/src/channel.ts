@@ -10,6 +10,7 @@ import {
   createChatChannelPlugin,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -261,6 +262,22 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           await (
             await loadWhatsAppChannelRuntime()
           ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          // Bare login skips the setup wizard's personal/separate number question,
+          // so the runtime pairing default would send codes to the owner's contacts.
+          if (resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).dmPolicy) {
+            return;
+          }
+          const setupCommand = formatCliCommand(
+            resolvedAccountId === DEFAULT_ACCOUNT_ID
+              ? "openclaw channels add --channel whatsapp"
+              : `openclaw channels add --channel whatsapp --account ${resolvedAccountId}`,
+          );
+          runtime.log(
+            [
+              "WhatsApp DMs use the default pairing policy: anyone who messages this number gets a pairing code sent from it.",
+              `If this is your personal number, run \`${setupCommand}\` and choose the personal phone setup so OpenClaw answers only you.`,
+            ].join("\n"),
+          );
         },
       },
       heartbeat: {
