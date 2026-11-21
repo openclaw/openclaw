@@ -9,6 +9,76 @@ import { collectConfiguredPluginIds } from "./missing-configured-plugin-install.
 describe("Doctor plugin installation intent", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    expected: string[];
+  }>([
+    {
+      name: "uses the explicitly enabled Kimi plugin",
+      cfg: { plugins: { entries: { kimi: { enabled: true } } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key" },
+      expected: ["kimi"],
+    },
+    {
+      name: "uses the selected Kimi model",
+      cfg: { agents: { defaults: { model: { primary: "kimi/k3" } } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key" },
+      expected: ["kimi"],
+    },
+    {
+      name: "uses a configured Kimi auth alias",
+      cfg: { auth: { profiles: { coding: { provider: "kimi-coding", mode: "api_key" } } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key", MOONSHOT_API_KEY: "   " },
+      expected: ["kimi"],
+    },
+    {
+      name: "preserves unrelated environment discoveries",
+      cfg: { plugins: { entries: { kimi: {} } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key", GROQ_API_KEY: "test-groq-key" },
+      expected: ["kimi", "groq"],
+    },
+    {
+      name: "retains dedicated Moonshot credentials",
+      cfg: { plugins: { entries: { kimi: { enabled: true } } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key", MOONSHOT_API_KEY: "test-moonshot-key" },
+      expected: ["kimi", "moonshot"],
+    },
+    {
+      name: "retains an explicitly selected Moonshot plugin",
+      cfg: { plugins: { entries: { kimi: { enabled: true }, moonshot: { enabled: true } } } },
+      env: { KIMI_API_KEY: "test-shared-key" },
+      expected: ["kimi", "moonshot"],
+    },
+    {
+      name: "retains an explicitly selected Moonshot model",
+      cfg: {
+        plugins: { entries: { kimi: { enabled: true } } },
+        agents: { defaults: { model: { primary: "moonshot/kimi-k3" } } },
+      },
+      env: { KIMI_API_KEY: "test-shared-key" },
+      expected: ["kimi", "moonshot"],
+    },
+    {
+      name: "retains explicitly selected Moonshot web search",
+      cfg: {
+        plugins: { entries: { kimi: { enabled: true } } },
+        tools: { web: { search: { provider: "kimi" } } },
+      },
+      env: { KIMI_API_KEY: "test-shared-key" },
+      expected: ["kimi", "moonshot"],
+    },
+    {
+      name: "preserves discovery when neither provider is configured",
+      cfg: {},
+      env: { KIMI_API_KEY: "test-shared-key" },
+      expected: ["kimi", "moonshot"],
+    },
+  ])("$name when discovering shared environment credentials", ({ cfg, env, expected }) => {
+    expect(collectConfiguredPluginIds(cfg, env)).toEqual(new Set(expected));
+  });
+
   it("does not read unrelated provider catalogs for an environment-selected provider", () => {
     vi.spyOn(providerInstallCatalog, "resolveProviderInstallCatalogEntries").mockImplementation(
       () => {
