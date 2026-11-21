@@ -10,6 +10,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { SidebarPluginSection } from "./app-sidebar-pages.tsx";
 import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
@@ -72,9 +73,6 @@ const SidebarCustomize = lazy(() => import("./app-sidebar-customize.tsx"), {
   export: "SidebarCustomize",
 });
 
-const SidebarPluginSection = lazy(() => import("./app-sidebar-pages.tsx"), {
-  export: "SidebarPluginSection",
-});
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
