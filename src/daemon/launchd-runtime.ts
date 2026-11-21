@@ -76,39 +76,30 @@ export function launchAgentNeedsReloadSync(env: GatewayServiceEnv, timeoutMs = 2
     timeout: Math.max(1, Math.min(timeoutMs, 2_000)),
   };
   const loaded = spawnSync("launchctl", ["print", target], options);
-  if (
-    isLaunchctlNotLoaded({
-      code: loaded.status ?? 1,
-      termination: loaded.error ? "error" : loaded.signal ? "signal" : "exit",
-      stdout: loaded.stdout ?? "",
-      stderr: loaded.stderr ?? "",
-    })
-  ) {
+  const plist =
+    loaded.status === 0 && !loaded.error
+      ? spawnSync(
+          "/usr/bin/plutil",
+          ["-convert", "json", "-o", "-", "--", resolveLaunchAgentPlistPath(env)],
+          options,
+        )
+      : undefined;
+  if (!plist || plist.error || plist.status !== 0) {
     return false;
-  }
-  const plist = spawnSync(
-    "/usr/bin/plutil",
-    ["-convert", "json", "-o", "-", "--", resolveLaunchAgentPlistPath(env)],
-    options,
-  );
-  if (loaded.error || loaded.status !== 0 || plist.error || plist.status !== 0) {
-    return true;
   }
   try {
     const job = parseLaunchctlJob(loaded.stdout, target);
-    const definition = safeParseJsonRecord(plist.stdout);
-    const args = definition?.ProgramArguments;
-    // Unknown inspection also reloads: a restart is already authorized to stop this job.
+    const args = safeParseJsonRecord(plist.stdout)?.ProgramArguments;
+    // Only a known difference reloads; otherwise kickstart, which needs no readable plist.
     // Raw, operator-issued launchctl kickstart still uses launchd's cached definition.
     return (
-      !isStringArray(args) ||
-      args.length === 0 ||
-      !job.arguments?.length ||
-      (definition?.Program ?? args[0]) !== job.fields.get("program") ||
+      isStringArray(args) &&
+      args.length > 0 &&
+      Boolean(job.arguments?.length) &&
       !isDeepStrictEqual(args, job.arguments)
     );
   } catch {
-    return true;
+    return false;
   }
 }
 

@@ -83,6 +83,8 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
   const exited = new Promise((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+  // The detached child leads its own process group; killing the group takes its descendants too.
+  const group = -Number(child.pid);
   const run = { done: false };
   void exited.then(() => {
     run.done = true;
@@ -129,7 +131,7 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
     if (observed) {
       try {
         // The lane simulates a crash at this point: a graceful stop would defeat it.
-        process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
+        process.kill(group, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
       } catch {}
       Object.assign(record, {
         reached: true,
@@ -146,7 +148,7 @@ async function killAt(point, prefix, out, stdout, stderr, argv) {
   }
   if (!record.reached && !run.done) {
     try {
-      process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
+      process.kill(group, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill
     } catch {}
   }
   record.exit = await exited;
