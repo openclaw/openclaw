@@ -152,15 +152,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       return;
     }
     const prepare = async () => {
-      const pendingInlineCommands = runtime.context.theme.settings.chatInlineCommands
-        ? inlineCommandPresentation()
-        : undefined;
-      // Observe an early rejection while the snapshot is pending. The await below
-      // keeps failure reporting behind the same readiness boundary as success.
-      void pendingInlineCommands?.catch(() => undefined);
       await pendingSnapshot;
-      if (runtime.context.theme.settings.chatInlineCommands) {
-        preparedInlineCommands = await (pendingInlineCommands ?? inlineCommandPresentation());
+      if (!disposed && runtime.context.theme.settings.chatInlineCommands) {
+        preparedInlineCommands = await inlineCommandPresentation();
       }
     };
     // No live subscription starts until an enabled renderer can consume stdout.

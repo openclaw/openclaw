@@ -146,55 +146,44 @@ function pendingSnapshot() {
   return held;
 }
 
-it.each(["snapshot", "presentation"])(
-  "prepares saved-enabled startup concurrently and waits for both (%s first)",
-  async (first) => {
-    const snapshot = pendingSnapshot();
-    const held = createDeferred();
-    const prepared = held.promise.then(loadPresentation);
-    const loading = vi.spyOn(presentation, "inlineCommandPresentation").mockReturnValue(prepared);
-    onTestFinished(() => held.resolve());
-    const { pane, request } = savedInlinePane();
-    await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
-    if (first === "snapshot") {
-      snapshot.resolve();
-      await snapshot.promise;
-    } else {
-      held.resolve();
-      await prepared;
-    }
-    await vi.dynamicImportSettled();
-    flush();
-    expect(pane.state).toBeUndefined();
-    expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
-      false,
-    );
-    snapshot.resolve();
-    held.resolve();
-    await waitForSolid(() => {
-      expect(pane.querySelector("textarea")).not.toBeNull();
-      expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
-    });
-  },
-);
-
-it("does not let an early presentation failure bypass snapshot readiness", async () => {
-  const snapshot = pendingSnapshot();
+function pendingPresentation() {
   const held = createDeferred();
   const loading = vi
     .spyOn(presentation, "inlineCommandPresentation")
-    .mockReturnValue(held.promise.then(loadPresentation));
+    .mockImplementation(async () => {
+      await held.promise;
+      return loadPresentation();
+    });
   onTestFinished(() => held.resolve());
+  return { held, loading };
+}
+
+it("prepares saved-enabled presentation after the snapshot and before live admission", async () => {
+  const snapshot = pendingSnapshot();
+  const { held, loading } = pendingPresentation();
   const { pane, request } = savedInlinePane();
+  await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
+  expect(loading).not.toHaveBeenCalled();
+  snapshot.resolve();
   await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
-  held.reject(new Error("Synthetic early presentation failure"));
-  await vi.dynamicImportSettled();
-  flush();
   expect(pane.state).toBeUndefined();
   expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
     false,
   );
+  held.resolve();
+  await waitForSolid(() => {
+    expect(pane.querySelector("textarea")).not.toBeNull();
+    expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
+  });
+});
+
+it("reports presentation failure after snapshot readiness without admitting live output", async () => {
+  const snapshot = pendingSnapshot();
+  const { held, loading } = pendingPresentation();
+  const { pane } = savedInlinePane();
   snapshot.resolve();
+  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+  held.reject(new Error("Synthetic startup presentation failure"));
   await waitForSolid(() => {
     expect(pane.querySelector(".chat-error")?.textContent).toContain(
       "Grouped commands remain available",
@@ -203,33 +192,34 @@ it("does not let an early presentation failure bypass snapshot readiness", async
   });
 });
 
-it("does not wait for or report a disabled presentation during startup", async () => {
-  const snapshot = pendingSnapshot();
-  const held = createDeferred();
-  const loading = vi
-    .spyOn(presentation, "inlineCommandPresentation")
-    .mockReturnValue(held.promise.then(loadPresentation));
-  onTestFinished(() => held.resolve());
-  const { pane } = savedInlinePane();
-  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
-  patchSettings({ chatInlineCommands: false });
-  snapshot.resolve();
-  await waitForSolid(() => expect(pane.querySelector("textarea")).not.toBeNull());
-  held.reject(new Error("Disabled presentation failed"));
-  await vi.dynamicImportSettled();
-  flush();
-  expect(pane.querySelector(".chat-error")).toBeNull();
-  expect(pane.state.settings.chatInlineCommands).not.toBe(true);
-  expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).not.toBe(true);
-});
+it.each(["snapshot", "presentation"])(
+  "keeps inline mode disabled when changed during %s preparation",
+  async (phase) => {
+    const snapshot = pendingSnapshot();
+    const { held, loading } = pendingPresentation();
+    const { pane } = savedInlinePane();
+    await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
+    if (phase === "presentation") {
+      snapshot.resolve();
+      await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+    }
+    patchSettings({ chatInlineCommands: false });
+    snapshot.resolve();
+    if (phase === "presentation") {
+      held.reject(new Error("Disabled presentation failed"));
+    } else {
+      expect(loading).not.toHaveBeenCalled();
+    }
+    await waitForSolid(() => expect(pane.querySelector("textarea")).not.toBeNull());
+    expect(pane.querySelector(".chat-error")).toBeNull();
+    expect(pane.state.settings.chatInlineCommands).not.toBe(true);
+    expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).not.toBe(true);
+  },
+);
 
 it("prepares a presentation enabled while its startup snapshot is pending", async () => {
   const snapshot = pendingSnapshot();
-  const held = createDeferred();
-  const loading = vi
-    .spyOn(presentation, "inlineCommandPresentation")
-    .mockReturnValue(held.promise.then(loadPresentation));
-  onTestFinished(() => held.resolve());
+  const { held, loading } = pendingPresentation();
   const { pane, request } = savedInlinePane(false);
   await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
   expect(loading).not.toHaveBeenCalled();
@@ -247,25 +237,32 @@ it("prepares a presentation enabled while its startup snapshot is pending", asyn
   });
 });
 
-it("does not start a pane retired while startup preparation is pending", async () => {
-  const snapshot = pendingSnapshot();
-  const held = createDeferred();
-  const prepared = held.promise.then(loadPresentation);
-  const loading = vi.spyOn(presentation, "inlineCommandPresentation").mockReturnValue(prepared);
-  onTestFinished(() => held.resolve());
-  const { pane, request } = savedInlinePane();
-  await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
-  pane.disconnectedCallback();
-  snapshot.resolve();
-  held.resolve();
-  await prepared;
-  await vi.dynamicImportSettled();
-  flush();
-  expect(pane.state).toBeUndefined();
-  expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
-    false,
-  );
-});
+it.each(["snapshot", "presentation"])(
+  "does not start a pane retired during %s preparation",
+  async (phase) => {
+    const snapshot = pendingSnapshot();
+    const { held, loading } = pendingPresentation();
+    const { pane, request } = savedInlinePane();
+    await vi.waitFor(() => expect(snapshots.waitForPrewarmedChatSnapshot).toHaveBeenCalled());
+    if (phase === "presentation") {
+      snapshot.resolve();
+      await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
+    }
+    pane.disconnectedCallback();
+    snapshot.resolve();
+    held.resolve();
+    await loading.mock.results[0]?.value;
+    await vi.dynamicImportSettled();
+    flush();
+    if (phase === "snapshot") {
+      expect(loading).not.toHaveBeenCalled();
+    }
+    expect(pane.state).toBeUndefined();
+    expect(request.mock.calls.some(([method]) => method === "sessions.messages.subscribe")).toBe(
+      false,
+    );
+  },
+);
 
 it.each([false, true])(
   "recovers a mounted startup failure without clearing newer errors (%s)",
