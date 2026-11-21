@@ -9,6 +9,7 @@ import {
   type SessionCatalogSession,
   type SessionCatalogSourceProfileRelation,
 } from "openclaw/plugin-sdk/session-catalog";
+import { prepareStoredSessionControlUiPathResolver } from "openclaw/plugin-sdk/session-discussion";
 import type {
   SessionEntry,
   SessionStoreSelectedEntry,
@@ -21,11 +22,16 @@ import {
 import { sessionShareSelection } from "./config.js";
 
 export const SESSION_SHARE_LIST_COMMAND = "openclaw.sessions.list.v1";
+export const SESSION_SHARE_LIST_WITH_LINKS_COMMAND = "openclaw.sessions.list-with-links.v1";
+export const SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND =
+  "openclaw.sessions.list-for-profile-with-links.v1";
 export const SESSION_SHARE_READ_COMMAND = "openclaw.sessions.read.v1";
 export const SESSION_SHARE_FILTERED_LIST_COMMAND = "openclaw.sessions.list-for-profile.v1";
 export const SESSION_SHARE_FILTERED_READ_COMMAND = "openclaw.sessions.read-for-profile.v1";
 export const SESSION_SHARE_COMMANDS = [
   SESSION_SHARE_LIST_COMMAND,
+  SESSION_SHARE_LIST_WITH_LINKS_COMMAND,
+  SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND,
   SESSION_SHARE_READ_COMMAND,
   SESSION_SHARE_FILTERED_LIST_COMMAND,
   SESSION_SHARE_FILTERED_READ_COMMAND,
@@ -99,7 +105,6 @@ function withSharedEntries<T>(
       stores,
       involvingProfileId: selection?.involvingProfileId,
       profileRelation,
-      ...(profileRelation ? { config } : {}),
     },
     (entries) => {
       // Configuration can be edited in place while either worker prepares its facts.
@@ -209,8 +214,14 @@ export function createSessionShareNodeCommands(
     );
   }
   const commands: OpenClawPluginNodeHostCommand[] = [
-    {
-      command: filtered ? SESSION_SHARE_FILTERED_LIST_COMMAND : SESSION_SHARE_LIST_COMMAND,
+    ...[false, true].map((includeLinks): OpenClawPluginNodeHostCommand => ({
+      command: filtered
+        ? includeLinks
+          ? SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND
+          : SESSION_SHARE_FILTERED_LIST_COMMAND
+        : includeLinks
+          ? SESSION_SHARE_LIST_WITH_LINKS_COMMAND
+          : SESSION_SHARE_LIST_COMMAND,
       hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
@@ -224,6 +235,9 @@ export function createSessionShareNodeCommands(
         if (filtered && !params.profileRelation) {
           throw new Error("A relationship filter is required");
         }
+        const resolveOriginalPath = includeLinks
+          ? await prepareStoredSessionControlUiPathResolver()
+          : undefined;
         const offset = sessionCatalogPaging.decodeCursor(params.cursor, params.profileRelation);
         const search = params.searchTerm?.toLowerCase().normalize("NFC");
         const sessions = [];
@@ -308,7 +322,13 @@ export function createSessionShareNodeCommands(
               throw new Error("Session is no longer shared. Refresh the session catalog.");
             }
             const page = selected.map(
-              ({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
+              ({
+                agentId,
+                threadId,
+                name,
+                entry,
+                recencyAt,
+              }): SessionCatalogSession & { originalPath?: string } => {
                 const archived = entry.archivedAt !== undefined;
                 const cwd =
                   entry.execCwd ??
@@ -318,6 +338,11 @@ export function createSessionShareNodeCommands(
                   entry.worktree?.repoRoot;
                 return {
                   threadId,
+                  originalPath: resolveOriginalPath?.({
+                    config: api.runtime.config.current(),
+                    agentId,
+                    sessionKey: threadId,
+                  }),
                   name,
                   color: entry.color,
                   cwd: cwd ? cwd.slice(0, 6000) : undefined,
@@ -352,7 +377,7 @@ export function createSessionShareNodeCommands(
           params.profileRelation,
         );
       },
-    },
+    })),
     {
       command: filtered ? SESSION_SHARE_FILTERED_READ_COMMAND : SESSION_SHARE_READ_COMMAND,
       hasActiveWork: () => false,

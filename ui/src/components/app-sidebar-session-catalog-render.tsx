@@ -114,6 +114,7 @@ function renderCatalogHostGroup(
     );
     const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
       key: catalogKey(),
+      originalUrl: readSession().originalUrl,
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,

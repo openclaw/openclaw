@@ -21,11 +21,18 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sessionShareNodeBinding } from "./config.js";
 import {
   SESSION_SHARE_FILTERED_LIST_COMMAND,
+  SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND,
   SESSION_SHARE_FILTERED_READ_COMMAND,
   SESSION_SHARE_LIST_COMMAND,
+  SESSION_SHARE_LIST_WITH_LINKS_COMMAND,
   SESSION_SHARE_READ_COMMAND,
 } from "./node-commands.js";
-import { parseSessionSharePage, parseSessionShareTranscriptPage } from "./wire.js";
+import { sessionShareOriginalUrl } from "./original-url.js";
+import {
+  parseSessionSharePage,
+  parseSessionShareTranscriptPage,
+  type SessionShareSession,
+} from "./wire.js";
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 type GitHubLinker = Awaited<ReturnType<typeof prepareSessionCatalogGitHubLinker>>;
@@ -34,7 +41,7 @@ type NodeSnapshot = {
   node: CatalogNode;
   config: ReturnType<PluginRuntime["config"]["current"]>;
   scope: PluginServiceSchedulerV1;
-  sessions?: SessionCatalogSession[];
+  sessions?: SessionShareSession[];
   refreshedAt: number;
   retryMs: number;
   pending?: Promise<void>;
@@ -170,11 +177,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
   const refreshes = createPermitPool(MAX_REFRESHES);
   const bindingFor = (nodeId: string) =>
     sessionShareNodeBinding(api.runtime.config.current(), nodeId);
-  const bindSessions = async (
-    nodeId: string,
-    hostId: string,
-    sessions: SessionCatalogSession[],
-  ) => {
+  const bindSessions = async (nodeId: string, hostId: string, sessions: SessionShareSession[]) => {
     const binding = bindingFor(nodeId);
     const linker =
       binding.owner || binding.linkGitHubIdentities
@@ -189,7 +192,16 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         : undefined;
     const owner = binding.owner ? linker?.resolveOwner(binding.owner) : undefined;
     const linkParticipant = binding.linkGitHubIdentities ? linker?.linkParticipant : undefined;
-    return sessions.map((session) => bindSession(session, hostId, owner, linkParticipant));
+    return sessions.map(({ originalPath, ...session }) =>
+      Object.assign(bindSession(session, hostId, owner, linkParticipant), {
+        originalUrl: sessionShareOriginalUrl(
+          binding.controlUiOrigin,
+          session.threadId,
+          originalPath,
+          binding.controlUiBasePath,
+        ),
+      }),
+    );
   };
   const current = (entry: NodeSnapshot) =>
     !entry.scope.signal.aborted &&
@@ -201,7 +213,11 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     void entry.scope.stop();
   };
   const sameConnection = (entry: NodeSnapshot, node: CatalogNode | undefined) =>
-    node?.connected && isSessionHost(node) && node.connectedAtMs === entry.node.connectedAtMs;
+    node?.connected &&
+    isSessionHost(node) &&
+    node.connectedAtMs === entry.node.connectedAtMs &&
+    node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND) ===
+      entry.node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND);
 
   function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
     if (entry.pending) {
@@ -226,7 +242,10 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           const snapshot = await observeCatalogRefresh(
             async () => {
               const deadline = performance.now() + REFRESH_BUDGET_MS;
-              const sessions: SessionCatalogSession[] = [];
+              const sessions: SessionShareSession[] = [];
+              const includeLinks =
+                Boolean(bindingFor(entry.node.nodeId).controlUiOrigin) &&
+                entry.node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND) === true;
               let cursor: string | undefined;
               let bytes = 0;
               do {
@@ -240,11 +259,14 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 const page = parseSessionSharePage(
                   await owner.invokeNode({
                     nodeId: entry.node.nodeId,
-                    command: SESSION_SHARE_LIST_COMMAND,
+                    command: includeLinks
+                      ? SESSION_SHARE_LIST_WITH_LINKS_COMMAND
+                      : SESSION_SHARE_LIST_COMMAND,
                     params: { limit: 100, ...(cursor ? { cursor } : {}) },
                     timeoutMs,
                     signal,
                   }),
+                  includeLinks,
                 );
                 bytes += Buffer.byteLength(JSON.stringify(page));
                 if (
@@ -437,9 +459,14 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
       }
       try {
+        const includeLinks =
+          Boolean(bindingFor(node.nodeId).controlUiOrigin) &&
+          node.commands?.includes(SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND) === true;
         const raw = await owner.invokeNode({
           nodeId: node.nodeId,
-          command: SESSION_SHARE_FILTERED_LIST_COMMAND,
+          command: includeLinks
+            ? SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND
+            : SESSION_SHARE_FILTERED_LIST_COMMAND,
           params: {
             limit,
             profileRelation: query.profileRelation,
@@ -449,7 +476,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           timeoutMs: 30_000,
           signal,
         });
-        const page = parseSessionSharePage(raw, query.profileRelation);
+        const page = parseSessionSharePage(raw, includeLinks, query.profileRelation);
         signal?.throwIfAborted();
         const host = {
           ...common,
@@ -512,6 +539,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const host: SessionCatalogHost = {
         ...common,
         sessions: selected,
+
         ...(offset + limit < sessions.length
           ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit) }
           : {}),

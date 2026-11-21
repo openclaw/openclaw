@@ -13,7 +13,7 @@ import {
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
 
 const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
@@ -642,4 +642,79 @@ it("keeps configured owner and portable identity attribution on filtered node pa
   );
   await f.hydrate();
   expect((await f.host())?.sessions).toEqual(filtered?.sessions);
+});
+
+describe("optional source-link command", () => {
+  const linkedCommand = "openclaw.sessions.list-with-links.v1";
+  const originalPath = "/chat/main/shared";
+  const configure = () => {
+    f.configure({
+      plugins: {
+        entries: {
+          "session-share": {
+            config: {
+              nodes: {
+                alpha: { controlUiOrigin: "https://source.example", controlUiBasePath: "/control" },
+              },
+            },
+          },
+        },
+      },
+    });
+  };
+  const linkedNode = { nodeId: "alpha", connected: true, commands: [...commands, linkedCommand] };
+
+  it.each([false, true])("uses the advertised link variant (filtered: %s)", async (filtered) => {
+    configure();
+    const command = filtered ? "openclaw.sessions.list-for-profile-with-links.v1" : linkedCommand;
+    const profileRelation = filtered
+      ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
+      : undefined;
+    f.list.mockResolvedValue({
+      nodes: [
+        {
+          ...linkedNode,
+          commands: [
+            ...linkedNode.commands,
+            "openclaw.sessions.list-for-profile.v1",
+            "openclaw.sessions.read-for-profile.v1",
+            command,
+          ],
+        },
+      ],
+    });
+    f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
+    expect((await f.host({ profileRelation }))?.sessions).toEqual([
+      { ...nativeSession, originalUrl: "https://source.example/control/chat/main/shared" },
+    ]);
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command }));
+  });
+
+  it("keeps an old source readable with visible unavailable navigation", async () => {
+    configure();
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: commands[0] }),
+    );
+  });
+
+  it("withdraws an in-flight linked snapshot when the command is removed without reconnecting", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    const gate = createDeferred<unknown>();
+    f.invoke.mockImplementationOnce(() => gate.promise);
+    const publication = await f.watch();
+    await vi.advanceTimersByTimeAsync(2);
+    f.nodes("alpha");
+    await f.begin();
+    gate.resolve({ sessions: [{ ...nativeSession, originalPath }] });
+    await publication.done();
+    expect(publication.onHost.mock.calls.flatMap(([host]) => host.sessions)).toEqual([]);
+    f.invoke.mockResolvedValue({ sessions: [nativeSession] });
+    await f.expectSessions();
+    expect(f.invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      linkedCommand,
+      commands[0],
+    ]);
+  });
 });

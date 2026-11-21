@@ -71,7 +71,9 @@ export function sessionCatalogListKey(params: {
     params.allowPartialResults,
     params.search ?? null,
     params.request.profileRelation ?? null,
-    params.client?.authenticatedUserProfile?.profileId ?? null,
+    params.request.profileRelation
+      ? (params.client?.authenticatedUserProfile?.profileId ?? null)
+      : null,
     params.request.limitPerHost ?? null,
     params.request.hostIds ?? null,
     cursors,

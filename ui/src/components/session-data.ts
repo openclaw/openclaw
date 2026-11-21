@@ -98,18 +98,15 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private catalogRelationKey: string | undefined;
   get sessionCatalogProfileRelation(): SessionCatalogProfileRelation | undefined {
     const { ownerId, involvingMe } = this.inputs.sidebarSessionOwnerFilter();
-    if (involvingMe) {
-      return { relationship: "involving", target: { type: "me" } };
-    }
-    if (!ownerId) {
+    if (!involvingMe && !ownerId) {
       return undefined;
     }
     return {
-      relationship: "owned",
+      relationship: involvingMe ? "involving" : "owned",
       target:
-        ownerId === this.context.gateway.snapshot.selfUser?.id
-          ? { type: "me" }
-          : { type: "local-profile", id: ownerId },
+        ownerId && !involvingMe && ownerId !== this.context.gateway.snapshot.selfUser?.id
+          ? { type: "local-profile", id: ownerId }
+          : { type: "me" },
     };
   }
   sessionCatalogAgentId: string | null = null;

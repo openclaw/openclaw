@@ -3,7 +3,6 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareSessionCatalogRelationIdentity } from "../gateway/session-catalog-identity.js";
 import {
   filterSessionEntriesByProfile,
@@ -40,7 +39,6 @@ export async function withSessionEntriesAsync<T>(
     env?: NodeJS.ProcessEnv;
     involvingProfileId?: string;
     profileRelation?: SessionCatalogSourceProfileRelation;
-    config?: OpenClawConfig;
   },
   consume: (entries: SessionStoreSelectedEntry[]) => T,
 ): Promise<T> {
@@ -114,7 +112,7 @@ export async function withSessionEntriesAsync<T>(
                   );
                 }
               }
-              const owner = projectSessionOwner(entry, identities, params.config ?? {})?.actor;
+              const owner = projectSessionOwner(entry, identities, {})?.actor;
               return relation.relationship === "owned"
                 ? owner?.identity?.type === "profile" && owner.identity.id === profile.profileId
                 : projectSessionRelatedProfileIds(entry, identities, owner).has(profile.profileId);

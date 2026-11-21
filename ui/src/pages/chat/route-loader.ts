@@ -6,18 +6,12 @@ import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-ro
 import type { ApplicationContext as FullApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
-import {
-  buildCatalogSessionKey,
-  catalogSessionKeyFromSearch,
-} from "../../lib/sessions/catalog-key.ts";
+import { catalogSessionKeyFromSearch } from "../../lib/sessions/catalog-key.ts";
 import {
   homeSessionRequiresConfirmation,
   resolveHomeSession,
 } from "../../lib/sessions/home-session.ts";
-import {
-  consumeSessionNavigationHandoff,
-  prepareSessionNavigationHandoff,
-} from "../../lib/sessions/navigation-handoff.ts";
+import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   resolveSessionPreferredFace,
@@ -55,16 +49,19 @@ import type { ChatRouteData } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
 
-function locationWithoutSearchParam(location: RouteLocation, key: string): RouteLocation {
+function locationWithoutSearchParam(location: RouteLocation, ...keys: string[]): RouteLocation {
   const params = new URLSearchParams(location.search);
-  params.delete(key);
+  for (const key of keys) {
+    params.delete(key);
+  }
   const search = params.toString();
   return { ...location, search: search ? `?${search}` : "" };
 }
 
 function locationWithoutNavigationHints(location: RouteLocation): RouteLocation {
   return locationWithoutSearchParam(
-    locationWithoutSearchParam(location, SESSION_FACE_PREFERENCE_PARAM),
+    location,
+    SESSION_FACE_PREFERENCE_PARAM,
     SESSION_NAVIGATION_KEY_PARAM,
   );
 }
@@ -331,63 +328,20 @@ export async function loadChatRoute(
     (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
-    const { resolveCatalogContinuation } = await import("./route-loader-catalog-share.runtime.ts");
-    const continued = await resolveCatalogContinuation(context, catalogKey, target.agentId, signal);
-    if (continued) {
-      return { kind: "session", ...continued, ...sessionRouteHints(routeLocation), face };
-    }
-    const sessionKey = buildCatalogSessionKey(catalogKey);
-    const routedSessionKey = buildCatalogSessionKey(catalogKey, target.agentId);
-    const handoff = consumeSessionNavigationHandoff(
-      context.gateway,
-      routeLocation.pathname,
-      routedSessionKey,
+    const { loadCatalogSessionRoute } = await import("./route-loader-catalog-share.runtime.ts");
+    return loadCatalogSessionRoute(
+      {
+        ...presentation,
+        key: catalogKey,
+        agentId: target.agentId,
+        signal,
+        revalidation,
+      },
+      configuredMainKey,
+      locationWithoutNavigationHints,
     );
-    const catalogProfileRelation = handoff
-      ? handoff.catalogProfileRelation
-      : revalidation?.sessionKey === routedSessionKey
-        ? revalidation.catalogProfileRelation
-        : undefined;
-    let canonicalLocation = preferenceDerived
-      ? locationWithoutNavigationHints(routeLocation)
-      : null;
-    let resolvedFace = face;
-    if (preferenceDerived) {
-      const resolution = await resolveReference(sessionKey);
-      if (resolution?.kind === "unique") {
-        resolvedFace = resolveSessionPreferredFace(resolution.session);
-        const pathname = pathForSession(
-          resolvedFace,
-          target.agentId,
-          mainSessionKey(context, target),
-          context.basePath,
-          { mainKey: configuredMainKey(context) },
-        );
-        if (pathname) {
-          canonicalLocation = { ...locationWithoutNavigationHints(routeLocation), pathname };
-        }
-      }
-    }
-    if (canonicalLocation && catalogProfileRelation && isResolutionSourceCurrent()) {
-      prepareSessionNavigationHandoff(
-        context.gateway,
-        canonicalLocation.pathname,
-        routedSessionKey,
-        catalogProfileRelation,
-      );
-    }
-    return {
-      kind: "session",
-      sessionKey: routedSessionKey,
-      ...(catalogProfileRelation ? { catalogProfileRelation } : {}),
-      agentId: target.agentId,
-      ...sessionRouteHints(routeLocation),
-      face: resolvedFace,
-      // Non-null only on a preference-derived open, where it always at least drops the
-      // marker from the URL.
-      ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: routeLocation } : {}),
-    };
   }
+
   if (target.kind === "main") {
     if (preferenceDerived || !defaultsUsable) {
       await waitForGatewayClient(context.gateway, signal);
@@ -671,14 +625,13 @@ export async function loadSessionPage(
       : undefined;
   // SAFETY: Matching this face selects only this page's loadChatRoute result.
   const data = current?.data as ChatRouteData | undefined;
-  const { sessionKey, catalogProfileRelation } = data?.kind === "session" ? data : {};
   // Revalidating an established link must not adopt another session with the same prefix.
   const result = await loadChatRoute(
     context,
     location,
     face,
     signal,
-    cause === "revalidate" ? { sessionKey, catalogProfileRelation } : undefined,
+    cause === "revalidate" && data?.kind === "session" ? data : undefined,
   );
   if ("kind" in result && result.kind === "session") {
     const creation = context.chatSubmissions.creationFor(result.sessionKey);

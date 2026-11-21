@@ -78,6 +78,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     }
   }
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
+    this.catalogLoadGeneration += 1;
     this.catalogRequestedSessionKey = this.sessionKey;
     this.history.catalogMessages = [];
     this.history.catalogCursor = undefined;

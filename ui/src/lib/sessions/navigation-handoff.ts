@@ -110,5 +110,5 @@ export function consumeSessionNavigationHandoff(
   if (handoff.client !== client || handoff.hello !== hello) {
     return undefined;
   }
-  return { sessionKey: handoff.sessionKey, catalogProfileRelation: handoff.catalogProfileRelation };
+  return handoff;
 }

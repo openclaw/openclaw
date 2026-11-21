@@ -238,7 +238,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                     : {}),
                 },
               );
-              const page = parseSessionSharePage(raw, query.profileRelation);
+              const page = parseSessionSharePage(raw, false, query.profileRelation);
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {

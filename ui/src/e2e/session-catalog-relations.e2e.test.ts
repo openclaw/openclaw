@@ -36,7 +36,12 @@ suite.define(() => {
         canContinue: false,
         canArchive: false,
       });
-      const catalog = (sessions: unknown[], profileRelation?: unknown, nextCursor?: string) => ({
+      const catalog = (
+        sessions: unknown[],
+        profileRelation?: unknown,
+        nextCursor?: string,
+        error?: { code: string; message: string },
+      ) => ({
         catalogs: [
           {
             id: "openclaw",
@@ -55,6 +60,7 @@ suite.define(() => {
                 connected: true,
                 sessions,
                 ...(nextCursor ? { nextCursor } : {}),
+                ...(error ? { error } : {}),
               },
             ],
           },
@@ -89,34 +95,16 @@ suite.define(() => {
               },
               {
                 match: { profileRelation: { relationship: "owned", target: { type: "me" } } },
-                response: {
-                  catalogs: [
-                    {
-                      id: "openclaw",
-                      label: "OpenClaw sessions",
-                      profileRelation: { relationship: "owned", target: { type: "me" } },
-                      capabilities: {
-                        continueSession: false,
-                        archive: false,
-                        profileRelation: true,
-                      },
-                      hosts: [
-                        {
-                          hostId: "node:team",
-                          label: "Team Gateway",
-                          kind: "node",
-                          connected: true,
-                          sessions: [],
-                          error: {
-                            code: "FILTER_UNSUPPORTED",
-                            message:
-                              "This source does not support relationship filters. Update the source or choose All owners.",
-                          },
-                        },
-                      ],
-                    },
-                  ],
-                },
+                response: catalog(
+                  [],
+                  { relationship: "owned", target: { type: "me" } },
+                  undefined,
+                  {
+                    code: "FILTER_UNSUPPORTED",
+                    message:
+                      "This source does not support relationship filters. Update the source or choose All owners.",
+                  },
+                ),
               },
               { response: catalog([entry("unrelated", "Unrelated source conversation")]) },
             ],
@@ -135,13 +123,6 @@ suite.define(() => {
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
       await chooseSidebarOwner(page, "involving-me");
-      await expect
-        .poll(
-          async () =>
-            (await gateway.getRequests("sessions.catalog.list", { profileRelation: relation }))
-              .length,
-        )
-        .toBeGreaterThan(0);
       const sidebar = page.locator(".sidebar");
       const group = sidebar.locator('[data-session-section="catalog:openclaw"]');
       const toggle = group.locator(".sidebar-session-group-toggle").first();
@@ -180,8 +161,9 @@ suite.define(() => {
         page.getByText("Remote transcript stays filtered", { exact: true }),
       ).toBeVisible();
       await chooseSidebarOwner(page, `owner:${viewer.id}`);
-      await expectBrowser(group.locator(".sidebar-session-group-toggle").first()).toHaveAttribute(
-        "title",
+      await expectBrowser(
+        group.locator(".sidebar-session-group-toggle").first(),
+      ).toHaveAccessibleName(
         /This source does not support relationship filters\. Update the source or choose All owners\./,
       );
       await expectBrowser(

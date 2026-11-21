@@ -66,6 +66,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 });
 
 export const SessionCatalogSessionSchema = closedObject({
+  originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),

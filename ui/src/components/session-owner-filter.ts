@@ -138,9 +138,9 @@ export function createSessionOwnerFilterQuery(
       if (prior !== current) {
         if (prior) {
           host.sessionData.resetSessionList();
+          host.sessionData.synchronizeSessionScope();
+          void host.sessionData.refreshSessionCatalogs();
         }
-        host.sessionData.synchronizeSessionScope();
-        void host.sessionData.refreshSessionCatalogs();
         // Empty owner facets never replace an explicit selection with a broader query.
         void (userIntent
           ? host.sessionData.refreshSidebarSessions()
