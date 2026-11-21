@@ -181,7 +181,10 @@ export class SessionManagerCore extends SessionManagerNavigation {
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.pendingWritableTranscriptEntries = partitioned.pendingWritableTranscriptEntries;
-    this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
+    // The persistence target is the canonical identity. A legacy header id that drifted from its
+    // session row must not leak into reply operations, or settlement sees a phantom rotation.
+    const targetSessionId = target?.sessionId.trim() ? target.sessionId : undefined;
+    this.sessionId = targetSessionId ?? header?.id ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
