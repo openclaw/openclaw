@@ -77,9 +77,7 @@ async function readResizeDimensions(
         }
         const height = header.getUint16(5);
         const width = header.getUint16(7);
-        // A bounded downscale may admit phone photos above the default 25 MP
-        // media limit. Do not remove source admission just because output is small.
-        if (width === 0 || height === 0 || width * height > MAX_JPEG_SOURCE_PIXELS) {
+        if (width === 0 || height === 0) {
           throw new Error("JPEG dimensions exceed the resize budget");
         }
         return { width, height };
@@ -105,8 +103,8 @@ async function readResizeDimensions(
   }
   const width = header.getUint32(16);
   const height = header.getUint32(20);
-  // Bound source allocation before decode, independently of the output canvas.
-  if (width === 0 || height === 0 || width * height > 25_000_000) {
+  // Reject invalid dimensions before considering browser preparation.
+  if (width === 0 || height === 0) {
     throw new Error("PNG dimensions exceed the resize budget");
   }
   return { width, height };
@@ -149,6 +147,18 @@ export async function resizeChatAttachmentImage(
 ): Promise<File> {
   signal.throwIfAborted();
   const { width, height } = await readResizeDimensions(file, signal);
+  const sourcePixelLimit = file.type === "image/jpeg" ? MAX_JPEG_SOURCE_PIXELS : 25_000_000;
+  if (width * height > sourcePixelLimit) {
+    // The browser decode budget must not reject byte-valid uploads that the server supports.
+    if (file.size <= maxBytes) {
+      return file;
+    }
+    throw new Error(
+      file.type === "image/jpeg"
+        ? "JPEG dimensions exceed the resize budget"
+        : "PNG dimensions exceed the resize budget",
+    );
+  }
   if (file.size <= maxBytes && Math.max(width, height) <= 4096) {
     return file;
   }

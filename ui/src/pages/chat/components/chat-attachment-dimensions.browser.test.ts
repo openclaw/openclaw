@@ -6,7 +6,7 @@ import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
 import { appendChatAttachmentFiles, handleChatAttachmentPaste } from "./chat-attachments.ts";
 
-async function jpeg(width: number, height: number): Promise<File> {
+async function jpeg(width: number, height: number, mimeType = "image/jpeg"): Promise<File> {
   const canvas = document.createElement("canvas");
   Object.assign(canvas, { width, height });
   try {
@@ -15,11 +15,11 @@ async function jpeg(width: number, height: number): Promise<File> {
     context.fillRect(0, 0, width, height);
     const blob = expectDefined(
       await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, "image/jpeg", 0.9);
+        canvas.toBlob(resolve, mimeType, 0.9);
       }),
       "fixture JPEG",
     );
-    return new File([blob], "synthetic.jpg", { type: "image/jpeg", lastModified: 1234 });
+    return new File([blob], "synthetic-image", { type: mimeType, lastModified: 1234 });
   } finally {
     canvas.width = canvas.height = 0;
   }
@@ -88,9 +88,28 @@ describe.runIf("__vitest_browser__" in globalThis)("dimension-aware attachment p
       { type: "image/jpeg" },
     );
     await expect(
-      resizeChatAttachmentImage(source, 6 * 1024 * 1024, new AbortController().signal, () => {}),
+      resizeChatAttachmentImage(source, source.size - 1, new AbortController().signal, () => {}),
     ).rejects.toThrow("JPEG dimensions exceed the resize budget");
   });
+
+  it.each([
+    [8000, 6000, "image/jpeg"],
+    [5120, 10472, "image/png"],
+  ] as const)(
+    "preserves byte-valid %sx%s %s beyond the browser decode cap",
+    async (width, height, type) => {
+      const source = await jpeg(width, height, type);
+      expect(source.size).toBeLessThan(6 * 1024 * 1024);
+      expect(
+        await resizeChatAttachmentImage(
+          source,
+          6 * 1024 * 1024,
+          new AbortController().signal,
+          () => {},
+        ),
+      ).toBe(source);
+    },
+  );
 
   it("preserves cancellation before header inspection", async () => {
     const controller = new AbortController();
