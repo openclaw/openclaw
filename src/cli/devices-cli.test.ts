@@ -17,7 +17,9 @@ const mocks = vi.hoisted(() => ({
   summarizeDeviceTokens: vi.fn(),
 }));
 const { runtime, callGateway, listDevicePairing, approveDevicePairing } = mocks;
-vi.mock("../gateway/call.js", () => ({
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  isImplicitLocalGatewayTarget: async () => false,
   callGateway: mocks.callGateway,
   formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
   buildGatewayConnectionDetails: () => ({
