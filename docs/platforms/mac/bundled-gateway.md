@@ -19,21 +19,21 @@ another one. Independently managed Gateways keep their existing lifecycle.
 For first-time setup, start with [Onboarding (macOS app)](/start/onboarding).
 This page covers local hosting, updates, recovery, and runtime details.
 
-## Automatic setup
+## First-run setup
 
-On a fresh local setup with no configuration or saved connections, opening the
-app shows **Setting up OpenClaw on this Mac**. The app prepares its runtime,
-starts the Gateway, and opens automatic setup in the dashboard.
+<a id="automatic-setup" />
 
-- Choose **Set up manually** to use native setup. Its **Getting things ready**
-  page prepares the same runtime when needed.
+On a fresh setup, choose **Use this Mac** on the welcome screen. The app
+prepares its runtime, starts the Gateway, and continues to AI setup.
+
+- **Getting things ready** shows each step. If one fails, the error stays on
+  that page and **Try again** retries it.
 - Existing configurations keep their connection.
 - Setup needs no runtime download, Terminal, Homebrew, or administrator access.
   Connecting an AI provider may still need internet access.
-- Setup waits while Gateway startup retries. If startup fails, the relevant
-  native setup step opens. Failure or cancellation leaves onboarding unfinished.
+- Closing setup early leaves onboarding unfinished; reopen it from the app menu.
 
-See [Onboarding (macOS app)](/start/onboarding) for eligibility and fallbacks.
+See [Onboarding (macOS app)](/start/onboarding) for the full flow.
 
 ### Terminal commands
 

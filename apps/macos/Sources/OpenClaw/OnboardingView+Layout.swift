@@ -317,7 +317,7 @@ extension OnboardingView {
     }
 
     var navigationBar: some View {
-        let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
+        let connectionLockIndex = pageOrder.firstIndex(of: welcomePageIndex)
         let findLockIndex = pageOrder.firstIndex(of: findPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
@@ -399,7 +399,6 @@ extension OnboardingView {
 
     private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
         switch pageIndex {
-        case self.connectionPageIndex: "Where should your assistant run?"
         case self.findPageIndex: "Find your OpenClaw"
         case self.reachabilityPageIndex: "Reach it from anywhere?"
         case self.cliPageIndex: "Getting things ready"
@@ -443,13 +442,7 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureRow(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        buttonTitle: String? = nil,
-        action: (() -> Void)? = nil) -> some View
-    {
+    func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
                 .font(.title3.weight(.semibold))
@@ -460,11 +453,6 @@ extension OnboardingView {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                if let buttonTitle, let action {
-                    Button(buttonTitle, action: action)
-                        .buttonStyle(.link)
-                        .padding(.top, 2)
-                }
             }
             Spacer(minLength: 0)
         }

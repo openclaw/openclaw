@@ -855,7 +855,9 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
             .compactMap(\.self)
         if element.accessibilityRole?() == .button,
            element.isAccessibilityEnabled?() == true,
-           text.contains(where: { $0 == title || (title == "API Keys" && $0.contains(title)) })
+           // Choice rows combine their title and subtitle into one label.
+           text.contains(where: { $0 == title || $0.hasPrefix("\(title),") ||
+               (title == "API Keys" && $0.contains(title)) })
         {
             matches.append(element)
         }
@@ -3448,33 +3450,33 @@ struct OnboardingAISetupTests {
                 try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
                 try #require(!isPending(defaults))
                 try #require(!model.connected && model.phase == .idle)
-                try await pressOnboardingEntryButton("Next", in: hosting)
-                try await TestWait.state("connection page buttons") {
-                    let ax = try await inspectAISetupAccessibility(hosting)
-                    return ax.actions["Back"] == true && ax.actions["Next"] == true
-                }
-                try #require(events.persistenceCalls == 3)
-                try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
-                try await pressOnboardingEntryButton("Next", in: hosting)
+                // The welcome page's one action leaves the choice for setup.
+                try await pressOnboardingEntryButton("Use this Mac", in: hosting)
                 if blocked {
-                    try await TestWait.state("unreadable ownership CLI gate") {
+                    func preparationFailureShown() async throws -> Bool {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Next"] == false && ax.actions["Finish"] == nil &&
+                        return ax.actions["Next"] == false && ax.actions["Use this Mac"] == nil &&
+                            ax.actions["Try again"] == true &&
                             ax.labels.contains(GatewayProcessManager.Installation.ownershipFailure)
                     }
+                    try await TestWait.state("unreadable ownership CLI gate") { try await preparationFailureShown() }
+                    // Retry runs the preparation step again in place.
+                    try await pressOnboardingEntryButton("Try again", in: hosting)
+                    try await TestWait.state("retried CLI gate") { try await preparationFailureShown() }
                     #expect(events.persistenceCalls == 3)
                 } else {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
+                    // AI setup is the last page: a verified test finishes onboarding itself.
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Next"] == false &&
+                        return ax.actions["Finish"] == false &&
                             ax.actions.contains { $0.key.contains("API Keys") && $0.value }
                     }
                     try await pressOnboardingEntryButton("API Keys", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
-                            ax.actions["Next"] == false
+                            ax.actions["Finish"] == false
                     }
                     #expect(events.persistenceCalls == 4)
                 }
@@ -3485,6 +3487,82 @@ struct OnboardingAISetupTests {
                 #expect(!model.connected)
                 #expect(!finishState.didFinish)
                 #expect(!isPending(defaults))
+            } catch {
+                await cleanup()
+                throw error
+            }
+            await cleanup()
+        }
+    }
+
+    @Test func `first mounted remote choice opens the finder without starting local setup`() async throws {
+        try #require(!AppProfile.current.isActive, "Run this fixture in an unprofiled disposable test process")
+        let root = try makeTempDirForTests().resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root, env: [
+            "OPENCLAW_STATE_DIR": root.appendingPathComponent("state").path,
+            "OPENCLAW_CONFIG_PATH": root.appendingPathComponent("openclaw.json").path,
+        ]) {
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRemoteEntry"))
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            let url = try #require(URL(string: "ws://127.0.0.1:49152"))
+            let harness = AISetupHarness(url: url) { _, request, _ in
+                request.method == "agents.list"
+                    ? missingConfiguredModelResponse(id: request.id)
+                    : unavailableGatewayResponse(id: request.id)
+            }
+            let state = AppState(preview: true)
+            state.onboardingSeen = false
+            state.connectionMode = .unconfigured
+            let view = harness.view(
+                state: state, defaults: defaults, routeIdentityProvider: { nil }, gatewaySelectionPersister: { true })
+            let model = view.aiSetup
+            let probe = view.configuredGatewayProbe
+            let discovery = view.gatewayDiscovery
+            _ = AppKitTestSupport.application
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 900)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            @MainActor
+            func cleanup() async {
+                probe.invalidate()
+                model.resetForGatewayChange(clearPendingHandoff: false)
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+                discovery.stop()
+                await harness.gateway.shutdown()
+            }
+            do {
+                window.contentView = hosting
+                window.orderFront(nil)
+                hosting.layoutSubtreeIfNeeded()
+                try await TestWait.state("welcome hosting choice") {
+                    try await inspectAISetupAccessibility(hosting).actions["Use this Mac"] == true
+                }
+                try await pressOnboardingEntryButton("On another computer", in: hosting)
+                try await TestWait.state("remote choice navigation") {
+                    let ax = try await inspectAISetupAccessibility(hosting)
+                    return ax.actions["Next"] == true && ax.actions["Use this Mac"] == nil
+                }
+                try await pressOnboardingEntryButton("Next", in: hosting)
+                // The finder needs a verified remote Gateway before Next unlocks.
+                try await TestWait.state("remote finder") {
+                    let ax = try await inspectAISetupAccessibility(hosting)
+                    return ax.actions["Back"] == true && ax.actions["Next"] == false &&
+                        ax.labels.contains("Find your OpenClaw")
+                }
+                #expect(state.connectionMode == .unconfigured)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().allSatisfy {
+                    $0.first == "status"
+                })
+                #expect(!view.finishState.didFinish)
             } catch {
                 await cleanup()
                 throw error
@@ -3623,8 +3701,7 @@ struct OnboardingAISetupTests {
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
         #expect(view.aiSetup.verifiedExistingInference)
-        #expect(handoffs.isEmpty)
-        #expect(view.finish())
+        try await TestWait.observed("verified route finishes onboarding") { view.finishState.didFinish }
         #expect(handoffs == [.dashboard])
     }
 
@@ -4326,10 +4403,10 @@ struct OnboardingAISetupTests {
             connectionMode: appState.connectionMode,
             authIssue: view.aiSetup.configuredGatewayAuthIssue,
             pageOrder: view.pageOrder,
-            connectionPageIndex: view.connectionPageIndex,
+            connectionPageIndex: view.findPageIndex,
             probeInput: view.remoteGatewayProbeInput
         ))
-        #expect(decision.connectionPage == view.pageOrder.firstIndex(of: view.connectionPageIndex))
+        #expect(decision.connectionPage == view.pageOrder.firstIndex(of: view.findPageIndex))
         #expect(decision.authIssue == .tokenRequired)
         #expect(decision.probeState == .failed(
             view.remoteGatewayProbeInput,

@@ -168,13 +168,13 @@ struct OnboardingViewSmokeTests {
             let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
 
             #expect(!view.cliInstalled)
-            let reachability = MacOpenClawIDFeature.isEnabled ? [5, 9] : [9]
+            let reachability = MacOpenClawIDFeature.isEnabled ? [5] : []
             let expectedOrder = scenario == "remote"
-                ? [0, 1, 4, 3, 9]
-                : (requiresSetup ? [0, 1, 2, 3] : [0, 1, 3]) + reachability
+                ? [0, 4, 3]
+                : (requiresSetup ? [0, 2, 3] : [0, 3]) + reachability
             try #require(view.pageOrder == expectedOrder)
             // Remote setup visits the remote connection page (4) before AI setup.
-            #expect(view.activePageIndex(for: 2) == (scenario == "remote"
+            #expect(view.activePageIndex(for: 1) == (scenario == "remote"
                     ? 4
                     : (requiresSetup ? view.cliPageIndex : view.aiPageIndex)))
             if scenario == "fresh-recommended" {
@@ -305,40 +305,26 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows keep native reachability and final steps after AI setup`() {
+    @Test func `verified AI setup ends configured flows without a final page`() {
         // Memory import, permissions, channels and hatch remain Dashboard-owned.
-        // Native onboarding retains the optional reachability and final pages.
+        // Only the optional OpenClaw ID reachability offer follows AI setup.
         #expect(OnboardingView.pageOrder(
             for: .local,
             requiresCLIInstall: true,
-            openClawIDEnabled: true) == [0, 1, 2, 3, 5, 9])
+            openClawIDEnabled: true) == [0, 2, 3, 5])
         #expect(OnboardingView.pageOrder(
             for: .local,
             requiresCLIInstall: false,
-            openClawIDEnabled: true) == [0, 1, 3, 5, 9])
+            openClawIDEnabled: false) == [0, 3])
         #expect(OnboardingView.pageOrder(
             for: .remote,
-            requiresCLIInstall: true) == [0, 1, 4, 3, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: false) == [0, 1, 4, 3, 9])
-    }
-
-    @Test func `builds without OpenClaw ID skip the reachability page`() {
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: true,
-            openClawIDEnabled: false) == [0, 1, 2, 3, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            openClawIDEnabled: false) == [0, 1, 3, 9])
+            requiresCLIInstall: false) == [0, 4, 3])
     }
 
     @Test func `set up later keeps the native ready page`() {
         #expect(OnboardingView.pageOrder(
             for: .unconfigured,
-            requiresCLIInstall: false) == [0, 1, 9])
+            requiresCLIInstall: false) == [0, 9])
     }
 
     @Test func `reopened onboarding preserves configure later selection`() {
@@ -349,17 +335,20 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .unconfigured)
         #expect(!view.isConnectionSelectionBlocking)
-        #expect(view.pageOrder == [0, 1, 9])
+        #expect(view.pageOrder == [0, 9])
         #expect(state.connectionMode == .unconfigured)
     }
 
-    @Test func `advancing from recommended this Mac commits local mode`() {
+    @Test func `use this Mac on the welcome page commits local setup in one action`() {
         let state = AppState(preview: true)
         state.onboardingSeen = false
         state.connectionMode = .unconfigured
         let view = OnboardingView(state: state)
 
-        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+        #expect(view.activePageIndex == view.welcomePageIndex)
+        #expect(view.buttonTitle == "Use this Mac")
+        #expect(view.canAdvance)
+        view.handleNext()
 
         #expect(state.connectionMode == .local)
     }
@@ -416,7 +405,7 @@ struct OnboardingViewSmokeTests {
             #expect(OnboardingView.pageOrder(
                 for: .local,
                 requiresCLIInstall: !outcome.ready,
-                openClawIDEnabled: true) == [0, 1, 2, 3, 5, 9])
+                openClawIDEnabled: true) == [0, 2, 3, 5])
             #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
         }
     }

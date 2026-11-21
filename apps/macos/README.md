@@ -123,11 +123,15 @@ test proof as incomplete and requires the exact commit's `macos-swift` CI result
 
 ## Onboarding development
 
-The hosting question has two routes: **On this Mac** and **On another computer**.
-The remote finder reuses network discovery, trusted connection settings, and
-browser Gateway sign-in. Discovery advertisements never establish trust.
-Local setup retains the runtime and live inference gates, then offers optional
-OpenClaw ID setup before the final page. **Set up later** starts no Gateway.
+The welcome page asks where OpenClaw runs. **On this Mac** is selected by
+default, so **Use this Mac** commits local setup in one action. **On another
+computer** opens the remote finder, which reuses network discovery, trusted
+connection settings, and browser Gateway sign-in. Discovery advertisements
+never establish trust. Local and remote setup retain the runtime and live
+inference gates; a verified AI connection finishes onboarding and opens the
+dashboard destination chosen by AI setup, without a final tour. Builds with
+OpenClaw ID first offer optional reachability. **Set up later** starts no
+Gateway; it and node or browser-Gateway completions end on a short ready page.
 
 Native OpenClaw ID enrollment is not implemented in this build. The production
 `OnboardingOpenClawIDService` reports that limitation; it cannot report a linked

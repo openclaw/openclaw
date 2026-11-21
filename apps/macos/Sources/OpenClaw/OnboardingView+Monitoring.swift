@@ -23,7 +23,7 @@ extension OnboardingView {
     }
 
     func updateDiscoveryMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == connectionPageIndex || pageIndex == findPageIndex
+        let shouldMonitor = pageIndex == welcomePageIndex || pageIndex == findPageIndex
         if shouldMonitor, !monitoringDiscovery {
             monitoringDiscovery = true
             Task { @MainActor in

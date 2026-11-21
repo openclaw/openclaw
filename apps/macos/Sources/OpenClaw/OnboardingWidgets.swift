@@ -68,7 +68,7 @@ extension OnboardingView {
 
     private var mascotPage: MascotPage {
         switch self.activePageIndex {
-        case self.connectionPageIndex: .connection
+        case self.findPageIndex: .connection
         case self.cliPageIndex: .cli
         case self.aiPageIndex: .ai
         case self.readyPageIndex: .ready
