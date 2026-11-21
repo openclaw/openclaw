@@ -72,6 +72,7 @@ type WhatsAppMessageDeliveryOptions = {
   loadConfig?: () => OpenClawConfig;
   verbose: boolean;
   accountId: string;
+  authDir?: string;
   sock: WASocket;
   socketSession: WhatsAppAttachedSocketSession;
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
@@ -263,6 +264,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       msg,
       sock,
       mediaMaxMb: options.mediaMaxMb,
+      authDir: options.authDir,
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
