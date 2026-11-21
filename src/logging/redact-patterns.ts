@@ -261,6 +261,8 @@ const BARE_PASS_KEY_RE = new RegExp(
 const BARE_PASS_VALUE_RE = /[^\s#"'\x60<>]+/y;
 const ASCII_WORD_CHAR_RE = /[A-Za-z0-9]/;
 const INLINE_WHITESPACE_RE = /[ \t\r\n]/;
+const BARE_PASS_CLOCK_RE = /(?:[01]?\d|2[0-3]):(?:[0-5][\dx]|xx)(?::[0-5]\d)?(?=$|[ \t\r\n])/y;
+const BARE_PASS_GREP_LINE_RE = /\d{1,9}:(?=[-*+] )/y;
 
 function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
   if (!/pass\s*:/.test(text)) {
@@ -272,6 +274,7 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
   }
   let next = 0;
   let assignmentSeen = false;
+  let clockEnd = -1;
   for (let index = 0; index < text.length; index++) {
     const key = keys[next];
     if (!key) {
@@ -285,6 +288,7 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
         !owned &&
         !assignmentSeen &&
         before === " " &&
+        index !== clockEnd + 1 &&
         ASCII_WORD_CHAR_RE.test(text[index - 2] ?? "");
       if (!prose) {
         // A key, this rule's or a namespaced one's, makes the rest of its value's line a record, so a
@@ -310,6 +314,24 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
       }
     }
     const char = text[index];
+    const before = text[index - 1];
+    if (char >= "0" && char <= "9" && (!before || INLINE_WHITESPACE_RE.test(before))) {
+      // Clocks and grep line-number prefixes are context, not compact key:value fields.
+      // Skip their colons without clearing a real assignment already seen on this line.
+      BARE_PASS_CLOCK_RE.lastIndex = index;
+      BARE_PASS_GREP_LINE_RE.lastIndex = index;
+      const clock = BARE_PASS_CLOCK_RE.exec(text);
+      if (clock) {
+        clockEnd = index + clock[0].length;
+      }
+      const context =
+        clock ??
+        ((!before || before === "\n" || before === "\r") && BARE_PASS_GREP_LINE_RE.exec(text));
+      if (context) {
+        index += context[0].length - 1;
+        continue;
+      }
+    }
     if (char === "\n" || char === "\r") {
       assignmentSeen = false;
     } else if (char === "=") {
