@@ -130,6 +130,98 @@ describe("balanced JSON extraction", () => {
     );
   });
 
+  it.each(['\u001b]0;"window title\u0007', '\u001b[1"q'])(
+    "treats declared external framing as opaque without changing source coordinates (%j)",
+    (prefix) => {
+      const json = '{"publicShare":{"id":"opaque"},"count":7}';
+      const source = `${prefix}${json}\r\n`;
+      const discovery = " ".repeat(prefix.length) + json + "\r\n";
+      const options = {
+        ...strictRecovery,
+        strictJson: {
+          source,
+          opaqueSpans: [{ startIndex: 0, endIndex: prefix.length - 1 }],
+        },
+      };
+      expect(extractBalancedJsonFragments(discovery, options)).toEqual(fragmentsAt(source, [json]));
+      expect(extractBalancedJsonPrefix(discovery, options)).toEqual(fragmentsAt(source, [json])[0]);
+      expect(
+        extractBalancedJsonFragments(discovery, {
+          ...strictRecovery,
+          strictJson: { source },
+        }),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
+    "retains opaque line boundaries but never admits a parent from masked text (%j)",
+    (newline) => {
+      const framing = `framing "[]${newline}`;
+      const child = '{"ok":true}';
+      const source = `[${framing}${child}${newline}]`;
+      const discovery = source.replace(framing, framing.replace(/[^\r\n]/g, " "));
+      expect(() => JSON.parse(discovery)).not.toThrow();
+      expect(
+        extractBalancedJsonFragments(discovery, {
+          ...strictRecovery,
+          strictJson: {
+            source,
+            opaqueSpans: [{ startIndex: 1, endIndex: framing.length }],
+          },
+        }),
+      ).toEqual(fragmentsAt(source, [child]));
+    },
+  );
+
+  it("ignores a span entering inside an original string, including beyond its closing quote", () => {
+    const child = '{"actual":true}';
+    const quoted = '"note \u009b and \\"quoted\\" [0]"';
+    const source = `${quoted}\r\n${child}`;
+    const span = { startIndex: source.indexOf("\u009b"), endIndex: source.length - 1 };
+    expect(
+      extractBalancedJsonFragments(source, {
+        ...strictRecovery,
+        strictJson: { source, opaqueSpans: [span] },
+      }),
+    ).toEqual(fragmentsAt(source, [child]));
+    const parent = `[\r\n${quoted},\r\n${child}\r\n]`;
+    expect(
+      extractBalancedJsonFragments(parent, {
+        ...strictRecovery,
+        strictJson: {
+          source: parent,
+          opaqueSpans: [{ startIndex: parent.indexOf("\u009b"), endIndex: parent.length - 1 }],
+        },
+      }),
+    ).toEqual(fragmentsAt(parent, [parent]));
+  });
+
+  it.each([
+    [{ startIndex: -1, endIndex: 0 }],
+    [{ startIndex: 0.5, endIndex: 1 }],
+    [{ startIndex: 0, endIndex: Number.NaN }],
+    [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY }],
+    [{ startIndex: 1, endIndex: 0 }],
+    [{ startIndex: 0, endIndex: 2 }],
+    [
+      { startIndex: 1, endIndex: 1 },
+      { startIndex: 0, endIndex: 0 },
+    ],
+    [
+      { startIndex: 0, endIndex: 1 },
+      { startIndex: 1, endIndex: 1 },
+    ],
+    [
+      { startIndex: 0, endIndex: 0 },
+      { startIndex: 0, endIndex: 0 },
+    ],
+  ])("rejects invalid opaque span geometry instead of repairing it: %j", (...opaqueSpans) => {
+    const options = { strictJson: { source: "{}", opaqueSpans } };
+    expect(() => extractBalancedJsonFragments("{}", options)).toThrow(RangeError);
+    expect(() => extractBalancedJsonPrefix("{}", options)).toThrow(RangeError);
+  });
+
   it("retains original numeric lexemes, duplicate keys, and escaped strings in admitted records", () => {
     const json = '{"value":9007199254740993,"value":-0,"exponent":1e3,"text":"\\u0000 \\ud800"}';
     expect(extractBalancedJsonFragments(json, strictRecovery)).toEqual(fragmentsAt(json, [json]));
