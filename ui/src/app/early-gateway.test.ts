@@ -14,6 +14,7 @@ import {
   createTestSessionCapability,
 } from "../lib/sessions/session-capability.test-support.ts";
 import type { startControlUi } from "../main.runtime.ts";
+import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
@@ -294,7 +295,7 @@ async function connectWarmGateway() {
 }
 
 it.each(["cold", "before", "after"])(
-  "leaves inline history with the ready foreground consumer (%s cache)",
+  "starts inline history before transferring it to the ready foreground consumer (%s cache)",
   async (cache) => {
     saveSettings({ ...loadSettings(), chatInlineCommands: true });
     window.history.replaceState({}, "", "/chat/main/warm");
@@ -313,7 +314,10 @@ it.each(["cold", "before", "after"])(
       await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
     }
-    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual([
+      "connect",
+      "sessions.messages.subscribe",
+    ]);
 
     const { transport } = early;
     const h = createGatewayHarness(transport.client);
@@ -325,13 +329,18 @@ it.each(["cold", "before", "after"])(
         onEvent: h.emitEvent,
       }),
     ).toBe(transport.client);
-    const initialHistory = {
-      limit: 80,
-      maxBytes: 262144,
-      toolResultMaxChars: 2000,
-      knownState: warm ? { commands: "commands-1" } : {},
-      ...(warm ? { cursor: "warm-cursor" } : {}),
-    };
+    const {
+      sessionKey: _key,
+      agentId: _agent,
+      ...initialHistory
+    } = chatHistoryRequestParams(
+      "chat.startup",
+      "agent:main:warm",
+      undefined,
+      warm ? "warm-cursor" : undefined,
+      [],
+      warm ? { stateRevision: { commands: "commands-1" }, commands: [] } : undefined,
+    );
     const pending = sessions.subscribeMessages("agent:main:warm", {
       includeLiveToolOutput: true,
       initialHistory,
