@@ -27,7 +27,6 @@ type JsonContainer = {
   start: number;
   end: number;
   children: JsonContainer[];
-  selected: boolean;
   eligible: boolean;
   invalid: boolean;
   valid: boolean;
@@ -60,6 +59,7 @@ function extractStrictJsonFragments(
   const roots: JsonContainer[] = [];
   const nodes: JsonContainer[] = [];
   const stack: JsonContainer[] = [];
+  const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
   let selectedDepth = 0;
   let inString = false;
   let escaped = false;
@@ -69,7 +69,8 @@ function extractStrictJsonFragments(
   let spanOpaque = false;
   const pop = () => {
     const node = stack.pop()!;
-    selectedDepth -= Number(node.selected);
+    activeOpeners[node.opener] -= 1;
+    selectedDepth -= Number(openers.includes(node.opener));
     return node;
   };
   for (let index = 0; index < source.length; index += 1) {
@@ -121,7 +122,6 @@ function extractStrictJsonFragments(
         start: index,
         end: -1,
         children: [],
-        selected,
         eligible: selected && (selectedDepth === 0 || (!!opts.recoverAtLineStart && atLineStart)),
         invalid: false,
         valid: false,
@@ -130,15 +130,22 @@ function extractStrictJsonFragments(
       (parent ? parent.children : roots).push(node);
       nodes.push(node);
       stack.push(node);
-      selectedDepth += Number(selected);
+      activeOpeners[char] += 1;
+      // Discovery controls emission, not ownership by original selected kinds.
+      selectedDepth += Number(openers.includes(char));
     } else if (char === "}" || char === "]") {
       const opener = char === "}" ? "{" : "[";
-      while (stack.length > 0 && stack.at(-1)!.opener !== opener) {
+      // A stray closer cannot release its enclosing warning. Counts avoid
+      // rescanning that same ancestry for each repeated unmatched closer.
+      if (activeOpeners[opener] === 0) {
+        const parent = stack.at(-1);
+        if (parent) parent.invalid = true;
+        continue;
+      }
+      while (stack.at(-1)!.opener !== opener) {
         pop().invalid = true;
       }
-      if (stack.length > 0) {
-        pop().end = index;
-      }
+      pop().end = index;
     }
   }
   // Reverse creation order is postorder. Each original own-text interval is
