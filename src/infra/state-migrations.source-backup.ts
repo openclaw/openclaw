@@ -121,7 +121,13 @@ export async function backupLegacyStateSource(params: {
     throw new Error(`Legacy migration backup differs from its source: ${backupName}`);
   }
   {
-    await using opened = await sourceRoot.open(backupName);
+    // Windows needs write access to flush the file. Reopen the verified archive without creating it.
+    await using opened = await sourceRoot.openWritable(backupName, {
+      writeMode: "update",
+      assertBeforeMutation: () => {
+        throw new Error(`Legacy migration backup disappeared before sync: ${backupName}`);
+      },
+    });
     params.assertCurrent();
     await opened.handle.sync();
   }
