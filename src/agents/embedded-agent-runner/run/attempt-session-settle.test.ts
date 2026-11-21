@@ -161,3 +161,40 @@ it.each([false, true])(
     expect(tracker.buildAbortSettlePromise()).toBeNull();
   },
 );
+
+it.each(["trajectory", "transcript"] as const)(
+  "disposes resources after %s cleanup fails",
+  async (phase) => {
+    const failure = new Error("cleanup checkpoint failed");
+    const beginCleanup = vi.fn(async () => {
+      if (phase === "transcript") {
+        throw failure;
+      }
+    });
+    const dispose = vi.fn(async () => {});
+    const runtimeDispose = vi.fn(async () => {});
+    await expect(
+      cleanupEmbeddedAttemptSessionPhase({
+        attempt: { sessionId: "cleanup-failure", runId: "cleanup-failure" },
+        trajectoryRecorder: {
+          enabled: true,
+          recordEvent: () => {
+            if (phase === "trajectory") {
+              throw failure;
+            }
+          },
+          describeFlushState: () => undefined,
+          flush: async () => {},
+        },
+        trajectoryEndRecorded: false,
+        buildAbortSettlePromise: () => null,
+        state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+        transcriptLifecycle: { beginCleanup, dispose },
+        bundleMcpRuntime: { dispose: runtimeDispose },
+      }),
+    ).rejects.toBe(failure);
+    expect(beginCleanup).toHaveBeenCalledOnce();
+    expect(runtimeDispose).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  },
+);

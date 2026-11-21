@@ -1,0 +1,2 @@
+# Preserve attempt resource disposal after trajectory or transcript cleanup failure.
+37
