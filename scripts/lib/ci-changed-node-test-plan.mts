@@ -1286,6 +1286,7 @@ export function createChangedNodeTestShards(
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
+          isolateSystemRuntime: true,
           onFallback: options.onFallback,
           preparedTestPlans: new Map(
             prTargetPlans.map(({ target, sourcePlans }) => [target, sourcePlans]),

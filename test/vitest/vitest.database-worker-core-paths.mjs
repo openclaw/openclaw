@@ -1095,6 +1095,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.async-capture.test.ts",
   "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
+  "src/state/openclaw-agent-execution.cleanup-isolation.test.ts",
   "src/sessions/session-diff-baseline.test.ts",
   "src/sessions/session-state-events.test.ts",
   "src/sessions/session-state-events.ownership.test.ts",

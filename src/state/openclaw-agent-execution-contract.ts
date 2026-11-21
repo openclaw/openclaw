@@ -60,6 +60,8 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly kind: "file";
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
+  readonly stateDatabasePath: string;
+  getCleanupFailure(): { error: unknown; retryable: boolean } | undefined;
   readonly creationIdentity?: DatabasePathIdentity;
   readonly fileIdentity?: AgentDatabaseExecutionFileIdentity;
   getPendingPreparation(): Promise<void> | undefined;
@@ -119,6 +121,6 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
 
 export type AgentDatabaseExecutionState = {
   owners: Map<string, AgentDatabaseFileExecutionOwner>;
-  // LRU entries keep their slots during eviction and after failed cleanup.
+  // Eviction holds its slot until settlement; failed cleanup retains custody in owners.
   idle: Set<AgentDatabaseFileExecutionOwner>;
 };

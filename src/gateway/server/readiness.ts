@@ -6,6 +6,7 @@ import {
   type ChildRuntimeViability,
 } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -101,6 +102,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    getAgentDatabaseCleanupFailures?: () => readonly AgentDatabaseCleanupFailure[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
@@ -217,6 +219,7 @@ export function createReadinessChecker(
     return { ...cachedState, uptimeMs };
   };
   const read = (childRuntime?: ChildRuntimeViability, startup?: StartupResult) => {
+    const agentCleanup = deps.getAgentDatabaseCleanupFailures?.();
     const refusals = deps.getAgentDatabaseAdmissionRefusals?.();
     const agentDatabases = refusals?.filter(({ code }) => code !== "agent-deletion");
     const agentDeletions = refusals?.filter(({ code }) => code === "agent-deletion");
@@ -227,6 +230,7 @@ export function createReadinessChecker(
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
       ...(agentDeletions?.length ? { agentDeletions } : {}),
+      ...(agentCleanup?.length ? { agentCleanup } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };
