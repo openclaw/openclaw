@@ -69,6 +69,7 @@ import {
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
 import {
+  adaptCompletionRelayTurnForToolSurface,
   buildClaudeCliFallbackContextPrelude,
   resolveCompletionToolPolicy,
   claudeCliSessionTranscriptHasContent,
@@ -231,6 +232,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       cliExecutionProvider,
       completionNeedsMessageDelivery,
     });
+  const adaptedCompletionTurn = adaptCompletionRelayTurnForToolSurface({
+    prompt: effectivePrompt,
+    internalEvents: params.opts.internalEvents,
+    isSubagentAnnounceHandoff,
+    completionRetainsRequesterTools,
+    completionNeedsMessageDelivery,
+  });
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
   // loopback server, so a plugin-launched or cron-continued collector needs the
@@ -385,8 +393,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             })
           : resolvedPrompt;
         const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
-          ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : effectivePrompt;
+          ? adaptCompletionRelayTurnForToolSurface({
+              prompt: annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance),
+              isSubagentAnnounceHandoff,
+              completionRetainsRequesterTools,
+              completionNeedsMessageDelivery,
+            }).prompt
+          : adaptedCompletionTurn.prompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -461,7 +474,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
-        const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
+        const { runtimeContextFragments: supplementalContext } = params.opts;
+        const internalEvents = adaptedCompletionTurn.internalEvents;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
@@ -657,7 +671,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: adaptedCompletionTurn.prompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -687,7 +701,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? params.opts.trustedInternalHandoff
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
-    internalEvents: params.opts.internalEvents,
+    internalEvents: adaptedCompletionTurn.internalEvents,
     runtimeContextFragments: params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
