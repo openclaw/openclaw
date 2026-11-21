@@ -193,6 +193,17 @@ describe("Telegram registered action authority and input contracts", () => {
     },
   );
 
+  it("sends local media for the selected agent on an explicit multi-agent fleet", async () => {
+    cfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    await expect(
+      invoke(
+        "send",
+        { to: "123", message: "chart", media: fixture.photoPath },
+        { agentId: "ops", mediaLocalRoots: [fixture.mediaDir] },
+      ),
+    ).resolves.toMatchObject({ details: { ok: true } });
+  });
+
   it("requires host-owned current-message authority for reactions, edits and deletes", async () => {
     const params = {
       chatId: "telegram:-1001:topic:77",
