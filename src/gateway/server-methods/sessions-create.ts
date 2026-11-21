@@ -20,6 +20,7 @@ import {
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
@@ -569,6 +570,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       bindSharingCreation: (operation) =>
         sessionMutationAuthorization?.bindCreation?.(p, operation),
       followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+      readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+      getCurrentSessionAccessCap: () => operatorSessionCap(client, getCurrentConfig()),
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,

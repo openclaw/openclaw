@@ -1,3 +1,4 @@
+import { createLegacyBackendProviderRuntime } from "./memory-backend-legacy.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -17,18 +18,29 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     }
     if (record.memoryBackend === true) {
       // A backend serves only the slot owner's provider runtime; it never joins slot resolution.
-      if (!capability.providerRuntime) {
-        reportRegistrationWarning(
-          record,
-          "memory backend registered no providerRuntime; the memory slot owner cannot open it",
-        );
+      if (capability.providerRuntime) {
+        registry.memoryBackends.push({
+          pluginId: record.id,
+          pluginName: record.name,
+          providerRuntime: capability.providerRuntime,
+        });
         return;
       }
-      registry.memoryBackends.push({
-        pluginId: record.id,
-        pluginName: record.name,
-        providerRuntime: capability.providerRuntime,
-      });
+      if (capability.runtime) {
+        // File-shaped runtimes reach the owner through the same adapter the slot uses for them.
+        registry.memoryBackends.push({
+          pluginId: record.id,
+          pluginName: record.name,
+          providerRuntime: createLegacyBackendProviderRuntime(record.id, capability.runtime),
+          adapter: "legacy",
+          instanceOwner: capability.runtime,
+        });
+        return;
+      }
+      reportRegistrationWarning(
+        record,
+        "memory backend registered no memory runtime; the memory slot owner cannot open it",
+      );
       return;
     }
     if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {

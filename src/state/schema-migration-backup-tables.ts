@@ -107,5 +107,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     38: ["session_repository_workspaces", "worker_workspace_pending_results"],
     39: ["worker_environments"],
     40: ["worker_environments"],
+    41: ["operator_approvals"],
   },
 };
