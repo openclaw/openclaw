@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { writeSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
@@ -8,6 +8,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
 
 vi.mock("./node-sqlite.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./node-sqlite.js")>();
@@ -25,6 +30,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     process.exitCode = originalExitCode;
     __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
+    vi.mocked(writeSync).mockReset();
     cleanup();
   });
 });
@@ -77,16 +83,40 @@ async function inspectFailure(
   const diagnostics = await import("./sqlite-error-diagnostics.js");
   const format = vi.spyOn(diagnostics, "formatSqliteReadOnlyInspectionFailure");
   const completed = createDeferred();
-  const write = vi.spyOn(process.stdout, "write").mockImplementation((_chunk, ...rest) => {
+  let stdout = "";
+  const capture = (chunk: string) => {
+    stdout += chunk;
+    completed.resolve();
+  };
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
+    capture(String(chunk));
     const callback = rest.find((argument) => typeof argument === "function");
-    queueMicrotask(() => {
-      if (typeof callback === "function") {
-        callback();
-      }
-      completed.resolve();
-    });
+    if (typeof callback === "function") {
+      queueMicrotask(() => callback());
+    }
     return true;
   });
+  vi.mocked(writeSync).mockImplementation(
+    (
+      file: number,
+      data: string | NodeJS.ArrayBufferView,
+      offset?: number | null,
+      length?: number | BufferEncoding | null,
+    ) => {
+      if (file !== 1) {
+        throw new Error("Unexpected descriptor in worker output fixture");
+      }
+      const bytes =
+        typeof data === "string"
+          ? Buffer.from(data, typeof length === "string" ? length : undefined)
+          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      const start = typeof data === "string" ? 0 : (offset ?? 0);
+      const size = typeof length === "number" ? length : bytes.length;
+      const chunk = bytes.subarray(start, start + size);
+      capture(chunk.toString());
+      return chunk.length;
+    },
+  );
   process.argv = [
     process.execPath,
     "sqlite-readonly-location.worker.ts",
@@ -103,7 +133,14 @@ async function inspectFailure(
     expect(opened.every((database) => !database.isOpen)).toBe(true);
     expect(fs.readdirSync(stagingRoot)).toEqual([]);
     expect(fs.readFileSync(sourcePath)).toEqual(before);
-    return { write, observedFailure };
+    const read = actual.openNodeSqliteDatabase(sourcePath, { readOnly: true });
+    try {
+      expect(read.prepare("SELECT id FROM present").get()).toEqual({ id: 7 });
+      expect(read.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      read.close();
+    }
+    return { stdout, observedFailure };
   } finally {
     opened.filter((database) => database.isOpen).forEach((database) => database.close());
   }
@@ -132,16 +169,15 @@ it.each([
             new FsSafeError("helper-failed", "native copy failed", { cause: nativeFailure }),
           )
         : nativeFailure;
-    const { write, observedFailure } = await inspectFailure(operation, failure);
+    const { stdout, observedFailure } = await inspectFailure(operation, failure);
     expect(observedFailure).toBe(failure);
     const message =
       operation === "snapshot-copy" ? "native copy failed" : "unable to open database file";
-    expect(write).toHaveBeenCalledExactlyOnceWith(
+    expect(stdout).toBe(
       JSON.stringify({
         ok: false,
         message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
       }),
-      expect.any(Function),
     );
   },
 );
@@ -151,15 +187,12 @@ it("keeps aggregate identity through staging and admits only bounded cause codes
   const failure = Object.freeze(
     new AggregateError([cause, new Error("hidden cleanup")], "read failed", { cause }),
   );
-  const { write, observedFailure } = await inspectFailure("backup-source", failure);
+  const { stdout, observedFailure } = await inspectFailure("backup-source", failure);
   expect(observedFailure instanceof Error && observedFailure.cause).toBe(failure);
-  expect(write).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining(
-      "failed while opening the source database: read failed (SQLite errcode=778)",
-    ),
-    expect.any(Function),
+  const message = JSON.parse(stdout).message as string;
+  expect(message).toContain(
+    "failed while opening the source database: read failed (SQLite errcode=778)",
   );
-  const [message] = expectDefined(write.mock.calls[0], "worker output");
   expect(message).toContain("code=EIO, errcode=778");
   expect(message).not.toContain("hidden cause prose");
   expect(message).not.toContain("hidden cleanup");
