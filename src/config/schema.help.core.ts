@@ -142,6 +142,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.sessionControl":
     "Explicit opt-ins for session control surfaces. Authentication and saved device grants do not enable publication or active steering.",
+  "gateway.sessionControl.publicationWriteEnabled":
+    "Allows restricted publication-writer connections only when true (default: false). Independent of publication reads and host steering. Source plugins still require their own opt-in and device grant. Checked at each request admission; disabling denies new requests without revoking admitted work.",
   "gateway.sessionControl.publicationReadEnabled":
     "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
   "gateway.sessionControl.steeringEnabled":
