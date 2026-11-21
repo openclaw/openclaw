@@ -598,7 +598,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }
       const catalogChanged = this.catalogRequestedSessionKey !== this.sessionKey;
       if (catalogKey && (catalogChanged || changes.catalogProfileRelation)) {
-        this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
       } else if (nextSessionKey) {
         // A retained pane owns one conversation for its lifetime. Only its

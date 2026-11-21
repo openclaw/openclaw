@@ -338,15 +338,11 @@ export function createSessionShareNodeCommands(
                   entry.worktree?.repoRoot;
                 return {
                   threadId,
-                  ...(resolveOriginalPath
-                    ? {
-                        originalPath: resolveOriginalPath({
-                          config: api.runtime.config.current(),
-                          agentId,
-                          sessionKey: threadId,
-                        }),
-                      }
-                    : {}),
+                  originalPath: resolveOriginalPath?.({
+                    config: api.runtime.config.current(),
+                    agentId,
+                    sessionKey: threadId,
+                  }),
                   name,
                   color: entry.color,
                   cwd: cwd ? cwd.slice(0, 6000) : undefined,
