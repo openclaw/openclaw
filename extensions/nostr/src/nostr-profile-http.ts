@@ -62,6 +62,7 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
 
 const PROFILE_MUTATION_SCOPE = "operator.admin";
 const PROFILE_URL_FIELDS = ["picture", "banner", "website"] as const;
+const CLEARABLE_PROFILE_FIELDS = [...PROFILE_URL_FIELDS, "nip05", "lud16"] as const;
 
 function normalizeProfileUpdateUrlInputs(value: unknown): unknown {
   if (!isRecord(value)) {
@@ -319,6 +320,17 @@ async function handleUpdateProfile(
     return true;
   }
 
+  // The form sends empty strings to clear fields; omitted fields must survive the merge.
+  const clearedFields: (typeof CLEARABLE_PROFILE_FIELDS)[number][] = [];
+  if (isRecord(body)) {
+    for (const field of CLEARABLE_PROFILE_FIELDS) {
+      if (body[field] === "") {
+        clearedFields.push(field);
+        delete body[field];
+      }
+    }
+  }
+
   const parseResult = ProfileUpdateSchema.safeParse(normalizeProfileUpdateUrlInputs(body));
   if (!parseResult.success) {
     const errors = parseResult.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
@@ -346,6 +358,9 @@ async function handleUpdateProfile(
     ...existingProfile,
     ...profile,
   };
+  for (const field of clearedFields) {
+    delete mergedProfile[field];
+  }
 
   try {
     const result = await publishLocks.enqueue(accountId, async () => {
