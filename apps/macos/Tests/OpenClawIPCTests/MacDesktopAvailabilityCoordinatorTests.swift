@@ -268,12 +268,15 @@ struct MacDesktopAvailabilityCoordinatorTests {
         ]
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked], uid: 501) == .unlocked)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked], uid: 502) == .locked)
+        var rootConsole = unlocked
+        rootConsole["kCGSSessionUserIDKey"] = 0
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [rootConsole], uid: 0) == .locked)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [], uid: 501) == .unknown)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked, unlocked], uid: 501) == .unknown)
         for (field, value, expected) in [
             ("CGSSessionScreenIsLocked", true, Owner.State.locked),
             ("kCGSessionLoginDoneKey", false, .locked),
-            ("kCGSSessionOnConsoleKey", false, .unknown),
+            ("kCGSSessionOnConsoleKey", false, .unlocked),
         ] {
             var changed = unlocked
             changed[field] = value
@@ -287,11 +290,26 @@ struct MacDesktopAvailabilityCoordinatorTests {
         missing.removeValue(forKey: "CGSSessionScreenIsLocked")
         missing.removeValue(forKey: "kCGSessionLoginDoneKey")
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [missing], uid: 501) == .unknown)
-        for field in ["kCGSSessionOnConsoleKey", "kCGSessionLoginDoneKey", "CGSSessionScreenIsLocked"] {
+        for field in ["kCGSessionLoginDoneKey", "CGSSessionScreenIsLocked"] {
             var malformed = unlocked
             malformed[field] = NSNumber(value: field == "CGSSessionScreenIsLocked" ? 0 : 1)
             #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [malformed], uid: 501) == .unknown)
         }
+        var ignoredConsoleFlag = unlocked
+        ignoredConsoleFlag["kCGSSessionOnConsoleKey"] = NSNumber(value: 1)
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [ignoredConsoleFlag], uid: 501) == .unlocked)
+        let consoleUser: [String: Any] = [
+            "kCGSSessionOnConsoleKey": true,
+            "kCGSSessionUserIDKey": 502,
+            "kCGSessionLoginDoneKey": true,
+            "CGSSessionScreenIsLocked": false,
+        ]
+        var remote = unlocked
+        remote["kCGSSessionOnConsoleKey"] = false
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [consoleUser, remote], uid: 501) == .unlocked)
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [consoleUser, remote], uid: 502) == .unlocked)
+        remote["CGSSessionScreenIsLocked"] = true
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [consoleUser, remote], uid: 501) == .locked)
     }
 }
 
