@@ -457,8 +457,6 @@ openclaw config set plugins.entries.acpx.config.probeAgent claude
 With the default hybrid reload mode, this change automatically reloads the plugin.
 Run `/acp doctor` to check the updated backend.
 
-<a id="agent-process-environment" />
-
 ### Agent process environment
 
 By default, ACP agents, their command probes, and the terminals they open
