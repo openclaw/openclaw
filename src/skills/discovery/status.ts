@@ -42,7 +42,6 @@ import {
 import { readWorkspaceSkillStatusFacts } from "./status-files.js";
 import type {
   SkillInstallOption,
-  SkillStatusEntry,
   SkillStatusReport,
   WorkspaceSkillStatusFacts,
 } from "./status.types.js";
