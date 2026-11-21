@@ -518,6 +518,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ...gatewayCallOptionSchemaProperties(),
       ...(!managementOnly && !options?.selfRemoveOnly
         ? {
+            showCard: Type.Optional(
+              Type.Boolean({
+                description:
+                  'Add: set true only if the user asked this turn to create or schedule this automation (e.g. "remind me tomorrow"). Omit for your own polling or follow-ups. Omitted or false hides only the inline chat card, not the saved job.',
+              }),
+            ),
             names: Type.Optional(
               Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
                 minItems: 1,

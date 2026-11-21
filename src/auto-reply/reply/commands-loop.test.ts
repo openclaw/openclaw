@@ -41,6 +41,7 @@ it("returns usage for bare /loop without continuing", async () => {
 
 it("keeps multiline prompts in a current-session fixed-interval loop", async () => {
   const body = await rewrite(normalizeCommandBody("/loop 5m check these:\n- CI\n- deploy"));
+  expect(body).toContain('action:"add", showCard:true');
   expect(body).toContain('schedule:{kind:"every",everyMs:300000}');
   expect(body).toContain('sessionTarget:"current"');
   expect(body).toContain(`name:"${LOOP_PREFIX} check these: - CI - deploy"`);

@@ -22,7 +22,13 @@ export type AutomationCreationResult = {
   planId: string;
   slotId: string;
 } & (
-  | { status: "created"; jobId: string; definition?: AutomationSavedDefinition }
+  | {
+      status: "created";
+      jobId: string;
+      /** Absent on historical and installer receipts, which retain their original card. */
+      showCard?: boolean;
+      definition?: AutomationSavedDefinition;
+    }
   | { status: "failed" }
 );
 export type AutomationCreationEvent = AutomationCreationPlan | AutomationCreationResult;
@@ -53,6 +59,7 @@ export function readAutomationCreationEvent(value: unknown): AutomationCreationE
         slotId,
         status,
         jobId: raw.jobId,
+        ...(typeof raw.showCard === "boolean" ? { showCard: raw.showCard } : {}),
         ...(definition ? { definition } : {}),
       };
     }
