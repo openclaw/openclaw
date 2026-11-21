@@ -1771,7 +1771,7 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
-      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.MODELSTUDIO_API_KEY || secrets.DASHSCOPE_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -1909,7 +1909,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY || secrets.MODELSTUDIO_API_KEY || secrets.DASHSCOPE_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}

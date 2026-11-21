@@ -11538,6 +11538,35 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("uses documented Qwen credential aliases in release live lanes", () => {
+    for (const jobName of ["live_repo_e2e_release_checks", "docker_e2e_release_checks"]) {
+      const secrets = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName).secrets;
+      if (!secrets || typeof secrets === "string") {
+        throw new Error(`${jobName} must forward explicit live credentials`);
+      }
+      const expression = secrets.QWEN_API_KEY;
+      for (const [primary, modelstudio, dashscope, expected] of [
+        ["primary", "compat", "legacy", "primary"],
+        ["", "compat", "legacy", "compat"],
+        ["", "", "legacy", "legacy"],
+        ["", "", "", ""],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            secrets: {
+              QWEN_API_KEY: primary,
+              MODELSTUDIO_API_KEY: modelstudio,
+              DASHSCOPE_API_KEY: dashscope,
+            },
+          }),
+        ).toBe(expected);
+      }
+    }
+  });
+
   it("plumbs live credentials through planned Docker E2E live lanes", () => {
     const reusableWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
