@@ -185,6 +185,10 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   if (rules.size === 0) {
     return 0;
   }
+  // A store without a database has no archives to prune; its first writer creates it.
+  if (params.source && !params.source.readIdentity.key.startsWith("file:")) {
+    return 0;
+  }
   return withSqliteSessionPageReclamation(
     toDatabaseOptions(params.scope),
     async (_reclaim, assertCurrent, _options, archives) => {
