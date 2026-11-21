@@ -69,13 +69,12 @@ extension WebChatRoute {
         return (["", "chat", Self.encodedSessionSegment(agent)] + suffix).joined(separator: "/")
     }
 
-    static func dashboardSearch(draft: String?) -> String? {
-        guard let draft, !draft.isEmpty else { return nil }
+    static func dashboardSearch(draft: String?, focusComposer: Bool = false) -> String? {
+        let draft = draft?.isEmpty == false ? draft : nil
+        guard draft != nil || focusComposer else { return nil }
         var query = URLComponents()
-        query.queryItems = [
-            URLQueryItem(name: "draft", value: draft),
-            URLQueryItem(name: "__openclawComposerFocus", value: "1"),
-        ]
+        query.queryItems = (draft.map { [URLQueryItem(name: "draft", value: $0)] } ?? []) +
+            [URLQueryItem(name: "__openclawComposerFocus", value: "1")]
         // URLSearchParams decodes '+' as a space; Foundation leaves it literal.
         return query.percentEncodedQuery.map { "?" + $0.replacingOccurrences(of: "+", with: "%2B") }
     }

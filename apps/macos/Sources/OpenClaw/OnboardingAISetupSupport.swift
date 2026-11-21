@@ -164,13 +164,19 @@ extension OnboardingAISetupModel {
         let modelTarget: ModelTarget?
 
         func handoff(for kind: String) -> OnboardingDashboardHandoff {
-            kind == "existing-model" && self.modelTarget != .utility ? .dashboard : .custodianOnboarding
+            kind == "existing-model" && self.modelTarget != .utility
+                ? .dashboard : OnboardingAISetupModel.activationHandoff(modelTarget: self.modelTarget)
         }
 
         func verifies(modelRef: String?, modelTarget: ModelTarget?) -> Bool {
             self.ok && self.modelRef?.isEmpty == false &&
                 (modelRef == nil || self.modelRef == modelRef) && self.modelTarget == modelTarget
         }
+    }
+
+    /// Only a primary model can run the agent; a utility model opens OpenClaw help instead.
+    nonisolated static func activationHandoff(modelTarget: ModelTarget?) -> OnboardingDashboardHandoff {
+        modelTarget == .utility ? .custodianOnboarding : .chat
     }
 
     static func activationWizardResult(
@@ -455,13 +461,6 @@ extension OnboardingAISetupModel {
                 featured: false,
                 modelTarget: option.modelTarget),
             kind: .prepare)
-    }
-
-    /// True when setup live-verified an already-configured route instead of
-    /// activating a new one. The custodian first-run handoff belongs only to
-    /// fresh activations; verified reopens land on the normal dashboard.
-    var verifiedExistingInference: Bool {
-        self.phase == .connected(.dashboard)
     }
 
     /// Once setup starts changing inference, its successful result belongs to

@@ -133,14 +133,18 @@ or saving anything. Setup must pass a live AI test before you can continue.
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
 local models, and custom endpoints.
 </Step>
-<Step title="Continue in the dashboard">
-A newly verified model opens guided setup for your workspace, Gateway,
-channels, and optional features, then agent chat. An already configured model
-opens the normal dashboard.
+<Step title="Start chatting">
+A newly verified primary model opens your agent's chat, ready for your first
+message. A utility-only model cannot run the agent, so OpenClaw help opens to
+add a primary model. An already configured model opens the normal dashboard.
+Setup stays complete even if the chat window cannot open: click the OpenClaw
+menu bar icon to continue without connecting your AI again.
 
-- **Import memory (optional):** choose files during guided setup or later in
-  **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,
-  and Hermes memories into `memory/imports/`; previously imported files are skipped.
+Optional setup stays available later:
+
+- **Connect channels:** open **Settings → Channels**.
+- **Import memory (optional):** choose files in **Settings → Import Memory**.
+  Local Gateways can import Claude Code, Codex, and Hermes memories into `memory/imports/`; previously imported files are skipped.
 - **Grant macOS access as needed:** open **Settings → This Mac → Permissions** for features
   such as screen recording, microphone access, and automation. See
   [macOS permissions](/platforms/mac/permissions) for the full list and recovery steps.

@@ -2950,10 +2950,9 @@ struct OnboardingAISetupTests {
         }
 
         #expect(model.connected)
-        let expected: OnboardingDashboardHandoff = utility || kind != "existing-model"
-            ? .custodianOnboarding : .dashboard
+        let expected: OnboardingDashboardHandoff = utility
+            ? .custodianOnboarding : kind == "existing-model" ? .dashboard : .chat
         #expect(model.phase == .connected(expected))
-        #expect(model.verifiedExistingInference == (expected == .dashboard))
         #expect(handedOff)
         #expect(pendingState(defaults) == .completed)
         let receipt = OnboardingSystemAgentResumeStore.activationModel(
@@ -3035,7 +3034,7 @@ struct OnboardingAISetupTests {
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
         #expect(view.finish())
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(handoffs == [.chat])
     }
 
     @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {
@@ -3622,7 +3621,7 @@ struct OnboardingAISetupTests {
         #expect(await recorder.snapshot().methods == [
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
-        #expect(view.aiSetup.verifiedExistingInference)
+        #expect(view.aiSetup.phase == .connected(.dashboard))
         #expect(handoffs.isEmpty)
         #expect(view.finish())
         #expect(handoffs == [.dashboard])

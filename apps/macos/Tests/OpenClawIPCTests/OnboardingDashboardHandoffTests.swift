@@ -175,25 +175,82 @@ struct OnboardingDashboardHandoffTests {
         view.configuredGatewayProbe.invalidate()
     }
 
-    @Test func `fresh inference waits for the optional native steps before finishing once`() {
+    @Test(arguments: [false, true])
+    func `fresh activation waits for the native steps then opens its role destination once`(
+        utility: Bool) async throws
+    {
+        let suiteName = "OnboardingFreshActivationHandoffTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let targetField = utility ? ",\"modelTarget\":\"utility\"" : ""
+        let methods = OnboardingMethodRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message),
+                      let method = onboardingRequestMethod(from: message)
+                else { return }
+                await methods.record(method)
+                if respondToOnboardingHealth(task: task, id: id, method: method) { return }
+                switch method {
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(Data("""
+                    {"type":"res","id":"\(id)","ok":true,"payload":{
+                      "candidates":[{"kind":"claude-cli","label":"Claude","detail":"installed",
+                        "modelRef":"\(verifiedInferenceModelRef)","recommended":false,
+                        "credentials":true\(targetField)}],
+                      "manualProviders":[],"prepareOptions":[],
+                      "workspace":"/tmp/openclaw-workspace","configuredModel":null,"setupComplete":false}}
+                    """.utf8)))
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id, utility: utility)))
+                default:
+                    break
+                }
+            }, receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    capabilities: ["openclaw-setup-model-ref"]))
+            })
+        })
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
         let state = AppState(preview: true)
         state.connectionMode = .local
         var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: state,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
             dashboardHandoffOpener: { handoffs.append($0) })
 
         view.prepareSystemAgentHandoff()
-        view.aiSetup.onConnected?()
+        await view.aiSetup.detectConnections()
+        await view.aiSetup.activate(kind: "claude-cli")
 
+        #expect(view.aiSetup.connected)
         #expect(!view.finishState.didFinish)
         #expect(handoffs.isEmpty)
         #expect(view.finish())
         #expect(view.finishState.didFinish)
-        // Fresh connections own the remaining first-run steps via the custodian.
-        #expect(handoffs == [.custodianOnboarding])
+        // A primary model opens its agent chat; a utility-only model cannot run the
+        // agent, so OpenClaw help opens instead.
+        let expected: OnboardingDashboardHandoff = utility ? .custodianOnboarding : .chat
+        #expect(handoffs == [expected])
         #expect(!view.finish())
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(handoffs == [expected])
+        // Completion retires the activation receipt; reopening chat never re-activates.
+        #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
+        #expect(await methods.snapshot().filter { $0 != "health" } == [
+            "openclaw.setup.detect", "openclaw.setup.activate",
+        ])
+        await gateway.shutdown()
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -624,13 +681,14 @@ struct OnboardingDashboardHandoffTests {
             #expect(receipt?.modelTarget == .utility)
             #expect(receipt?.utilityModel == nil)
         } else {
-            #expect(aiSetup.connected)
-            #expect(!aiSetup.verifiedExistingInference)
+            // A relaunch-completed activation keeps its role destination.
+            let expected: OnboardingDashboardHandoff = utility ? .custodianOnboarding : .chat
+            #expect(aiSetup.phase == .connected(expected))
             #expect(!view.finishState.didFinish)
             #expect(handoffs.isEmpty)
             #expect(view.finish())
             #expect(view.finishState.didFinish)
-            #expect(handoffs == [.custodianOnboarding])
+            #expect(handoffs == [expected])
             #expect(OnboardingSystemAgentResumeStore.pendingState(
                 for: routeIdentity,
                 defaults: defaults) == .none)
