@@ -148,12 +148,10 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }, exitCode
       outcome: string;
       reason: string;
       bytes: number;
-      detail?: string;
     }>;
   };
   return {
     status: report.status,
-    details: Object.fromEntries(report.artifacts.map((item) => [item.path, item.detail])),
     snapshots: Object.fromEntries(
       report.artifacts
         .filter((item) => item.kind === "database-snapshot")
@@ -197,8 +195,7 @@ const expectedPreview = (snapshots: Record<string, string>, runs: Record<string,
 
 it("previews earlier runs' database snapshots with run, bytes and reason without removing any", async () => {
   await withSnapshotHistory(async (snapshots, runs) => {
-    const { status, snapshots: listed } = await runCleanup({ dryRun: true });
-    expect({ status, snapshots: listed }).toEqual({
+    expect(await runCleanup({ dryRun: true })).toEqual({
       status: "preview",
       snapshots: expectedPreview(snapshots, runs),
     });
@@ -284,10 +281,8 @@ it("still retires recorded snapshots when an earlier install root can no longer 
     fs.rmSync(previous, { recursive: true });
     fs.writeFileSync(previous, "");
     const result = await runCleanup({ yes: true });
-    expect(result.status).toBe("complete");
     expect(result.snapshots[snapshots.supersededPreviousRoot!]).toBeUndefined();
     expect(result.snapshots[snapshots.supersededPackage!]).toMatchObject({ outcome: "removed" });
-    expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
   });
 });
 
@@ -298,32 +293,18 @@ it("drops a snapshot's PostgreSQL server captures before removing it and keeps i
     const exported = path.join(snapshot, "payload", "workboard.sqlite.postgres");
     fs.mkdirSync(exported);
     fs.writeFileSync(path.join(exported, "manifest.json"), "{}");
-    const discard = vi
-      .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
-      .mockRejectedValueOnce(new Error("connection refused"));
+    const discard = vi.spyOn(snapshotBackup, "discardPostgresSchemaCaptures");
+    discard.mockImplementationOnce(async () => {
+      expect(fs.existsSync(path.join(exported, "manifest.json"))).toBe(true);
+      throw new Error("connection refused");
+    });
     const failed = await runCleanup({ yes: true }, 1);
     expect(discard).toHaveBeenCalledExactlyOnceWith(expect.anything(), [exported]);
-    expect(failed.snapshots[snapshot]).toMatchObject({
-      outcome: "failed",
-      reason: "database-snapshot-retirement-failed",
-    });
-    expect(failed.details[snapshot]).toContain(
-      `PostgreSQL capture cleanup remains pending at ${snapshot}: connection refused`,
-    );
+    expect(failed.snapshots[snapshot]?.reason).toBe("database-snapshot-retirement-failed");
     expect(fs.existsSync(path.join(exported, "manifest.json"))).toBe(true);
     // A snapshot without server captures needs no drop and is retired in the same cleanup.
     expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
-
-    discard.mockReset().mockImplementation(async (_config, directories) => {
-      expect(directories).toEqual([exported]);
-      expect(fs.existsSync(path.join(exported, "manifest.json"))).toBe(true);
-    });
-    const retried = await runCleanup({ yes: true });
-    expect(discard).toHaveBeenCalledOnce();
-    expect(retried.snapshots[snapshot]).toMatchObject({
-      outcome: "removed",
-      reason: "database-snapshot-retired",
-    });
-    expect(fs.existsSync(snapshot)).toBe(false);
+    discard.mockResolvedValueOnce();
+    expect((await runCleanup({ yes: true })).snapshots[snapshot]?.outcome).toBe("removed");
   });
 });

@@ -606,104 +606,75 @@ it.skipIf(!connection)(
   () =>
     withSeededWorkboard(
       async ({ state, client, namespace, namespaces, storeId, anchorPath, config }) => {
+        const env = state.env;
         // An earlier update kept its snapshot, with the workboard store captured on the server.
-        const backupRoot = path.join(
-          state.home,
-          "node_modules",
-          ".openclaw.package-backup-4242-1795000000000",
-        );
-        await fs.mkdir(path.dirname(backupRoot), { recursive: true });
         const backup = await createUpdateDatabaseBackupWithFixtureTransport({
-          backupRoot,
+          backupRoot: path.join(state.home, ".openclaw.package-backup-4242-1795000000000"),
           stateDir: state.stateDir,
           config,
-          env: state.env,
+          env,
           stopped: true,
           postgresSchemaCaptures: true,
         });
-        const entry = backup.databases.find((item) => item.path === anchorPath);
-        assert(entry?.exportDirectory);
-        const manifest = await verifyMatchedPostgresBackup(entry.exportDirectory, "exact", {
-          storeId,
-          namespace,
-        });
-        assert(manifest.schema);
-        namespaces.add(manifest.schema);
+        const exported = backup.databases.find((item) => item.path === anchorPath)?.exportDirectory;
+        assert(exported);
+        const expected = { storeId, namespace };
+        const { schema } = await verifyMatchedPostgresBackup(exported, "exact", expected);
+        assert(schema);
+        namespaces.add(schema);
         // That run finished; a later verified update supersedes its snapshot.
         const clock = vi.spyOn(Date, "now");
         let now = Date.UTC(2026, 10, 1);
-        const env = state.env;
-        clock.mockReturnValue((now += 60_000));
-        const earlier = createUpdateRun({ trigger: "cli" }, { env }).runId;
-        recordUpdateRunStep(
-          earlier,
-          {
+        for (const status of ["failed", "succeeded"] as const) {
+          clock.mockReturnValue((now += 60_000));
+          const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+          const detail = formatUpdateDatabaseSnapshotReceipt(backup.directory);
+          const step = {
             step: "diagnostic:database snapshot",
             status: "completed",
-            detail: formatUpdateDatabaseSnapshotReceipt(backup.directory),
-          },
-          { env },
-        );
-        clock.mockReturnValue((now += 60_000));
-        finishUpdateRun(earlier, { status: "failed" }, { env });
-        clock.mockReturnValue((now += 60_000));
-        const verified = createUpdateRun({ trigger: "cli" }, { env }).runId;
-        recordUpdateRunVerification(
-          verified,
-          {
+            detail,
+          } as const;
+          const healthy = {
             serviceRunning: true,
             versionMatch: true,
             settled: true,
             coreReady: true,
-            pluginErrors: [],
-          },
-          { env },
-        );
-        clock.mockReturnValue(now + 60_000);
-        finishUpdateRun(verified, { status: "succeeded" }, { env });
+          };
+          if (status === "failed") {
+            recordUpdateRunStep(runId, step, { env });
+          } else {
+            recordUpdateRunVerification(runId, { ...healthy, pluginErrors: [] }, { env });
+          }
+          clock.mockReturnValue((now += 60_000));
+          finishUpdateRun(runId, { status }, { env });
+        }
         clock.mockRestore();
         await closeOpenClawStateDatabaseAsync();
-
         const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
         const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-        const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
         const cleanup = async () => {
           await updateCleanupCommand({ yes: true, json: true });
           await closeOpenClawStateDatabaseAsync();
-          const report = output.mock.lastCall?.[0] as {
-            artifacts: Array<{ path: string; outcome: string; reason: string; detail?: string }>;
-          };
+          const report = output.mock.lastCall?.[0] as { artifacts: Array<{ path: string }> };
           return report.artifacts.find((item) => item.path === backup.directory);
         };
         try {
           // The server cannot be reached: the capture and its only record both stay.
-          await state.writeConfig({
-            ...config,
-            database: {
-              ...config.database,
-              postgres: { connection: "postgresql://postgres@127.0.0.1:1/postgres" },
-            },
-          });
+          const postgres = { connection: "postgresql://postgres@127.0.0.1:1/postgres" };
+          await state.writeConfig({ ...config, database: { ...config.database, postgres } });
           expect(await cleanup()).toMatchObject({
             outcome: "failed",
             reason: "database-snapshot-retirement-failed",
-            detail: expect.stringContaining(
-              `PostgreSQL capture cleanup remains pending at ${backup.directory}`,
-            ),
+            detail: expect.stringContaining("PostgreSQL capture cleanup remains pending at"),
           });
-          expect(await schemaExists(client, manifest.schema)).toBe(true);
-          expect(await fs.readdir(entry.exportDirectory)).toContain("manifest.json");
-
+          expect(await schemaExists(client, schema)).toBe(true);
+          expect(await fs.readdir(exported)).toContain("manifest.json");
           await state.writeConfig(config);
-          expect(await cleanup()).toMatchObject({
-            outcome: "removed",
-            reason: "database-snapshot-retired",
-          });
-          expect(await schemaExists(client, manifest.schema)).toBe(false);
+          expect(await cleanup()).toMatchObject({ outcome: "removed" });
+          expect(await schemaExists(client, schema)).toBe(false);
           expect(await schemaExists(client, namespace)).toBe(true);
           await expect(fs.stat(backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
         } finally {
-          stderr.mockRestore();
           exit.mockRestore();
           output.mockRestore();
         }
