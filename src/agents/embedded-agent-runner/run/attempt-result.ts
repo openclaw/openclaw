@@ -215,7 +215,7 @@ export function completeEmbeddedAttemptResult(
             ? { harnessId: attempt.runtimePlan.observability.harnessId }
             : {}),
           assistantTexts,
-          lastAssistant: state.lastAssistant,
+          lastAssistant: resolveCurrentAttemptAssistant(state),
           usage: state.attemptUsage,
         },
         {
