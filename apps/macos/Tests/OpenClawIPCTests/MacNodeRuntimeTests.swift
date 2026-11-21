@@ -143,6 +143,19 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    actor CanvasRotationProbe {
+        private(set) var refreshes = 0
+
+        func current() -> String? {
+            "http://127.0.0.1:18789/__openclaw__/cap/token-\(max(self.refreshes, 1))"
+        }
+
+        func refresh() -> String? {
+            self.refreshes += 1
+            return "http://127.0.0.1:18789/__openclaw__/cap/token-\(self.refreshes)"
+        }
+    }
+
     actor CanvasReconnectProbe {
         private var surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
 
@@ -176,6 +189,17 @@ struct MacNodeRuntimeTests {
                 if disabled.contains(capability) { return (capability, .disabledInOpenClaw) }
                 return self.permissionStates[capability].map { (capability, $0) }
             })
+        }
+
+        var canvasShowingLoadFailure = false
+        var canvasShows: [(sessionKey: String, path: String?)] = []
+
+        func canvasIsShowingLoadFailure(sessionKey _: String) async -> Bool {
+            self.canvasShowingLoadFailure
+        }
+
+        func showCanvas(sessionKey: String, path: String?, placement _: CanvasPlacement?) async throws {
+            self.canvasShows.append((sessionKey, path))
         }
 
         var recordingBytes = 2
@@ -472,6 +496,52 @@ struct MacNodeRuntimeTests {
 
         #expect(resolved?.absoluteString ==
             "http://127.0.0.1:18789/__openclaw__/cap/new-token/__openclaw__/canvas/demo.html")
+    }
+
+    @Test @MainActor func `bare present after a failed hosted page re-resolves the logical target`() async throws {
+        let probe = CanvasRotationProbe()
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { services },
+            canvasSurfaceUrl: { await probe.current() },
+            refreshCanvasSurfaceUrl: { _ in await probe.refresh() })
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let first = await self.invoke(
+                runtime, "req-canvas-hosted", OpenClawCanvasCommand.present.rawValue,
+                #"{"url":"/__openclaw__/canvas/demo.html"}"#)
+            #expect(first.ok)
+            #expect(services.canvasShows.last?.path ==
+                "http://127.0.0.1:18789/__openclaw__/cap/token-1/__openclaw__/canvas/demo.html")
+
+            // A bare present while a good page shows only brings the panel forward.
+            let idle = await self.invoke(runtime, "req-canvas-bare-idle", OpenClawCanvasCommand.present.rawValue)
+            #expect(idle.ok)
+            #expect(services.canvasShows.count == 2)
+            #expect(services.canvasShows.last?.path == nil)
+
+            // The page failed and the capability rotated: the retry must carry the new token.
+            services.canvasShowingLoadFailure = true
+            let retry = await self.invoke(runtime, "req-canvas-bare-retry", OpenClawCanvasCommand.present.rawValue)
+            #expect(retry.ok)
+            #expect(services.canvasShows.last?.path ==
+                "http://127.0.0.1:18789/__openclaw__/cap/token-2/__openclaw__/canvas/demo.html")
+            #expect(await probe.refreshes == 2)
+        }
+    }
+
+    @Test @MainActor func `bare present after the default page failed reloads the default page`() async throws {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let first = await self.invoke(runtime, "req-canvas-default", OpenClawCanvasCommand.present.rawValue)
+            #expect(first.ok)
+            #expect(services.canvasShows.last?.path == nil)
+
+            services.canvasShowingLoadFailure = true
+            let retry = await self.invoke(runtime, "req-canvas-default-retry", OpenClawCanvasCommand.present.rawValue)
+            #expect(retry.ok)
+            #expect(services.canvasShows.last?.path == "/")
+        }
     }
 
     @Test func `removed Canvas commands are unknown even when Canvas is disabled`() async {

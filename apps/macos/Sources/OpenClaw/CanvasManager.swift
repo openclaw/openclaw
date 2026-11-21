@@ -52,6 +52,13 @@ final class CanvasManager {
         self.panelController?.hideCanvas()
     }
 
+    /// True while this session's panel shows a load-failure card (the "present it again" state).
+    func isShowingLoadFailure(sessionKey: String) -> Bool {
+        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let controller = self.panelController, controller.sessionKey == session else { return false }
+        return controller.isShowingLoadFailure
+    }
+
     func hideAll() {
         self.panelController?.hideCanvas()
     }

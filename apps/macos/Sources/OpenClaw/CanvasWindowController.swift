@@ -19,10 +19,18 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     private var debugStatusSubtitle: String?
     private var canvasVisible = false
     private var watchesLocalCanvasFiles = false
+    /// Set while a load-failure page is showing; cleared by the next `load(target:)`. The node runtime
+    /// reads it to turn a bare present into a retry of the last logical target.
+    var isShowingLoadFailure = false
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    init(sessionKey: String, root: URL, anchorProvider: @escaping () -> NSRect?) throws {
+    init(
+        sessionKey: String,
+        root: URL,
+        anchorProvider: @escaping () -> NSRect?,
+        websiteDataStore: WKWebsiteDataStore = .default()) throws
+    {
         self.sessionKey = sessionKey
         self.anchorProvider = anchorProvider
 
@@ -37,6 +45,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.tabFocusesLinks = true
         config.setURLSchemeHandler(self.schemeHandler, forURLScheme: CanvasScheme.scheme)
+        config.websiteDataStore = websiteDataStore
 
         self.webView = WKWebView(frame: .zero, configuration: config)
         // Presented documents render against an opaque surface.
@@ -106,6 +115,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     func load(target: String) {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isShowingLoadFailure = false
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == CanvasScheme.scheme {
