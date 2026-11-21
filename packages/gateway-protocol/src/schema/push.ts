@@ -123,11 +123,15 @@ export const WebPushSendParamsSchema = closedObject({
   ]),
   /** Collapses repeated notifications on the device; namespaced by the Gateway. */
   tag: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9._:-]{1,64}$" })),
-  /** Control UI path opened on click, relative to the Control UI base path. */
+  /**
+   * Control UI path opened on click, relative to the Control UI base path. No query or
+   * fragment (Control UI reads startup settings such as `token` and `gatewayUrl` from
+   * them), no empty segments, and no dot segments, including percent-encoded ones.
+   */
   path: Type.Optional(
     Type.String({
       maxLength: 512,
-      pattern: "^[A-Za-z0-9][A-Za-z0-9._~%/-]*(?:\\?[^\\s#]*)?$",
+      pattern: "^(?!.*//)(?!.*/(?:\\.|%2[Ee]){1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._~%/-]*$",
     }),
   ),
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
