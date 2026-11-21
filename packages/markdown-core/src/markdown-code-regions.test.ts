@@ -17,6 +17,24 @@ describe("range-only Markdown ownership", () => {
     ).toEqual(["`shown`", "`linked`"]);
   });
 
+  it.each([undefined, true, false])(
+    "selects indented regions without changing grammar: %s",
+    (includeIndentedCode) => {
+      const text = "`inline`\n\n~~~md\nfenced\n~~~\n\n    `indented`";
+      const options = includeIndentedCode === undefined ? undefined : { includeIndentedCode };
+      expect(
+        findMarkdownCodeRegions(text, options).map(({ start, end, block }) => [
+          text.slice(start, end),
+          block,
+        ]),
+      ).toEqual([
+        ["`inline`", false],
+        ["~~~md\nfenced\n~~~", true],
+        ...(includeIndentedCode === false ? [] : [["    `indented`", true]]),
+      ]);
+    },
+  );
+
   it("retains exact raw offsets through partially expanded container tabs", () => {
     expect(findMarkdownCodeRegions(">\t\t`code`\n>\tmore")).toEqual([
       { start: 2, end: 9, block: true },

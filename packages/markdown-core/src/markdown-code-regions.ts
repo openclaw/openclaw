@@ -4,7 +4,10 @@ import { gfmTable } from "micromark-extension-gfm-table";
 type MarkdownCodeRegion = { start: number; end: number; block: boolean };
 
 /** Read exact original UTF-16 code ranges without building a Markdown tree. */
-export function findMarkdownCodeRegions(text: string): MarkdownCodeRegion[] {
+export function findMarkdownCodeRegions(
+  text: string,
+  options?: { includeIndentedCode?: boolean },
+): MarkdownCodeRegion[] {
   if (!/[`~\t]| {4}/u.test(text)) {
     return [];
   }
@@ -23,7 +26,9 @@ export function findMarkdownCodeRegions(text: string): MarkdownCodeRegion[] {
     if (
       phase === "enter" &&
       imageDepth === 0 &&
-      (token.type === "codeText" || token.type === "codeFenced" || token.type === "codeIndented")
+      (token.type === "codeText" ||
+        token.type === "codeFenced" ||
+        (token.type === "codeIndented" && options?.includeIndentedCode !== false))
     ) {
       regions.push({
         start: token.start.offset,
