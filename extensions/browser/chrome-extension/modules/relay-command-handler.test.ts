@@ -22,6 +22,7 @@ function createHarness() {
     captureAccess: vi.fn(() => epoch),
     navigateTab: vi.fn(async () => navigationResult),
     requireAccessibleTab: vi.fn(async () => ({ id: 7, windowId: 3 })),
+    requireInputReceipt: vi.fn(async () => ({ id: 7, windowId: 3 })),
     requireNavigatedTab: vi.fn(async () => ({ id: 7, windowId: 3 })),
   };
   const handler = createRelayCommandHandler(dependencies);
