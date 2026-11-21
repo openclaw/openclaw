@@ -134,7 +134,19 @@ read_when:
   <Accordion title="Why did an isolated cron run switch models or retry once?">
     That is the live model-switch path, not duplicate scheduling. Isolated cron persists a runtime model handoff and retries when the active run throws `LiveSessionModelSwitchError`, keeping the switched provider/model (and any switched auth-profile override) before retrying.
 
-    Model-selection precedence: Gmail hook model override (`hooks.gmail.model`) first, then per-job `model`, then any stored cron-session model override, then normal agent/default model selection.
+    Initial model selection uses this precedence:
+
+    1. Per-job `model` override.
+    2. Gmail hook model override (`hooks.gmail.model`), for Gmail-triggered runs when allowed.
+    3. Stored cron-session model override.
+    4. The agent's `subagents.model`.
+    5. `agents.defaults.subagents.model`.
+    6. The agent's own `model`.
+    7. Default model selection.
+
+    Subagent model defaults therefore also affect isolated cron jobs. A disallowed
+    per-job model override is rejected instead of silently falling back to a
+    lower-priority selection.
 
     The retry loop is bounded to the initial attempt plus 2 switch retries; cron then aborts instead of looping forever.
 
