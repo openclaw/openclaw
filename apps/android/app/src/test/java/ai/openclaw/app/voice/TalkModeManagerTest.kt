@@ -20,6 +20,7 @@ import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -1702,6 +1703,40 @@ class TalkModeManagerTest {
       talkAudioPlayer.finished.complete(Unit)
       job.join()
     }
+
+  @Test
+  fun localSpeechStopsWhenAnotherAppRequestsDucking() {
+    runTest {
+      withStartedLocalPlayback { manager, playback, player ->
+        val app = RuntimeEnvironment.getApplication()
+        val audioManager = app.getSystemService(AudioManager::class.java)
+        val audio = shadowOf(audioManager)
+        val request = checkNotNull(audio.lastAudioFocusRequest)
+        val focus = checkNotNull(request.audioFocusRequest)
+        val attributes = focus.audioAttributes
+        assertEquals(AudioAttributes.CONTENT_TYPE_SPEECH, attributes.contentType)
+
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        runCurrent()
+        assertTrue(playback.isActive)
+        assertTrue(manager.isSpeaking.value)
+
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+        runCurrent()
+
+        assertTrue("Speech must yield when Android cannot duck it", playback.isCompleted)
+        assertTrue(playback.isCancelled)
+        assertFalse(manager.isSpeaking.value)
+        assertFalse("The player did not finish the reply itself", player.finished.isCompleted)
+        assertSame(focus, audio.lastAbandonedAudioFocusRequest)
+
+        request.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        runCurrent()
+        assertFalse("A retired reply must not restart on focus gain", manager.isSpeaking.value)
+        assertEquals(1, player.playCalls)
+      }
+    }
+  }
 
   @Test
   fun localPlaybackReleasesItsAudioFocusForEveryTerminalOutcome() =

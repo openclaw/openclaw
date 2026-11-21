@@ -2950,7 +2950,12 @@ class TalkModeManager internal constructor(
         .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
         .setAudioAttributes(speechPlaybackAttributes())
         .setOnAudioFocusChangeListener { change ->
-          if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+          // Android does not auto-duck speech; use the native reply interruption path.
+          if (
+            change == AudioManager.AUDIOFOCUS_LOSS ||
+            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
+            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
+          ) {
             lease.job.cancel(CancellationException("audio focus lost"))
           }
         }.build()
