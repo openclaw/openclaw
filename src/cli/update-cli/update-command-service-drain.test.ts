@@ -635,8 +635,8 @@ it.each(["authority", "boot"] as const)(
   },
 );
 
-// Node runtime recovery reruns the Gateway under another Node: systemd's main
-// process is the launcher and its direct child serves the port (#202954).
+// Runtime recovery reruns a Gateway whose Node fails admission under another
+// Node: systemd's main process is the launcher and its child serves (#202954).
 it.each([
   { listener: { pid: 43, ppid: 42 }, explicit: false, stops: true },
   { listener: { pid: 43, ppid: 42 }, explicit: true, stops: true },

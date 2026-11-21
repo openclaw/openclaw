@@ -188,9 +188,9 @@ export async function withGatewayMaintenanceDrain<T>(
     assertResidentCurrent();
     return usage.status === "busy" && allListenersOwnedByRuntimePid(usage.listeners, pid);
   };
-  // A launcher that reruns the Gateway under another Node (runtime recovery)
-  // stays the service's main process; its direct child serves the port and
-  // stops with the service.
+  // Runtime recovery reruns a Gateway whose Node fails admission under another
+  // Node; the launcher stays the service's main process and its direct child
+  // serves the port and stops with the service.
   const isServiceResident = async (pid: number | undefined) => {
     const runtimePid = params.state.runtime?.pid;
     if (pid === undefined || runtimePid === undefined) {
