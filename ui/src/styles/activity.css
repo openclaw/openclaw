@@ -931,6 +931,11 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Align the first tab’s label, not the edge of its padded hit target. */
+  .activity-mode-tabs {
+    margin-inline-start: calc(var(--activity-inset) - var(--space-2));
+  }
+
   main.content:where(.content--activity-page) {
     overflow-y: auto;
   }
@@ -943,6 +948,21 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 640px) {
+  /* The shell already supplies the phone gutter for the header and workspace. */
+  main.content:where(.content--activity-page) {
+    --activity-inset: 0px;
+  }
+
+  /* Center differently sized avatars on one column; labels start after it. */
+  .activity-feed__people-row {
+    display: grid;
+    grid-template-columns: var(--space-5) minmax(0, 1fr) auto;
+  }
+
+  .activity-feed__people-row > :first-child {
+    justify-self: center;
+  }
+
   /* Search and person share a row; the time range takes the full row below. */
   .activity-feed__search {
     flex: 1 1 0;
