@@ -11,7 +11,10 @@ import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
-import { readPublicSupportCauses } from "./diagnostic-support-causes.js";
+import {
+  readPublicSupportCauses,
+  redactPublicTempWorkspaceRefusal,
+} from "./diagnostic-support-causes.js";
 import { createSupportKeyChecker } from "./diagnostic-support-key-check.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
@@ -270,10 +273,6 @@ function matchPathPrefix(file: string, prefix: PathRedactionPrefix): string | un
   return next === "/" || next === "\\" ? file.slice(prefix.prefix.length) : undefined;
 }
 
-function isSupportAbsolutePath(value: string): boolean {
-  return path.isAbsolute(value) || isWindowsAbsolutePath(value);
-}
-
 export function redactPathForSupport(
   file: string | null | undefined,
   options: SupportRedactionContext,
@@ -380,9 +379,10 @@ export function redactSupportString(
   const maxLength = options.maxLength ?? MAX_SUPPORT_STRING_LENGTH;
   const truncationSuffix = options.truncationSuffix ?? DEFAULT_TRUNCATION_SUFFIX;
   const redacted = redactTextForSupport(value);
-  const pathRedacted = isSupportAbsolutePath(redacted)
-    ? redactPathForSupport(redacted, redaction)
-    : redactKnownPathPrefixesForSupport(redacted, redaction);
+  const pathRedacted =
+    path.isAbsolute(redacted) || isWindowsAbsolutePath(redacted)
+      ? redactPathForSupport(redacted, redaction)
+      : redactKnownPathPrefixesForSupport(redacted, redaction);
   if (pathRedacted.length <= maxLength) {
     return pathRedacted;
   }
@@ -664,16 +664,16 @@ export function redactPublicSupportDiagnosticLine(
   const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
-  const causes = readPublicSupportCauses(lines);
   // Candidate admission's existing text protocol carries only these fixed validation lines.
   const configFields = parsePublicConfigDiagnosticLines(value).map(
     (issue) =>
       `${redactPublicSupportConfigKey(issue.path, context.redactConfigPathSegment)}: ${issue.message}`,
   );
-  return truncateUtf16Safe(
-    [...new Set([...codes, ...causes, ...configFields])].join("; ") || "[redacted-diagnostic]",
-    200,
+  const workspaceRefusal = redactPublicTempWorkspaceRefusal(value, (directory) =>
+    context.redactRelativePaths ? undefined : redactSupportString(directory, context),
   );
+  const causes = [...new Set([...codes, ...readPublicSupportCauses(lines), ...configFields])];
+  return truncateUtf16Safe(workspaceRefusal ?? (causes.join("; ") || "[redacted-diagnostic]"), 200);
 }
 
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {
