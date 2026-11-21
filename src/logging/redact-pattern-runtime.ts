@@ -210,7 +210,11 @@ export function readRedactMatch(args: unknown[]) {
   return { match, groups, input, offset };
 }
 
-export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: string };
+export type RedactMatch = ReturnType<typeof readRedactMatch> & {
+  replacement?: string;
+  /** Offset of a bounded match input inside the complete diagnostic text. */
+  sourceOffset?: number;
+};
 
 export type RedactContext = {
   pattern: ResolvedRedactPattern;

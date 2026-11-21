@@ -1,3 +1,5 @@
+import { readRedactMatch, type RedactMatch } from "./redact-pattern-runtime.js";
+
 // Bounded regex replacement prevents large support/log strings from monopolizing the event loop.
 const REDACT_REGEX_CHUNK_THRESHOLD = 32_768;
 const REDACT_REGEX_CHUNK_SIZE = 16_384;
@@ -25,4 +27,26 @@ export function replacePatternBounded(
     }
   }
   return output ?? text;
+}
+
+/** Visits the same bounded regex matches while retaining each chunk's capture context. */
+export function visitPatternBounded(
+  text: string,
+  pattern: RegExp,
+  visit: (match: RedactMatch) => void,
+): void {
+  const visitChunk = (chunk: string, sourceOffset: number) => {
+    chunk.replace(pattern, (...args: unknown[]) => {
+      const match = readRedactMatch(args);
+      visit({ ...match, sourceOffset });
+      return match.match;
+    });
+  };
+  if (text.length <= REDACT_REGEX_CHUNK_THRESHOLD) {
+    visitChunk(text, 0);
+    return;
+  }
+  for (let index = 0; index < text.length; index += REDACT_REGEX_CHUNK_SIZE) {
+    visitChunk(text.slice(index, index + REDACT_REGEX_CHUNK_SIZE), index);
+  }
 }
