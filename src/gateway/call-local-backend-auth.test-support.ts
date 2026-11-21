@@ -8,6 +8,26 @@ import type { GatewayClientOptions } from "./client.js";
 
 type DeviceAuthLookupMock = Mock<(...args: unknown[]) => DeviceAuthEntry | null>;
 
+export function deviceAuth(
+  token = "paired-device-token",
+  scopes = ["operator.read"],
+): DeviceAuthEntry {
+  return { token, role: "operator", scopes, updatedAtMs: 123 };
+}
+
+export function makeRemotePasswordGatewayConfig(
+  remotePassword: string,
+  localPassword = "from-config",
+) {
+  return {
+    gateway: {
+      mode: "remote",
+      remote: { url: "wss://remote.example:18789", password: remotePassword },
+      auth: { password: localPassword },
+    },
+  };
+}
+
 export function registerGatewayCallLocalBackendAuthTests(fixture: {
   callGateway: typeof CallGateway;
   setGatewayConfig: (gateway: NonNullable<OpenClawConfig["gateway"]>) => void;

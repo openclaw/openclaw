@@ -21,6 +21,14 @@ export function bootDecision(tripped = false, recovered = false) {
   };
 }
 
+export function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[argIndex];
+}
+
 export function registerGatewayRunStartupRecoveryTests({
   bootLifecycle,
   bootDecision,

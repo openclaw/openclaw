@@ -57,6 +57,7 @@ import {
   inspectPortUsage,
   inspectPortUsages,
   originalReadGatewayLastShutdown,
+  probeInput,
   readGatewayLastShutdownAsync,
   readGatewayRecentCrashesAsync,
   readGatewayRestartHandoffSync,
@@ -206,6 +207,7 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
   isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
 }));
 
@@ -390,12 +392,6 @@ vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
 vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
-
-function probeInput() {
-  const input = callGatewayStatusProbe.mock.calls[0]?.[0];
-  assert(input, "expected status probe");
-  return input;
-}
 
 function gatherStatus(overrides: Partial<Parameters<typeof gatherDaemonStatus>[0]> = {}) {
   return gatherDaemonStatus({ rpc: {}, probe: true, deep: false, ...overrides });

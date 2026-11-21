@@ -104,6 +104,8 @@ vi.mock("../config/config.js", async (importActual) => {
       return committedConfigFiles.write(nextConfig, resolveTestConfigPath());
     },
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
+    // Keep the operator's port and profile out of these synthetic config snapshots.
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {

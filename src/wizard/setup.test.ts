@@ -25,6 +25,7 @@ import {
   modelConfig,
   modelConfigWithApiKey,
   openAiAuthProfile,
+  providerFlag,
   registerSetupCompletionTests,
 } from "./setup.credentials.test-support.js";
 import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
@@ -117,20 +118,6 @@ const probeGatewayReachable = vi.hoisted(() => vi.fn<() => Promise<{ ok: boolean
 const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
-
-function providerFlag(
-  optionKey: ReturnType<ResolveProviderOnboardAuthFlags>[number]["optionKey"],
-  authChoice: ReturnType<ResolveProviderOnboardAuthFlags>[number]["authChoice"],
-  cliFlag: string,
-) {
-  return {
-    optionKey,
-    authChoice,
-    cliFlag,
-    cliOption: `${cliFlag} <key>`,
-    description: "Provider credential",
-  };
-}
 
 function storedRemote(
   extra: Partial<NonNullable<NonNullable<OpenClawConfig["gateway"]>["remote"]>> = {},
@@ -284,6 +271,7 @@ vi.mock("../config/config.js", async (importActual) => {
     DEFAULT_GATEWAY_PORT: 18789,
     createConfigIO: () => ({ readConfigFileSnapshot }),
     readConfigFileSnapshot,
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
     replaceConfigFile,
     transformConfigFileWithRetry: async (
       params: Parameters<typeof actual.transformConfigFileWithRetry>[0],

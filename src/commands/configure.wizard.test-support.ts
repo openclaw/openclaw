@@ -138,6 +138,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ) => actual.transformConfigFileWithRetry({ ...params, io }),
     writeConfigFile: wizardTestMocks.writeConfigFile,
     replaceConfigFile: wizardTestMocks.replaceConfigFile,
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
   };
 });
 

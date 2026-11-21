@@ -14,6 +14,7 @@ const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-migrate-app
 
 vi.mock("../../config/paths.js", async (importActual) => ({
   ...(await importActual<typeof import("../../config/paths.js")>()),
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
   resolveStateDir: () => stateDir,
 }));
 

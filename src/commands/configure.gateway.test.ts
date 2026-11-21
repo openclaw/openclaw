@@ -29,6 +29,14 @@ vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => chatChannels(),
 }));
 
+vi.mock("../config/config.js", async (importActual) => {
+  const actual = await importActual<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
+  };
+});
+
 vi.mock("../config/gateway-port.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/gateway-port.js")>();
   return { ...actual, resolveGatewayPort: mocks.resolveGatewayPort };

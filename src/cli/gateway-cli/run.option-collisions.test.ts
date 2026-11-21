@@ -45,6 +45,7 @@ import {
 import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
 import {
   bootDecision,
+  callArg,
   registerGatewayRunStartupRecoveryTests,
 } from "./run-startup-recovery.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -196,6 +197,7 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
+  resolveGatewayPort: (await import("../../config/gateway-port.js")).resolveGatewayPort,
 }));
 
 vi.mock("../../config/gateway-port.js", async (importOriginal) => ({
@@ -497,14 +499,6 @@ describe("gateway run option collisions", () => {
   }
 
   registerInvalidConfigResetTests(configState);
-  function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
-    const call = mock.mock.calls[index];
-    if (!call) {
-      throw new Error(`Expected mock call ${index}`);
-    }
-    return call[argIndex];
-  }
-
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;

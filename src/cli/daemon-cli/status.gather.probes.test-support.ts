@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { assert, vi } from "vitest";
 import type { GatewayServiceInventory } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -47,6 +47,12 @@ export const callGatewayStatusProbe = vi.fn<
   error: null,
   server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
+
+export function probeInput() {
+  const input = callGatewayStatusProbe.mock.calls[0]?.[0];
+  assert(input, "expected status probe");
+  return input;
+}
 
 export type PortUsageTestSummary = Omit<PortUsage, "errors">;
 export type PortUsageInspectionOptions = { probeHosts?: readonly string[] };

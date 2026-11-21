@@ -91,6 +91,7 @@ vi.mock("../config/paths.js", async () => {
     get CONFIG_PATH() {
       return actual.resolveConfigPath();
     },
+    resolveGatewayPort: (await import("../config/gateway-port.js")).resolveGatewayPort,
   };
 });
 
