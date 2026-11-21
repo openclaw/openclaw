@@ -141,7 +141,12 @@ it("uses theme artwork as fallback, respects personal artwork, and follows theme
 
   vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:personal-avatar");
   fixture.theme.settings.tabIcon = "agent";
-  await settle(fixture, "blob:personal-avatar", "circle");
+  await settle(fixture, "blob:personal-avatar", "square");
+  const loaded = vi.mocked(applyControlUiFaviconImage).mock.lastCall?.[0];
+  fixture.theme.settings.tabIcon = "agent:rounded";
+  await settle(fixture, "blob:personal-avatar", "rounded");
+  expect(vi.mocked(applyControlUiFaviconImage).mock.lastCall?.[0]).toBe(loaded);
+  expect(resolveAvatarImageUrl).toHaveBeenCalledOnce();
   fixture.selection.state.selectedId = "other";
   await settle(fixture, "blob:/__openclaw__/theme-art/ship?v=2");
 

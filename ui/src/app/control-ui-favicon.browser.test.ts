@@ -12,6 +12,7 @@ import {
   applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
   applyControlUiPresentation,
+  controlUiIconPreviews,
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
 import { applyControlUiAccent } from "./control-ui-presentation.ts";
@@ -32,6 +33,8 @@ let previousAttributes: Array<[string, string | null]>;
 let previousBranding: ReturnType<typeof currentThemeBranding>;
 let svgIcon: HTMLLinkElement;
 let pngIcon: HTMLLinkElement;
+let appleIcon: HTMLLinkElement;
+let originalAppleHref: string;
 let originals: [[string, string], [string, string]];
 
 function mascot(value: "claw" | "none") {
@@ -85,7 +88,14 @@ beforeEach(() => {
   };
   svgIcon = createIcon(originals[0]);
   pngIcon = createIcon(originals[1]);
+  appleIcon = document.head.appendChild(document.createElement("link"));
+  Object.assign(appleIcon, {
+    id: "openclaw-apple-touch-icon",
+    rel: "apple-touch-icon",
+    sizes: "180x180",
+  });
   initializeControlUiDocumentHead();
+  originalAppleHref = appleIcon.href;
   Object.assign(svgIcon, { href: originals[0][0], type: originals[0][1] });
   Object.assign(pngIcon, { href: originals[1][0], type: originals[1][1] });
 });
@@ -95,7 +105,7 @@ afterEach(() => {
   applyControlUiFaviconImage(null);
   applyControlUiFaviconStatus("idle");
   applyControlUiPresentation({ environment: null });
-  [svgIcon, pngIcon].forEach((icon) => icon.remove());
+  [svgIcon, pngIcon, appleIcon].forEach((icon) => icon.remove());
   initializeControlUiDocumentHead();
   document.head.append(...previousIcons);
   document.title = previousTitle;
@@ -152,8 +162,19 @@ it("keeps personal artwork SVG-preferred without cropping or changing its status
   expectOriginals();
 });
 
-it("clips avatar shapes without clipping status dots and replaces same-image shapes", async () => {
+it("changes favicon shapes and badges without changing the full-square Apple touch PNG", async () => {
   const personal = await artwork();
+  applyControlUiFaviconImage(personal, "circle");
+  expect(appleIcon.href.startsWith("data:image/png;base64,")).toBe(true);
+  const touchHref = appleIcon.href;
+  const touch = await imageFrom(touchHref);
+  expect([touch.naturalWidth, touch.naturalHeight]).toEqual([180, 180]);
+  const touchDrawing = drawingContext(180);
+  touchDrawing.drawImage(touch, 0, 0);
+  expect([...touchDrawing.getImageData(0, 0, 1, 1).data]).toEqual([32, 36, 44, 255]);
+  expect([...touchDrawing.getImageData(90, 90, 1, 1).data]).toEqual([180, 40, 110, 255]);
+  // Artwork reaches the square's side: the rounded mask only belongs to the preview.
+  expect([...touchDrawing.getImageData(0, 90, 1, 1).data]).toEqual([180, 40, 110, 255]);
   const drawing = drawingContext();
   const pixels = async () => {
     await Promise.resolve();
@@ -171,14 +192,19 @@ it("clips avatar shapes without clipping status dots and replaces same-image sha
     expect(pixel(0, 0)[3]).toBe(0);
     expect(pixel(16, 1)[3]).toBe(shape === "square" ? 0 : 255);
     expect(pixel(3, 3)[3]).toBe(shape === "rounded" ? 255 : 0);
+    const previews = controlUiIconPreviews.read();
     applyControlUiFaviconStatus("working");
     const activePixel = await pixels();
     expect(activePixel(25, 25)).toEqual([80, 120, 160, 255]);
     expect(activePixel(27, 27)).toEqual([80, 120, 160, 255]);
+    expect(appleIcon.href).toBe(touchHref);
+    expect(controlUiIconPreviews.read()).toBe(previews);
+    expect(previews.appleTouch).toBe(touchHref);
   }
   applyControlUiFaviconImage(null);
   applyControlUiFaviconStatus("idle");
   expectOriginals();
+  expect(appleIcon.href).toBe(originalAppleHref);
 });
 
 async function imageFrom(src: string) {
@@ -192,9 +218,9 @@ async function artwork() {
     `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="rgb(180,40,110)"/></svg>')}`,
   );
 }
-function drawingContext() {
+function drawingContext(size = 32) {
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 32;
+  canvas.width = canvas.height = size;
   return canvas.getContext("2d")!;
 }
 function expectSvg(selector: string, attribute: string, value: string) {
@@ -432,11 +458,18 @@ it("preserves each active presentation when the environment or status is indepen
   const environment = { label: "Preview", color: "blue" } as const;
   applyControlUiPresentation({ environment });
   const environmentHref = svgIcon.href;
+  await vi.waitFor(() => expect(appleIcon.href.startsWith("data:image/png;base64,")).toBe(true));
+  const environmentTouchHref = appleIcon.href;
+  const touch = await imageFrom(environmentTouchHref);
+  const drawing = drawingContext(180);
+  drawing.drawImage(touch, 0, 0);
+  expect([...drawing.getImageData(90, 90, 1, 1).data]).toEqual([40, 100, 180, 255]);
   applyControlUiFaviconStatus("attention");
   await vi.waitFor(() => {
     expect(svgIcon.href).not.toBe(environmentHref);
     expect(dotColor()).toBe("rgb(210, 150, 60)");
   });
+  expect(appleIcon.href).toBe(environmentTouchHref);
   const environmentWithStatus = svgIcon.href;
   applyControlUiPresentation({ environment: null });
   await vi.waitFor(() => {
@@ -445,6 +478,7 @@ it("preserves each active presentation when the environment or status is indepen
     expect(dotColor()).toBe("rgb(210, 150, 60)");
     expect(pngIcon.type).toBe("image/png");
   });
+  expect(appleIcon.href).toBe(originalAppleHref);
   applyControlUiPresentation({ environment });
   applyControlUiFaviconStatus("idle");
   expect(svgIcon.href).toBe(environmentHref);
@@ -452,6 +486,8 @@ it("preserves each active presentation when the environment or status is indepen
   expect(svgIcon.hasAttribute("data-openclaw-original-favicon")).toBe(true);
   applyControlUiPresentation({ environment: null });
   expectOriginals();
+  await painted();
+  expect(appleIcon.href).toBe(originalAppleHref);
 });
 
 it.each(["resolve", "reject", "idle"])(
