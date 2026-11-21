@@ -642,6 +642,12 @@ async function submitFollowup(client: Client, submissionId = "turn-b") {
 async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStore) {
   const client = createClient();
   const runtime = createRuntime();
+  const source = createCustody();
+  runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
+  const onDirectChildAccepted =
+    vi.fn<
+      (handoff?: { runId: string; completionCustody?: AgentHarnessCompletionCustody }) => void
+    >();
   let connected = true;
   const heldClients = new Set<symbol>();
   const heldThreads = new Set<symbol>();
@@ -676,6 +682,7 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
     completionScope: createCompletionScope(),
     agentId: "main",
     submissionStore,
+    onDirectChildAccepted,
   });
   owner.bindTurn("parent-turn");
   return {
@@ -685,6 +692,8 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
     owner,
     heldClients,
     heldThreads,
+    source,
+    onDirectChildAccepted,
     releaseHistory,
     dropObservationBacking: () => {
       connected = false;
@@ -697,6 +706,38 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
     },
   };
 }
+
+it("refreshes accepted completion custody after a pending follow-up becomes active", async () => {
+  const fixture = await createFixture();
+  const { client, owner, runtime, onDirectChildAccepted } = fixture;
+  try {
+    await notifyChildStarted(client);
+    await startTurn(client, "turn-a");
+    await completeTurn(client, "turn-a", "A result");
+    await deliverInitialResult(client);
+    await submitFollowup(client);
+    await startTurn(client, "turn-b");
+    const pending = onDirectChildAccepted.mock.calls
+      .map(([handoff]) => handoff)
+      .find((handoff) => handoff?.runId === followupRunId)?.completionCustody;
+    const active = onDirectChildAccepted.mock.calls
+      .map(([handoff]) => handoff)
+      .findLast((handoff) => handoff?.runId === followupRunId)?.completionCustody;
+    expect(pending?.isCurrent()).toBe(false);
+    expect(active?.isCurrent()).toBe(true);
+    expect(active).not.toBe(pending);
+    await completeTurn(client, "turn-b", "B result");
+    fixture.releaseHistory();
+    await owner.unregister();
+    await vi.waitFor(() => expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce());
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ childSessionKey: followupRunId, result: "B result" }),
+    );
+    expect(active?.isCurrent()).toBe(false);
+  } finally {
+    await fixture[Symbol.asyncDispose]();
+  }
+});
 
 describe("Codex native transient predecessor anchor", () => {
   it.each(["parent-output-before-a-end", "parent-unregister-before-anchor"] as const)(

@@ -1,3 +1,4 @@
+import { registerAgentHarnessCompletionHandoff } from "openclaw/plugin-sdk/agent-harness-completion";
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -7,6 +8,7 @@ import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isCodexInferenceTransportFailure } from "./inference-transport.js";
+import type { ParentOwner } from "./native-subagent-monitor-types.js";
 import { isJsonObject } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -49,6 +51,22 @@ export function retireCodexTransportAfterFailure(
       closed: retired.closed,
     });
   }
+}
+
+export function createCodexNativeContinuation(
+  params: Pick<EmbeddedRunAttemptParams, "agentHarnessCompletionScope">,
+  state: { runtimeContinuationStarted: boolean },
+): NonNullable<ParentOwner["onDirectChildAccepted"]> {
+  return (handoff) => {
+    if (handoff?.completionCustody) {
+      registerAgentHarnessCompletionHandoff({
+        scope: params.agentHarnessCompletionScope!,
+        completionCustody: handoff.completionCustody,
+        runId: handoff.runId,
+      });
+    }
+    state.runtimeContinuationStarted = true;
+  };
 }
 
 export function canClearCodexBindingForRecovery(
