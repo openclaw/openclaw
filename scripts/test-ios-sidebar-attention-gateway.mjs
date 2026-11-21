@@ -10,13 +10,17 @@ const port = Number(process.env.OPENCLAW_IOS_ATTENTION_FIXTURE_PORT ?? 19877);
 const mainKey = "agent:main:main";
 const parentKey = "agent:main:attention-parent";
 const reviewKey = "agent:main:attention-review";
+const planningKey = "agent:main:snooze-active";
+const planningDashboardPath = "/focus/dashboard/main/~key/snooze-active";
 const requests = [];
 let questions = [];
 let approvals = [];
 let created;
+let showsPlanningDashboard = false;
 
-function reset() {
+function reset({ planningDashboard = false } = {}) {
   created = Date.now();
+  showsPlanningDashboard = planningDashboard;
   questions = ["Which draft should we review first?", "Should the summary include a timeline?"].map(
     (question, index) => ({
       id: `attention-question-${index + 1}`,
@@ -214,11 +218,20 @@ function settleApprovals(status, id) {
   }
 }
 const server = createServer((req, res) => {
-  res.setHeader("content-type", "application/json");
   const path = new URL(req.url, `http://127.0.0.1:${port}`).pathname;
+  if (req.method === "GET" && showsPlanningDashboard && path === planningDashboardPath) {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(
+      '<!doctype html><html lang="en"><title>Planning dashboard</title><h1>Planning dashboard</h1></html>',
+    );
+    return;
+  }
+  res.setHeader("content-type", "application/json");
   if (req.method === "POST") {
     if (path === "/reset") {
       reset();
+    } else if (path === "/reset-dashboard") {
+      reset({ planningDashboard: true });
     } else if (path === "/questions/answer") {
       settleQuestions("answered");
     } else if (path === "/questions/answer-oldest") {
@@ -308,7 +321,10 @@ wss.on("connection", (ws) => {
           type: "hello-ok",
           protocol: 3,
           server: { version: "synthetic-attention", connId: "synthetic" },
-          features: { methods, events },
+          features: {
+            methods: showsPlanningDashboard ? [...methods, "desktop.observe"] : methods,
+            events,
+          },
           snapshot: {
             presence: [],
             health: { ok: true },
@@ -350,11 +366,12 @@ wss.on("connection", (ws) => {
           defaults: {},
           sessions: [
             {
-              key: "agent:main:snooze-active",
+              key: planningKey,
               sessionId: "synthetic-snooze-active",
               displayName: "Planning notes",
               label: "Planning notes",
               kind: "direct",
+              ...(showsPlanningDashboard ? { boardFace: "dashboard", agentId: "main" } : {}),
               updatedAt: created,
             },
             {
@@ -402,7 +419,7 @@ wss.on("connection", (ws) => {
         reply({
           sessionKey: params.sessionKey ?? mainKey,
           sessionId:
-            params.sessionKey === "agent:main:snooze-active"
+            params.sessionKey === planningKey
               ? "synthetic-snooze-active"
               : "synthetic-main-session",
           messages: [
@@ -412,7 +429,7 @@ wss.on("connection", (ws) => {
                 {
                   type: "text",
                   text:
-                    params.sessionKey === "agent:main:snooze-active"
+                    params.sessionKey === planningKey
                       ? "Your planning notes are ready."
                       : "Your research workspace is ready.",
                 },

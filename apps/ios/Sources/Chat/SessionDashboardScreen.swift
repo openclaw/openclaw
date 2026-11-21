@@ -79,6 +79,15 @@ struct SessionDashboardScreen: View {
         .navigationTitle("Dashboard")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    self.dismiss()
+                    self.appModel.openChat(sessionKey: self.sessionKey)
+                } label: {
+                    Text("Chat")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
             if self.appModel.isDesktopObserveAvailable {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
