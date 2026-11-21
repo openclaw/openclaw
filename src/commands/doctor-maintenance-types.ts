@@ -24,5 +24,9 @@ export type DoctorMaintenanceParams = {
   reportStoppedService?: boolean;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
-  beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
+  beforeStateMutation?: (context: {
+    env: NodeJS.ProcessEnv;
+    signal: AbortSignal;
+    serviceRoot?: string;
+  }) => Promise<void>;
 };

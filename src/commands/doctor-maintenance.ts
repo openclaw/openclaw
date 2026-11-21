@@ -44,6 +44,7 @@ import {
 import { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 import type { DoctorConfigWriter, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
+import { DoctorRepairSchemaConsentRefusal } from "./doctor-repair-schema-admission.js";
 import {
   assertDoctorServiceSelection,
   isServiceRepairExternallyManaged,
@@ -96,6 +97,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let repairStoresMayBeOpen = false;
   // Service safety outlives database handles released for an update child.
   let retainStoppedInstallation = false;
+  let refusedRepairRoot: string | undefined;
   let inspectingActivation = false;
   let staleReplacement: DoctorStaleGateway | undefined;
   let assertUpdateAdmissionReadCurrent: (() => void) | undefined;
@@ -169,7 +171,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   ) => {
     assertCustody?.();
     const before = stopped;
-    const root = params.root;
+    const root = refusedRepairRoot ?? params.root;
     if (!before?.serviceEnv || !root) {
       return;
     }
@@ -215,6 +217,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         before,
         serviceEnv,
         root,
+        restorationRoot: refusedRepairRoot,
         env,
         cfg,
         writeConfig,
@@ -241,7 +244,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           port,
           env: state.env,
           requireRunningService: true,
-          ...(staleReplacement
+          ...(staleReplacement && !refusedRepairRoot
             ? {
                 expectedVersion: staleReplacement.version,
                 expectedBuildId: staleReplacement.buildId,
@@ -296,7 +299,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       });
     }
     params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
-    if (staleReplacement) {
+    if (staleReplacement && !refusedRepairRoot) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
     }
@@ -344,6 +347,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let admissionFailureHandled = false;
   const failAdmission = async (error: unknown, assertStopCustody?: () => void): Promise<never> => {
     admissionFailureHandled = true;
+    if (error instanceof DoctorRepairSchemaConsentRefusal) {
+      // Schema migration did not start. Declining must not rebind to the newer package
+      // whose Gateway startup could perform the very migrations we refused.
+      refusedRepairRoot = error.installedRoot;
+      retainStoppedInstallation = false;
+    }
     if (hasCommandProcessCleanupError(error)) {
       reportGatewayRecoveryFailure(error);
       throw error;
@@ -613,7 +622,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
-      await state.prepareRepair(assertDeadline);
+      await state.prepareRepair(
+        assertDeadline,
+        serviceVerdict?.kind === "owned" ? serviceVerdict.root : undefined,
+      );
     });
   } catch (error) {
     try {

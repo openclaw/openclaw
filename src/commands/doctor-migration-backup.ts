@@ -157,12 +157,15 @@ export async function backupDoctorMigrationDatabases(params: {
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   /** Only the version-phase owner may select a table-scoped checkpoint. */
   versionMigrationsOnly?: boolean;
+  /** Pre-consent capture must refuse rather than repair live session rows. */
+  allowSessionWindowRepair?: boolean;
   check?: "quick" | "full";
   repair?: { key: string; validate?: (database: DatabaseSync) => void };
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
     postgresGenerations?: Record<string, string>;
+    snapshots?: readonly { sourcePath: string; path: string }[];
   }
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
@@ -312,7 +315,7 @@ export async function backupDoctorMigrationDatabases(params: {
       integrityChecks,
     });
   };
-  let result: MigrationMessages;
+  let result: Awaited<ReturnType<typeof backupDoctorSqliteDatabases>>;
   try {
     result = await backup();
   } catch (error) {
@@ -324,6 +327,12 @@ export async function backupDoctorMigrationDatabases(params: {
       )
     ) {
       throw error;
+    }
+    if (params.allowSessionWindowRepair === false) {
+      throw new Error(
+        "Pre-migration SQLite backups could not be verified without repairing live session data. No session repair was attempted.",
+        { cause: error },
+      );
     }
     const { repairDoctorSessionWindowsBeforeMigration } =
       await import("../infra/state-migrations.session-window-repair.js");

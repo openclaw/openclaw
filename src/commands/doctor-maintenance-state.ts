@@ -264,12 +264,12 @@ export async function createDoctorMaintenanceState(options: {
       );
       await enterResources(acquired, assertAdmission);
     },
-    async prepareRepair(assertAdmission?: () => void) {
+    async prepareRepair(assertAdmission?: () => void, serviceRoot?: string) {
       assertAdmission?.();
       const beforeStateMutation = params.beforeStateMutation;
       if (beforeStateMutation) {
         await resources!.run(() =>
-          beforeStateMutation({ env: selectedEnv, signal: options.signal }),
+          beforeStateMutation({ env: selectedEnv, signal: options.signal, serviceRoot }),
         );
         assertAdmission?.();
         resources!.assertAdmission();

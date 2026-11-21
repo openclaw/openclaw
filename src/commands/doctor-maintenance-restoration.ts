@@ -139,6 +139,8 @@ export async function restoreDoctorGatewayService(params: {
   before: PreManagedServiceStop;
   serviceEnv: NodeJS.ProcessEnv;
   root: string;
+  /** A refused pre-migration repair restores only the original parked package. */
+  restorationRoot?: string;
   env: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   writeConfig?: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
@@ -152,7 +154,6 @@ export async function restoreDoctorGatewayService(params: {
   assertInstallationAdmission?: () => void;
 }) {
   const {
-    before,
     serviceEnv,
     root,
     env,
@@ -162,6 +163,18 @@ export async function restoreDoctorGatewayService(params: {
     assertCustody,
     assertRestoreAdmission,
   } = params;
+  let before = params.before;
+  if (params.restorationRoot && before.serviceUpdateVerdict?.kind === "owned") {
+    before = {
+      ...before,
+      serviceUpdateVerdict: {
+        ...before.serviceUpdateVerdict,
+        root: params.restorationRoot,
+        refreshDefinition: false,
+        requiresInstallRootRefresh: false,
+      },
+    };
+  }
   let cfg = params.cfg;
   const [
     { readGatewayServiceState, resolveGatewayService },
