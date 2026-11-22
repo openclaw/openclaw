@@ -20,6 +20,7 @@ import { toSavedAuthSetupKind } from "../../system-agent/setup-inference-core.js
 import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
+import { createProviderAuthNodes } from "../server-plugins.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -27,7 +28,11 @@ import {
 import { buildModelsListResult } from "./models-list-result.js";
 import { startGatewayWizard } from "./setup-admission.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import { runSetupActivation, startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import {
+  admitProviderSignIn,
+  runSetupActivation,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -142,12 +147,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             }
           : undefined;
       };
+      const ownerKey = resolveSystemAgentSessionOwnerKey({ client });
       if (choice.appGuidedAuth && choice.credentialOnly !== true) {
         await startSetupActivationWizard({
           request: options,
           sessionId: params.sessionId,
-          ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
-          connectionBound: true,
+          ownerKey,
           isLocalClient: client.internal?.isLocalClient === true,
           assertCurrent: assertLoginCurrent,
           activation: {
@@ -160,11 +165,22 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      // The sign-in outlives its socket: the user leaves for the provider's page and
+      // comes back on a new connection. The retained grant still stops it on revocation.
       await startGatewayWizard({
         request: options,
         sessionId: params.sessionId,
-        connectionBound: true,
         assertCurrent: assertLoginCurrent,
+        ...(ownerKey
+          ? {
+              admit: (create: () => WizardSession, assertCurrent: () => void) =>
+                admitProviderSignIn(
+                  { sessionId: params.sessionId, ownerKey, starter: client, context },
+                  create,
+                  assertCurrent,
+                ),
+            }
+          : {}),
         createSession: (assertCurrent) =>
           new WizardSession(
             async (prompter, signal, runner) => {
@@ -180,6 +196,13 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                     openUrl,
                     browserOrigin: client.browserOrigin,
                     authPolicy: client.authPolicy,
+                    onRefusal: (failure) =>
+                      runner.pushProgress(
+                        failure.message,
+                        undefined,
+                        failure.message,
+                        failure.reason,
+                      ),
                   })
                 : undefined;
               const assertFlowCurrent = () => {
@@ -201,6 +224,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   signal: browser?.signal ?? signal,
                   isRemote: !params.expectedOwnerId,
                   openUrl,
+                  nodes: createProviderAuthNodes(),
                   browserAuthorization: browser?.available ? browser.authorize : undefined,
                   assertCurrent: assertFlowCurrent,
                   beforePersistentEffect: () => {
@@ -218,12 +242,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
               }
               if (result.modelAccess && !result.modelAccess.applied) {
                 throw new ProviderCredentialsSavedError(
-                  "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes, then send /models.",
+                  "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes.",
                 );
               }
               if (result.authRefresh !== "refreshed") {
                 throw new ProviderCredentialsSavedError(
-                  "Your sign-in was saved, but the connection update could not be confirmed. Send /login refresh in chat to try again.",
+                  "Your sign-in was saved, but the connection update could not be confirmed. Close this dialog and reopen Models to check it.",
                 );
               }
               const profileId = result.profiles[0]?.profileId;

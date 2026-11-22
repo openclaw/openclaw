@@ -30,6 +30,7 @@ import {
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
+  wrapCompactHooksEntryPoints,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
 import { mockNonDurableCompactionRuntime } from "./compact.hooks.non-durable-mocks.test-support.js";
@@ -913,14 +914,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   return {
     ...compactModule,
-    compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
-        ...host,
-        sourceAuthority: host.sourceAuthority ?? {
-          assertActive: host.assertActive ?? (() => {}),
-          operatorAuthority: undefined,
-        },
-      }),
+    ...wrapCompactHooksEntryPoints(compactModule, compactQueuedModule),
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };

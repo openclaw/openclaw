@@ -21,7 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { projectRequesterForClient } from "../project-access.js";
 import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -206,7 +206,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       deviceFolderAuthority.assertCurrent?.();
     };
     await using operatorCapture = {
-      preparation: captureGatewayOperatorRunAuthority({
+      preparation: prepareGatewayOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority,

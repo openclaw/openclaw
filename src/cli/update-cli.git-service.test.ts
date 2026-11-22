@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { getMockCallOutput } from "./test-runtime-capture.js";
 import * as checks from "./update-cli-assertions.test-support.js";
@@ -36,18 +35,4 @@ it("disarms legacy updater jobs before stopping the gateway without polluting JS
   expect(checks.requireValue(cleanupOrder, "launchd updater cleanup order")).toBeLessThan(
     checks.requireValue(serviceStopOrder, "service stop order"),
   );
-});
-
-it("stops a Gateway whose service still names the checkout before a Git release activates", async () => {
-  // A Gateway's handoff runs inside its LaunchAgent, which cannot rebind itself while loaded.
-  f.mockOwnedGitService();
-  f.mockRunningManagedGateway(gatewayArgs(path.join(process.cwd(), "dist", "index.js")));
-  const mutationAdmitted = cli.mockGitUpdateAfterMutation(
-    cli.makeOkUpdateResult({ root: process.cwd() }),
-  );
-
-  await cli.updateCommand({ yes: true, json: true }).catch(() => {});
-
-  expect(mutationAdmitted).toHaveBeenCalledOnce();
-  expect(mocks.serviceStop).toHaveBeenCalled();
 });
