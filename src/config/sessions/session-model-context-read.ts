@@ -20,6 +20,15 @@ import {
 } from "./session-model-context-window.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 
+export function isSessionModelStateEntry(entry: ContextEntry): boolean {
+  return (
+    (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) ||
+    (entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !isTranscriptArtifactProvider(entry.message.provider))
+  );
+}
+
 /** Canonical request membership is shared by cold reads and committed append deltas. */
 export function collectSessionModelContextRequests(entries: ContextEntry[]): ModelContextRequest[] {
   const requests: ModelContextRequest[] = [];
@@ -118,13 +127,7 @@ export function projectSessionModelContext(
     placements.get(entry) ?? (placedSources.has(entry) ? [] : undefined);
   let contextEntries: SessionTreeEntry[];
   if (limits) {
-    const model = entries.findLast(
-      (entry) =>
-        (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) ||
-        (entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          !isTranscriptArtifactProvider(entry.message.provider)),
-    );
+    const model = entries.findLast(isSessionModelStateEntry);
     const thinking = entries.findLast((entry) => entry.type === "thinking_level_change");
     const detached = entries.flatMap((entry) => {
       const placed = placedPayload(entry);
