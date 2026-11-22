@@ -153,15 +153,17 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
         <For each={props.feedback.details ?? []}>{(detail) => <p>{detail}</p>}</For>
         <div class="login-gate__failure-raw mono">{props.feedback.rawError}</div>
       </details>
-      <a
-        class="session-link login-gate__failure-docs"
-        href={props.feedback.docsHref}
-        target={EXTERNAL_LINK_TARGET}
-        rel={buildExternalLinkRel()}
-      >
-        {t("common.learnMore")}
-      </a>
-      <ReportIssueLink />
+      <div class="login-gate__foot-links">
+        <a
+          class="session-link login-gate__failure-docs"
+          href={props.feedback.docsHref}
+          target={EXTERNAL_LINK_TARGET}
+          rel={buildExternalLinkRel()}
+        >
+          {t("common.learnMore")}
+        </a>
+        <ReportIssueLink />
+      </div>
     </footer>
   );
 }

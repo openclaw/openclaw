@@ -7,7 +7,11 @@ import { assert, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -436,6 +440,42 @@ suite.define(() => {
     expect(
       await page.evaluate(() => sessionStorage.getItem("openclaw.control-ui-e2e.render-count")),
     ).toBe("1");
+  });
+
+  it("lets a phone read enlarged recovery guidance and expanded error details across the card", async () => {
+    const page = await newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    await page.addInitScript(
+      ({ key }) => {
+        localStorage.setItem(key, JSON.stringify({ textScale: 140 }));
+      },
+      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+    );
+    await page.goto(suite.server.baseUrl);
+    await gateway.waitForRequest("connect");
+    await gateway.rejectDeferred("connect", authRequiredError);
+    const foot = page.locator(".login-gate__foot");
+    const summary = foot.locator("summary");
+    await summary.focus();
+    await summary.press("Enter");
+    const raw = foot.locator(".login-gate__failure-raw");
+    await raw.waitFor();
+    expect((await raw.boundingBox())!.width).toBeCloseTo((await foot.boundingBox())!.width, 0);
+    expect(await raw.evaluate((node) => getComputedStyle(node).fontSize)).toBe("16.8px");
+    expect(
+      await page.locator(".login-gate h1").evaluate((node) => getComputedStyle(node).fontSize),
+    ).toBe("28px");
+    await summary.press("Tab");
+    expect(
+      await foot
+        .locator("a")
+        .first()
+        .evaluate((node) => document.activeElement === node),
+    ).toBe(true);
   });
 
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {

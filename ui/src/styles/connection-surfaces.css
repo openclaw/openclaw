@@ -10,6 +10,7 @@
   max-height: 100%;
   overflow-y: auto;
   background: var(--bg);
+  font-size: var(--control-ui-text-md);
   padding: 24px;
 }
 
@@ -29,7 +30,7 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 24px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1;
 }
 
@@ -83,7 +84,7 @@
 .login-gate__heading,
 .login-gate__failure-title {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -94,7 +95,7 @@
 .login-gate__failure-summary {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -113,7 +114,7 @@
 .login-gate__failure-steps {
   margin: 0;
   padding-left: 20px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.55;
   color: var(--text);
 }
@@ -132,7 +133,7 @@
   margin: 1px 2px;
   padding: 1px 4px 1px 8px;
   vertical-align: middle;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .login-gate__failure-steps .login-gate__command code {
@@ -163,6 +164,12 @@
   gap: 14px;
 }
 
+.login-gate__form .field label {
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
 .login-gate__form .field input[aria-invalid="true"] {
   border-color: var(--login-gate-tone, var(--danger));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
@@ -172,7 +179,7 @@
   margin-top: 2px;
   justify-content: center;
   padding: 10px 16px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 600;
 }
 
@@ -190,7 +197,7 @@
   align-items: center;
   gap: 6px;
   list-style: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--muted);
   cursor: var(--cursor-action);
 }
@@ -209,9 +216,7 @@
 }
 
 .login-gate__connection-target span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .login-gate__connection-target svg {
@@ -240,15 +245,20 @@
 
 .login-gate__foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .login-gate__failure-detail {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 max-content;
+}
+
+.login-gate__failure-detail[open] {
+  flex-basis: 100%;
 }
 
 .login-gate__failure-detail summary {
@@ -262,8 +272,12 @@
   color: var(--muted);
 }
 
-.login-gate__failure-docs {
-  flex: 0 0 auto;
+.login-gate__foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-inline-start: auto;
 }
 
 .login-gate__recovery {
@@ -278,14 +292,14 @@
 
 .login-gate__help-title {
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
 }
 
 .login-gate__steps {
   margin: 10px 0 0;
   padding-left: 20px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -300,7 +314,7 @@
 
 .login-gate__docs {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* The outer app owns safe areas for the login gate as well as the shell. */
@@ -320,7 +334,7 @@
 
   .login-gate__heading,
   .login-gate__failure-title {
-    font-size: 20px;
+    font-size: calc(20px * var(--control-ui-text-scale));
   }
 
   /* 44px touch targets per platform guidelines. */
@@ -380,6 +394,15 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.login-gate__hero-label {
+  font-size: var(--control-ui-text-xs);
+}
+
+.login-gate__hero .login-gate__command--hero code,
+.login-gate__body .btn--ghost {
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .gateway-switch__host code {

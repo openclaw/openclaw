@@ -992,7 +992,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   gap: 6px;
 }
 
-.login-gate__form .field label,
 .field span {
   color: var(--muted);
   font-size: 13px;
