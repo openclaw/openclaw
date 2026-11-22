@@ -116,7 +116,8 @@ export async function preflight(params: {
     reason = "prefix-not-writable";
     await fs.access(ancestor, constants.W_OK);
     reason = "missing-tool";
-    const tools = params.kind === "git" ? ["git", "pnpm"] : ["npm"];
+    // Git releases provision the target's pinned pnpm during preparation.
+    const tools = params.kind === "git" ? ["git"] : ["npm"];
     for (const tool of tools) {
       const result = await runCommandWithTimeout([tool, "--version"], {
         env,

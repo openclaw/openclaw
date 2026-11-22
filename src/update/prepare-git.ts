@@ -3,6 +3,8 @@ import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
+import { resolveUpdateBuildManager } from "../infra/update-package-manager.js";
+import { shouldInstallWithoutScriptsOnWindows } from "../infra/update-runner-git-commands.js";
 import { fetchGitUpdateTarget } from "../infra/update-runner-git-target.js";
 import type { RunStepOptions } from "../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
@@ -29,6 +31,7 @@ export async function prepareGit(params: {
   };
   const steps: UpdateStepResult[] = [];
   let reason = "fetch-failed";
+  let cleanupManager: (() => Promise<void>) | undefined;
   const remaining = () => {
     const ms = deadline - Date.now();
     if (ms <= 0) {
@@ -37,7 +40,12 @@ export async function prepareGit(params: {
     return ms;
   };
   const runCommand: RunStepOptions["runCommand"] = (argv, options) =>
-    runCommandWithTimeout(argv, { ...options, env, timeoutMs: remaining(), killProcessTree: true });
+    runCommandWithTimeout(argv, {
+      ...options,
+      env: options.env ?? env,
+      timeoutMs: remaining(),
+      killProcessTree: true,
+    });
   const step = (name: string, argv: string[], cwd: string): RunStepOptions => ({
     name,
     argv,
@@ -68,23 +76,44 @@ export async function prepareGit(params: {
     if (!fetched.ok) {
       throw new Error(steps.at(-1)?.stderrTail || "Could not fetch the selected Git revision.");
     }
-    for (const [name, argv, cwd] of [
-      [
-        "worktree",
-        ["git", "-C", params.checkout, "worktree", "add", "--detach", releaseRoot, params.sha],
-        params.checkout,
-      ],
-      ["install", ["pnpm", "install", "--frozen-lockfile"], releaseRoot],
-      ["build", ["pnpm", "build"], releaseRoot],
-      ["ui-build", ["pnpm", "ui:build"], releaseRoot],
-    ] as const) {
+    const run = async (name: string, argv: string[], cwd: string, commandEnv = env) => {
       reason = `${name}-failed`;
       await params.onStep?.(name);
-      const result = await runCommand([...argv], { cwd, timeoutMs: remaining() });
+      const result = await runCommand(argv, { cwd, env: commandEnv, timeoutMs: remaining() });
       if (result.code !== 0 || result.killed || result.signal) {
         throw new Error(result.stderr || result.stdout || `${name} exited ${result.code}`);
       }
+    };
+    await run(
+      "worktree",
+      ["git", "-C", params.checkout, "worktree", "add", "--detach", releaseRoot, params.sha],
+      params.checkout,
+    );
+    // The target's packageManager pin selects pnpm; installers leave no global pnpm on PATH.
+    reason = "package-manager-unavailable";
+    const manager = await resolveUpdateBuildManager(runCommand, releaseRoot, remaining(), env, {
+      timeoutMs: remaining(),
+    });
+    if (manager.kind !== "resolved" || manager.manager !== "pnpm") {
+      throw new Error(
+        `Could not provide the target's pnpm (${manager.kind === "resolved" ? manager.manager : manager.reason}). Install pnpm or enable Corepack, then retry the update.`,
+      );
     }
+    cleanupManager = manager.cleanup;
+    const pnpmEnv = manager.env ?? env;
+    await run(
+      "install",
+      [
+        "pnpm",
+        "install",
+        "--frozen-lockfile",
+        ...(shouldInstallWithoutScriptsOnWindows("pnpm") ? ["--ignore-scripts"] : []),
+      ],
+      releaseRoot,
+      pnpmEnv,
+    );
+    await run("build", ["pnpm", "build"], releaseRoot, pnpmEnv);
+    await run("ui-build", ["pnpm", "ui:build"], releaseRoot, pnpmEnv);
     reason = "metadata-failed";
     const version = await readPackageVersion(releaseRoot);
     if (!version) {
@@ -103,5 +132,7 @@ export async function prepareGit(params: {
     ).catch(() => undefined);
     await fs.rm(params.staging, { recursive: true, force: true });
     return { ok: false, reason, stderrTail: formatErrorMessage(error).slice(-8192) };
+  } finally {
+    await cleanupManager?.();
   }
 }
