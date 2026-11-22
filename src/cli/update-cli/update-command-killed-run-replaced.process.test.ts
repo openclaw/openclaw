@@ -59,10 +59,14 @@ describe.skipIf(process.platform === "win32")(
         expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
         // The candidate's plugin and config changes are kept: it was verified serving.
         expect(config().gateway).toEqual({ mode: "local" });
-        expect(settled(ctx.admitted[0])).toMatch(/kept, because its Gateway was verified/u);
-        expect(replacedWarning(killed.runId)).toBe(
-          `Plugin recovery was settled from a replacing installation: the package directory this update recorded, ${home(install.key)}, no longer exists, its install path ${home(install.slot)} resolves to the installation at ${home(successor)}, its driver exited, and it recorded OpenClaw ${candidate} serving.`,
+        expect(settled(ctx.admitted[0])).toMatch(
+          /kept, because its Gateway was verified on the version it installed, which this installation replaced/u,
         );
+        // The retained warning names the replaced directory, the path and successor, and the version.
+        const warning = replacedWarning(killed.runId);
+        for (const fact of [home(install.key), home(install.slot), home(successor), candidate]) {
+          expect(warning).toContain(fact);
+        }
         // History reconciliation then closes the dead run and keeps the warning.
         await reconcileAbandonedUpdateRunsAsync({});
         expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
@@ -116,6 +120,26 @@ describe.skipIf(process.platform === "win32")(
         expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
         expect(config().gateway).toEqual({ mode: "local" });
         expect(replacedWarning(killed.runId)).toContain(`recorded OpenClaw ${candidate} serving.`);
+      }));
+
+    it("keeps a begun commit's refusal when the version from before it is installed again", () =>
+      fixtures.lifetime.run(async () => {
+        const install = await linkedInstallation();
+        const killed = await updater(install.key, { ...verified, root: install.slot });
+        writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
+          ...loadPluginCohortRecovery(killed.runId)!.cohort,
+          disposition: "commit",
+        });
+        // The original core in a fresh directory: committing would keep the candidate's changes over it.
+        await replacePackageDirectory(install, { version: "2026.11.3" });
+        const before = reserved(killed.runId);
+
+        await expect(runRepair(install.slot)).rejects.toThrow(
+          "Plugin cohort commit does not match the installed candidate version and build.",
+        );
+
+        expect(reserved(killed.runId)).toEqual(before);
+        expect(replacedWarning(killed.runId)).toBeUndefined();
       }));
 
     // Each control removes one piece of evidence; both entries refuse and change nothing.

@@ -1972,8 +1972,11 @@ installation that replaced it when all of these hold:
 - every process that update recorded has exited;
 - that update recorded its candidate version serving.
 
-The plugin and configuration changes are then kept, as for any verified
-candidate, and that update's run records a
+The plugin and configuration changes are then settled as for any verified
+candidate: usually kept, but a rollback that had already restored something is
+finished instead. A commit that update had already begun is finished even when
+a later build is installed, but not when the version from before that update
+was installed again. That update's run records a
 `warning:plugin-cohort:replaced-installation` entry naming both directories.
 The next update still needs the lease proof above. An updater that exited on its
 own, rather than being killed, released its lease, so that update stops and

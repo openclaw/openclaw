@@ -292,8 +292,13 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const installed = (core: { version: string; buildId: string | null }) =>
     version === core.version && (buildId ?? null) === core.buildId;
   const { from, to } = current.reservation;
-  // A proven successor may be a different build installed after the candidate served.
-  if (current.cohort.disposition === "commit" && !installed(to) && !params.replaced) {
+  // A proven successor may be a different build installed after the candidate served,
+  // but never the original core reinstalled.
+  if (
+    current.cohort.disposition === "commit" &&
+    !installed(to) &&
+    (!params.replaced || installed(from))
+  ) {
     throw new Error(
       "Plugin cohort commit does not match the installed candidate version and build.",
     );
@@ -695,20 +700,22 @@ export async function inspectInterruptedUpdateRecovery(
             refuse(`It could not be settled (${formatErrorMessage(cause)}).`, undefined, cause)
           );
         });
-        return { action, unfinished, gatewayStopped };
+        return { action, unfinished, gatewayStopped, replaced: installation.kind === "replaced" };
       }),
     );
     if (!settled || settled === "settled") {
       return;
     }
-    const { action, unfinished, gatewayStopped } = settled;
+    const { action, unfinished, gatewayStopped, replaced } = settled;
     const runId = pair.cohort.runId;
     const note = unfinished.length
       ? `Settled interrupted update ${runId}: ${unfinished.join(" ")} Its plugin and configuration changes were settled as ${repair} settles them, and this update finishes the installed version the same way before it continues.`
       : `Settled interrupted update ${runId}: its plugin and configuration changes were ${
-          action === "commit"
-            ? "kept, because its Gateway was verified on the installed version"
-            : "rolled back, because the previous version is still installed"
+          action !== "commit"
+            ? "rolled back, because the previous version is still installed"
+            : replaced
+              ? "kept, because its Gateway was verified on the version it installed, which this installation replaced"
+              : "kept, because its Gateway was verified on the installed version"
         }; update can proceed past recovery admission.`;
     defaultRuntime.error(note);
     const settledAt = Date.now();
