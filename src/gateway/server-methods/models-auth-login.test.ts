@@ -435,8 +435,21 @@ describe("models.authLogin ownership", () => {
         other,
       );
     expectRejected(await start(), { details: { code: "SETUP_ADMISSION_BUSY" } });
+    // A second tab reads it and drops; the returned tab still shows it.
+    const secondTab = new AbortController();
+    await h.invoke(
+      "wizard.next",
+      { sessionId: "login" },
+      {
+        ...h.client,
+        connId: "second-tab",
+        connectionSignal: secondTab.signal,
+      },
+    );
+    secondTab.abort();
+    expectRejected(await start(), { details: { code: "SETUP_ADMISSION_BUSY" } });
     expect(session.getStatus()).toBe("running");
-    // Once that socket closes too, nobody watches it: a new sign-in is not refused.
+    // Once every reader's socket is closed, nobody watches it: a new sign-in is not refused.
     returning.abort();
     void mockLogin(() => undefined);
     expectReply(await start(), { sessionId: "replacement", status: "running" });

@@ -16,18 +16,19 @@ export function canAccessWizardSession(
   return !owner || (owner === client && !owner.invalidated && !owner.connectionSignal?.aborted);
 }
 
-// The connection that last started or read each session: the one a user is watching.
-const lastReaders = new WeakMap<WizardSession, GatewayClient>();
+// Connections that started or read each session: any open one may still show it.
+const readers = new WeakMap<WizardSession, Set<GatewayClient>>();
 
 export function noteWizardReader(session: WizardSession, client: GatewayClient | null): void {
   if (client) {
-    lastReaders.set(session, client);
+    readers.set(session, (readers.get(session) ?? new Set()).add(client));
   }
 }
 
-/** A session whose last reader's socket closed may be abandoned; nobody shows it. */
+/** A session whose every reader's socket closed may be abandoned; nobody shows it. */
 export function isWizardSessionUnwatched(session: WizardSession): boolean {
-  return lastReaders.get(session)?.connectionSignal?.aborted === true;
+  const current = [...(readers.get(session) ?? [])];
+  return current.length > 0 && current.every((client) => client.connectionSignal?.aborted);
 }
 
 const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
