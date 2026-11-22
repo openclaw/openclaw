@@ -1,0 +1,2 @@
+# Composed plugin callback/guarded-fetch regression with real admission replacement, inherited authority, no-admission, and cancellation controls.
+115
