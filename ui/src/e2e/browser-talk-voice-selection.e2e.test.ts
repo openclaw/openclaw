@@ -167,15 +167,17 @@ suite.define(() => {
           const text = [...label.childNodes].find(
             (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
           );
-          if (!text) throw new Error("Missing visible provider label");
+          if (!text) {
+            throw new Error("Missing visible provider label");
+          }
           const range = document.createRange();
           range.selectNodeContents(text);
           const bounds = label.getBoundingClientRect(),
             style = getComputedStyle(label);
           return [...range.getClientRects()].every(
             (line) =>
-              line.left >= bounds.left + parseFloat(style.paddingLeft) - 1 &&
-              line.right <= bounds.right - parseFloat(style.paddingRight) + 1,
+              line.left >= bounds.left + Number.parseFloat(style.paddingLeft) - 1 &&
+              line.right <= bounds.right - Number.parseFloat(style.paddingRight) + 1,
           );
         });
         expect(fits, "every line stays inside the selected provider's padding").toBe(true);
