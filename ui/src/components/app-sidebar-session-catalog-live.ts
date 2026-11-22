@@ -425,35 +425,18 @@ export async function refreshSessionCatalogsLive(params: {
     scope === live.refreshScope &&
     live.isCurrentRequest(progressId);
   try {
-    const selected = params.profileRelation
-      ? params
-          .catalogs()
-          .filter((catalog) => catalog.capabilities.profileRelation)
-          .map((catalog) => catalog.id)
-      : [];
-    const requests = selected.length ? selected : [undefined];
-    const results = await Promise.all(
-      requests.map((catalogId) =>
-        client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-          agentId: params.agentId,
-          ...(catalogId ? { catalogId } : {}),
-          ...(params.profileRelation && catalogId
-            ? { profileRelation: params.profileRelation }
-            : {}),
-          limitPerHost: 40,
-          progressId,
-          allowPartialResults: true,
-        }),
-      ),
-    );
-    const result = {
-      catalogs: [
-        ...(selected.length
-          ? params.catalogs().filter((catalog) => !selected.includes(catalog.id))
-          : []),
-        ...results.flatMap(({ catalogs }) => catalogs),
-      ],
-    };
+    // One aggregate request refreshes every catalog. The Gateway applies the relation only to
+    // providers that support it, and an advertised capability proves it accepts the field.
+    const sendRelation =
+      params.profileRelation &&
+      params.catalogs().some((catalog) => catalog.capabilities.profileRelation);
+    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId: params.agentId,
+      ...(sendRelation ? { profileRelation: params.profileRelation } : {}),
+      limitPerHost: 40,
+      progressId,
+      allowPartialResults: true,
+    });
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }

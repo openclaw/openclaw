@@ -472,9 +472,7 @@ it("retains authorized rows and the fallback mode across Gateway cursor pages", 
   };
   const sourceCursor = sessionCatalogPaging.encodeCursor(20);
   client.request
-    .mockRejectedValueOnce(
-      Object.assign(new Error("Unresolved profile"), { code: "FILTER_UNAVAILABLE" }),
-    )
+    .mockResolvedValueOnce({ sessions: [], relationUnresolved: true })
     .mockResolvedValueOnce({ sessions: [row], nextCursor: sourceCursor });
   const host = (await catalog.list({ profileRelation }))[0]!;
   expect(host).toMatchObject({ sessions: [row], error: { code: "FILTER_PARTIAL" } });

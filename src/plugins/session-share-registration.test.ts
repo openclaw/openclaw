@@ -138,6 +138,9 @@ it("invokes the real source list and read through the receiver's default policy"
         requestParams: {
           nodeId,
           command,
+          // The Session Share receiver allows up to 30 s per invoke; the first source read
+          // starts a cold session-history worker and can exceed the 5 s default here.
+          timeoutMs: 30_000,
           params: command === legacy[1] ? { threadId: "agent:main:shared" } : {},
         },
       });

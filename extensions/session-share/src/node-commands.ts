@@ -45,6 +45,12 @@ function parseNodeParams(paramsJSON?: string | null): unknown {
   return paramsJSON ? JSON.parse(paramsJSON) : undefined;
 }
 
+// The host's relation resolver marks an unknown or ambiguous target with this closed code.
+// Node transports flatten thrown errors to text, so the list answers with a typed page instead.
+export function isUnresolvedRelationError(error: unknown): boolean {
+  return isRecord(error) && error.code === "PROFILE_RELATION_UNRESOLVED";
+}
+
 function isSharedEntry(
   groups: ReadonlySet<string>,
   { sessionKey, entry }: { sessionKey: string; entry: SessionEntry },
@@ -237,14 +243,17 @@ export function createSessionShareNodeCommands(
           : undefined;
         const offset = sessionCatalogPaging.decodeCursor(params.cursor, params.profileRelation);
         const search = params.searchTerm?.toLowerCase().normalize("NFC");
+        let shared: Awaited<ReturnType<typeof readSharedEntries>>;
+        try {
+          shared = await readSharedEntries(params.profileRelation);
+        } catch (error) {
+          if (!params.profileRelation || !isUnresolvedRelationError(error)) {
+            throw error;
+          }
+          return serializeResult({ sessions: [], relationUnresolved: true });
+        }
         const sessions = [];
-        for (const {
-          agentId,
-          sessionKey,
-          storePath,
-          entry,
-          assertSourceCurrent,
-        } of await readSharedEntries(params.profileRelation)) {
+        for (const { agentId, sessionKey, storePath, entry, assertSourceCurrent } of shared) {
           const name = search
             ? await readSessionTranscriptCatalogTitleAsync({
                 agentId,

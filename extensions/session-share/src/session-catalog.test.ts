@@ -104,7 +104,7 @@ async function catalogFixture() {
     scheduler,
   };
   await service.start(serviceContext);
-  const readDelayMs = 2;
+  let readDelayMs = 2;
   const readList = async (query: CatalogQuery = {}) => {
     const listing = catalog.list(query);
     void listing.catch(() => {});
@@ -135,6 +135,8 @@ async function catalogFixture() {
       return { done: () => Promise.all(publications), onHost };
     },
     paginate: (sessions: SessionCatalogSession[], delayMs = 0) => {
+      // Every explicit list starts a fresh read, so each read waits out a full refresh.
+      readDelayMs = Math.ceil(sessions.length / 100) * delayMs + 2;
       invoke.mockImplementation(async ({ params }) => {
         const { cursor, profileRelation } = params as {
           cursor?: string;
@@ -230,6 +232,16 @@ it("bounds admission and refresh concurrency without interrupting work", async (
   }
 });
 
+it("evicts older relation snapshots of the same node instead of loading forever", async () => {
+  for (let id = 1; id <= 33; id++) {
+    const profileRelation = {
+      relationship: "owned",
+      target: { type: "github-account", id: String(id) },
+    } as const;
+    expect(await f.host({ profileRelation })).toMatchObject({ sessions: [nativeSession] });
+  }
+});
+
 it("restarts after retiring queued refreshes before dispatch", async () => {
   const { done } = await f.watch();
   await f.restart();
@@ -247,48 +259,45 @@ it.each([
       target: { type: "github-account", id: "101" },
     } as const,
   },
-])(
-  "caches slow pages and finds $title (relation: $profileRelation)",
-  async ({ title, profileRelation }) => {
-    if (profileRelation) {
-      f.list.mockResolvedValue({
-        nodes: [
-          {
-            ...makeNode("alpha"),
-            commands: [
-              ...commands,
-              "openclaw.sessions.catalog.list.v1",
-              "openclaw.sessions.catalog.read.v1",
-            ],
-          },
-        ],
-      });
-    }
-    const sessions = rows(601);
-    sessions[100]!.name = title;
-    f.paginate(sessions, 5_000);
-    expect((await f.begin({ profileRelation }))[0]?.pending).toBe(true);
-    await advance(35_005);
-    const first = (await f.host({ limitPerHost: 100, profileRelation }))!;
-    expect(first.sessions).toEqual(sessions.slice(0, 100));
-    expect(first.error).toBeUndefined();
-    await f.expectSessions(sessions.slice(100, 200), {
-      limitPerHost: 100,
-      cursors: { "node:alpha": first.nextCursor! },
-      profileRelation,
+])("pages and finds $title (relation: $profileRelation)", async ({ title, profileRelation }) => {
+  if (profileRelation) {
+    f.list.mockResolvedValue({
+      nodes: [
+        {
+          ...makeNode("alpha"),
+          commands: [
+            ...commands,
+            "openclaw.sessions.catalog.list.v1",
+            "openclaw.sessions.catalog.read.v1",
+          ],
+        },
+      ],
     });
-    await f.expectSessions(sessions.slice(600), {
-      cursors: { "node:alpha": encodeCursor(600, profileRelation) },
-      profileRelation,
-    });
-    const query = title === "München" ? "Mu\u0308nchen" : "München";
-    await f.expectSessions([sessions[100]!], { search: query.toUpperCase(), profileRelation });
-    await f.expectSessions([sessions[100]!], { search: "MAIN:100", profileRelation });
-    f.invoke.mockResolvedValue({ sessions: [] });
-    await advance(30_000);
-    await f.expectSessions([], { profileRelation });
-  },
-);
+  }
+  const sessions = rows(601);
+  sessions[100]!.name = title;
+  f.paginate(sessions, 5_000);
+  expect((await f.begin({ profileRelation }))[0]?.pending).toBe(true);
+  await advance(35_005);
+  const first = (await f.host({ limitPerHost: 100, profileRelation }))!;
+  expect(first.sessions).toEqual(sessions.slice(0, 100));
+  expect(first.error).toBeUndefined();
+  await f.expectSessions(sessions.slice(100, 200), {
+    limitPerHost: 100,
+    cursors: { "node:alpha": first.nextCursor! },
+    profileRelation,
+  });
+  await f.expectSessions(sessions.slice(600), {
+    cursors: { "node:alpha": encodeCursor(600, profileRelation) },
+    profileRelation,
+  });
+  const query = title === "München" ? "Mu\u0308nchen" : "München";
+  await f.expectSessions([sessions[100]!], { search: query.toUpperCase(), profileRelation });
+  await f.expectSessions([sessions[100]!], { search: "MAIN:100", profileRelation });
+  f.invoke.mockResolvedValue({ sessions: [] });
+  await advance(30_000);
+  await f.expectSessions([], { profileRelation });
+});
 
 it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
   const total = budget === "rows" ? 10_100 : 1_500;
@@ -523,8 +532,7 @@ it("preserves eligible host order and separates offline and failed sources", asy
     { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
   ]);
   expect(hosts[0]?.sessions).toEqual([nativeSession]);
-  expect(f.invoke).toHaveBeenCalledTimes(3);
-  expect(f.invoke.mock.calls.filter(([request]) => request.nodeId === "alpha")).toHaveLength(1);
+  expect(f.invoke).toHaveBeenCalledTimes(4);
   expect(f.catalog.continueSession).toBeUndefined();
   expect(f.catalog.archive).toBeUndefined();
   expect(f.catalog.openTerminal).toBeUndefined();
@@ -595,6 +603,20 @@ it("does not send relationship params to legacy nodes and pages only advertised 
       params: { limit: 100, profileRelation },
     }),
   );
+  // A source that cannot resolve the target answers with a typed page, not an error text.
+  f.invoke.mockClear();
+  f.invoke
+    .mockResolvedValueOnce(wire({ sessions: [], relationUnresolved: true }))
+    .mockResolvedValueOnce(wire({ sessions: [nativeSession] }));
+  const unresolved = { ...profileRelation, relationship: "involving" } as const;
+  expect(await f.host({ profileRelation: unresolved })).toMatchObject({
+    sessions: [nativeSession],
+    error: { code: "FILTER_PARTIAL" },
+  });
+  expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+    { limit: 100, profileRelation: unresolved },
+    { limit: 100 },
+  ]);
 });
 
 it("keeps configured owner and portable identity attribution on filtered node pages", async () => {

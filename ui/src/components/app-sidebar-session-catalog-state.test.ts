@@ -76,7 +76,7 @@ it("publishes fresh authorized fallback rows instead of wiping a fresh-list cata
     ...catalog(["authorized"], {
       error: { code: "FILTER_PARTIAL", message: "Client-side matching" },
     }),
-    requiresFreshList: true,
+    requiresFreshList: true as const,
   };
   const result = await refetchExpandedSessionCatalogPages({
     catalogs: [fresh],

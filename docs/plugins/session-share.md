@@ -314,7 +314,7 @@ Nothing is enabled by default, and both machines need a release that includes th
 
 The source returns only a source-relative path, and only for a session that its current routing still resolves to the stored session. The receiver joins that path to the origin you configured. Links follow the source's current routing; they are not permanent session addresses.
 
-The receiver uses the catalog pair for every list/read when both commands are advertised, and the legacy pair only when the pair is absent. It requests original paths only when the pair and `controlUiOrigin` are configured. A missing allow or approval denies the catalog call with visible setup guidance; it does not bypass that denial through a legacy command.
+The receiver uses the catalog pair for every list/read when the node advertises both commands, and the legacy pair otherwise. It requests original paths only when the pair and `controlUiOrigin` are configured. If the pair was not allowed on the receiver when the node connected, the Gateway withholds it, so the receiver uses the legacy pair: shared sessions stay readable, relationship filters fall back to client-side matching with guidance, and **Open original** stays disabled. Allow the pair, then restart the source node and approve the request in `openclaw nodes pending`.
 
 ### Relationship filtering
 

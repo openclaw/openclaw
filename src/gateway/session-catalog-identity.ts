@@ -385,6 +385,12 @@ export async function resolveSessionCatalogProfileRelation(
   return { relationship, target: { type: "github-account", id: String(account.accountId) } };
 }
 
+// Session Share turns this closed code into a client-side-filter fallback. Node transports
+// flatten thrown errors to text, so callers must branch on `code`, never on the message.
+function unresolvedRelationError(message: string) {
+  return Object.assign(new Error(message), { code: "PROFILE_RELATION_UNRESOLVED" as const });
+}
+
 /** Resolve only the supplied target in the source's existing identity catalog. */
 export async function prepareSessionCatalogRelationIdentity(
   query: SessionCatalogSourceProfileRelation,
@@ -399,11 +405,11 @@ export async function prepareSessionCatalogRelationIdentity(
   );
   const profileId = facts.accounts.get(target.id);
   if (!profileId) {
-    throw new Error("Profile selection is unresolved or ambiguous on this source");
+    throw unresolvedRelationError("Profile selection is unresolved or ambiguous on this source");
   }
   const identity = await prepareCurrentUserProfileIdentity(profileId, options);
   if (!identity.profile) {
-    throw new Error("Profile selection is unresolved on this source");
+    throw unresolvedRelationError("Profile selection is unresolved on this source");
   }
   const current = authority.bind([profileId, identity.profile.profileId]);
   const assertCurrent = () => {

@@ -759,10 +759,11 @@ it("intersects request relationships with publication before paging and transcri
     ).toEqual(["agent:main:owned", "agent:main:participating"]);
     fixture.select({ groups: ["Other"] });
     expect((await fixture.listForProfile({ profileRelation: involving })).sessions).toEqual([]);
+    // Unknown targets answer with a typed page: node transports flatten thrown errors to text.
     await expect(
       fixture.listForProfile({
         profileRelation: { ...involving, target: { type: "github-account", id: "999" } },
       }),
-    ).rejects.toThrow("unresolved");
+    ).resolves.toEqual({ sessions: [], relationUnresolved: true });
   });
 });

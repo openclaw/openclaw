@@ -203,6 +203,19 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
               let relation = entry.profileRelation;
               entry.error = undefined;
               let retry: boolean;
+              // Start over without the relation and let the receiver match rows client-side.
+              const fallBackToClientFilter = () => {
+                relation = undefined;
+                cursor = undefined;
+                sessions.length = 0;
+                bytes = 0;
+                retry = true;
+                entry.error = {
+                  code: "FILTER_PARTIAL",
+                  message:
+                    "Source relationship filtering is unavailable. Showing authorized rows with client-side matching; check the identity link and catalog command approvals.",
+                };
+              };
               do {
                 retry = false;
                 if (!current(entry) || !owner.invokeNode) {
@@ -228,43 +241,28 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                   });
                 } catch (error) {
                   const details = asOptionalRecord(asOptionalRecord(error)?.details);
-                  const nodeError = asOptionalRecord(details?.nodeError);
-                  const message = nodeError?.message ?? asOptionalRecord(error)?.message;
-                  const unresolved =
-                    typeof message === "string" &&
-                    /^Profile selection is unresolved(?: or ambiguous)? on this source$/.test(
-                      message,
-                    );
-                  const unapproved = details?.reason === "command not allowlisted";
-                  if (!relation || (!unresolved && !unapproved)) {
+                  if (!relation || details?.reason !== "command not allowlisted") {
                     throw error;
                   }
-                  if (unapproved) {
-                    // Only refreshed advertisement can select the legacy pair; a rejected
-                    // catalog command is not permission to bypass the pair selection.
-                    const latest = (await api.runtime.nodes.list()).nodes.find(
-                      (node) => node.nodeId === entry.node.nodeId,
-                    );
-                    if (!latest?.connected || selectNodeCommands(latest).catalog) {
-                      throw error;
-                    }
-                    entry.node = latest;
-                    commands = selectNodeCommands(latest);
-                    includeLinks = false;
+                  // Only refreshed advertisement can select the legacy pair; a rejected
+                  // catalog command is not permission to bypass the pair selection.
+                  const latest = (await api.runtime.nodes.list()).nodes.find(
+                    (node) => node.nodeId === entry.node.nodeId,
+                  );
+                  if (!latest?.connected || selectNodeCommands(latest).catalog) {
+                    throw error;
                   }
-                  relation = undefined;
-                  cursor = undefined;
-                  sessions.length = 0;
-                  bytes = 0;
-                  retry = true;
-                  entry.error = {
-                    code: "FILTER_PARTIAL",
-                    message:
-                      "Source relationship filtering is unavailable. Showing authorized rows with client-side matching; check the identity link and catalog command approvals.",
-                  };
+                  entry.node = latest;
+                  commands = selectNodeCommands(latest);
+                  includeLinks = false;
+                  fallBackToClientFilter();
                   continue;
                 }
                 const page = parseSessionSharePage(raw, includeLinks, relation);
+                if (page.relationUnresolved) {
+                  fallBackToClientFilter();
+                  continue;
+                }
                 bytes += Buffer.byteLength(JSON.stringify(page));
                 if (
                   sessions.length + page.sessions.length > MAX_SNAPSHOT_ROWS ||
@@ -362,21 +360,25 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       return;
     }
     const config = api.runtime.config.current();
-    const selected = new Set(nodes.map((node) => node.nodeId));
+    const snapshotKey = (node: CatalogNode) =>
+      JSON.stringify([node.nodeId, profileRelation ?? null]);
+    // Protect only the snapshots this request needs. Other relations of the same node stay
+    // evictable, or 32 relations on one node would block every new filter for good.
+    const requested = new Set(nodes.map(snapshotKey));
     for (const node of nodes.filter((candidate) => candidate.connected)) {
-      const key = JSON.stringify([node.nodeId, profileRelation ?? null]);
+      const key = snapshotKey(node);
       const existing = snapshots.get(key);
       if (existing) {
         snapshots.delete(key);
         snapshots.set(key, existing);
-        if (!existing.sessions || performance.now() - existing.refreshedAt >= REFRESH_MS) {
-          refresh(existing, owner);
-        }
+        // An explicit request always starts a fresh read, so source revocations show at once;
+        // refresh() joins one already in flight instead of starting another.
+        refresh(existing, owner);
         continue;
       }
       if (snapshots.size >= MAX_SNAPSHOTS) {
         const victim = Array.from(snapshots.values()).find(
-          (candidate) => !candidate.pending && !selected.has(candidate.node.nodeId),
+          (candidate) => !candidate.pending && !requested.has(candidate.key),
         );
         if (!victim) {
           continue;

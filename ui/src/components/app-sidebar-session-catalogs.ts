@@ -193,8 +193,10 @@ export function projectSidebarSessionCatalogs(
       }
     }
     // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
+    // A partially applied relation is the exception: its guidance explains the empty result.
+    const partial = catalog.hosts.some((host) => host.error?.code === "FILTER_PARTIAL");
     return visibleHosts.length > 0 ||
-      (catalog.hosts.every((host) => host.sessions.length === 0) &&
+      ((partial || catalog.hosts.every((host) => host.sessions.length === 0)) &&
         catalogErrorMessages(catalog).length > 0)
       ? [{ ...catalog, visibleHosts }]
       : [];

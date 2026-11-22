@@ -247,24 +247,14 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                     ...(cursor ? { cursor } : {}),
                   },
                 );
-              let raw: unknown;
-              try {
-                raw = await requestPage();
-              } catch (error) {
-                if (
-                  !relation ||
-                  !(error instanceof Error) ||
-                  !("code" in error) ||
-                  error.code !== "FILTER_UNAVAILABLE"
-                ) {
-                  throw error;
-                }
+              let page = parseSessionSharePage(await requestPage(), false, relation);
+              if (page.relationUnresolved) {
+                // Unknown or ambiguous target on the source: show authorized rows unfiltered.
                 relation = undefined;
                 partial = true;
                 cursor = undefined;
-                raw = await requestPage();
+                page = parseSessionSharePage(await requestPage(), false, relation);
               }
-              const page = parseSessionSharePage(raw, false, relation);
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
@@ -282,7 +272,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                       error: {
                         code: "FILTER_PARTIAL",
                         message:
-                          "This Gateway does not support relationship filtering. Showing authorized rows with client-side matching; update the source.",
+                          "Relationship filtering is unavailable on this Gateway source. Showing authorized rows with client-side matching; update the source or check the identity link on both Gateways.",
                       },
                     }
                   : {}),

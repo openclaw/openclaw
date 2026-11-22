@@ -8,6 +8,7 @@ import {
 } from "./config.js";
 import {
   createSessionShareNodeCommands,
+  isUnresolvedRelationError,
   SESSION_SHARE_LIST_COMMAND,
   SESSION_SHARE_READ_COMMAND,
   SESSION_SHARE_CATALOG_LIST_COMMAND,
@@ -66,10 +67,7 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
           }).find((candidate) => candidate.command === command)!;
           await handler.handle(JSON.stringify(request.params));
         } catch (error) {
-          if (
-            error instanceof Error &&
-            /^Profile selection is unresolved(?: or ambiguous)? on this source$/.test(error.message)
-          ) {
+          if (isUnresolvedRelationError(error)) {
             request.respond(false, undefined, {
               code: "FILTER_UNAVAILABLE",
               message: "Relationship target is unresolved or ambiguous on this source",
