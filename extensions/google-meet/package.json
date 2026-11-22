@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "jszip": "3.10.2",
-    "typebox": "1.4.3"
+    "typebox": "1.4.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@muse-code/sdk": "1.4.14"
+    "@muse-code/sdk": "1.4.20"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

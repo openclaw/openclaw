@@ -11,10 +11,10 @@
     "@openai/codex": "0.169.0",
     "@openclaw/fs-safe": "0.27.1",
     "acorn": "8.19.0",
-    "semver": "7.8.5",
+    "semver": "7.8.6",
     "smol-toml": "1.9.1",
-    "typebox": "1.4.3",
-    "ws": "8.22.0",
+    "typebox": "1.4.5",
+    "ws": "8.23.0",
     "zod": "4.6.7"
   },
   "bundleDependencies": [

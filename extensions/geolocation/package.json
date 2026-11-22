@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "maxmind": "5.0.7"
+    "maxmind": "5.1.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

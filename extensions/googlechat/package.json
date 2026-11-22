@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "google-auth-library": "11.3.2",
+    "google-auth-library": "11.3.4",
     "zod": "4.6.7"
   },
   "devDependencies": {

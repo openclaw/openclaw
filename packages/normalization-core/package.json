@@ -159,7 +159,7 @@
     "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts normalization-core"
   },
   "dependencies": {
-    "libphonenumber-js": "1.13.15",
-    "typebox": "1.4.3"
+    "libphonenumber-js": "1.13.16",
+    "typebox": "1.4.5"
   }
 }
