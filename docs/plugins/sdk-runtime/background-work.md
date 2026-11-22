@@ -346,11 +346,12 @@ choose a different parent or delivery route.
 Within one Gateway process, schedules bind the exact managed plugin instance,
 not just its ID, version, or source path. Registry adoption of that same
 instance preserves the binding. After an in-process plugin reload, the first
-occurrence that finds another live instance of the plugin is refused without
-running plugin code and retires the schedule; it does not wait for generic
-repeated-failure auto-disable. That refusal spends one attempt. A transient gap,
-such as a registry swap that keeps the same instance or a plugin that is still
-unloading, is an ordinary refusal that retries at the next occurrence.
+occurrence that finds another live instance of the plugin, or finds the plugin
+disabled or uninstalled, is refused without running plugin code and retires the
+schedule; it does not wait for generic repeated-failure auto-disable. That
+refusal spends one attempt. A transient gap, such as a registry swap that keeps
+the same instance or an enabled plugin that is still unloading, is an ordinary
+refusal that retries at the next occurrence.
 
 Accepted schedules survive a Gateway restart on hosts advertising
 `command-scheduled-turns-restart-v1` in `api.runtime.capabilities`. The accepted

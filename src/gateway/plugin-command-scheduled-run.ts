@@ -104,11 +104,11 @@ export function readPluginCommandScheduledJob(
   return schedule;
 }
 
-/** The bound managed plugin instance was replaced in this process; the schedule ends. */
-class PluginCommandScheduleInstanceReplacedError extends Error {
-  constructor() {
-    super("Scheduled plugin command's original plugin instance was replaced; the schedule ended.");
-    this.name = "PluginCommandScheduleInstanceReplacedError";
+/** The schedule can never run plugin code again; settlement retires it on this refusal. */
+class PluginCommandScheduleEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginCommandScheduleEndedError";
   }
 }
 
@@ -125,14 +125,20 @@ export function assertPluginCommandScheduleRegistry(
   const { pluginIncarnation } = binding;
   const plugin = registry.plugins.find((record) => record.id === schedule.pluginId);
   const liveIncarnation = plugin && getPluginInstanceIncarnation(plugin);
-  if (
-    !isPluginRegistryRetired(registry) &&
-    liveIncarnation !== undefined &&
-    liveIncarnation !== pluginIncarnation
-  ) {
-    // A current registry already serves another live instance. A transient gap (retired
-    // registry, unloading or disposed instance) stays an ordinary refusal: adoption can keep it.
-    throw new PluginCommandScheduleInstanceReplacedError();
+  if (!isPluginRegistryRetired(registry) && liveIncarnation !== pluginIncarnation) {
+    // A current registry serving another live instance, or listing the plugin disabled or not at
+    // all, never adopts the bound instance again. A transient gap (retired registry, unloading or
+    // disposed instance of an enabled plugin) stays an ordinary refusal: adoption can keep it.
+    if (liveIncarnation !== undefined) {
+      throw new PluginCommandScheduleEndedError(
+        "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",
+      );
+    }
+    if (!plugin?.enabled) {
+      throw new PluginCommandScheduleEndedError(
+        "Scheduled plugin command's plugin was disabled or removed; the schedule ended.",
+      );
+    }
   }
   const command = listRegisteredPluginCommands(registry).find(
     (entry) => entry.name === schedule.command,
@@ -598,7 +604,7 @@ export async function runPluginCommandScheduledTurn(params: {
       error: formatErrorMessage(error),
       ...(turnSignal?.aborted || params.request.abortSignal?.aborted || isAbortError(error)
         ? { errorClassification: { kind: "aborted" as const } }
-        : error instanceof PluginCommandScheduleInstanceReplacedError
+        : error instanceof PluginCommandScheduleEndedError
           ? // Settlement retires the schedule on this first refusal.
             { errorClassification: { kind: "permanent" as const } }
           : {}),
