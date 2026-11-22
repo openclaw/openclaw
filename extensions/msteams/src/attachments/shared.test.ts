@@ -6,11 +6,13 @@ import {
 const installAttachmentTestTransport = useAttachmentTestTransport();
 import { lookup } from "node:dns/promises";
 import {
-  encodeGraphShareId,
-  htmlTagAttributeValues,
+  extractMSTeamsHtmlAttachmentIds,
   isDownloadableAttachment,
-  isLikelyImageAttachment,
   normalizeContentType,
+  resolveMSTeamsAdvertisedMedia,
+} from "./html.js";
+import {
+  encodeGraphShareId,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
@@ -186,10 +188,10 @@ it("normalizeContentType returns undefined for non-string, empty, or whitespace 
 });
 
 it.each([
-  ["Image/PNG", "download", true],
-  ["Application/PDF", "doc", false],
+  ["Image/PNG", "download", "image"],
+  ["Application/PDF", "doc", "document"],
 ] as const)("classifies mixed-case %s without a filename hint", (contentType, name, expected) => {
-  expect(isLikelyImageAttachment({ contentType, name })).toBe(expected);
+  expect(resolveMSTeamsAdvertisedMedia([{ contentType, name }])).toEqual([{ kind: expected }]);
 });
 
 it("recognizes the Teams download-info attachment type regardless of casing", () => {
@@ -201,25 +203,31 @@ it("recognizes the Teams download-info attachment type regardless of casing", ()
   ).toBe(true);
 });
 
-describe("htmlTagAttributeValues", () => {
-  const values = (html: string, tag: "img" | "attachment", attr: "src" | "id") =>
-    htmlTagAttributeValues(html, tag, attr);
+describe("HTML attachment parsing", () => {
+  const html = (content: string) => [{ contentType: "text/html", content }];
 
   it("reads one value per tag, keeping the last spelling inside each tag", () => {
     expect(
-      values('<img data-src="a.png" src="b.png"><p>x</p><IMG alt=x SRC=\'cid:c\'>', "img", "src"),
-    ).toEqual(["b.png", "cid:c"]);
+      resolveMSTeamsAdvertisedMedia(
+        html('<img data-src="a.png" src="b.png"><p>x</p><IMG alt=x SRC=\'cid:c\'>'),
+      ),
+    ).toEqual([
+      { kind: "image", sourceId: "b.png" },
+      { kind: "image", sourceId: "c" },
+    ]);
     expect(
-      values(
-        '<attachment id="one"></attachment><attachment fluid="no" id="two">',
-        "attachment",
-        "id",
+      extractMSTeamsHtmlAttachmentIds(
+        html('<attachment id="one"></attachment><attachment fluid="no" id="two">'),
       ),
     ).toEqual(["one", "two"]);
   });
 
   it("keeps a quoted value containing > and skips tags without a usable value", () => {
-    expect(values('<img src="a>b" alt="x">', "img", "src")).toEqual(["a>b"]);
-    expect(values('<img src="">, <img alt="x">, <img src="open', "img", "src")).toEqual([]);
+    expect(resolveMSTeamsAdvertisedMedia(html('<img src="a>b" alt="x">'))).toEqual([
+      { kind: "image", sourceId: "a>b" },
+    ]);
+    expect(
+      resolveMSTeamsAdvertisedMedia(html('<img src="">, <img alt="x">, <img src="open')),
+    ).toEqual([]);
   });
 });

@@ -108,6 +108,7 @@ const completionRuntime = createSubagentRegistryCompletionRuntime({
 });
 const pendingLifecycle = completionRuntime.pendingLifecycle;
 const clearPendingLifecycleError = pendingLifecycle.clearError;
+export const completeSubagentRunWithRecovery = completionRuntime.completeSubagentRunWithRecovery;
 const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 
 const contextCleanup = createSubagentRegistryContextCleanup({
@@ -575,7 +576,7 @@ export function initSubagentRegistry() {
 }
 
 export {
-  listLiveSubagentRootSessions,
+  listLiveSubagentSessions,
   resolveRootSubagentRequester,
 } from "./subagent-registry-read.js";
 

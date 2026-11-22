@@ -450,6 +450,75 @@ export function hasSameLifecycleInput(
   );
 }
 
+// Catalog callbacks retain this guard. Capture only its generation, not the batch's
+// previous catalog, candidates or transient publication callbacks.
+function createPreparedModelRuntimeGenerationGuard(
+  owner: PreparedModelRuntimeOwner,
+  generation: number,
+  key: string,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean,
+): () => boolean {
+  return () =>
+    owner.generation === generation &&
+    (isOwnerRegistered?.(key, owner) ?? owners.get(key) === owner);
+}
+
+// Catalog and auth loaders retain these callbacks after publication. Keep their lexical
+// scope separate from the batch so a live candidate cannot pin the previous remote catalog.
+function createPreparedModelRuntimePublicationCandidate(
+  owner: PreparedModelRuntimeOwner,
+  input: PreparedModelRuntimeInput,
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  isPublicationCurrent: (() => boolean) | undefined,
+  isOwnerRegistered: ((key: string, owner: PreparedModelRuntimeOwner) => boolean) | undefined,
+  isBuildCurrent: (() => boolean) | undefined,
+  registerEntriesAfterBuildStart: boolean | undefined,
+) {
+  const generation = owner.generation;
+  const key = ownerKey(input);
+  let registered = owners.get(key) === owner;
+  // Scoped reloads retain unaffected generations beyond their creating publication epoch.
+  // Persistent catalog/auth callbacks must retire only with this exact registered generation.
+  const isGenerationCurrent = createPreparedModelRuntimeGenerationGuard(
+    owner,
+    generation,
+    key,
+    owners,
+    isOwnerRegistered,
+  );
+  const isCurrent = () => (isPublicationCurrent?.() ?? true) && isGenerationCurrent();
+  return {
+    catalogMode: owner.catalogMode,
+    input,
+    catalogOwner: owner.catalogOwner,
+    inventoryOwner: owner,
+    pluginGeneration: owner.pendingPluginGeneration,
+    prepareInboundPluginRegistry: owner.provenance === "configured",
+    inspectRegistry:
+      owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
+    isGenerationCurrent,
+    retirementSignal: capturePreparedModelRuntimeGeneration(owner),
+    isBuildCurrent: isBuildCurrent ?? isCurrent,
+    onBeforeAuthCapture: () => {
+      if (owner.generation === generation) {
+        owner.authCaptureStarted = true;
+      }
+    },
+    isEligible: () =>
+      (isPublicationCurrent?.() ?? true) &&
+      owner.generation === generation &&
+      (registered ? owners.get(key) === owner : registerEntriesAfterBuildStart === true),
+    isCurrent,
+    key,
+    generation,
+    markRegistered: () => {
+      registered = true;
+    },
+    owner,
+  };
+}
+
 export async function publishPreparedModelRuntimeOwnerBatch(
   params: {
     ownersToPublish: readonly PreparedModelRuntimeOwner[];
@@ -486,46 +555,15 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     owner.needsRefresh = true;
     owner.refreshError = undefined;
     owner.pendingPluginGeneration = params.selectPluginGeneration?.(owner);
-    const generation = owner.generation;
-    const key = ownerKey(input);
-    let registered = params.owners.get(key) === owner;
-    // Scoped reloads retain unaffected generations beyond their creating publication epoch.
-    // Persistent catalog/auth callbacks must retire only with this exact registered generation.
-    const isGenerationCurrent = () =>
-      owner.generation === generation &&
-      (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
-    const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
-    return {
-      catalogMode: owner.catalogMode,
-      input,
-      catalogOwner: owner.catalogOwner,
-      inventoryOwner: owner,
-      pluginGeneration: owner.pendingPluginGeneration,
-      prepareInboundPluginRegistry: owner.provenance === "configured",
-      inspectRegistry:
-        owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
-      isGenerationCurrent,
-      retirementSignal: capturePreparedModelRuntimeGeneration(owner),
-      isBuildCurrent: params.isBuildCurrent ?? isCurrent,
-      onBeforeAuthCapture: () => {
-        if (owner.generation === generation) {
-          owner.authCaptureStarted = true;
-        }
-      },
-      isEligible: () =>
-        (params.isPublicationCurrent?.() ?? true) &&
-        owner.generation === generation &&
-        (registered
-          ? params.owners.get(key) === owner
-          : params.registerEntriesAfterBuildStart === true),
-      isCurrent,
-      key,
-      generation,
-      markRegistered: () => {
-        registered = true;
-      },
+    return createPreparedModelRuntimePublicationCandidate(
       owner,
-    };
+      input,
+      params.owners,
+      params.isPublicationCurrent,
+      params.isOwnerRegistered,
+      params.isBuildCurrent,
+      params.registerEntriesAfterBuildStart,
+    );
   });
   const groups = groupRecords(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();

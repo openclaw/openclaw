@@ -46,6 +46,69 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("restores runtime statement limits after maintenance commits and nested rollbacks", () => {
+    fixture(({ db, open, invalidate }) => {
+      db.exec("SET statement_timeout = '37s'");
+      const timeout = () => db.prepare("SHOW statement_timeout").get()!.statement_timeout;
+      const runtime = timeout();
+      db.runTransaction(
+        () => {
+          expect(timeout()).not.toBe(runtime);
+          db.exec("INSERT INTO items(id) VALUES (1)");
+        },
+        { maintenance: true },
+      );
+      expect(timeout()).toBe(runtime);
+      db.runTransaction(() => {
+        for (const fail of [false, true]) {
+          const nested = () =>
+            db.runTransaction(
+              () => {
+                expect(timeout()).not.toBe(runtime);
+                db.exec(`INSERT INTO items(id) VALUES (${fail ? 3 : 2})`);
+                if (fail) {
+                  throw new Error("maintenance failed");
+                }
+              },
+              { maintenance: true },
+            );
+          if (fail) {
+            expect(nested).toThrow("maintenance failed");
+          } else {
+            nested();
+          }
+          expect(timeout()).toBe(runtime);
+        }
+      });
+      expect(db.prepare("SELECT id FROM items ORDER BY id").all()).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(timeout()).toBe(runtime);
+      const nextDdl = `${ddl}\nALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`;
+      invalidate();
+      const migrated = open({
+        ...schema,
+        version: 2,
+        postgres: nextDdl,
+        postgresMigrations: [
+          {
+            version: 2,
+            fromSchema: { postgres: ddl },
+            schema: { postgres: nextDdl },
+            sql: `DO $$ BEGIN
+            IF current_setting('statement_timeout')::interval <= interval '90 seconds' THEN
+              RAISE EXCEPTION 'migration still has a runtime statement limit';
+            END IF;
+          END $$; ALTER TABLE items ADD COLUMN migrated BOOLEAN NOT NULL DEFAULT true;`,
+          },
+        ],
+      });
+      expect(migrated.prepare("SELECT id, migrated FROM items ORDER BY id").all()).toEqual([
+        { id: 1, migrated: 1 },
+        { id: 2, migrated: 1 },
+      ]);
+      expect(migrated.prepare("SHOW statement_timeout").get()!.statement_timeout).toBe("90s");
+    });
+  });
+
   it("keeps migration callbacks out of worker admission snapshots", () => {
     fixture(({ open, invalidate }) => {
       invalidate();

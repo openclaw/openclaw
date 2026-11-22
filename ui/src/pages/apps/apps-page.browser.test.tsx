@@ -46,7 +46,7 @@ it.each([
   } as unknown as ApplicationContext;
   const mounted = mountSolid(
     () => (
-      <main class="content">
+      <main class="content content--hub-header">
         <AppsPage />
       </main>
     ),
@@ -60,6 +60,9 @@ it.each([
     expect(mounted.queryByRole("heading", { name: "Plugin apps" })).toBeNull();
     expect(mounted.queryByRole("button", { name: "Configure MCP servers" })).toBeNull();
     expect(mounted.getByRole("heading", { name: "iPhone" })).toBeVisible();
+    const intro = mounted.getByText(/Companion apps for phone/);
+    const section = mounted.getByRole("heading", { name: "On your phone" });
+    expect(section.getBoundingClientRect().left).toBeCloseTo(intro.getBoundingClientRect().left, 0);
     expect(describe).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   } finally {

@@ -10,6 +10,9 @@ const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(confi
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();
 
+const postgresSchemaPrefixRules =
+  "Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. The prefix pg and prefixes starting with pg_ generate reserved PostgreSQL schema names.";
+
 export const DatabaseConfigSchema = z
   .strictObject({
     engine: z.enum(["sqlite", "postgres"]).optional().register(configUiMetadata, {
@@ -43,11 +46,11 @@ export const DatabaseConfigSchema = z
           }),
         schemaPrefix: z
           .string()
-          .regex(/^[a-z_][a-z0-9_]{0,26}$/)
+          .regex(/^(?!pg(?:_|$))[a-z_][a-z0-9_]{0,26}$/, postgresSchemaPrefixRules)
           .optional()
           .register(configUiMetadata, {
             label: "PostgreSQL Schema Prefix",
-            help: "Prefix for new PostgreSQL store schemas (default: openclaw). Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors retain their schema.",
+            help: `Prefix for new PostgreSQL store schemas (default: openclaw). ${postgresSchemaPrefixRules} Existing anchors retain their schema.`,
           }),
         recoveryCaptures: z.enum(["portable", "server"]).optional().register(configUiMetadata, {
           label: "PostgreSQL Recovery Captures",

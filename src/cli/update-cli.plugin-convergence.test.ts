@@ -9,6 +9,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
+import type { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
@@ -22,7 +23,6 @@ import {
 import {
   mockUnbuiltRecoveryFixture,
   recoveryObservationStep,
-  recoveryCleanupStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -44,8 +44,6 @@ describe("update-cli", () => {
     mockPackageInstallAtCaseDir,
     primeNpmChannelTag,
     runPostCoreCommand,
-    clawHubSuspiciousPayloadWarning,
-    clawHubSyncRiskError,
   } = createUpdateCliFixture();
 
   async function updatePlugins() {
@@ -113,7 +111,7 @@ describe("update-cli", () => {
 
     expect(JSON.parse(await fs.readFile(resultPath, "utf-8"))).toMatchObject({ status: "ok" });
     expect(update.defaultRuntime.exit).toHaveBeenCalledWith(0);
-    assert.expectNoSideEffects(update.updateGitCheckout, mocks.spawn);
+    assert.expectNoSideEffects(update.updateGitRelease, mocks.spawn);
     const runsAfter = update.listUpdateRuns();
     expect(runsAfter).toHaveLength(runsBefore.length);
     const { steps: priorSteps, updatedAtMs: _priorUpdate, ...priorOwnership } = runsBefore[0]!;
@@ -138,7 +136,7 @@ describe("update-cli", () => {
       },
     );
 
-    expect(update.updateGitCheckout).not.toHaveBeenCalled();
+    expect(update.updateGitRelease).not.toHaveBeenCalled();
     expect(update.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: { update: { channel: "dev" } },
       baseHash: "stable-hash",
@@ -217,9 +215,7 @@ describe("update-cli", () => {
       actualIntegrity: "sha512-new",
     };
     mocks.updateNpmInstalledPlugins.mockImplementationOnce(
-      async (
-        params: Parameters<typeof import("../plugins/update.js").updateNpmInstalledPlugins>[0],
-      ) => {
+      async (params: Parameters<typeof updateNpmInstalledPlugins>[0]) => {
         const proceed = await params.onIntegrityDrift?.({ ...drift, dryRun: false });
         return {
           changed: false,
@@ -239,7 +235,8 @@ describe("update-cli", () => {
     );
     vi.mocked(update.defaultRuntime.writeJson).mockClear();
 
-    await update.updateCommand({ json: true, restart: false });
+    // A switched Git release converges plugins only when this update activates it.
+    await update.updateCommand({ json: true });
 
     const jsonOutput = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -262,7 +259,11 @@ describe("update-cli", () => {
   it.each(["sync", "update"] as const)(
     "prints ClawHub %s trust warnings once in human output",
     async (source) => {
-      const trustWarning = clawHubSuspiciousPayloadWarning;
+      const trustWarning =
+        "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
+        "│ Outcome: Review                                         │\n" +
+        "│ Overview: Review the requested capabilities.             │\n" +
+        "╰───────────────────────────────────────────────────────────────────────╯";
       if (source === "sync") {
         mocks.syncPluginsForUpdateChannel.mockImplementationOnce(
           async (params: {
@@ -272,7 +273,13 @@ describe("update-cli", () => {
             params.logger?.warn?.(trustWarning);
             return pluginSyncResult(params.config, false, {
               warnings: [trustWarning],
-              errors: [{ pluginId: "demo", message: clawHubSyncRiskError }],
+              errors: [
+                {
+                  pluginId: "demo",
+                  message:
+                    "Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo@1.2.4).",
+                },
+              ],
             });
           },
         );
@@ -300,7 +307,7 @@ describe("update-cli", () => {
           },
         );
       }
-      await update.updateCommand({ yes: true, restart: false });
+      await update.updateCommand({ yes: true });
       const output = assert.getLogOutput();
       expect(output.split(trustWarning).length - 1).toBe(1);
       if (source === "sync") {
@@ -358,7 +365,7 @@ describe("update-cli", () => {
         installRecords: repaired ? { demo: { ...record, version: "2.0.0" } } : records,
       });
 
-      await update.updateCommand({ yes: true, json, restart: false });
+      await update.updateCommand({ yes: true, json });
 
       expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       await flushLogger();
@@ -408,7 +415,7 @@ describe("update-cli", () => {
     );
     vi.mocked(update.defaultRuntime.writeJson).mockClear();
 
-    await update.updateCommand({ json: true, restart: false });
+    await update.updateCommand({ json: true });
 
     const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(result?.postUpdate?.plugins?.status).toBe("warning");
@@ -443,8 +450,8 @@ describe("update-cli", () => {
       reason: "post-update-failed",
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
+        // An already-current core copied nothing, so there is nothing to clean up.
         recoveryObservationStep(),
-        recoveryCleanupStep(),
       ],
     });
   });

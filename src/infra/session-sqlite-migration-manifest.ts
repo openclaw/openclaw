@@ -15,6 +15,7 @@ import {
   isSessionSqliteMigrationWarning,
   type DoctorSessionSqliteIssue,
 } from "./session-sqlite-migration-issues.js";
+import { UPDATE_RUN_ID_PATTERN } from "./update-displaced-database-receipt.js";
 
 export type SessionSqliteMigrationMove = z.infer<typeof MigrationMoveSchema>;
 export type SessionSqliteMigrationMoveKind = SessionSqliteMigrationMove["kind"];
@@ -175,6 +176,8 @@ const MigrationManifestSchema = z
     runId: z.string().min(1),
     startedAt: z.string().min(1),
     targets: z.array(MigrationTargetSchema),
+    /** The update run whose Doctor took these backups; its outcome releases them. */
+    updateRunId: z.string().regex(UPDATE_RUN_ID_PATTERN).optional(),
   })
   .superRefine((manifest, context) => {
     if (manifest.failureReports?.githubIssue && manifest.manifestVersion !== 4) {

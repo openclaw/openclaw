@@ -1,6 +1,7 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
+import { readInheritedExecRequestOwners } from "../infra/exec-request-context.js";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
@@ -115,16 +116,30 @@ export function buildAgentHookContextChannelFields(params: {
   };
 }
 
+/** Host-recorded starters of the commands this run continues, independent of the trigger. */
+export function buildAgentHookContextExecRequestFields(): Pick<
+  PluginHookAgentContext,
+  "execRequestOwners"
+> {
+  const execRequestOwners = readInheritedExecRequestOwners();
+  return execRequestOwners ? { execRequestOwners } : {};
+}
+
+/** Sender identity for user turns, plus the exec request owners any run continues. */
 export function buildAgentHookContextIdentityFields(params: {
   trigger?: string | null;
   senderId?: string | null;
   chatId?: string | null;
   channelContext?: PluginHookChannelContext;
   approvalReviewerDeviceId?: string | null;
-}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext" | "requesterDeviceId"> {
+}): Pick<
+  PluginHookAgentContext,
+  "senderId" | "chatId" | "channelContext" | "requesterDeviceId" | "execRequestOwners"
+> {
+  const execRequestFields = buildAgentHookContextExecRequestFields();
   const trigger = normalizeOptionalString(params.trigger);
   if (trigger && trigger !== "user") {
-    return {};
+    return execRequestFields;
   }
 
   const senderId = normalizeOptionalString(params.senderId);
@@ -150,6 +165,7 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
     ...(requesterDeviceId ? { requesterDeviceId } : {}),
+    ...execRequestFields,
   };
 }
 

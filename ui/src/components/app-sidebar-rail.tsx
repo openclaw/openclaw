@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, lazy, Show, onSettled } from "solid-js";
+import { createMemo, createSignal, For, Show, onSettled } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -30,6 +30,7 @@ import { forgetSectionLocation } from "../lib/section-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { navigationItemCurrent } from "../plugins/navigation-sections.ts";
 import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
+import { SidebarPagesMenu } from "./app-sidebar-pages.tsx";
 import {
   sidebarCollapsedByChoice,
   renderSidebarAgentCard,
@@ -40,7 +41,6 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
-import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
@@ -54,10 +54,6 @@ type RailPinTouchPress = {
   timer?: ReturnType<typeof setTimeout>;
   opened: boolean;
 };
-
-const SidebarPagesMenu = lazy(() => import("./app-sidebar-pages.tsx"), {
-  export: "SidebarPagesMenu",
-});
 
 /**
  * Before a rail or menu destination opens. The page decides the sidebar, so choosing a section
@@ -283,8 +279,12 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             aria-label={titleForRoute("sessions")}
             aria-pressed={sessionsPressed() ? "true" : "false"}
             onClick={() => {
-              // Already showing its list, Sessions stays put rather than leaving the page.
-              if (sessionsPressed()) {
+              const state = host.router?.getState();
+              const pending = state?.pendingMatches[0];
+              const destination = (pending ?? state?.matches[0])?.routeId ?? host.activeRouteId;
+              const returnToSession = !isMobileNavLayout() && !isSessionRouteId(destination);
+              // The visible list can still look selected while a cold page is taking over.
+              if (sessionsPressed() && !(pending && returnToSession)) {
                 return;
               }
               host.navigationView = "sessions";
@@ -295,11 +295,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               }
               // Off a session page, Sessions returns to the session last open, in its preferred
               // face; the mobile drawer closes on navigation, so there it only opens the list.
-              if (
-                !host.onExitSettings &&
-                !isMobileNavLayout() &&
-                !isSessionRouteId(host.activeRouteId)
-              ) {
+              if (!host.onExitSettings && returnToSession) {
                 if (host.sessionKey) {
                   host.selectSession(host.sessionKey);
                 } else {
@@ -413,7 +409,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>,
-    // Outside the rail so its rows keep full Pages styling instead of icon-only rail controls.
+    // Keep the rows unmounted until opening, but render the available links on the first open.
     <Popover
       id="sidebar-pages-menu"
       label={t("nav.pages")}
@@ -426,17 +422,15 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       onOpenChange={setPagesMenuOpen}
       ref={(handle) => (pagesMenu = handle)}
     >
-      <SidebarViewBoundary>
-        <SidebarPagesMenu
-          host={host}
-          onNavigate={(entry) => {
-            pagesMenu?.hide();
-            if (entry) {
-              revealDestination(host, entry);
-            }
-          }}
-        />
-      </SidebarViewBoundary>
+      <SidebarPagesMenu
+        host={host}
+        onNavigate={(entry) => {
+          pagesMenu?.hide();
+          if (entry) {
+            revealDestination(host, entry);
+          }
+        }}
+      />
     </Popover>,
   ];
 }

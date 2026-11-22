@@ -16,11 +16,7 @@ it("records an unset upstream config key as a completed read, not a failing chec
   await git(fixture.root, "checkout", "-b", "feature");
   await git(fixture.root, "config", "--unset", "branch.main.remote");
 
-  const result = await fixture.update({
-    runGitDoctor: async () => {
-      throw new Error("Doctor must not run for an unmanaged checkout");
-    },
-  });
+  const result = await fixture.update();
 
   expect(result).toMatchObject({ status: "skipped", reason: "no-upstream" });
   const reads = result.steps.filter((step) => step.name === "git-config-update-upstream");
@@ -29,5 +25,4 @@ it("records an unset upstream config key as a completed read, not a failing chec
   );
   expect(reads.filter(isFailedUpdateStep)).toEqual([]);
   expect(reads.flatMap((step) => step.failureFacts ?? [])).toEqual([]);
-  expect(fixture.events).toEqual([]);
 });

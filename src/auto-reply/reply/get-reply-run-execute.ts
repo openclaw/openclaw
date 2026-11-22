@@ -52,10 +52,14 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
-import { createReplyCronAuthorityFactory } from "./get-reply-run.cron-requester.js";
+import {
+  createReplyCronAuthorityFactory,
+  logReplyCronOwnerWithoutAuthority,
+} from "./get-reply-run.cron-requester.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -411,6 +415,12 @@ export async function executePreparedReplyRun(
           accountId: ctx.AccountId ?? sessionCtx.AccountId,
         })
       : undefined;
+  if (authorityRunId && !inheritedCronCreatorAuthorityCapability && !createChannelCronAuthority) {
+    logReplyCronOwnerWithoutAuthority(sessionCtx, {
+      channel: messageProvider,
+      accountId: ctx.AccountId ?? sessionCtx.AccountId,
+    });
+  }
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,
@@ -434,6 +444,7 @@ export async function executePreparedReplyRun(
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
+    [replyCallbackCustody]: opts?.[replyCallbackCustody],
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     runObservers: {
       awaitSessionDiffBaseline: opts?.awaitSessionDiffBaseline,

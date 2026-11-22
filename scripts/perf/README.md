@@ -6256,3 +6256,60 @@ Use the same A/A and AB/BA order for ordinary `skill-resource-delivery-measure.t
 preparation, with `--operations 50 --concurrency 1 --existing` against one prepared
 32-file fixture. Time and profile separately; retain the baseline SHA and raw
 results. These owner measurements do not qualify storage or whole-Gateway latency.
+
+## Talk transcription catalog discovery
+
+`talk-catalog-transcription-measure.ts` compares the actual file resolver and
+unscoped operator-read catalog handler against four frozen owner modules from a
+base commit, sharing unchanged dependencies and one prepared plugin generation.
+It uses generated state only: `agent-startup-inspection.ts seed --gib 35` for the
+agent database and `team-shape-fixture.ts --sessions 5000 --agents 32 --runs 0
+--projects 1 --worktree-files 62000 --worktree-file-bytes 19000` for workspaces.
+Both generators also require a new `--state-dir`.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/talk-catalog-transcription-measure.ts \
+  --baseline <base-commit> --state-dir <database-fixture> \
+  --workspace-fixture <workspace-fixture> --output <new-results-directory>
+```
+
+Run `--allocations` separately for sampled allocations, and `--profile` separately
+for owner CPU profiles. Five serial A1/A2/B groups each measure 200 warm handler
+reads, 20 refresh completions, and 1,000 direct resolver calls. Cold imports and
+preparation are excluded; the injected clock advances the existing refresh timer.
+Results include source hashes, fixture sizes, host load, CPU, and latency spread.
+Require reduced discovery work and owner CPU/allocations without a material
+handler regression beyond A/A variability. Returned catalog bytes must stay
+identical within each arm. This is owner-boundary evidence, not WebSocket,
+provider-network, filesystem cold-cache, or production incident attribution.
+
+## Directory watch stream
+
+`directory-watch-stream-measure.mjs` measures the complete directory-watch host
+parser and worker bridge using a real subprocess stdout pipe, MessagePort, and
+800 owned-directory subscribers in a worker. It freezes the baseline and candidate
+sources, replays 260,000 ordered native-protocol events in 65-event bursts, and
+checks each owner's sequence against an independently computed digest. It does
+not measure model-catalog refresh work or whole-Gateway latency.
+
+```sh
+node --expose-gc scripts/perf/directory-watch-stream-measure.mjs \
+  --base <baseline-commit> --output /path/to/new-proof-directory
+```
+
+Five counterbalanced A1/A2/B samples run serially in fresh processes with equal
+warmup. Separate timing and allocation passes record main-thread/process/producer
+CPU, collected-object-inclusive heap samples, CPU profiles, stream chunks, worker
+messages, monotonic-clock delivery tails, and host load. The private `--arm` and
+`--allocations` flags select one subprocess sample. Compare both A controls and
+report spread; a faster stream bridge must preserve every owner event and order.
+
+`--events 26000 --batch-events 5` checks smaller bursts resembling the native
+fixture’s typical chunk size; defaults retain the heavier burst workload.
+
+`--native` first characterizes the real watch helper on 800 synthetic roots with
+62,400 files (1.1 GB), then creates/renames/deletes 8,000 build artifacts. It records
+native events, notified roots, bytes and chunks over the churn plus a fixed drain
+window. Native operating-system notifications can coalesce transient files, so
+this rate is platform-specific, not a prediction of production traffic. No agent
+database is read by this transport; database size does not affect this workload.

@@ -133,6 +133,39 @@ suite.define(() => {
     );
   });
 
+  it("keeps embedded Settings links on their routes when read-only permissions arrive", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 375, height: 812 }, hasTouch: true },
+      async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+        await installDeviceSettingsBridge(page, createIosNativeDeviceSettingsSnapshot());
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+          awaitInitialRoster: false,
+          methodDelays: { connect: "forever" },
+        });
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const list = page.locator(".settings-embed-list");
+        const custodian = list.locator('a[href="/custodian"]');
+        await custodian.waitFor();
+        // Retain the targets picked before a group and a row within another group disappear.
+        const device = await list
+          .getByRole("link", { name: "This iPhone", exact: true })
+          .elementHandle();
+        const talk = await list.locator('a[href="/settings/talk"]').elementHandle();
+        await gateway.setMethodDelay("connect", null);
+        await custodian.waitFor({ state: "detached" });
+
+        const attachedRoute = (link: Element) =>
+          link.isConnected ? link.getAttribute("href") : null;
+        expect.soft(await device.evaluate(attachedRoute)).toBe("/settings/device");
+        expect.soft(await talk.evaluate(attachedRoute)).toBe("/settings/talk");
+        await device.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device");
+      },
+    );
+  });
+
   for (const colorScheme of ["light", "dark"] as const) {
     it(`edits this iPhone in embedded settings in ${colorScheme}`, async () => {
       const artifactDir = captureUiProof
@@ -346,8 +379,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["voicewake.get", "voicewake.set"],
-          deferredMethods: ["voicewake.set"],
-          methodResponses: { "voicewake.get": { triggers: ["openclaw"] } },
+          deferredMethods: ["voicewake.get", "voicewake.set"],
         });
         for (const route of ["device", "device/permissions"]) {
           expect((await page.goto(`${suite.server.baseUrl}settings/${route}`))?.status()).toBe(200);
@@ -369,9 +401,17 @@ suite.define(() => {
         }
         await page.goto(`${suite.server.baseUrl}settings/talk`);
         const triggers = page.getByRole("textbox", { name: "Trigger words", exact: true });
+        await gateway.waitForRequest("voicewake.get");
+        await triggers.waitFor();
+        expect(await triggers.isDisabled()).toBe(true);
+        const editorWidth = () => triggers.evaluate((el) => el.getBoundingClientRect().width);
+        const pendingWidth = await editorWidth();
+        await gateway.resolveDeferred("voicewake.get", { triggers: ["openclaw"] });
         await expect.poll(() => triggers.inputValue()).toBe("openclaw");
+        expect(await editorWidth()).toBe(pendingWidth);
         await triggers.fill("first phrase");
         await gateway.waitForRequest("voicewake.set");
+        expect(await editorWidth()).toBe(pendingWidth);
         expect(await triggers.isEnabled()).toBe(true);
         expect(await triggers.evaluate((element) => element === document.activeElement)).toBe(true);
         await triggers.fill("second phrase");

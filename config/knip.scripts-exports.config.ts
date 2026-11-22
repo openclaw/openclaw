@@ -32,6 +32,7 @@ const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/workflows/labeler.yml!",
   ".github/workflows/openclaw-release-publish.yml!",
+  ".github/workflows/full-release-validation.yml!",
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   ".github/workflows/plugin-prerelease.yml!",
   "apps/android/scripts/build-release-artifacts.ts!",
