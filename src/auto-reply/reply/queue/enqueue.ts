@@ -84,10 +84,10 @@ export function enqueueFollowupRun(
   if (isFollowupRunAborted(run)) {
     return false;
   }
-  const settings = run.run.participationCeiling
+  const settings = run.operatorAuthority?.participationCeiling
     ? { ...requestedSettings, mode: "followup" as const }
     : requestedSettings;
-  if (run.run.participationCeiling) {
+  if (run.operatorAuthority?.participationCeiling) {
     run.disableCollectBatching = true;
     run.protectFromQueueOverflow = true;
   }
@@ -467,8 +467,8 @@ export function claimNextQueuedFollowupRequestFrom(
   );
   if (
     !next ||
-    source.run.participationCeiling ||
-    next.run.participationCeiling ||
+    source.operatorAuthority?.participationCeiling ||
+    next.operatorAuthority?.participationCeiling ||
     followupMessageRouteIdentityKey(next) !== followupMessageRouteIdentityKey(source) ||
     resolveFollowupAuthorizationKey(next) !== resolveFollowupAuthorizationKey(source)
   ) {

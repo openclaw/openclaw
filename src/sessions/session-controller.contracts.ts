@@ -4,7 +4,6 @@ import type {
   OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
@@ -833,7 +832,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
   /** Host-admitted execution ceiling, never reconstructed from an approval request. */
-  readonly participationCeiling?: ParticipationCeiling;
+  readonly operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type EmbeddedRunRegistration = {

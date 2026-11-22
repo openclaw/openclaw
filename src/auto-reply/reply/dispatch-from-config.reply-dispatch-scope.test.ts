@@ -268,7 +268,27 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
         dispatcher,
         replyResolver,
         replyOptions: participation
-          ? { participationCeiling: { kind: "send", profileId: "participant", sessionKey } }
+          ? {
+              operatorAuthority: createAdmittedRunOperatorAuthority({
+                profileId: "participant",
+                scopes: [],
+                assertCurrent() {},
+                participationCeiling: {
+                  kind: "send",
+                  profileId: "participant",
+                  sessionKey,
+                  tools: ["read"],
+                  permission: "workspace",
+                  source: {
+                    agentId: "main",
+                    sessionId: "test",
+                    lifecycleRevision: null,
+                    creatorProfileId: "creator",
+                    root: "/synthetic",
+                  },
+                },
+              }),
+            }
           : { admittedSessionSettings: guarded },
       });
 

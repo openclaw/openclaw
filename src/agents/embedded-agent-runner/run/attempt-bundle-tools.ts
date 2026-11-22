@@ -1,5 +1,6 @@
 import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { readRunOperatorAuthority } from "../../admitted-run-context.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
@@ -94,6 +95,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     !params.isRawModelRun &&
     runtimeCapabilityProfile.policy.globalPolicy?.deny?.some((name) => name.trim() === "*") !==
       true;
+  const participationCeiling = readRunOperatorAuthority(params.attempt)?.participationCeiling;
   let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
@@ -101,14 +103,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
     clientTools = clientTools.filter((definition) => matchesRuntime(definition.function.name));
   }
-  if (clientTools && params.attempt.participationCeiling) {
+  if (clientTools && participationCeiling) {
     clientTools = clientTools.filter((tool) =>
-      participationAllowsTool(params.attempt.participationCeiling!, tool.function.name),
+      participationAllowsTool(participationCeiling!, tool.function.name),
     );
   }
   const participationAllow =
-    params.attempt.participationCeiling &&
-    participationToolPolicy(params.attempt.participationCeiling).allow;
+    participationCeiling && participationToolPolicy(participationCeiling).allow;
   const bundleToolsAllow = participationAllow
     ? attachToolAllowlistIntersection(
         [...participationAllow],

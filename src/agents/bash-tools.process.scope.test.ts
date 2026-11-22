@@ -15,6 +15,7 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import { completionConfig } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { ParticipationCeiling } from "./participation-ceiling.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
 
 // mock-isolation: Each test owns the supervisor; subprocesses and cleanup are real.
@@ -196,7 +197,7 @@ test.skipIf(process.platform === "win32")(
         sessionKey: child,
         runSessionKey: child,
         workspaceDir: recordedRoot,
-        participationCeiling: { ...recorded, permission },
+        ...prepareParticipationTestRun({ ...recorded, permission }),
         sessionPermissionPolicy: { root: recordedRoot, mode: "full" },
         exec: { host: "gateway" },
         toolConstructionPlan: {

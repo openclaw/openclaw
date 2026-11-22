@@ -17,6 +17,7 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import {
@@ -53,7 +54,6 @@ import {
 } from "../media-generation-activity.js";
 import { resolveTurnCyberAccessProgram } from "../model-catalog-access-programs.js";
 import { isCliProvider } from "../model-selection.js";
-import { assertParticipationRuntime } from "../participation-ceiling.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -210,9 +210,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
-  if (isCliExecutionProvider) {
-    assertParticipationRuntime(params.opts.participationCeiling, "cli");
-  }
   // Sandboxed delegated children never dispatch to host-executed CLI backends;
   // spawn admission checks once the child model is resolved, and this run-seam
   // guard owns the invariant for fallback candidates and post-spawn runtime
@@ -653,7 +650,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     hasRepliedRef: params.runContext.hasRepliedRef,
     /** Session-scoped settings every embedded turn of the session runs with. */
     permissionMode: params.sessionEntry?.permissionMode,
-    sessionRoot: params.opts.participationCeiling?.source?.root ?? params.sessionEntry?.sessionRoot,
+    sessionRoot:
+      readRunOperatorAuthority(params)?.participationCeiling?.source?.root ??
+      params.sessionEntry?.sessionRoot,
     blindPrompt: params.sessionEntry?.blindPrompt,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),

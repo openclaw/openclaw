@@ -6,12 +6,15 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { projectAgentToolsExecPolicy } from "./agent-tools.execution-policy.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { prepareRunSessionPermissionPolicy } from "./session-permission-policy.js";
-import { resolveParticipationSpawnError } from "./subagents/spawn/subagent-spawn-participation.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
 import { readRegistryWorktrees } from "./worktrees/registry-read.js";
 import { insertRegistryWorktree } from "./worktrees/registry.js";
@@ -55,6 +58,13 @@ it("records managed workspace use and retains default-mode participant execution
       profileId: "guest",
       sessionKey: params.sessionKey,
       permission: "workspace",
+      source: {
+        agentId: "main",
+        sessionId: params.sessionId,
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: state.workspaceDir,
+      },
     } as const;
     for (const [mode, expected] of [
       ["full", "workspace"],
@@ -65,7 +75,7 @@ it("records managed workspace use and retains default-mode participant execution
       using workspace = await resolveAttemptWorkspaceSandbox({
         ...params,
         sessionRoot: state.workspaceDir,
-        participationCeiling,
+        ...prepareParticipationTestRun(participationCeiling),
         config: { ...sandboxConfig({ mode: "off" }), tools: { exec: { mode } } },
       });
       expect(workspace.sessionPermissionPolicy).toMatchObject({
@@ -74,7 +84,7 @@ it("records managed workspace use and retains default-mode participant execution
       });
       const exec = projectAgentToolsExecPolicy({
         options: {
-          participationCeiling,
+          ...prepareParticipationTestRun(participationCeiling),
           sessionPermissionPolicy: workspace.sessionPermissionPolicy,
           exec: { mode: expected === "guarded" ? "ask" : mode },
         },
@@ -84,14 +94,6 @@ it("records managed workspace use and retains default-mode participant execution
       if (mode === "allowlist") {
         expect(exec).toMatchObject({ security: "allowlist", ask: "off" });
       }
-      const context = {
-        participationCeiling,
-        sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-      };
-      expect(resolveParticipationSpawnError({}, context, "main")).toBeUndefined();
-      expect(
-        resolveParticipationSpawnError({ cwd: state.path("elsewhere") }, context, "main"),
-      ).toContain("original session root");
     }
     expect(
       await prepareRunSessionPermissionPolicy({
@@ -103,11 +105,14 @@ it("records managed workspace use and retains default-mode participant execution
     ).toMatchObject({ mode: "workspace", execPolicy: { security: "allowlist", ask: "on-miss" } });
     using alwaysAsk = await resolveAttemptWorkspaceSandbox({
       ...params,
-      participationCeiling,
+      ...prepareParticipationTestRun(participationCeiling),
       config: { tools: { exec: { security: "allowlist", ask: "always" } } },
     });
     const exact = projectAgentToolsExecPolicy({
-      options: { participationCeiling, sessionPermissionPolicy: alwaysAsk.sessionPermissionPolicy },
+      options: {
+        ...prepareParticipationTestRun(participationCeiling),
+        sessionPermissionPolicy: alwaysAsk.sessionPermissionPolicy,
+      },
       execConfig: resolveExecToolConfig({}),
       model: {},
     });
@@ -118,6 +123,53 @@ it("records managed workspace use and retains default-mode participant execution
         ask: exact.ask ?? "off",
       }),
     ).toMatchObject({ security: "allowlist", ask: "always" });
+  });
+});
+
+it("uses only admitted participation authority for the original root and permission floor", async () => {
+  await withOpenClawTestState({ label: "admitted-participation-workspace" }, async (state) => {
+    const root = state.path("original-root");
+    await fs.mkdir(root);
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: [],
+      assertCurrent() {},
+      participationCeiling: {
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:original",
+        permission: "read-only",
+        tools: ["read"],
+        source: {
+          agentId: "main",
+          lifecycleRevision: null,
+          sessionId: "original",
+          creatorProfileId: "creator",
+          root,
+        },
+      },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "authority-only",
+      "main",
+      "test",
+      undefined,
+      authority,
+    );
+    try {
+      using workspace = await resolveAttemptWorkspaceSandbox({
+        ...runParams(state.workspaceDir),
+        admittedRunContext: await admission.admit("embedded"),
+        sessionRoot: state.workspaceDir,
+        permissionMode: "full",
+      });
+      expect(workspace.sessionPermissionRoot).toBe(root);
+      expect(workspace.effectiveFsWorkspaceOnly).toBe(true);
+      expect(workspace.sessionPermissionPolicy).toMatchObject({ root, mode: "read-only" });
+    } finally {
+      admission.close();
+    }
   });
 });
 

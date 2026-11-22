@@ -262,7 +262,7 @@ export function requiresIndividualCollectDrain(item: FollowupRun): boolean {
     // Keep its original recorder/event; only unconsumed sources may regroup.
     item.userTurnTranscriptRecorder?.hasPersisted() === true ||
     item.disableCollectBatching === true ||
-    item.run.participationCeiling !== undefined ||
+    item.operatorAuthority?.participationCeiling !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||
     item.currentInboundEventKind === "room_event" ||
     item.currentInboundAudio === true

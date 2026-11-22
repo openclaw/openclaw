@@ -3,6 +3,7 @@ import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
 import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
@@ -28,7 +29,7 @@ export function projectAgentToolsExecPolicy(params: {
     base: params.execConfig,
     overrides: options?.exec,
     permissionPolicy: options?.sessionPermissionPolicy,
-    participationCeiling: options?.participationCeiling,
+    participationCeiling: readRunOperatorAuthority(options ?? {})?.participationCeiling,
     scheduledExecTarget: options?.scheduledToolPolicy?.execTarget,
     modelExecCeilings: resolveModelExecCeilings({
       cfg: options?.config,

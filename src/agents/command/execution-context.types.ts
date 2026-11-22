@@ -65,11 +65,7 @@ export type AgentRunMessageContext = Pick<
 
 export type AgentRunChannelContext = Pick<
   QueuedAgentRunParams,
-  | "messageProvider"
-  | "chatType"
-  | "channelContext"
-  | "approvalReviewerDeviceId"
-  | "participationCeiling"
+  "messageProvider" | "chatType" | "channelContext" | "approvalReviewerDeviceId"
 > & {
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;

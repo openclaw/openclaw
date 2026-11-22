@@ -1,12 +1,15 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawCodingToolsInternal as createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
@@ -67,7 +70,11 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
 
   it("keeps participation exec approvals in-turn, disables exit wakes, and makes process observational", async () => {
     const tools = createOpenClawCodingTools({
-      participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:test" },
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:test",
+      }),
       sessionPermissionPolicy: { mode: "full", root: process.cwd() },
       exec: { notifyOnExit: true, approvalFollowupMode: "agent" },
     });
@@ -87,6 +94,38 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     );
     expect(shellSpies.processDefaults).toHaveBeenLastCalledWith(
       expect.objectContaining({ readOnly: true, includeAncestors: false }),
+    );
+  });
+
+  it("projects participant containment into the verified sandbox workspace", async () => {
+    const hostRoot = "/tmp/participant-original";
+    const sandboxRoot = "/tmp/participant-sandbox";
+    const tools = createOpenClawCodingTools({
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+        source: {
+          agentId: "main",
+          sessionId: "invited",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: hostRoot,
+        },
+      }),
+      workspaceDir: hostRoot,
+      sandbox: createSandboxTestContext({
+        overrides: {
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: hostRoot,
+          fsBridge: createHostSandboxFsBridge(sandboxRoot),
+        },
+      }),
+      sessionPermissionPolicy: { mode: "full", root: hostRoot },
+    });
+    await tools.find((tool) => tool.name === "exec")!.execute("sandbox-exec", { command: "true" });
+    expect(shellSpies.defaults).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: sandboxRoot, participationRoot: sandboxRoot }),
     );
   });
 

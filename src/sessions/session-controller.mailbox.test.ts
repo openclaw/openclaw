@@ -1,4 +1,5 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
@@ -137,8 +138,25 @@ describe("controller mailbox scheduling", () => {
       source("owner after"),
     ];
     const ceiling = { kind: "send" as const, profileId: "guest", sessionKey: key };
-    runs[1]!.run.participationCeiling = ceiling;
-    runs[2]!.run.participationCeiling = ceiling;
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: [],
+      assertCurrent() {},
+      participationCeiling: {
+        ...ceiling,
+        tools: ["read"],
+        permission: "workspace",
+        source: {
+          agentId: "main",
+          sessionId: "test",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: "/synthetic",
+        },
+      },
+    });
+    runs[1]!.operatorAuthority = authority;
+    runs[2]!.operatorAuthority = authority;
     const dispatched: typeof runs = [];
     const dispatch = async (run: ReturnType<typeof source>) => {
       dispatched.push(run);

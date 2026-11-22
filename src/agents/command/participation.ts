@@ -76,7 +76,7 @@ export async function prepareCommandParticipation(params: {
   const completion = await completionParticipation(params);
   const ceiling = intersectParticipationCeilings(
     sessionParticipationCeiling(params.entry),
-    intersectParticipationCeilings(params.opts.participationCeiling, completion),
+    intersectParticipationCeilings(params.opts.operatorAuthority?.participationCeiling, completion),
   );
   if (!ceiling?.source) {
     return undefined;

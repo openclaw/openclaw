@@ -1,10 +1,14 @@
 import type { ScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
+import {
+  readRunOperatorAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { awaitExecsForYield, listYieldAwaitableExecs } from "./bash-tools.exec-notify.js";
 import { bindRequesterYieldCronAuthority } from "./cron-creator-authority-context.js";
-import type { ParticipationCeiling } from "./participation-ceiling.js";
 import type {
   SessionsYieldClaimResult,
   SessionsYieldIntent,
@@ -35,10 +39,12 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   processScopeKey?: string;
   swarmCollector?: boolean;
-  participationCeiling?: ParticipationCeiling;
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
+  const participationCeiling = readRunOperatorAuthority(params)?.participationCeiling;
   // A collector result is read by an explicit wait, never delivered by a requester
   // continuation, so a collector yield can only park the run its waiter is blocked
   // on. Reject before any claim source runs so no durable yield intent is recorded.
@@ -47,7 +53,7 @@ export function createRequesterYieldCallback(params: {
   }
   // The scheduler owns child output and delivery for every automation placement.
   // End the model turn without arming an interactive requester continuation.
-  if (!params.participationCeiling && isSchedulerOwnedRequesterYield(params)) {
+  if (!participationCeiling && isSchedulerOwnedRequesterYield(params)) {
     // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
     const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
     return () => {
@@ -82,13 +88,13 @@ export function createRequesterYieldCallback(params: {
   return async (intent) => {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
-    const runtimeClaim = params.participationCeiling
+    const runtimeClaim = participationCeiling
       ? false
       : ((await params.claimYieldCompletion?.()) ?? false);
     // The chat's wake-armed commands resume it on exit, bounded by their deadlines.
     const runtimeClaimed =
       runtimeClaim === true ||
-      (!params.participationCeiling && listYieldAwaitableExecs(requesterChat).length > 0);
+      (!participationCeiling && listYieldAwaitableExecs(requesterChat).length > 0);
     let registryClaimed = false;
     if (hasRegistryClaim) {
       const { markRequesterTurnYielded } =
@@ -104,7 +110,7 @@ export function createRequesterYieldCallback(params: {
     }
     // A participant only hands off this turn's accepted children. Session-wide
     // runtime wakes, prior turns' children, and message waits have separate owners.
-    if (params.participationCeiling) {
+    if (participationCeiling) {
       return registryClaimed;
     }
     const completionClaimed = runtimeClaimed || registryClaimed;

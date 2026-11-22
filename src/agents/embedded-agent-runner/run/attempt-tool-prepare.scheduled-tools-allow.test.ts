@@ -10,10 +10,14 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { rewrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { runWithAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { DEFAULT_PARTICIPATION_TOOLS } from "../../participation-ceiling.js";
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -150,7 +154,10 @@ async function prepareTools(
   const refusals = await Promise.all(
     tools.map(
       async (tool) =>
-        [tool.name, await refusedVia(tool, Boolean(overrides.participationCeiling))] as const,
+        [
+          tool.name,
+          await refusedVia(tool, Boolean(readRunOperatorAuthority(attempt)?.participationCeiling)),
+        ] as const,
     ),
   );
   return {
@@ -585,7 +592,10 @@ it("removes participation-excluded tools from construction and deferred dispatch
       runId: "participant",
       trigger: "user",
       senderIsOwner: true,
-      participationCeiling,
+      admittedRunContext:
+        await prepareParticipationTestRun(participationCeiling).preparedRunAdmission.admit(
+          "embedded",
+        ),
       approvalReviewerDeviceId: "guest-device",
     },
     config,
@@ -617,7 +627,12 @@ it.each(
         runId: "configured-participant",
         trigger: "user",
         senderIsOwner: true,
-        participationCeiling: { kind: "send", profileId: "guest", sessionKey, tools },
+        admittedRunContext: await prepareParticipationTestRun({
+          kind: "send",
+          profileId: "guest",
+          sessionKey,
+          tools,
+        }).preparedRunAdmission.admit("embedded"),
       },
       { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } },
     );

@@ -510,15 +510,10 @@ export async function assertAgentHarnessRunAdmission(
       const authority =
         readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
         readPreparedRunOperatorAuthority(params.preparedRunAdmission);
-      if (
-        !entry.participationCeiling?.source ||
-        !params.participationCeiling?.source ||
-        !authority?.participationCeiling?.source
-      ) {
+      if (!entry.participationCeiling?.source || !authority?.participationCeiling?.source) {
         throw new Error("Participant child requires current original-source admission.");
       }
       authority.assertCurrent();
-      intersectParticipationCeilings(entry.participationCeiling, params.participationCeiling);
       intersectParticipationCeilings(entry.participationCeiling, authority.participationCeiling);
     }
     const admissionError = resolveAgentHarnessRunAdmissionError({

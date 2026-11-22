@@ -419,8 +419,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   thinkingLevelOverride: p.thinking,
                   normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
-                  queueModeOverride: request.participationCeiling ? "followup" : p.queueMode,
-                  participationCeiling: request.participationCeiling,
+                  queueModeOverride: admission.operatorAuthority?.participationCeiling
+                    ? "followup"
+                    : p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
                   ...injectionDisposition.replyOptions(Boolean(messageInjectionTarget)),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,

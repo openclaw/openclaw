@@ -426,7 +426,7 @@ export async function executePreparedReplyRun(
     });
   }
   const followupRun = {
-    disableCollectBatching: Boolean(opts?.participationCeiling),
+    disableCollectBatching: Boolean(opts?.operatorAuthority?.participationCeiling),
     createChannelCronAuthority,
     prompt: queuedBody,
     readAdmissionConfig,
@@ -548,8 +548,7 @@ export async function executePreparedReplyRun(
       traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,
-      participationCeiling: opts?.participationCeiling,
-      approvalReviewerDeviceId: opts?.participationCeiling
+      approvalReviewerDeviceId: opts?.operatorAuthority?.participationCeiling
         ? undefined
         : normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
@@ -559,7 +558,7 @@ export async function executePreparedReplyRun(
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot:
-        opts?.participationCeiling?.source?.root ??
+        opts?.operatorAuthority?.participationCeiling?.source?.root ??
         normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
@@ -698,11 +697,11 @@ export async function executePreparedReplyRun(
       transcriptCommandBody,
       followupRun,
       queueKey,
-      resolvedQueue: opts?.participationCeiling
+      resolvedQueue: opts?.operatorAuthority?.participationCeiling
         ? { ...resolvedQueue, mode: "followup" }
         : resolvedQueue,
-      shouldSteer: opts?.participationCeiling ? false : shouldSteer,
-      shouldFollowup: opts?.participationCeiling ? true : shouldFollowup,
+      shouldSteer: opts?.operatorAuthority?.participationCeiling ? false : shouldSteer,
+      shouldFollowup: opts?.operatorAuthority?.participationCeiling ? true : shouldFollowup,
       hasQueuedFollowups,
       isActive,
       isRunActive,

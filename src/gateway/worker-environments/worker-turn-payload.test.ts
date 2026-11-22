@@ -8,6 +8,7 @@ import type { OperationalRunInstanceRef } from "../../agents/admitted-run-contex
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { PARTICIPATION_WORKER_ERROR } from "../../agents/participation-ceiling.js";
+import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { testWorkerDescriptor } from "../../node-host/node-worker-supervisor.test-support.js";
@@ -35,7 +36,11 @@ it("refuses participating input at direct worker execution preflight", () => {
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
-      participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:session" },
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:session",
+      }),
     }),
   ).toThrow(PARTICIPATION_WORKER_ERROR);
 });

@@ -4,7 +4,10 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
@@ -28,7 +31,6 @@ export type WorkspaceSandboxParams = Pick<
   | "cwd"
   | "execOverrides"
   | "permissionMode"
-  | "participationCeiling"
   | "sandboxSessionKey"
   | "sandboxAgentId"
   | "sessionId"
@@ -39,6 +41,7 @@ export type WorkspaceSandboxParams = Pick<
   | "workspaceDir"
 > & {
   admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
+  preparedRunAdmission?: import("./admitted-run-context.js").PreparedAgentRunAdmission;
   /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
   placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
 };
@@ -116,6 +119,7 @@ export async function preparePluginHarnessWorkspace(
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.workspace.policy");
+  const participationCeiling = readRunOperatorAuthority(params)?.participationCeiling;
   const assertRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
@@ -211,13 +215,15 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
         // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
         // the agent's canonical workspace as their permission boundary.
-        const sessionPermissionRoot = projectedWorkspace
-          ? sandbox.workspaceDir
-          : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
+        const sessionPermissionRoot =
+          participationCeiling?.source?.root ??
+          (projectedWorkspace
+            ? sandbox.workspaceDir
+            : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace))));
         const sessionPermissionPolicy = await prepareRunSessionPermissionPolicy({
           root: sessionPermissionRoot,
           mode: params.permissionMode,
-          participationCeiling: params.participationCeiling,
+          participationCeiling,
           config: params.config,
           agentId: sessionAgentId,
           sandboxAvailable: sandbox?.enabled === true,
@@ -237,7 +243,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             ? effectiveWorkspace
             : (requestedCwd ?? effectiveWorkspace),
           effectiveFsWorkspaceOnly:
-            params.participationCeiling !== undefined ||
+            participationCeiling !== undefined ||
             params.requireWorkspaceOnly === true ||
             resolveEffectiveToolFsWorkspaceOnly({
               cfg: params.config,

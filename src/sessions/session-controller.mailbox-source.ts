@@ -62,7 +62,7 @@ export function beginSessionControllerSourceInjection(
   options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
-    input.source?.run.participationCeiling !== undefined ||
+    input.source?.operatorAuthority?.participationCeiling !== undefined ||
     (input.phase !== "preparing" && input.phase !== "waiting") ||
     (input.injectionAttempted &&
       !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
@@ -230,7 +230,7 @@ export function updateSessionControllerSourcePolicy(
   assertConfigurable();
   input.sourceAdapter?.authority?.assertCurrent?.();
   assertConfigurable();
-  const policy = input.source?.run.participationCeiling
+  const policy = input.source?.operatorAuthority?.participationCeiling
     ? { ...requestedPolicy, mode: "followup" as const }
     : requestedPolicy;
   const wasInterrupt = input.policy.mode === "interrupt";

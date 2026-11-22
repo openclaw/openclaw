@@ -8,6 +8,7 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
@@ -121,15 +122,15 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     async ({ tools, allowed }) => {
       const input = createInput();
       input.attempt.config = { mcp: { servers: { fixture: { command: "unused" } } } };
-      input.attempt.participationCeiling = {
+      input.attempt.admittedRunContext = await prepareParticipationTestRun({
         kind: "send",
         profileId: "participant",
         sessionKey: "agent:main:participant",
         tools,
-      };
+      }).preparedRunAdmission.admit("embedded");
       input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
         config: input.attempt.config,
-        participationCeiling: input.attempt.participationCeiling,
+        admittedRunContext: input.attempt.admittedRunContext,
       });
       const actual = await vi.importActual<typeof import("../effective-tool-policy.js")>(
         "../effective-tool-policy.js",

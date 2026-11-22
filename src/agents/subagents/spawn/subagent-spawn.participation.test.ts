@@ -1,3 +1,4 @@
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import "./subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -151,7 +152,7 @@ it.each(["ask", "allowlist"] as const)(
       sessionId: "source-session",
       sessionKey: fixture.parentSessionKey,
       config: getRuntimeConfig(),
-      participationCeiling: currentCeiling,
+      ...prepareParticipationTestRun(currentCeiling),
     });
     const tool = createSessionsSpawnTool({
       ...context,
@@ -193,13 +194,13 @@ it.each(["ask", "allowlist"] as const)(
       sessionId: child!.sessionId,
       sessionKey: firstKey,
       permissionMode: undefined,
-      participationCeiling: child?.participationCeiling,
+      ...prepareParticipationTestRun(child!.participationCeiling!),
       config: getRuntimeConfig(),
     });
     expect(
       projectAgentToolsExecPolicy({
         options: {
-          participationCeiling: child?.participationCeiling,
+          ...prepareParticipationTestRun(child!.participationCeiling!),
           sessionPermissionPolicy: reopened.sessionPermissionPolicy,
         },
         execConfig: resolveExecToolConfig({}),

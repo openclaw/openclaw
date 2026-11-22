@@ -91,6 +91,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const { attempt } = params;
   let getRunAbortDeadlineAtMs: (() => number | undefined) | undefined;
   const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
+  const participationCeiling = pluginExecutionAuthority?.participationCeiling;
   const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
   const captureBaseline = attempt.awaitSessionDiffBaseline;
@@ -126,37 +127,39 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
-  const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
-    config: attempt.config,
-    trigger: attempt.trigger,
-    agentId: params.setup.sessionAgentId,
-    sessionKey: params.setup.sandboxSessionKey,
-    forceMessageTool: forceDirectMessageTool,
-    model: attempt.model,
-    modelProvider: attempt.provider,
-    modelId: attempt.modelId,
-    codeModeOverride: attempt.participationCeiling ? false : attempt.codeModeOverride,
-    participationCeiling: attempt.participationCeiling,
-    // Without its controls, discovery would hide allowed tools or re-add forbidden ones.
-    disableToolSearch:
-      attempt.disableToolSearch ||
-      (attempt.participationCeiling && attempt.swarmCollector) ||
-      (attempt.participationCeiling &&
-        [...TOOL_SEARCH_CONTROL_TOOL_NAMES].some(
-          (name) => !participationAllowsTool(attempt.participationCeiling!, name),
-        ))
-        ? true
-        : undefined,
-    modelToolsEnabled: toolsEnabled,
-    disableTools: attempt.disableTools,
-    isRawModelRun,
-    toolsAllow: attempt.toolsAllow,
-    runtimeToolAllowlist: toolsAllowWithForcedRuntimeTools,
-    sessionId: attempt.sessionId,
-    runId: attempt.runId,
-    contextTokenBudget: attempt.contextTokenBudget,
-    executeTool: params.toolSearchCatalogExecutor,
-  });
+  const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore(
+    {
+      config: attempt.config,
+      trigger: attempt.trigger,
+      agentId: params.setup.sessionAgentId,
+      sessionKey: params.setup.sandboxSessionKey,
+      forceMessageTool: forceDirectMessageTool,
+      model: attempt.model,
+      modelProvider: attempt.provider,
+      modelId: attempt.modelId,
+      codeModeOverride: participationCeiling ? false : attempt.codeModeOverride,
+      // Without its controls, discovery would hide allowed tools or re-add forbidden ones.
+      disableToolSearch:
+        attempt.disableToolSearch ||
+        (participationCeiling && attempt.swarmCollector) ||
+        (participationCeiling &&
+          [...TOOL_SEARCH_CONTROL_TOOL_NAMES].some(
+            (name) => !participationAllowsTool(participationCeiling!, name),
+          ))
+          ? true
+          : undefined,
+      modelToolsEnabled: toolsEnabled,
+      disableTools: attempt.disableTools,
+      isRawModelRun,
+      toolsAllow: attempt.toolsAllow,
+      runtimeToolAllowlist: toolsAllowWithForcedRuntimeTools,
+      sessionId: attempt.sessionId,
+      runId: attempt.runId,
+      contextTokenBudget: attempt.contextTokenBudget,
+      executeTool: params.toolSearchCatalogExecutor,
+    },
+    { admittedRunContext: attempt.admittedRunContext },
+  );
   const {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
     toolSearchConfig,
@@ -513,7 +516,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         sessionKey: params.setup.sandboxSessionKey,
         sessionId: attempt.sessionId,
         runId: attempt.runId,
-        approvalReviewerDeviceId: attempt.participationCeiling
+        approvalReviewerDeviceId: participationCeiling
           ? undefined
           : attempt.approvalReviewerDeviceId,
         channelId: attempt.currentChannelId,
@@ -545,7 +548,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         const permission = await prepareRunSessionPermissionPolicy({
           root: params.setup.sessionPermissionRoot,
           mode: attempt.permissionMode,
-          participationCeiling: attempt.participationCeiling,
+          participationCeiling,
           config: attempt.config,
           agentId: params.setup.sessionAgentId,
           sandboxAvailable: params.setup.sandbox?.enabled === true,

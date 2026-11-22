@@ -276,7 +276,6 @@ export async function prepareAgentCommandExecution(
       const source = participation.authority;
       commandOpts = {
         ...commandOpts,
-        participationCeiling: source.participationCeiling,
         operatorAuthority: source,
         assertSourceCurrent: () => {
           previousAssertion?.();
@@ -332,7 +331,7 @@ export async function prepareAgentCommandExecution(
     // fallback applies only to ordinary sessions and never bridges into a node.
     const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
     if (isAcpPlacedSession) {
-      assertParticipationRuntime(commandOpts.participationCeiling, "acp");
+      assertParticipationRuntime(commandOpts.operatorAuthority?.participationCeiling, "acp");
     }
     const cwd =
       normalizeOptionalString(opts.cwd) ??

@@ -27,6 +27,10 @@ import {
 } from "../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -54,11 +58,21 @@ export {
 
 function preparePreTurnRuntimeContext(
   runtimeContext: ContextEngineRuntimeContext | undefined,
+  source: HarnessSourceScope,
 ): ContextEngineRuntimeContext | undefined {
-  if (!runtimeContext?.rewriteTranscriptEntries) {
+  if (!runtimeContext) {
     return runtimeContext;
   }
   const { rewriteTranscriptEntries: _rewriteTranscriptEntries, ...fenced } = runtimeContext;
+  attachCompactionAccountingRecorder(fenced, {
+    ...readCompactionAccountingRecorder(runtimeContext),
+    ...(source.admittedRunContext || source.preparedRunAdmission
+      ? {
+          admittedRunContext: source.admittedRunContext,
+          preparedRunAdmission: source.preparedRunAdmission,
+        }
+      : {}),
+  });
   return fenced;
 }
 
@@ -144,7 +158,7 @@ export async function bootstrapHarnessContextEngine(
   await runWithHarnessSourceFence(params, async () => {
     try {
       const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
       if (typeof params.contextEngine?.bootstrap === "function") {
         await params.contextEngine.bootstrap({
           sessionId: params.sessionId,
@@ -291,7 +305,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
     modelId: params.modelId,
     tokenBudget,
   };
-  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext, params);
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,

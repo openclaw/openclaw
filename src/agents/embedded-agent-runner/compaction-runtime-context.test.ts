@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import {
@@ -12,6 +13,7 @@ import {
   modelDefinition,
   providerEntry,
 } from "../model-auth.fixtures.test-support.js";
+import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import {
@@ -22,6 +24,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import { buildAfterTurnRuntimeContext } from "./run/attempt-prompt-helpers.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -496,7 +499,7 @@ describe("compaction runtime context", () => {
   });
 });
 
-it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
+it.each([true, false])("preserves process scope and model policy (locked=%s)", async (locked) => {
   const scopedId = "after-turn-session",
     foreignId = "after-turn-foreign";
   for (const [id, scopeKey, pid] of [
@@ -532,13 +535,13 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
       agentDir: "/tmp/agent",
       activeAgentId: "main",
       attempt: {
-        sessionId: "session-123",
-        participationCeiling: {
+        admittedRunContext: await prepareParticipationTestRun({
           kind: "send",
           profileId: "guest",
           sessionKey: "session-123",
           permission: "read-only",
-        },
+        }).preparedRunAdmission.admit("embedded"),
+        sessionId: "session-123",
         sessionKey: "session-123",
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
@@ -561,9 +564,14 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
         },
       },
     });
+    expect(
+      readRunOperatorAuthority(readCompactionAccountingRecorder(context) ?? {})
+        ?.participationCeiling?.permission,
+    ).toBe("read-only");
+    expect(context).not.toHaveProperty("admittedRunContext");
+    expect(context).not.toHaveProperty("participationCeiling");
     expect(context.activeProcessSessions).toHaveLength(1);
     expect(context).toMatchObject({
-      participationCeiling: { profileId: "guest", permission: "read-only" },
       activeProcessSessions: [{ sessionId: scopedId, command: "sleep 600", pid: 1234 }],
       transcriptStorage: { kind: "sqlite" },
       modelSelectionLocked: locked,

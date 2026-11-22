@@ -22,6 +22,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
@@ -101,6 +102,8 @@ export function* assembleOpenClawCodingTools(
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
   assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config),
 ): CodingToolAssembly {
+  const participationCeiling = readRunOperatorAuthority(options ?? {})?.participationCeiling;
+  const reviewerDeviceId = participationCeiling ? undefined : options?.approvalReviewerDeviceId;
   const preparedTools = preparedSurface?.tools;
   const listingClientCaps =
     options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});
@@ -190,7 +193,8 @@ export function* assembleOpenClawCodingTools(
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const { workspaceRoot, runtimeRoot } = capabilityProfile.workspace;
   const codingRoot = sandboxRoot ?? runtimeRoot;
-  const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
+  const permissionRoot = participationCeiling?.source?.root ?? sessionPermissionPolicy?.root;
+  const containmentRoot = sandboxRoot ?? permissionRoot ?? codingRoot;
   const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
     mutationRoot: sandboxRoot ?? workspaceRoot,
     workspaceDir: sandboxRoot ?? workspaceRoot,
@@ -271,7 +275,7 @@ export function* assembleOpenClawCodingTools(
               config: options?.exec?.config ?? options?.config,
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
-              participation: options?.participationCeiling !== undefined,
+              participation: participationCeiling !== undefined,
               reviewTranscript: options?.exec?.reviewTranscript,
               trigger: options?.trigger,
               node: options?.exec?.node ?? execConfig.node,
@@ -307,9 +311,7 @@ export function* assembleOpenClawCodingTools(
               currentThreadTs: options?.currentThreadTs,
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
-              approvalReviewerDeviceId: options?.participationCeiling
-                ? undefined
-                : options?.approvalReviewerDeviceId,
+              approvalReviewerDeviceId: reviewerDeviceId,
               // A hidden fork has nobody to ask; a command that needs approval is denied.
               nonInteractiveApproval:
                 options?.swarmCollector ||
@@ -319,18 +321,18 @@ export function* assembleOpenClawCodingTools(
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
               // Participation has no authority to create an uncapped completion turn.
-              notifyOnExit: options?.participationCeiling
+              notifyOnExit: participationCeiling
                 ? false
                 : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
-              approvalFollowupMode: options?.participationCeiling
+              approvalFollowupMode: participationCeiling
                 ? undefined
                 : options?.exec?.approvalFollowupMode,
               notifyOnExitEmptySuccess:
                 options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
             },
             processDefaults: {
-              readOnly: Boolean(options?.participationCeiling),
-              includeAncestors: !options?.participationCeiling,
+              readOnly: Boolean(participationCeiling),
+              includeAncestors: !participationCeiling,
               scopeKey,
               sessionKey: executionSessionKey,
               agentId: executionAgentId,
@@ -493,10 +495,7 @@ export function* assembleOpenClawCodingTools(
               ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
-            approvalReviewerDeviceIds:
-              !options?.participationCeiling && options?.approvalReviewerDeviceId
-                ? [options.approvalReviewerDeviceId]
-                : undefined,
+            approvalReviewerDeviceIds: reviewerDeviceId ? [reviewerDeviceId] : undefined,
             gatewayCallerAccountId: gatewayCaller.accountId,
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
@@ -622,7 +621,7 @@ export function* assembleOpenClawCodingTools(
     messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
   );
   const participatingTools = new Set(
-    filterParticipationTools(turnTools, options?.participationCeiling, getPluginToolMeta),
+    filterParticipationTools(turnTools, participationCeiling, getPluginToolMeta),
   );
   const {
     tools: authorizedTools,
@@ -638,7 +637,7 @@ export function* assembleOpenClawCodingTools(
     ),
     // Participation narrows the provider schema as well as executable authority.
     sessionTools:
-      !options?.participationCeiling && (handoff || fixedListing)
+      !participationCeiling && (handoff || fixedListing)
         ? completeTurnTools(
             messageInvocationPolicy.filter(
               capabilityProfile,
@@ -700,9 +699,7 @@ export function* assembleOpenClawCodingTools(
     sessionId: options?.sessionId,
     runId: options?.runId,
     trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.participationCeiling
-      ? undefined
-      : options?.approvalReviewerDeviceId,
+    approvalReviewerDeviceId: reviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(Object.keys(requester).length > 0 ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),

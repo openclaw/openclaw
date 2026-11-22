@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -15,6 +16,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { OPENCLAW_AGENT_RUNTIME_ID, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -39,6 +41,7 @@ import {
   type AcceptedCompactionSuccessor,
 } from "../embedded-agent-runner/compaction-successor.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
@@ -457,6 +460,16 @@ export async function runCliTurnCompactionLifecycle(
               currentTokenCount,
               trigger: "cli_budget",
             });
+            const admission = prepareSystemAgentRunAdmission(
+              params.cfg,
+              `${params.sessionId}:cli-compact:${randomUUID()}`,
+              params.sessionAgentId,
+              "agents.cli-context-engine-compaction",
+              assertActive,
+              operatorAuthority,
+            );
+            onAcquired({ release: admission.close, releaseBeforeResultWhenIdle: true });
+            attachCompactionAccountingRecorder(runtimeContext, { preparedRunAdmission: admission });
             const runtimeSettings = buildContextEngineRuntimeSettings({
               contextEngineHost: buildGenericCliContextEngineHostSupport({
                 backendId: params.provider,

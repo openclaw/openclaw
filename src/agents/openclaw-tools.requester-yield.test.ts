@@ -25,6 +25,7 @@ import { addSession, markExited, type ProcessSession } from "./bash-process-regi
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { settleRequesterRun } from "./requester-run-settlement.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
@@ -838,11 +839,11 @@ describe("requester yield ownership", () => {
         requesterTurnRunId: "run-turn-2",
         ...(source === "participant"
           ? {
-              participationCeiling: {
+              ...prepareParticipationTestRun({
                 kind: "send" as const,
                 profileId: "invited",
                 sessionKey: requesterSessionKey,
-              },
+              }),
             }
           : {}),
         ...(native ? { claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }) } : {}),

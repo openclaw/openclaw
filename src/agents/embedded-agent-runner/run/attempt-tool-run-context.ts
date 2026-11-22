@@ -5,6 +5,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import { readRunOperatorAuthority } from "../../admitted-run-context.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -12,6 +13,8 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<
   RunEmbeddedAgentParams,
+  | "admittedRunContext"
+  | "preparedRunAdmission"
   | "clientCaps"
   | "gatewayUiCommandTarget"
   | "pinnedWidgetAuthoring"
@@ -37,7 +40,6 @@ type AttemptToolRunFacts = Pick<
   | "operatorProfileId"
   | "conversationId"
   | "scheduledToolPolicy"
-  | "participationCeiling"
   | "approvalReviewerDeviceId"
   | "currentChannelId"
   | "currentMessagingTarget"
@@ -115,8 +117,9 @@ export function buildEmbeddedAttemptToolRunContext(
     operatorProfileId: params.operatorProfileId,
     conversationId: params.conversationId,
     scheduledToolPolicy: params.scheduledToolPolicy,
-    participationCeiling: params.participationCeiling,
-    approvalReviewerDeviceId: params.participationCeiling
+    admittedRunContext: params.admittedRunContext,
+    preparedRunAdmission: params.preparedRunAdmission,
+    approvalReviewerDeviceId: readRunOperatorAuthority(params)?.participationCeiling
       ? undefined
       : params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,

@@ -28,6 +28,7 @@ import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-con
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
+import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
@@ -337,6 +338,7 @@ export function resolveAttemptFsWorkspaceOnly(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "admittedRunContext"
   | "sessionTarget"
   | "trigger"
   | "bootstrapContextRunKind"
@@ -344,7 +346,6 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "inputProvenance"
   | "spawnedBy"
   | "trustedInternalHandoff"
-  | "participationCeiling"
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
@@ -403,7 +404,7 @@ export function buildAfterTurnRuntimeContext(params: {
       : undefined;
   const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
   const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
-  return {
+  const runtimeContext: ContextEngineRuntimeContext = {
     ...buildEmbeddedCompactionRuntimeContext(
       {
         sessionKey: params.attempt.sessionKey,
@@ -420,7 +421,6 @@ export function buildAfterTurnRuntimeContext(params: {
         modelSelectionLocked: params.attempt.modelSelectionLocked,
         config: params.attempt.config,
         toolsAllow: params.attempt.toolsAllow,
-        participationCeiling: params.attempt.participationCeiling,
         skillsSnapshot: params.attempt.skillsSnapshot,
         senderId: params.attempt.senderId,
         provider: params.attempt.provider,
@@ -460,6 +460,10 @@ export function buildAfterTurnRuntimeContext(params: {
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),
   };
+  attachCompactionAccountingRecorder(runtimeContext, {
+    admittedRunContext: params.attempt.admittedRunContext,
+  });
+  return runtimeContext;
 }
 
 export function buildAfterTurnRuntimeContextFromUsage(

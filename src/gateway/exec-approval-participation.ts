@@ -110,7 +110,9 @@ export function authorizeParticipationExecApprovalMethod(params: {
         ? params.manager?.getLiveSnapshot(params.params.id)
         : undefined;
     // Waiting consumes only this retained tool owner's request, never another approval.
-    return record?.participation?.participantProfileId === captured.ceiling.profileId &&
+    return record &&
+      record.participation &&
+      record.participation.participantProfileId === captured.ceiling.profileId &&
       record.participation.sessionKey === captured.ceiling.sessionKey &&
       record.agentRuntimeDelegatedAuthority &&
       validateAgentRunDelegatedAuthority(

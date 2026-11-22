@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import { expectRecordFields } from "./compact.hooks.assertions.test-support.js";
 
 function createMockToolDefinitions(tools: unknown[] = []) {
@@ -112,14 +113,21 @@ export function registerCompactionPermissionTests({
     const directory = fixture.makeTempDir("participant-compaction-");
     const root = await realpath(directory);
     await compactDirect({
-      workspaceDir: directory,
-      sessionRoot: root,
-      participationCeiling: {
+      workspaceDir: workspaceDir(),
+      sessionRoot: workspaceDir(),
+      ...prepareParticipationTestRun({
         kind: "send",
         profileId: "guest",
         sessionKey: "agent:main:invited",
         permission: "workspace",
-      },
+        source: {
+          agentId: "main",
+          sessionId: "invited",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root,
+        },
+      }),
       execOverrides: { mode: "full" },
     });
     expect(toolOptions()).toMatchObject({

@@ -1,5 +1,6 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -13,7 +14,6 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "../local-model-lean.js";
-import type { ParticipationCeiling } from "../participation-ceiling.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
@@ -60,8 +60,11 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     preparedToolOverrideAllowlist?: readonly string[];
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
-    participationCeiling?: ParticipationCeiling;
     sourceReplyDeliveryMode?: string;
+  },
+  authority?: {
+    admittedRunContext?: AdmittedRunContext;
+    preparedRunAdmission?: PreparedAgentRunAdmission;
   },
 ) {
   const presentation = input.presentation;
@@ -166,6 +169,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     const controls = createControls
       ? createControls({
           ...params,
+          admittedRunContext: authority?.admittedRunContext,
+          preparedRunAdmission: authority?.preparedRunAdmission,
           runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           catalogRef: toolSearchCatalogRef,

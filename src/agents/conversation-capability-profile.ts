@@ -12,11 +12,15 @@ import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
-import type { ParticipationCeiling } from "./participation-ceiling.js";
 import { captureRequesterOrigin, type RequesterOrigin } from "./requester-origin.js";
 import { isInternalOwnerRequester, resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
@@ -59,7 +63,8 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
-  participationCeiling?: ParticipationCeiling;
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   /** Captured policy owner; null excludes ambient request authority. */
@@ -225,7 +230,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
-    participationCeiling: params.participationCeiling,
+    participationCeiling: readRunOperatorAuthority(params)?.participationCeiling,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,

@@ -53,7 +53,6 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   | "bootstrapWorkspaceDir"
   | "cwd"
   | "permissionMode"
-  | "participationCeiling"
   | "sessionRoot"
   | "agentDir"
   | "config"
@@ -150,6 +149,8 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   CompactEmbeddedAgentSessionParams,
   "sessionFile"
 > & {
+  admittedRunContext?: import("../admitted-run-context.js").AdmittedRunContext;
+  preparedRunAdmission?: import("../admitted-run-context.js").PreparedAgentRunAdmission;
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
 };

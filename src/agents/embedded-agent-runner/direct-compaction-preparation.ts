@@ -52,6 +52,8 @@ import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
+  admittedRunContext?: import("../admitted-run-context.js").AdmittedRunContext;
+  preparedRunAdmission?: import("../admitted-run-context.js").PreparedAgentRunAdmission;
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
   seedCompaction?: CompactionAppendPersistenceAsync;

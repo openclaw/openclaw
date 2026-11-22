@@ -3,7 +3,7 @@ import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import * as runAdmission from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -92,7 +92,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
-  assertParticipationRuntime(params.participationCeiling, runtime.agentHarness.id);
+  const ceiling = runAdmission.readRunOperatorAuthority(params)?.participationCeiling;
+  assertParticipationRuntime(ceiling, runtime.agentHarness.id);
   const effectiveModel = attachModelProviderRuntimePluginHandle(
     runtime.effectiveModel,
     runtime.providerRuntimeHandle,
@@ -158,7 +159,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   }
   const admittedRunContext = params.admittedRunContext;
   const requireActiveAssertion = (signal?: AbortSignal) => {
-    const assertion = resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
+    const assertion = runAdmission.resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
     if (!assertion) {
       throw new Error("embedded attempt reached dispatch without an active admitted run");
     }
@@ -449,7 +450,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     ...resolveHarnessWorkspace(workspaceDir, params, pluginWorkspace, pluginSandbox),
     bootstrapWorkspaceDir,
     permissionMode: params.permissionMode,
-    participationCeiling: params.participationCeiling,
     requireWorkspaceOnly: params.requireWorkspaceOnly,
     agentDir,
     preparedModelRuntime: runInput.preparedModelRuntime,

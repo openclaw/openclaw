@@ -263,6 +263,8 @@ async function executeRecoveryCompaction(
           owner.withTranscriptWrites(backendParams.abortSignal, () => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                admittedRunContext: runParams.admittedRunContext,
+                preparedRunAdmission: runParams.preparedRunAdmission,
                 requestBudget: input.state.compactionRequestBudget,
                 requestFromEntryId,
                 pendingRequestState:

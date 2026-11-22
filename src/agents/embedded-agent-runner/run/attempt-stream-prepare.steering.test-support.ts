@@ -12,6 +12,7 @@ import { captureReplyMessageInjectionTarget } from "../../../sessions/session-co
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { beginSessionControllerSteer } from "../../../sessions/session-controller.steer.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -25,11 +26,11 @@ export function registerPreparationSteeringTests() {
   it("does not inject an owner's message into a participating turn", async () => {
     const prepared = prepareCatalogExecutor({
       attempt: {
-        participationCeiling: {
+        admittedRunContext: await prepareParticipationTestRun({
           kind: "send",
           profileId: "guest",
           sessionKey: "agent:main:participant",
-        },
+        }).preparedRunAdmission.admit("embedded"),
       },
     });
     try {

@@ -98,7 +98,7 @@ export async function beginAgentCommandSessionEffect(params: {
       if (childCeiling && !opts.operatorAuthority?.participationCeiling) {
         throw new Error("Participant child has no admitted original-source authority.");
       }
-      intersectParticipationCeilings(childCeiling, opts.participationCeiling);
+      intersectParticipationCeilings(childCeiling, opts.operatorAuthority?.participationCeiling);
       operatorSession?.assertAuthorized(currentEntry);
       sessionEntry = currentEntry;
       params.onValidated(currentEntry);

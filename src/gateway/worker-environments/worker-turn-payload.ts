@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  readRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -600,7 +601,7 @@ export async function finalizeWorkerTurnResult(
 }
 
 export function assertSupportedTurn(params: SessionPlacementTurnParams) {
-  assertParticipationWorkerExecution(params.participationCeiling);
+  assertParticipationWorkerExecution(readRunOperatorAuthority(params)?.participationCeiling);
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }

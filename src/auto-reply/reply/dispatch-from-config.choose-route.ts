@@ -553,7 +553,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
 
   const restrictedRuntime =
-    replyOptions?.participationCeiling ||
+    replyOptions?.operatorAuthority?.participationCeiling ||
     admittedSessionSettingsRestrictRuntime(replyOptions?.admittedSessionSettings);
   let takeover:
     | { payload: ReplyPayload; deliveryId: string; recordProcessed: () => void }
@@ -622,7 +622,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   }
 
   if (!takeover && state.dispatchKind === "acp" && restrictedRuntime) {
-    const error = replyOptions?.participationCeiling
+    const error = replyOptions?.operatorAuthority?.participationCeiling
       ? PARTICIPATION_RUNTIME_ERROR
       : "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.";
     takeover = {
@@ -656,7 +656,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   if (acpRefusal) {
     return acpRefusal;
   }
-  const replyDispatchTakeover = replyOptions?.participationCeiling
+  const replyDispatchTakeover = replyOptions?.operatorAuthority?.participationCeiling
     ? undefined
     : await runReplyDispatchHook(state, {
         shouldSendToolSummaries,

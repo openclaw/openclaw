@@ -6,6 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { projectAgentToolsExecPolicy } from "./agent-tools.execution-policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -26,6 +30,7 @@ import {
   resolveParticipationTools,
   type ParticipationCeiling,
 } from "./participation-ceiling.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -64,6 +69,59 @@ const policies = {
   full: { security: "allowlist", ask: "on-miss" },
 } as const;
 
+it("enforces admitted-only permission, filesystem and exact-ID tool policy", async () => {
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "participant",
+    scopes: [],
+    assertCurrent() {},
+    participationCeiling: {
+      ...ceiling,
+      permission: "read-only",
+      tools: ["read"],
+      source: {
+        agentId: "main",
+        sessionId: "clamp",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/synthetic",
+      },
+    },
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "authority-only",
+    "main",
+    "test",
+    undefined,
+    authority,
+  );
+  try {
+    const options = {
+      admittedRunContext: await admission.admit("embedded"),
+      sessionPermissionPolicy: { mode: "full" as const, root: "/workspace" },
+    };
+    expect(
+      projectAgentToolsExecPolicy({ options, execConfig: resolveExecToolConfig({}), model: {} }),
+    ).toMatchObject({ security: "deny", bypassHostApprovalFloors: false });
+    expect(prepareCoreToolPolicy(options)).toMatchObject({
+      readOnly: true,
+      strictWorkspaceRoot: true,
+    });
+    const read = createStubTool("read");
+    const write = createStubTool("write");
+    write.execute = vi.fn();
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [read, write] });
+    const writeId = catalogRef.current!.entries.find((entry) => entry.name === "write")!.id;
+    const runtime = new ToolSearchRuntime({ catalogRef, ...options }, resolveToolSearchConfig());
+    expect(runtime.all().map((entry) => entry.name)).toEqual(["read"]);
+    await expect(runtime.callExactId(writeId, {})).rejects.toThrow();
+    expect(write.execute).not.toHaveBeenCalled();
+  } finally {
+    admission.close();
+  }
+});
+
 describe("participation permission intersection", () => {
   it.each([
     ...defaults.map((mode) => ({ permissionMode: undefined, mode })),
@@ -93,7 +151,7 @@ describe("participation permission intersection", () => {
       const tools = projectAgentToolsExecPolicy({
         options: {
           config: cfg,
-          participationCeiling: ceiling,
+          ...prepareParticipationTestRun(ceiling),
           sessionPermissionPolicy: permissionMode
             ? { mode: permissionMode, root: "/workspace" }
             : undefined,
@@ -121,7 +179,7 @@ describe("participation permission intersection", () => {
     };
     expect(
       projectAgentToolsExecPolicy({
-        options: { config: cfg, participationCeiling: ceiling },
+        options: { config: cfg, ...prepareParticipationTestRun(ceiling) },
         execConfig: resolveExecToolConfig({ cfg }),
         model: { provider: "example" },
       }),
@@ -130,7 +188,7 @@ describe("participation permission intersection", () => {
       expect(
         prepareCoreToolPolicy({
           config: { tools: { fs: { workspaceOnly: false } } },
-          participationCeiling: ceiling,
+          ...prepareParticipationTestRun(ceiling),
           sessionPermissionPolicy: mode ? { root: "/workspace", mode } : undefined,
         }),
       ).toMatchObject({
@@ -148,7 +206,7 @@ describe("participation permission intersection", () => {
     (mode) => {
       const params = {
         permissionMode: "guarded" as SessionPermissionMode | undefined,
-        participationCeiling: ceiling,
+        ...prepareParticipationTestRun(ceiling),
         execOverrides: {},
       };
       const changes = createEmbeddedRunPermissionChanges(params);
@@ -159,13 +217,15 @@ describe("participation permission intersection", () => {
         });
         expect(changes.prepareRestart()).toBe(true);
         withAuthorizedPermissionChange(attempt.owner, mode, () => attempt.recordApplied(mode));
-        expect(params.participationCeiling).toBe(ceiling);
+        expect(
+          params.preparedRunAdmission.readOperatorAuthority?.()?.participationCeiling,
+        ).toMatchObject(ceiling);
         const cfg: OpenClawConfig = { tools: { exec: { mode: "deny" } } };
         expect(
           projectAgentToolsExecPolicy({
             options: {
               config: cfg,
-              participationCeiling: params.participationCeiling,
+              preparedRunAdmission: params.preparedRunAdmission,
               exec: params.execOverrides,
               sessionPermissionPolicy: params.permissionMode
                 ? { root: "/workspace", mode: params.permissionMode }
@@ -189,10 +249,10 @@ describe("participation permission intersection", () => {
 it("never binds the participating device as approval reviewer", () => {
   expect(
     buildEmbeddedAttemptToolRunContext({
-      participationCeiling: ceiling,
+      ...prepareParticipationTestRun(ceiling),
       approvalReviewerDeviceId: "participant-device",
     }),
-  ).toMatchObject({ participationCeiling: ceiling, approvalReviewerDeviceId: undefined });
+  ).toMatchObject({ approvalReviewerDeviceId: undefined });
   expect(
     buildEmbeddedAttemptToolRunContext({ approvalReviewerDeviceId: "owner-device" })
       .approvalReviewerDeviceId,
@@ -232,7 +292,7 @@ it.each([
 ] as [string[], string[]][])("projects configured participant policy %j", (tools, expected) => {
   const capabilityProfile = resolveConversationCapabilityProfile({
     sessionKey: ceiling.sessionKey,
-    participationCeiling: { ...ceiling, tools },
+    ...prepareParticipationTestRun({ ...ceiling, tools }),
   });
   expect(
     projectConversationToolNames({
@@ -260,7 +320,7 @@ it("retains both patterned restrictions through JSON recovery and later widening
     projectConversationToolNames({
       capabilityProfile: resolveConversationCapabilityProfile({
         sessionKey: ceiling.sessionKey,
-        participationCeiling,
+        ...prepareParticipationTestRun(participationCeiling!),
       }),
       toolNames: ["knowledge_record", "knowledge_remember", "other_record", "openclaw"],
       warn: () => undefined,
@@ -301,7 +361,10 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   const runtime = new ToolSearchRuntime(
     {
       catalogRef,
-      participationCeiling: { ...ceiling, tools: ["read", "sessions_spawn", "sessions_yield"] },
+      ...prepareParticipationTestRun({
+        ...ceiling,
+        tools: ["read", "sessions_spawn", "sessions_yield"],
+      }),
     },
     resolveToolSearchConfig(),
   );
@@ -350,10 +413,10 @@ it("dispatches configured plugin and MCP tools but never openclaw, including exa
   const runtime = new ToolSearchRuntime(
     {
       catalogRef,
-      participationCeiling: {
+      ...prepareParticipationTestRun({
         ...ceiling,
         tools: ["knowledge", "fixture__*", "openclaw"],
-      },
+      }),
     },
     resolveToolSearchConfig(),
   );
@@ -385,7 +448,7 @@ it.each([
 ] as const)("caps participant %s in session %s at %s", (permission, session, mode, readOnly) => {
   const participationCeiling = { ...ceiling, permission };
   const options = {
-    participationCeiling,
+    ...prepareParticipationTestRun(participationCeiling),
     sessionPermissionPolicy: { mode: session, root: "/workspace" },
   };
   expect(
@@ -441,7 +504,7 @@ it("discovers and reads eligible installed skills without widening participant f
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
   const runtime = new ToolSearchRuntime(
-    { catalogRef, participationCeiling: ceiling },
+    { catalogRef, ...prepareParticipationTestRun(ceiling) },
     resolveToolSearchConfig(),
   );
   expect(runtime.all().map((entry) => entry.name)).toContain("skills_read");
@@ -456,7 +519,7 @@ it("discovers and reads eligible installed skills without widening participant f
   );
   await expect(runtime.call("read", { path: location })).rejects.toThrow(/root/);
   const narrowed = new ToolSearchRuntime(
-    { catalogRef, participationCeiling: { ...ceiling, tools: ["ls"] } },
+    { catalogRef, ...prepareParticipationTestRun({ ...ceiling, tools: ["ls"] }) },
     resolveToolSearchConfig(),
   );
   for (const name of ["skills_read", "skills_search"]) {
@@ -468,7 +531,7 @@ it("discovers and reads eligible installed skills without widening participant f
 it("does not lend a participant another turn's runtime yield claim", async () => {
   const runtimeClaim = vi.fn(() => true);
   const claim = createRequesterYieldCallback({
-    participationCeiling: ceiling,
+    ...prepareParticipationTestRun(ceiling),
     requesterAgentId: "main",
     requesterSessionKey: ceiling.sessionKey,
     claimYieldCompletion: runtimeClaim,

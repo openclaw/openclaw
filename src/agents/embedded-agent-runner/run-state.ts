@@ -260,12 +260,12 @@ export function captureActiveEmbeddedRunParticipation(identity: AgentRuntimeIden
   // Ordinary and native approvals keep their existing authority checks.
   if (
     !ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(identity.operationalRunInstance.runId)?.toolAuthority
-      ?.participationCeiling
+      ?.operatorAuthority?.participationCeiling
   ) {
     return undefined;
   }
   const captured = captureActiveEmbeddedRunToolAuthority(identity);
-  const ceiling = captured?.toolAuthority.participationCeiling;
+  const ceiling = captured?.toolAuthority.operatorAuthority?.participationCeiling;
   if (!captured || !ceiling) {
     return undefined;
   }

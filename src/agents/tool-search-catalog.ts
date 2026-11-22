@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { classifyAgentToolSource, getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -456,9 +457,10 @@ export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSes
   if (!catalog) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
-  if (ctx.participationCeiling) {
+  const participationCeiling = readRunOperatorAuthority(ctx)?.participationCeiling;
+  if (participationCeiling) {
     // Catalog refs are run-owned. Narrow exact-id dispatch as well as discovery.
-    catalog.entries = filterParticipationTools(catalog.entries, ctx.participationCeiling, (entry) =>
+    catalog.entries = filterParticipationTools(catalog.entries, participationCeiling, (entry) =>
       getPluginToolMeta(entry.tool),
     );
   }

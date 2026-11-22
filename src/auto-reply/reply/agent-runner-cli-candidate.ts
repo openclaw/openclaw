@@ -1,3 +1,4 @@
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -63,7 +64,7 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
-  assertParticipationRuntime(params.turn.followupRun.run.participationCeiling, "cli");
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const accessProgram = resolveCyberAccessProgramForProvider(
     params.candidateRun.cyberAccessProgram,
     params.provider,

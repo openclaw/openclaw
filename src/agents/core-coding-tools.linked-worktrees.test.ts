@@ -9,6 +9,7 @@ import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers
 import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 import { resolvePatchFileOps } from "./apply-patch-file-ops.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { writeHostWorkspaceFile } from "./workspace-file-ops.js";
 import { git, initializeGitFixture } from "./worktrees/git-fixture.test-support.js";
@@ -35,7 +36,11 @@ it("contains participant file tools to the invited worktree and read-only sessio
   await fs.writeFile(path.join(foreignAttachments, "seed.txt"), "fixture\n");
   const policy = structuredClone(
     prepareCoreToolPolicy({
-      participationCeiling: { kind: "send", profileId: "guest", sessionKey: "agent:main:invited" },
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+      }),
       sessionPermissionPolicy: { root: invited, mode: "full" },
     }),
   );

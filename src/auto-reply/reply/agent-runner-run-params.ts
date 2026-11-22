@@ -213,7 +213,6 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     workspaceDir: run.workspaceDir,
     cwd: run.cwd,
     toolOverrides: run.toolOverrides,
-    participationCeiling: run.participationCeiling,
     skillsSnapshot: run.skillsSnapshot,
     ownerNumbers: run.ownerNumbers,
     inputProvenance: run.inputProvenance,

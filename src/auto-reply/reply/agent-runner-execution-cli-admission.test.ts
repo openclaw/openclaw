@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
@@ -590,11 +591,25 @@ it("carries the admitted session permission and placement into the CLI grant", a
 
 it("refuses a participating CLI fallback before launching its backend", async () => {
   const { turn, followupRun } = await sessionFixture("agent:main:participant-cli", {});
-  followupRun.run.participationCeiling = {
-    kind: "send",
+  followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
     profileId: "guest",
-    sessionKey: "agent:main:participant-cli",
-  };
+    scopes: [],
+    assertCurrent() {},
+    participationCeiling: {
+      kind: "send",
+      profileId: "guest",
+      sessionKey: "agent:main:participant-cli",
+      tools: ["read"],
+      permission: "workspace",
+      source: {
+        agentId: "main",
+        sessionId: "test",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/synthetic",
+      },
+    },
+  });
   useCliFallback();
   expect(await executeAgentTurn(turn)).toMatchObject({
     kind: "final",

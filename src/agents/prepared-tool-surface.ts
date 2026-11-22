@@ -1,6 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { isAgentToolRepeatGuardEnabled } from "./agent-scope.js";
-import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
+import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -9,11 +10,12 @@ import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exe
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 
 type CoreToolPolicyOptions = Pick<
-  OpenClawCodingToolsOptions,
+  InternalCodingToolsOptions,
   | "config"
   | "agentId"
   | "sessionPermissionPolicy"
-  | "participationCeiling"
+  | "admittedRunContext"
+  | "preparedRunAdmission"
   | "requireWorkspaceOnly"
   | "trigger"
   | "memoryFlushWritePath"
@@ -28,11 +30,12 @@ export function prepareCoreToolPolicy(
   options: CoreToolPolicyOptions,
   execConfig = resolveExecToolConfig({ cfg: options.config, agentId: options.agentId }),
 ) {
+  const participationCeiling = readRunOperatorAuthority(options)?.participationCeiling;
   const sessionPolicy = options.sessionPermissionPolicy
     ? resolveSessionPermissionCoreToolPolicy(options.sessionPermissionPolicy)
     : undefined;
   const workspaceOnly =
-    options.participationCeiling !== undefined ||
+    participationCeiling !== undefined ||
     options.requireWorkspaceOnly === true ||
     options.trigger === "memory" ||
     (sessionPolicy?.workspaceOnly ??
@@ -40,11 +43,11 @@ export function prepareCoreToolPolicy(
         true);
   const readOnly =
     sessionPolicy?.readOnly === true ||
-    (options.participationCeiling !== undefined &&
-      participationPermission(options.participationCeiling) === "read-only");
+    (participationCeiling !== undefined &&
+      participationPermission(participationCeiling) === "read-only");
   const patch = execConfig.applyPatch;
   const applyPatchContainmentSource: ApplyPatchContainmentSource =
-    options.participationCeiling || options.requireWorkspaceOnly
+    participationCeiling || options.requireWorkspaceOnly
       ? "required-root"
       : sessionPolicy
         ? "session"
@@ -52,7 +55,7 @@ export function prepareCoreToolPolicy(
   return {
     workspaceOnly,
     // Participation is Gateway-local; ordinary worker policies retain their wire shape.
-    ...(options.participationCeiling ? { strictWorkspaceRoot: true } : {}),
+    ...(participationCeiling ? { strictWorkspaceRoot: true } : {}),
     readOnly,
     applyPatchEnabled:
       !readOnly &&

@@ -9,6 +9,7 @@ import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
@@ -96,19 +97,18 @@ export async function buildPreparedCompactionRuntime(
     effectiveCwd,
     sessionAgentId,
   } = prepared;
+  const participationCeiling = readRunOperatorAuthority(params)?.participationCeiling;
   const mode = params.execOverrides?.mode
     ? SESSION_PERMISSION_BY_EXEC_MODE[params.execOverrides.mode]
     : (params.permissionMode ?? params.sessionEntry?.permissionMode);
   const root =
-    params.participationCeiling?.source?.root ??
-    params.sessionRoot ??
-    params.sessionEntry?.sessionRoot;
+    participationCeiling?.source?.root ?? params.sessionRoot ?? params.sessionEntry?.sessionRoot;
   const sessionPermissionPolicy =
-    mode || params.participationCeiling
+    mode || participationCeiling
       ? await prepareRunSessionPermissionPolicy({
           mode,
           root: root ?? (await fs.realpath(resolvedWorkspace)),
-          participationCeiling: params.participationCeiling,
+          participationCeiling,
           config: params.config,
           agentId: sessionAgentId,
           sandboxAvailable: sandbox?.enabled === true,
@@ -265,7 +265,8 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       requesterOrigin: params.requesterOrigin,
       operatorProfileId: params.operatorProfileId,
-      participationCeiling: params.participationCeiling,
+      admittedRunContext: params.admittedRunContext,
+      preparedRunAdmission: params.preparedRunAdmission,
       conversationId: params.conversationId,
       messageThreadId: params.messageThreadId,
       memberRoleIds: params.memberRoleIds,
