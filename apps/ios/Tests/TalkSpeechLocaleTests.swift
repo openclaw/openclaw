@@ -78,6 +78,15 @@ struct TalkSpeechLocaleTests {
         #expect(english == "en-US")
     }
 
+    @Test func `simplified Chinese device locale selects zh-CN before English`() {
+        let locale = TalkSpeechLocale.resolvedLocaleID(
+            gatewaySelection: nil,
+            deviceLocaleID: "zh-Hans-US",
+            supportedLocaleIDs: ["zh-CN", "zh-TW", "en-US"])
+
+        #expect(locale == "zh-CN")
+    }
+
     @Test func `speech synthesis prefers directive locale`() {
         let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
             directiveLanguage: " tr_TR ",
