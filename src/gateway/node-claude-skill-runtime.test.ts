@@ -16,6 +16,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
@@ -120,7 +121,7 @@ async function fixture(
   const config: OpenClawConfig = options.claudeCliHostKey
     ? { tools: { exec: { claudeCliHost: "node" as const, node: "node-1" } } }
     : {};
-  const stored = { sessionId, updatedAt: 1, skillLibrarySelections: pins };
+  const stored: SessionEntry = { sessionId, updatedAt: 1, skillLibrarySelections: pins };
   const entry = {
     ...stored,
     execHost: "node" as const,
