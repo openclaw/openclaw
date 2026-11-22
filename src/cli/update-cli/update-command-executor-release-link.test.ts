@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,12 +10,16 @@ import {
 } from "../../infra/package-release-slot.js";
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { reserveUpdateCommandExecutorSlot } from "./update-command-executor-capabilities.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  reserveUpdateCommandExecutorSlot,
+} from "./update-command-executor-capabilities.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
+import { admitUpdatePackageRoot } from "./update-command-package-activation.js";
 
 const fixture = useExecutorFixture("update-release-link-");
 
@@ -81,5 +86,36 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
 
     expect(outcome.releaseLease).toBe("absent");
     expect(outcome.deselected).toMatch(/does not resolve to its original installation/u);
+  });
+
+  it("keys a switch from a Git release to npm by the package destination, even before npm has a copy", async () => {
+    const { root } = fixture();
+    // `<state>/git-install/openclaw -> releases/<id>/openclaw`, as a Git release install keeps it.
+    const prefix = path.join(root, "git-install");
+    fs.mkdirSync(path.join(prefix, "releases", "r1", "openclaw"), { recursive: true });
+    const gitSlot = path.join(prefix, "openclaw");
+    fs.symlinkSync(path.join("releases", "r1", "openclaw"), gitSlot);
+    // A Git install that never had an npm copy (M25 Windows: `ENOENT: realpath ...\node_modules\openclaw`).
+    const globalRoot = path.join(root, "npm", "lib", "node_modules");
+    fs.mkdirSync(globalRoot, { recursive: true });
+    const packageRoot = path.join(globalRoot, "openclaw");
+    const outcome: { gitKeyed?: string; installKey?: string } = {};
+
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(gitSlot);
+      try {
+        reserveUpdateCommandExecutorSlot(fence, packageRoot);
+      } catch (error) {
+        outcome.gitKeyed = (error as NodeJS.ErrnoException).code;
+      }
+    });
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      await admitUpdatePackageRoot(executor, packageRoot, undefined, undefined);
+      const fence = await executor.enter(packageRoot);
+      reserveUpdateCommandExecutorSlot(fence, packageRoot);
+      outcome.installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
+    });
+
+    expect(outcome).toEqual({ gitKeyed: "ENOENT", installKey: packageRoot });
   });
 });
