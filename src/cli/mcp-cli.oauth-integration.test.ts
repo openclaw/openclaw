@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { text as readBody } from "node:stream/consumers";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createMcpProbeFixture } from "../agents/agent-bundle-mcp-probe.test-support.js";
 import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
@@ -25,6 +27,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
 function createCli() {
   const program = new Command().exitOverride();
@@ -569,6 +572,58 @@ it("names the config path when a pre-registered client secret cannot be resolved
     } finally {
       vi.unstubAllEnvs();
       await fixture.close();
+    }
+  });
+});
+
+it("still probes healthy servers when one client secret cannot be resolved", async () => {
+  await withTempHome(`openclaw-mcp-probe-secret-${randomUUID()}-`, async () => {
+    const tempDirs: string[] = [];
+    const docs = (await createMcpProbeFixture(tempDirs)).config().mcp?.servers?.healthy;
+    vi.stubEnv(PRE_REGISTERED_SECRET_ENV, "");
+    try {
+      const json: unknown[] = [];
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
+      const { run } = createCli();
+      await run("set", "docs", JSON.stringify(docs));
+      await run(
+        "set",
+        "calendar",
+        JSON.stringify(
+          oauthServer("https://calendar.example.test/mcp", {
+            clientId: PRE_REGISTERED_CLIENT.id,
+            clientSecret: { source: "env", provider: "default", id: PRE_REGISTERED_SECRET_ENV },
+          }),
+        ),
+      );
+
+      const invocationExitCode = process.exitCode;
+      await runCliWithExitFinalization({
+        run: () => run("probe", "--json"),
+        onError: (error) => {
+          throw error;
+        },
+      });
+      expect(process.exitCode).toBe(1);
+      process.exitCode = invocationExitCode;
+      expect(json.at(-1)).toMatchObject({
+        servers: { docs: { tools: 1 } },
+        tools: ["docs__probe"],
+        diagnostics: [
+          {
+            serverName: "calendar",
+            message: expect.stringContaining(
+              `mcp.servers.calendar.oauth.clientSecret (env:default:${PRE_REGISTERED_SECRET_ENV})`,
+            ),
+          },
+        ],
+      });
+      expect(json.at(-1)).not.toHaveProperty("servers.calendar");
+    } finally {
+      vi.unstubAllEnvs();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     }
   });
 });

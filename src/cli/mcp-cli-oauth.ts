@@ -58,7 +58,9 @@ export async function resolveMcpOAuthClientSecretLocally(
     value: oauth.clientSecret,
     env: process.env,
     onResolveRefError: (error, ref) =>
-      unresolved(`(${secretRefKey(ref)}) could not be resolved: ${formatErrorMessage(error)}`),
+      unresolved(
+        `(${secretRefKey(ref)}) could not be resolved: ${formatErrorMessage(error).replace(/\.$/, "")}`,
+      ),
   });
   return { ...server, oauth: { ...oauth, clientSecret: clientSecret ?? unresolved("is empty") } };
 }

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { McpToolCatalogDiagnostic } from "../agents/agent-bundle-mcp-catalog.types.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -77,19 +78,24 @@ export async function probeMcpServers(
 ) {
   const { recoverMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
   await recoverMcpDockerServers(Object.values(servers));
-  const resolvedServers = Object.fromEntries(
-    await Promise.all(
-      Object.entries(servers).map(
-        async ([name, server]) =>
-          [
-            name,
-            server.enabled === false
-              ? server
-              : await resolveMcpOAuthClientSecretLocally(config, name, server),
-          ] as const,
-      ),
-    ),
-  );
+  // An unresolvable client secret fails only its own server; the others are still checked.
+  const resolvedServers: Record<string, Record<string, unknown>> = {};
+  const secretDiagnostics: McpToolCatalogDiagnostic[] = [];
+  for (const [name, server] of Object.entries(servers)) {
+    try {
+      resolvedServers[name] =
+        server.enabled === false
+          ? server
+          : await resolveMcpOAuthClientSecretLocally(config, name, server);
+    } catch (err) {
+      secretDiagnostics.push({
+        serverName: name,
+        safeServerName: name,
+        launchSummary: name,
+        message: formatErrorMessage(err),
+      });
+    }
+  }
   const runtime = await createSessionMcpRuntime({
     sessionId,
     workspaceDir: process.cwd(),
@@ -109,7 +115,11 @@ export async function probeMcpServers(
       cleanupError = `${formatErrorMessage(err)}. Rerun this command; if local cleanup still fails, restart the process that owns the MCP connection.`;
     }
   }
-  return { ...result, ...(cleanupError ? { cleanupError } : {}) };
+  return {
+    ...result,
+    diagnostics: [...secretDiagnostics, ...result.diagnostics],
+    ...(cleanupError ? { cleanupError } : {}),
+  };
 }
 
 export function resolveMcpProbeIssue(params: {

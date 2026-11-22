@@ -238,10 +238,10 @@ Some providers do not offer dynamic client registration and require an OAuth app
     --ref-source env --ref-provider default --ref-id DOCS_MCP_CLIENT_SECRET
   ```
 
-  A running Gateway resolves the reference with its other secrets; after changing it, run `openclaw secrets reload`. With the Gateway stopped, `openclaw mcp login` and `openclaw mcp probe` resolve it in that terminal, so the variable must be set there. If the reference cannot be resolved, sign-in stops with an error that names the config path and the reference, never the value.
+  A running Gateway resolves the reference with its other secrets; after changing it, run `openclaw secrets reload`. With the Gateway stopped, `openclaw mcp login` and `openclaw mcp probe` resolve it in that terminal, so the variable must be set there. If the reference cannot be resolved, sign-in stops with an error that names the config path and the reference, never the value. `openclaw mcp probe` reports that error as the server's diagnostic, still checks the other servers, and exits nonzero.
 
 - OpenClaw sends the secret only to the provider's token endpoint, for both the code exchange and every refresh. It picks `client_secret_basic`, `client_secret_post`, or no client authentication from the provider's advertised `token_endpoint_auth_methods_supported`. The secret is not stored in the SQLite sign-in row, the sign-in URL, logs, or `openclaw mcp status --json`. PKCE (`S256`) stays on for every sign-in. For an app on your own machine, the client secret is a configuration value, not a security boundary.
-- Saved tokens belong to the client that obtained them. When `oauth.clientId` changes, existing tokens stop being used and `openclaw mcp login <name>` signs in again with the new client.
+- Saved tokens belong to the client that obtained them. When `oauth.clientId` changes, existing tokens stop being used, `openclaw mcp status` reports `requires-authorization`, and an owner's direct chat offers the server's connect tool again. `openclaw mcp login <name>` signs in again with the new client.
 
 Register the exact callback URL that your sign-in uses. Providers often compare it byte for byte, so OpenClaw never retries with another loopback host for a pre-registered client:
 
