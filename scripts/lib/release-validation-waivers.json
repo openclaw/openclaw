@@ -135,6 +135,38 @@
           "exactCauses": true
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live agents)",
+      "reason": "Operator accepts this live job for the release after confirming Z.AI account credits are exhausted; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
+      "reason": "Operator accepts this live job for the release after confirming Z.AI account credits are exhausted; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
     }
   ]
 }
