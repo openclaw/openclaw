@@ -68,10 +68,12 @@ const MALFORMED_JSON_RE =
 // Projection judges `{ name|key: <credential>, value }` records and contextual media only after
 // JSON.parse. Unbounded callers keep unparsed JSON-like text (clipped output, scripts) whole
 // unless it carries one of those markers in any field order; then the value is still dropped.
-const UNPARSED_DISCRIMINATOR_RE = /\\*"(?:name|key)\\*"\s*:\s*\\*"([^"\\]{1,128})/giu;
+// Markers accept JSON, escaped JSON, single-quoted and unquoted object displays (`name: 'x'`).
+const UNPARSED_DISCRIMINATOR_RE =
+  /(?<![\w-])[\\"']*(?:name|key)[\\"']*\s*[:=]\s*[\\"']*([A-Za-z0-9_.-]{1,128})/giu;
 const UNPARSED_MEDIA_TYPE_RE =
-  /\\*"(?:type|mime_?type|media_?type|content_?type)\\*"\s*:\s*\\*"(?:input_?|output_?)?(?:audio|image|video)/iu;
-const UNPARSED_FIELD_NAME_RE = /\\*"([^"\\]{1,128})\\*"\s*:/gu;
+  /(?<![\w-])[\\"']*(?:type|mime_?type|media_?type|content_?type)[\\"']*\s*[:=]\s*[\\"']*(?:input_?|output_?)?(?:audio|image|video)/iu;
+const UNPARSED_FIELD_NAME_RE = /(?<![\w-])[\\"']*([A-Za-z0-9_.-]{1,128})[\\"']*\s*[:=]/gu;
 
 function hasUnparsedSensitiveRecord(text: string): boolean {
   if (UNPARSED_MEDIA_TYPE_RE.test(text)) {
