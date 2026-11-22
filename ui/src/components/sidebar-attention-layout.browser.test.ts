@@ -196,6 +196,34 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     }
   });
 
+  it("keeps a long automation name readable beside its Inbox timestamp", async () => {
+    const label = "InternationalMeetingAccessibilityAndInterpretationCalendarSynchronization";
+    const item: SidebarAttentionItem = {
+      ...authWarning,
+      kind: "cronFailed",
+      category: "automations",
+      label,
+      detail: "Failed",
+      action: { kind: "navigate", routeId: "cron" },
+      arrivedAtMs: Date.now() - 300_000,
+    };
+    const shell = mountPanel(panelParams(inboxEntries([item], [])), shellFor(true));
+    const panel = query(shell, ".sidebar-issues-panel");
+    panel.style.width = "390px";
+    const title = part(panel, "entity");
+    const age = part(panel, "age");
+    await document.fonts.ready;
+    const ink = document.createRange();
+    ink.selectNodeContents(title);
+    const lines = Array.from(ink.getClientRects());
+    expect(title.textContent).toBe(label);
+    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth + 1);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.every((line) => line.right <= bounds(title).right + 1)).toBe(true);
+    expect(bounds(title).right).toBeLessThan(bounds(age).left);
+    expect(part(panel, "navigation-link").getAttribute("href")).toBe("/automations");
+  });
+
   it.each(["system", "mentions", "all"] as const)(
     "dismisses only the selected %s tab without mixing mentions and local snoozes",
     (selectedTab) => {

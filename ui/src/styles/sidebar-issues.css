@@ -501,6 +501,12 @@ footer.sidebar-issues-panel__mentions-note {
   color: inherit;
 }
 
+/* Navigation rows have no disclosure where a touch reader can recover a clipped name. */
+.sidebar-issues-panel__navigation-link .sidebar-issues-panel__entity {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .sidebar-issues-panel__navigation-link::after {
   position: absolute;
   inset: 0;
