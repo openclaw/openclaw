@@ -528,7 +528,6 @@ export function DesktopSizing(
             .map((mode) => t(`desktop.${mode}`))
             .join("\n")}
           aria-label={t("desktop.sizing")}
-          title={t("desktop.matchRequirement")}
           onChange={(event) => {
             const mode = event.currentTarget.value;
             if (mode === "fit" || mode === "actual" || (mode === "match" && props.canResize)) {
@@ -542,6 +541,7 @@ export function DesktopSizing(
                 value={mode()}
                 selected={props.mode === mode()}
                 disabled={mode() === "match" && !props.canResize}
+                title={mode() === "match" ? t("desktop.matchRequirement") : undefined}
               >
                 {t(`desktop.${mode()}`)}
               </option>

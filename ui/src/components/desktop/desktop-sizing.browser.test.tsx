@@ -46,6 +46,10 @@ describe.runIf("__vitest_browser__" in globalThis)("pending desktop sizing selec
         return;
       }
       const menu = view.container.querySelector("select")!;
+      expect(menu.hasAttribute("title")).toBe(false);
+      expect(menu.querySelector('option[value="match"]')?.getAttribute("title")).toContain(
+        "Match requires",
+      );
       const pendingValue = menu.value;
       const pendingDisabled = menu.selectedOptions[0]?.disabled;
       await userEvent.selectOptions(menu, "fit");
