@@ -16,6 +16,14 @@ const TOOL_CHOICE_NONE = new Map<Model["api"], "object" | "string">([
   ["openai-completions", "string"],
 ]);
 
+/** Whether the fork can stop hosted tools before the provider executes them. */
+export function sessionForkGatesHostedTools(
+  api: Model["api"],
+  allowedTools: readonly string[],
+): boolean {
+  return allowedTools.length === 0 && TOOL_CHOICE_NONE.has(api);
+}
+
 /** Function declarations the run can gate; anything else may run at the provider. */
 function isClientTool(tool: unknown): boolean {
   if (!isRecord(tool)) {

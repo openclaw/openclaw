@@ -701,10 +701,26 @@ describe("prepareEmbeddedAttemptTransport", () => {
   });
 
   it.each([
-    { label: "parent session", toolExecutionAllow: undefined, codeMode: true },
-    { label: "search-enabled fork", toolExecutionAllow: ["web_search"], codeMode: true },
-    { label: "tool-free fork", toolExecutionAllow: [], codeMode: true },
-  ])("lists the session's tools for a $label (code mode=$codeMode)", async (testCase) => {
+    {
+      label: "parent session",
+      toolExecutionAllow: undefined,
+      expectedSearch: true,
+      codeMode: true,
+    },
+    {
+      label: "search-enabled fork",
+      toolExecutionAllow: ["web_search"],
+      expectedSearch: true,
+      codeMode: true,
+    },
+    { label: "tool-free fork", toolExecutionAllow: [], expectedSearch: true, codeMode: true },
+    {
+      label: "client-tool fork",
+      toolExecutionAllow: ["skill_workshop"],
+      expectedSearch: false,
+      codeMode: true,
+    },
+  ])("honors hosted-search execution for a $label (code mode=$codeMode)", async (testCase) => {
     const { input, streamFn } = createTransportFixture({ compaction: false });
     input.attempt.model = {
       ...input.attempt.model,
@@ -753,7 +769,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(JSON.stringify(payload.tools.filter((tool) => tool.type === "function"))).toBe(
       foregroundFunctionSchemas,
     );
-    expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(true);
+    expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(testCase.expectedSearch);
     expect(payload.tool_choice).toBe(
       testCase.toolExecutionAllow?.length === 0 ? "none" : undefined,
     );
