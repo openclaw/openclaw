@@ -45,7 +45,7 @@ export type ModelSetupWizardCompletion = {
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
-type WizardRunnerOptions = {
+export type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
@@ -123,6 +123,10 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
+  get isSuspended(): boolean {
+    return this.session?.suspended === true;
+  }
+
   suspend(notice?: string): void {
     const session = this.session;
     if (!session) {
@@ -141,18 +145,25 @@ export class ModelSetupWizardRunner {
     });
   }
 
-  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+  restore(
+    recovery: ModelSetupWizardRecovery,
+    onTerminalResult: WizardTerminalObserver,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+    presentation: { label?: string; brandId?: string } = {},
+  ): void {
     const client = this.options.getClient();
     if (!client || this.session) {
       return;
     }
+    this.authLabel = presentation.label;
+    this.authBrandId = presentation.brandId;
     this.session = {
       ...recovery,
       client,
       admitted: true,
       retirementGeneration: this.retirementGeneration,
       abortController: new AbortController(),
-      startMethod: "openclaw.setup.auth.start",
+      startMethod,
       onTerminalResult,
     };
     this.setState({ phase: "starting", authChoice: recovery.authChoice });
@@ -250,6 +261,7 @@ export class ModelSetupWizardRunner {
       return null;
     }
     const sessionId = generateUUID();
+    const wizard = { sessionId, authChoice, authKind: this.pendingSignIn?.kind };
     const session: WizardSession = {
       client,
       sessionId,
@@ -265,12 +277,10 @@ export class ModelSetupWizardRunner {
         "kind" in params
           ? params
           : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
-            ? {
-                ...params,
-                kind: "provider-auth",
-                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
-              }
-            : undefined,
+            ? { ...params, kind: "provider-auth", wizard }
+            : startMethod === "models.authLogin"
+              ? { kind: "provider-login", wizard }
+              : undefined,
       ),
     };
     this.pendingSignIn = undefined;

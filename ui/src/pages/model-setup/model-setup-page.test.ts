@@ -378,6 +378,7 @@ describe("ModelSetupPage catalog icons", () => {
             return { ok: false as const, reason: "error" as const, error: String(error) };
           }
         }),
+        subscribe: () => () => {},
       } as unknown as ApplicationContext["runtimeConfig"],
     } as ApplicationContext;
     const { page } = await mountSettings(context, client, {
