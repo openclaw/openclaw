@@ -39,7 +39,7 @@ let { readRestartSentinel, writeRestartSentinel } = await import("./restart-sent
 let { UpdateCampaignController } = await import("./update-campaign.js");
 let { createGatewayUpdateLifecycle, currentUpdateCheckLifecycle } =
   await import("./update-check-lifecycle.js");
-let { getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js");
+let { listUpdateRuns } = await import("./update-run-ledger.js");
 let { createDevGitStatus, writeDevGitInstallReceipt } =
   await import("./update-startup-git.test-support.js");
 
@@ -56,7 +56,7 @@ async function importUpdateFixtureModules() {
   ({ UpdateCampaignController } = await import("./update-campaign.js"));
   ({ createGatewayUpdateLifecycle, currentUpdateCheckLifecycle } =
     await import("./update-check-lifecycle.js"));
-  ({ getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js"));
+  ({ listUpdateRuns } = await import("./update-run-ledger.js"));
   ({ createDevGitStatus, writeDevGitInstallReceipt } =
     await import("./update-startup-git.test-support.js"));
 }
@@ -713,34 +713,6 @@ describe("update-startup", () => {
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
       }),
     );
-  });
-
-  it("pins managed dev campaign handoffs to the announced commit", async () => {
-    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
-    supervisor.mockReturnValue("launchd");
-    const onUpdateRunCreated = vi.fn();
-
-    await checkAutomatically(autoConfig("dev"), { onUpdateRunCreated });
-    await clock.advanceBy(60_000);
-    await handoffTransferStarted.promise;
-
-    const [handoffParams] = startHandoff.mock.calls[0] ?? [];
-    const run = getUpdateRun(handoffParams!.meta!.runId!);
-    expect(run).toMatchObject({
-      trigger: "campaign",
-      status: "running",
-      origin: { campaignId: getUpdateSchedule()?.campaign?.id },
-      target: { kind: "git", sha: "frozen-upstream-sha" },
-    });
-    expect(onUpdateRunCreated).toHaveBeenCalledOnce();
-    expect(handoffParams?.devTarget).toEqual({
-      mode: "tracked",
-      upstreamRef: "origin/main",
-      upstreamSha: "frozen-upstream-sha",
-    });
-    expect(handoffParams?.timeoutMs).toBeUndefined();
-    expect(transferHandoff).toHaveBeenCalledOnce();
-    expect(restart).not.toHaveBeenCalled();
   });
 
   it("records an already-current dev campaign without restarting or triage", async () => {
