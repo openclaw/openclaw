@@ -6,6 +6,7 @@ import {
   submitSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
+import { replyCallbackCustody } from "../reply-callback-custody.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import {
   startFollowupRunPreAdoptionHeartbeatWithCustody,
@@ -119,7 +120,10 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;
     try {
+      state.releaseCallbacks = run[replyCallbackCustody]?.retain();
       if (run.turnAdoptionLifecycle?.onDeferred?.() === false) {
+        state.releaseCallbacks?.();
+        state.releaseCallbacks = undefined;
         state.enqueued = false;
         return false;
       }
