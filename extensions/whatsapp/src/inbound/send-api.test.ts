@@ -15,7 +15,7 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { createWebSendApi, WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS } from "./send-api.js";
+import { createWebSendApi } from "./send-api.js";
 import {
   combineWhatsAppSendResults,
   mergeWhatsAppAcceptedSendError,
@@ -190,27 +190,6 @@ describe("createWebSendApi", () => {
       : { buffer: MEDIA, mimetype: undefined };
     await api.sendMessage("+1555", "cap", media.buffer, media.mimetype, options);
     expectSend({ [kind]: MEDIA, caption: "cap", mimetype, ...options });
-  });
-
-  it.each([
-    ["video", "video/mp4", undefined],
-    ["document", "application/pdf", undefined],
-    ["image", "image/png", undefined],
-    [
-      "quoted video",
-      "video/mp4",
-      { quotedMessageKey: { id: "q-1", remoteJid: DM_JID, fromMe: false } },
-    ],
-  ] as const)("gives %s uploads an explicit upload timeout", async (_label, mime, options) => {
-    await api.sendMessage("+1555", "cap", MEDIA, mime, options);
-    expect(sendMessage.mock.calls[0]?.[2]).toMatchObject({
-      mediaUploadTimeoutMs: WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS,
-    });
-  });
-
-  it("sends text without media upload options", async () => {
-    await api.sendMessage("+1555", "hello");
-    expect(sendMessage.mock.calls[0]?.[2]).toBeUndefined();
   });
 
   it("sends image thumbnails and dimensions", async () => {

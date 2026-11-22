@@ -6,8 +6,10 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { inspect } from "node:util";
+import type { WAMessage } from "baileys";
 import { DEFAULT_CONNECTION_CONFIG } from "baileys/lib/Defaults/index.js";
 import { getWAUploadToServer } from "baileys/lib/Utils/messages-media.js";
+import { generateWAMessage } from "baileys/lib/Utils/messages.js";
 import {
   acquireTestPortBlock,
   PROXY_FIXTURE_CERTIFICATE,
@@ -16,7 +18,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
-import { WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS } from "./inbound/send-api.js";
+import { createWebSendApi } from "./inbound/send-api.js";
 import { createWaSocket } from "./session.js";
 import * as baileys from "./session.runtime.js";
 
@@ -258,13 +260,13 @@ describe("WhatsApp session media upload", () => {
     return { options, filePath };
   }
 
-  async function upload(
+  function createUploader(
     session: Awaited<ReturnType<typeof createUploadSession>>,
     host: string,
-    { port = originPort, timeoutMs }: { port?: number; timeoutMs?: number } = {},
+    port: number,
+    warnings: unknown[][],
   ) {
-    const warnings: unknown[][] = [];
-    const uploadMedia = getWAUploadToServer(
+    return getWAUploadToServer(
       {
         ...DEFAULT_CONNECTION_CONFIG,
         ...session.options,
@@ -280,11 +282,19 @@ describe("WhatsApp session media upload", () => {
         hosts: [{ hostname: `${host}:${port}`, maxContentLengthBytes: 1024 }],
       }),
     );
+  }
+
+  async function upload(
+    session: Awaited<ReturnType<typeof createUploadSession>>,
+    host: string,
+    { port = originPort }: { port?: number } = {},
+  ) {
+    const warnings: unknown[][] = [];
+    const uploadMedia = createUploader(session, host, port, warnings);
     try {
       const result = await uploadMedia(session.filePath, {
         mediaType: "image",
         fileEncSha256B64: "fixture-sha256",
-        timeoutMs,
       });
       expect(result).toMatchObject({ mediaUrl: receipt.url, directPath: receipt.direct_path });
     } catch (cause) {
@@ -333,7 +343,7 @@ describe("WhatsApp session media upload", () => {
     }
   });
 
-  it("keeps a slow upload open past Node's default agent idle timeout", async () => {
+  it("sends media over a slow uplink past Node's default agent idle timeout", async () => {
     // Without a proxy, Baileys uploads through https.globalAgent, whose sockets time out after
     // 5s idle (Node >= 19). Shorten that idle timeout so the slow-uplink case runs quickly.
     const nodeIdleTimeout = https.globalAgent.options.timeout;
@@ -341,12 +351,40 @@ describe("WhatsApp session media upload", () => {
     try {
       const session = await createUploadSession();
       expect(session.options.fetchAgent).toBeUndefined();
+      // Without an upload timeout, the idle socket is aborted before the slow origin answers.
       await expect(upload(session, "127.0.0.1", { port: slowOriginPort })).rejects.toThrow(
         /Upload timeout/,
       );
-      await upload(session, "127.0.0.1", {
-        port: slowOriginPort,
-        timeoutMs: WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS,
+      const warnings: unknown[][] = [];
+      const uploadMedia = createUploader(session, "127.0.0.1", slowOriginPort, warnings);
+      const sent: WAMessage[] = [];
+      const api = createWebSendApi({
+        defaultAccountId: "default",
+        sock: {
+          // Same option merge as Baileys' socket sendMessage: send options over its uploader.
+          sendMessage: async (jid, content, options) => {
+            const message = await generateWAMessage(jid, content, {
+              logger: DEFAULT_CONNECTION_CONFIG.logger,
+              userJid: "15550000000@s.whatsapp.net",
+              upload: uploadMedia,
+              messageId: "fixture-message",
+              ...options,
+            });
+            sent.push(message);
+            return message;
+          },
+          sendPresenceUpdate: async () => undefined,
+        },
+      });
+      try {
+        await api.sendMessage("+15551234567", "report", mediaBytes, "application/pdf");
+      } catch (cause) {
+        throw new Error(`Baileys upload diagnostics: ${inspect(warnings)}`, { cause });
+      }
+      expect(sent[0]?.message?.documentMessage).toMatchObject({
+        url: receipt.url,
+        directPath: receipt.direct_path,
+        caption: "report",
       });
     } finally {
       https.globalAgent.options.timeout = nodeIdleTimeout;
