@@ -7,7 +7,6 @@ import {
   admittedAuthorities,
   preflightReleases,
   slotReservations,
-  reservedSlots,
   childOwners,
   terminalPreparations,
   type ManagedUpdateLeaseAuthority,
@@ -104,21 +103,6 @@ export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root
 // a saved fence nor a borrowed helper lease grants this one-way transition.
 export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFence): void {
   requireCapability(preflightReleases.get(fence), "Update preflight handoff is not current.")();
-}
-
-/**
- * The authority a live executor publishes a package at `root` with: its installation, or the
- * occupied slot it reserved (the npm package a Git release install left forwarding to it).
- */
-export function captureUpdateCommandExecutorPublicationAuthority(
-  fence: UpdateRecoveryFence,
-  root: string,
-): ManagedUpdateLeaseAuthority | undefined {
-  const authority = captureUpdateCommandExecutorAuthority(fence);
-  const key = resolveUpdateInstallRoot(root);
-  return authority.installKey === key || reservedSlots.get(fence) === key
-    ? { ...authority, installKey: key }
-    : undefined;
 }
 
 /** Reserve a prospective package slot without replacing the original domain. */

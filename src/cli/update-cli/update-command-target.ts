@@ -362,7 +362,7 @@ export async function resolveUpdateCommandTarget(
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
-      if (updateInstallKind === "package" && !opts.dryRun) {
+      const admitPackageRoot = async () => {
         assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
         const fence = await executor.enter(root, {
           preflight: true,
@@ -376,6 +376,9 @@ export async function resolveUpdateCommandTarget(
           captureUpdateCommandExecutorAuthority(fence).installKey,
           { serviceRoot: managedServiceRoot },
         );
+      };
+      if (updateInstallKind === "package" && !switchToPackage && !opts.dryRun) {
+        await admitPackageRoot();
       }
 
       const currentVersion = await readPackageVersion(root);
@@ -445,6 +448,14 @@ export async function resolveUpdateCommandTarget(
             if (destination.kind === "owned" && destination.releaseBoundService) {
               warn(destination.releaseBoundService.warning);
               packageInstallTarget = destination.releaseBoundService.installTarget;
+            }
+          }
+          if (switchToPackage && packageInstallTarget.packageRoot) {
+            // A switch from Git updates the package destination, which owns this update's
+            // lease and publication recovery; the installed target's continuation checks them.
+            root = packageInstallTarget.packageRoot;
+            if (!opts.dryRun) {
+              await admitPackageRoot();
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
