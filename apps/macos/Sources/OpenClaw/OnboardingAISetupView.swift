@@ -544,10 +544,10 @@ struct OnboardingAISetupView: View {
         return self.providerChoiceRow(
             icon: option.icon,
             brandCandidates: [option.brandId, option.id],
-            label: Text(option.label),
+            label: Text(option.actionLabel == nil ? option.label : option.groupLabel ?? option.label),
             hint: self.providerHint(option.hint),
             fallbackSymbol: fallbackSymbol,
-            actionLabel: Text(actionLabel))
+            actionLabel: option.actionLabel.map { Text($0) } ?? Text(actionLabel))
         {
             self.model.startProviderWizard(option, kind: .auth)
         }

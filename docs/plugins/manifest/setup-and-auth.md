@@ -53,6 +53,14 @@ resource is missing.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
+For an installed and enabled provider plugin with a guided sign-in available in
+Models, **Sign in** under **Accounts** in the plugin's settings opens that
+plugin's choices in Models.
+After saving a connection, users can choose an available model for a new chat.
+Their default model stays the same. Use `groupLabel` for the picker heading and
+`choiceLabel` for the method. Native onboarding can also use
+`appGuidedActionLabel` for the action button.
+
 When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
 
 | Field                  | Required | Type                                                                  | What it means                                                                                                                                              |

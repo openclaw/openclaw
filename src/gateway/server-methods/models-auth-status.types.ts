@@ -58,6 +58,7 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  quickApiKeyGroupLabel?: string;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
 };
 

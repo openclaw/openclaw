@@ -17,9 +17,15 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
-import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
+import type { ModelProviderCard } from "./data.ts";
+import { createProviderModelSelection, verifiedStarterModel } from "./login-completion-models.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  filterLoginProviders,
+  loginProviderAccounts,
+  resolveLoginSelection,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
@@ -46,6 +52,7 @@ export function createModelProviderLogin(options: {
   const [providerSelection, setProvider] = createSignal("");
   let currentPicker: {
     providers?: string[];
+    pluginId?: string;
     allowSetup: boolean;
     isCurrent: () => boolean;
     inventory: { value: ModelAuthStatusResult | Promise<ModelAuthStatusResult | null> };
@@ -67,6 +74,7 @@ export function createModelProviderLogin(options: {
   let message: ModelProviderRowMessage | undefined;
   let loginMode: "auth" | "activate" | "access" = "auth";
   let authProviderId: string | undefined;
+  let authProviderLabel: string | undefined;
   let completionModel: ModelCatalogEntry | undefined;
   let verifiedModelRef: string | undefined;
 
@@ -81,12 +89,22 @@ export function createModelProviderLogin(options: {
     sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
   });
   const runner = wizard.runner;
+  const modelSelection = createProviderModelSelection({
+    canChoose: () => !chat.busy && runner.state.phase === "done" && options.canContinue(),
+    getModel: () => completionModel,
+    setModel: (model) => (completionModel = model),
+    notify,
+  });
   const completionCatalog = new ModelCatalogReader(notify, {
     onResult: (catalog) => {
       const available = (model: ModelCatalogEntry) =>
         canonicalModelAuthProviderId(model.provider) === authProviderId &&
         model.available === true &&
         model.manualSelectionAllowed !== false;
+      if (authProviderId && loginMode !== "activate") {
+        modelSelection.update(catalog.models.filter(available));
+        return;
+      }
       const selected = completionModel;
       completionModel = selected
         ? (catalog.models.find(
@@ -187,9 +205,11 @@ export function createModelProviderLogin(options: {
     providers?: string[],
     authStatus = options.getScope().authStatus,
     allowSetup = false,
+    pluginId?: string,
   ) {
     return buildLoginProviders({
       providers,
+      pluginId,
       authStatus,
       allowQuickApiKey: Boolean(options.onApiKey),
       manualProviders:
@@ -197,7 +217,10 @@ export function createModelProviderLogin(options: {
     });
   }
 
-  async function open(providers?: string[]): Promise<void> {
+  async function open(
+    providers?: string[],
+    { pluginId }: { pluginId?: string } = {},
+  ): Promise<void> {
     if (!options.canStart() || busy()) {
       return;
     }
@@ -208,7 +231,7 @@ export function createModelProviderLogin(options: {
     }
     // Setup always chooses a model; elsewhere a sign-in only chooses one for an
     // agent without a configured primary, never replacing the operator's choice.
-    const allowSetup = Boolean(options.onManualProvider) || !selection().modelRef;
+    const allowSetup = !pluginId && (Boolean(options.onManualProvider) || !selection().modelRef);
     const currentGeneration = ++generation;
     const request = {
       controller: new AbortController(),
@@ -228,6 +251,7 @@ export function createModelProviderLogin(options: {
     };
     const picker = {
       providers,
+      pluginId,
       isCurrent,
       allowSetup,
       inventory: { value: scope.authStatus ?? request.result.promise },
@@ -246,8 +270,9 @@ export function createModelProviderLogin(options: {
           signal: request.controller.signal,
         }));
       if (inventoryRequest === request && isCurrent()) {
-        const available = loginProviders(providers, authStatus, allowSetup);
-        const provider = providers && available.length === 1 ? available[0] : undefined;
+        const available = loginProviders(providers, authStatus, allowSetup, pluginId);
+        const provider =
+          (providers || pluginId) && available.length === 1 ? available[0] : undefined;
         setProvider(provider?.id ?? "");
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
@@ -298,6 +323,8 @@ export function createModelProviderLogin(options: {
     message = undefined;
     loginMode = "auth";
     authProviderId = undefined;
+    authProviderLabel = undefined;
+    modelSelection.clear();
     completionModel = undefined;
     verifiedModelRef = undefined;
     completionCatalog.clear();
@@ -330,13 +357,16 @@ export function createModelProviderLogin(options: {
 
   function doneAction() {
     view.read();
-    return completionModel
-      ? {
-          label: t("modelProviders.login.startChat", { model: completionModel.name }),
-          disabled: presentation.chatSaving() || chat.busy,
-          onClick: () => void startChat(),
-        }
-      : undefined;
+    return (
+      modelSelection.action() ??
+      (completionModel
+        ? {
+            label: t("modelProviders.login.startChat", { model: completionModel.name }),
+            disabled: presentation.chatSaving() || chat.busy,
+            onClick: () => void startChat(),
+          }
+        : undefined)
+    );
   }
 
   function pickerView(authStatus?: ModelAuthStatusResult | null) {
@@ -347,35 +377,19 @@ export function createModelProviderLogin(options: {
     }
     const canSelect = () => currentPicker === picker && Boolean(authStatus) && picker.isCurrent();
     const groups = authStatus
-      ? loginProviders(picker.providers, authStatus, picker.allowSetup)
+      ? loginProviders(picker.providers, authStatus, picker.allowSetup, picker.pluginId)
       : [];
     const provider = groups.find((group) => group.id === providerSelection());
-    const accountsFor = (group: (typeof groups)[number]) =>
-      authStatus
-        ? buildModelProviderCards({
-            authStatus,
-            models: null,
-            providerUsage: null,
-          }).filter((card) =>
-            group.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
-          )
-        : [];
-    const accounts = provider ? accountsFor(provider) : [];
+    const accountsFor = (group: (typeof groups)[number] | undefined) =>
+      loginProviderAccounts(group, authStatus);
+    const accounts = accountsFor(provider);
     const docsUrl =
       provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
       "https://docs.openclaw.ai/concepts/model-providers";
     const missing = selection().missing;
     const recovery =
       missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-    const search = query().trim().toLocaleLowerCase().normalize("NFC");
-    const matches = groups.filter((group) =>
-      [
-        group.id,
-        group.label,
-        ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
-        ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-      ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(search)),
-    );
+    const matches = filterLoginProviders(groups, query());
 
     return {
       inventory: picker.inventory,
@@ -388,7 +402,7 @@ export function createModelProviderLogin(options: {
       matches,
       disabled: !authStatus || !picker.isCurrent(),
       canStart: options.canStart(),
-      showDiscover: !picker.providers && Boolean(options.onDiscover),
+      showDiscover: !picker.providers && !picker.pluginId && Boolean(options.onDiscover),
       discoverDisabled: !picker.isCurrent(),
       description: recovery
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
@@ -433,6 +447,7 @@ export function createModelProviderLogin(options: {
           return;
         }
         authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+        authProviderLabel = selected.kind === "secret" ? undefined : selected.groupLabel;
         currentPicker = null;
         // Browser and device sign-ins can select a model; a pasted secret only saves. A
         // credential-only sign-in still succeeds when its account offers no usable model.
@@ -472,6 +487,7 @@ export function createModelProviderLogin(options: {
           return;
         }
         picker.providers = undefined;
+        picker.pluginId = undefined;
         setProvider("");
         focusPicker = "search";
         notify();
@@ -486,27 +502,13 @@ export function createModelProviderLogin(options: {
       return;
     }
     const { context, agentId } = options.getScope();
-    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
-    const slash = modelRef.indexOf("/");
-    const provider = modelRef.slice(0, slash);
-    const id = modelRef.slice(slash + 1);
-    const known = catalog.models.find((model) => model.provider === provider && model.id === id);
     verifiedModelRef = modelRef;
-    const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
-    const name = completion.modelActivation?.modelName ?? known?.name;
-    completionModel = recommended
-      ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
-      : name
-        ? { provider, id, name }
-        : undefined;
+    completionModel = verifiedStarterModel(
+      readAgentModelCatalog(context.gateway.snapshot.client, agentId),
+      modelRef,
+      authProviderId,
+      completion.modelActivation?.modelName,
+    );
     notify();
   }
 
@@ -693,16 +695,18 @@ export function createModelProviderLogin(options: {
     },
     get wizardViewProps() {
       view.read();
+      const connectedLabel = authProviderLabel ?? runner.state.authLabel;
       const current = wizard.viewProps({
         mode: loginMode === "access" ? "auth" : loginMode,
         busy: mutationActive,
         refreshWarning,
-        doneMessage: runner.state.authLabel
-          ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
+        doneMessage: connectedLabel
+          ? t("modelSetup.providerConnected", { provider: connectedLabel })
           : t("modelSetup.wizard.connected"),
-        doneDescription: completionModel
-          ? t("modelProviders.login.modelReady", { model: completionModel.name })
-          : undefined,
+        doneDescription:
+          completionModel && !modelSelection.choosing
+            ? t("modelProviders.login.modelReady", { model: completionModel.name })
+            : undefined,
       });
       return {
         ...current,
@@ -712,6 +716,10 @@ export function createModelProviderLogin(options: {
     },
     saving: presentation.wizardSaving,
     doneAction,
+    completionModelPicker: () => {
+      view.read();
+      return modelSelection.picker();
+    },
     synchronizePresentation: presentation.synchronize,
     recoveryView,
     pickerView,

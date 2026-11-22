@@ -45,6 +45,8 @@ export function resolveModelProviderCapabilities(params: {
     const current = capabilities.get(provider);
     const apiKeySupported = choice.methodId === "api-key";
     const quickApiKeySetup = apiKeySupported && supportsSetupManualSecret(choice);
+    const quickApiKeyGroupLabel =
+      current?.quickApiKeyGroupLabel ?? (quickApiKeySetup ? choice.groupLabel : undefined);
     const providerLoginOptions = loginOptions.filter(
       (option) => resolveProvider(option.brandId) === provider,
     );
@@ -52,6 +54,7 @@ export function resolveModelProviderCapabilities(params: {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
+      ...(quickApiKeyGroupLabel ? { quickApiKeyGroupLabel } : {}),
       ...(providerLoginOptions.length > 0 ? { loginOptions: providerLoginOptions } : {}),
     });
   }

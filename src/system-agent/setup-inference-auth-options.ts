@@ -22,6 +22,7 @@ export type SetupInferenceManualProvider = SetupInferenceOptionPresentation & {
 };
 
 export type SetupInferenceAuthOption = SetupInferenceOptionPresentation & {
+  actionLabel?: string;
   kind: "oauth" | "device-code" | "install" | "custom";
   featured: boolean;
   groupLabel?: string;
@@ -178,6 +179,9 @@ export function listSetupInferenceAuthOptions(
     project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
       ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+      ...(choice.appGuidedAuth && choice.appGuidedActionLabel
+        ? { actionLabel: choice.appGuidedActionLabel }
+        : {}),
       kind: choice.appGuidedAuth ?? "install",
       featured: choice.onboardingFeatured === true,
     }),

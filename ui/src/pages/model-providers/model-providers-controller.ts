@@ -77,7 +77,7 @@ export function createModelProviders(
     mutationBlockedReason() === null && !modelProviderConfigBusy(context);
   let loaderPending = false;
   let connected = false;
-  let pendingConnection = false;
+  let pendingConnection: string | null = null;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
@@ -160,10 +160,7 @@ export function createModelProviders(
     },
     onPageActivation: () => void refreshPolicy.request("focus"),
   });
-  const installedAgents = createInstalledAgents({
-    gateway,
-    context,
-  });
+  const installedAgents = createInstalledAgents({ gateway, context });
   const mutations = createModelProviderMutationPresentation({
     readScope: () => {
       projection.read();
@@ -275,8 +272,8 @@ export function createModelProviders(
     previousRouteData = data;
     previousLoaderPending = pending;
     if (routeChanged && data) {
-      if (data.connect && !previous?.connect) {
-        pendingConnection = true;
+      if (data.connect !== previous?.connect || data.pluginId !== previous?.pluginId) {
+        pendingConnection = data.connect ? (data.pluginId ?? "") : null;
       }
       // Revalidation must not replace a search edited after navigation.
       if (data.provider !== previous?.provider) {
@@ -337,9 +334,10 @@ export function createModelProviders(
         return;
       }
       syncConfig();
-      if (pendingConnection && state.data && canMutate() && !core.loading) {
-        pendingConnection = false;
-        void login.open();
+      if (pendingConnection !== null && state.data && canMutate() && !core.loading && !loginBusy) {
+        const pluginId = pendingConnection || undefined;
+        pendingConnection = null;
+        void login.open(undefined, { pluginId });
       }
       if (pendingCredentialInvalidation && !loginBusy) {
         void refresh("replacement");

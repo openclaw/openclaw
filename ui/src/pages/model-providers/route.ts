@@ -19,6 +19,7 @@ export type ModelProvidersRouteData = {
   /** An explicit connection entry from a saved setup link. */
   connect?: boolean;
   provider?: string;
+  pluginId?: string;
 };
 
 async function loadModelProvidersRouteData(
@@ -28,11 +29,19 @@ async function loadModelProvidersRouteData(
   const search = new URLSearchParams(options.location.search);
   const connect = search.get("connect") === "1";
   const provider = search.get("provider")?.trim() ?? "";
+  const pluginId = connect ? search.get("plugin")?.trim() || undefined : undefined;
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
-  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
+  const owner = {
+    gateway,
+    gatewaySnapshot,
+    selectionIntentRevision,
+    connect,
+    provider,
+    ...(pluginId ? { pluginId } : {}),
+  };
   let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, startModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
