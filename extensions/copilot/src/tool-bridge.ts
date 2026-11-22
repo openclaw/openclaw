@@ -127,6 +127,9 @@ export async function createCopilotToolBridge(
       forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     }).runtimeToolAllowlist,
   });
+  if (!toolPlan.constructTools) {
+    return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
+  }
 
   const toolSurfaceRuntime = await createAgentHarnessToolSurfaceRuntimeAsync({
     abortSignal: attemptParams.abortSignal,
@@ -158,14 +161,6 @@ export async function createCopilotToolBridge(
     toolsAllow: attemptParams.toolsAllow,
     trigger: attemptParams.trigger,
   });
-  if (!toolPlan.constructTools) {
-    return {
-      cleanup: toolSurfaceRuntime.cleanup,
-      codeModeEngaged: false,
-      promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY,
-      sourceTools: [],
-    };
-  }
   const toolOptions = await buildOpenClawCodingToolsOptions(
     input,
     {
