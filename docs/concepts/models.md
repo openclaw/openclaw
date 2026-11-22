@@ -66,9 +66,11 @@ the session.
 OpenClaw does not pick a model for you. When no primary is set and no
 configured provider lists a model, the agent has no model:
 
-- Agent turns stop before any provider call and reply with how to choose one:
+- Agent turns stop before any model call and reply with how to choose one:
   pick a model in **Settings → Models**, send `/model <provider/model>` in
-  chat, or run `openclaw models set <provider/model>`.
+  chat, or run `openclaw models set <provider/model>`. Attachment
+  preprocessing, such as audio transcription with a configured or detected
+  media provider, runs earlier in the turn and can still run.
 - Chat commands that need no model, such as `/help`, `/status`, `/models`,
   `/model` and `/new`, still run. `/status` shows the model as not configured.
   Commands that change model settings, such as `/think` and `/fast`, reply with

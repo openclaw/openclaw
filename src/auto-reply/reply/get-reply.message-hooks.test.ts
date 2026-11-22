@@ -438,12 +438,6 @@ describe("getReplyFromConfig message hooks", () => {
     expect(stageMedia).not.toHaveBeenCalled();
   });
 
-  it("runs no media provider for a turn that has no model to answer it", async () => {
-    vi.mocked(defaultModel).mockReturnValue({ ...defaultModelFacts(), defaultModel: undefined });
-    await reply(buildCtx(), { tools: { media: { audio: { enabled: true } } } });
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
-  });
-
   it("skips media understanding for a cached sticker", async () => {
     const stickerPath = "/tmp/cached-sticker.webp";
     await reply(

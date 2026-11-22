@@ -57,7 +57,7 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { resolveActiveMediaModel, turnMayHaveModel } from "./get-reply-turn-model.js";
+import { resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
@@ -416,7 +416,7 @@ async function resolveReplyFromConfig(
     assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
     const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
-    if (mediaUnderstandingRequested && turnMayHaveModel(model, preprocessingState, cfg)) {
+    if (mediaUnderstandingRequested) {
       // Native harnesses receive images directly, but generic file attachments
       // still need host extraction. Only explicitly configured STT runs when locked.
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
