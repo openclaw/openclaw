@@ -73,10 +73,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
   };
   onDeliveryAttempt?: (reachedRecipient: boolean) => void;
   onDeliveryReceipt?: (receipt: NonNullable<CronDeliveryTrace["receipts"]>[number]) => void;
-  /** Fires when the durable batch is handed off to the provider, before any ack can arrive. */
-  onProviderHandoff?: () => void;
   /** Fires once the provider has acknowledged the complete payload set. */
   onPayloadDelivered?: () => void;
+  /** Fires when the adapter actually returned a transport result (not merely admitted). */
+  onTransportDispatch?: () => void;
 }): Promise<CronAnnounceResult> {
   const delivery = params.target;
   params.abortSignal.throwIfAborted();
@@ -187,20 +187,18 @@ export async function sendCronAnnouncePayloadStrict(params: {
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
-          // The platform send dispatch is the actual transport boundary: the
-          // channel turn has established delivery custody and invokes the
-          // adapter immediately after this callback, so the send request is
-          // genuinely under way. The adapter-admission handoff fires earlier,
-          // before channel-side preparation (e.g. resolving an unresolved chat
-          // id) that can still abort without ever starting a request.
-          onPlatformSendDispatch: async () => {
-            params.onProviderHandoff?.();
-          },
           onDeliveredPayload: ({ hookContent, ...payload }) => {
             deliveredPayloads.push({ ...payload, spokenText: hookContent });
+            // A chunk the provider accepted is receipt evidence for the whole
+            // alert, and it remains evidence across retries; only a handoff
+            // without any receipt still needs the deadline to become unknown.
             params.onPayloadDelivered?.();
           },
           onDeliveryResult: (deliveryResult) => {
+            // A transport result means the adapter actually ran (not merely that
+            // admission or channel preparation began), so this is the point past
+            // which the provider may complete the delivery on its own.
+            params.onTransportDispatch?.();
             if (params.onDeliveryReceipt) {
               const receipt = createMessageReceiptFromOutboundResults({
                 results: [deliveryResult],

@@ -580,16 +580,16 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const senderEntered = createVoidDeferred();
     mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
       ({
-        onProviderHandoff,
+        onTransportDispatch,
         onPayloadDelivered,
       }: {
-        onProviderHandoff?: () => void;
+        onTransportDispatch?: () => void;
         onPayloadDelivered?: () => void;
       }) =>
         new Promise<void>(() => {
           // Provider accepted the complete alert, then the history write stalled
           // past the deadline: delivery is proven, only the transcript is missing.
-          onProviderHandoff?.();
+          onTransportDispatch?.();
           onPayloadDelivered?.();
           senderEntered.resolve();
         }),
@@ -612,15 +612,23 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledTimes(1);
   });
 
-  it("does not queue the in-app fallback for a handoff without a complete acknowledgment", async () => {
+  it("does not queue the in-app fallback for a transport dispatch without a complete acknowledgment", async () => {
     vi.useFakeTimers();
     const senderEntered = createVoidDeferred();
     mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
-      ({ onProviderHandoff }: { onProviderHandoff?: () => void }) =>
+      ({
+        onTransportDispatch,
+        onDeliveryAttempt,
+      }: {
+        onTransportDispatch?: () => void;
+        onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+      }) =>
         new Promise<void>(() => {
-          // Handed off, but the ack never reached the callback: the provider may
-          // still complete the send, so non-delivery is unproven.
-          onProviderHandoff?.();
+          // The adapter dispatched and its result is pending, but the ack never
+          // reached the callback: the provider may still complete the send, so
+          // non-delivery is unproven.
+          onTransportDispatch?.();
+          onDeliveryAttempt?.(true);
           senderEntered.resolve();
         }),
     );
@@ -641,13 +649,13 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expectSettlement("unknown", "cron: failure alert announcement timed out");
   });
 
-  it("keeps definitive non-delivery for an ordinary send failure after handoff", async () => {
+  it("keeps definitive non-delivery for an ordinary send failure after transport dispatch", async () => {
     const senderEntered = createVoidDeferred();
     mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
-      ({ onProviderHandoff }: { onProviderHandoff?: () => void }) => {
-        // Handed off, then the transport rejected outright: no deadline, so the
+      ({ onTransportDispatch }: { onTransportDispatch?: () => void }) => {
+        // Dispatched, then the transport rejected outright: no deadline, so the
         // failure is authoritative and the in-app fallback must survive.
-        onProviderHandoff?.();
+        onTransportDispatch?.();
         senderEntered.resolve();
         return Promise.reject(new Error("adapter refused the alert"));
       },

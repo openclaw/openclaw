@@ -449,7 +449,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
 ): Promise<FailureAlertTransportResult> {
   let mayHaveReachedRecipient = false;
-  let providerHandoff = false;
+  let transportDispatched = false;
   let payloadDelivered = false;
   /** Set only by the announce deadline path; the webhook path never declares it. */
   let deadlineError: Error | undefined;
@@ -561,8 +561,8 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           }),
           abortSignal: abortController.signal,
           onDeliveryAttempt,
-          onProviderHandoff: () => {
-            providerHandoff = true;
+          onTransportDispatch: () => {
+            transportDispatched = true;
           },
           onPayloadDelivered: () => {
             payloadDelivered = true;
@@ -595,9 +595,9 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     // (a later history failure stays a diagnostic). Recipient evidence — a chunk
     // the provider already accepted — always disproves non-delivery, so a later
     // chunk failure records unknown instead of a fallback-worthy not-delivered.
-    // Only the deadline may turn a bare transport handoff into unknown, because
+    // Only the deadline may turn a bare transport dispatch into unknown, because
     // only the abort can hide a delivery the provider still completes; an
-    // ordinary failure after a handoff stays authoritative non-delivery.
+    // ordinary failure after dispatch stays authoritative non-delivery.
     if (payloadDelivered) {
       return {
         kind: "failed",
@@ -606,7 +606,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       };
     }
     const deadlineHit = deadlineError !== undefined && err === deadlineError;
-    const reachedUnconfirmed = mayHaveReachedRecipient ? true : deadlineHit && providerHandoff;
+    const reachedUnconfirmed = mayHaveReachedRecipient ? true : deadlineHit && transportDispatched;
     return {
       kind: "failed",
       error: err,
