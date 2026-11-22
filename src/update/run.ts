@@ -256,7 +256,7 @@ export async function prepareUpdate(params: {
       await switchLink(path.relative(prefix, params.runningRoot), prefix);
     }
     const previous = await fs.readlink(slot);
-    await markForwarding(install, params.runningRoot, launcher, prefix);
+    await markForwarding(params.runningRoot, launcher, prefix);
     // Last before the trial: the restart loads the new core and its plugins together.
     await maintainPlugins({
       runId: params.runId,
@@ -307,19 +307,16 @@ export async function prepareUpdate(params: {
  * Leaves the marker `release-launcher-forward.mjs` reads, so entry points written for the
  * running tree (service definitions, PATH shims) start the launcher. Never inside a release.
  */
-async function markForwarding(
-  install: InstallKind,
-  runningRoot: string,
-  launcher: string,
-  prefix: string,
-) {
+async function markForwarding(runningRoot: string, launcher: string, prefix: string) {
   if (runningRoot.startsWith(path.join(prefix, "releases") + path.sep)) {
     return;
   }
-  const marker =
-    install.kind === "git" && install.checkout
-      ? path.join(install.checkout, ".git", "openclaw-launcher")
-      : path.join(runningRoot, ".openclaw-launcher");
+  // A main working tree keeps the marker inside `.git`; a linked worktree's `.git` is a file,
+  // so it and package trees use the root-level marker the forwarder also reads.
+  const gitDir = await fs.stat(path.join(runningRoot, ".git")).catch(() => null);
+  const marker = gitDir?.isDirectory()
+    ? path.join(runningRoot, ".git", "openclaw-launcher")
+    : path.join(runningRoot, ".openclaw-launcher");
   await fs.writeFile(marker, `${launcher}\n`);
 }
 
