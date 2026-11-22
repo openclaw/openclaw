@@ -7,6 +7,7 @@ import { resolveSessionThreadInfo } from "../../channels/plugins/session-convers
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
+import { SessionFollowupAccessError } from "../../gateway/session-mutation-authorization-error.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import {
@@ -46,7 +47,7 @@ import {
 } from "./sessions-helpers.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
-import { sendFailure } from "./sessions-send-helpers.js";
+import { sendFailure, sendFollowupAccessFailure } from "./sessions-send-helpers.js";
 import {
   finishSessionsSendReply,
   prepareSessionsSendReplyContext,
@@ -539,6 +540,7 @@ export async function executeSessionsSend(
       } catch (error) {
         return sendFailure("forbidden", formatErrorMessage(error), displayKey, runId);
       }
+      let followupAccepted = false;
       try {
         const targetIsSubagent = isSubagentSessionFromEntry(
           targetSession.canonicalKey,
@@ -670,6 +672,7 @@ export async function executeSessionsSend(
             withRequesterAuthority,
             watch: params.watch === true,
           });
+        followupAccepted = start.ok;
         if (!start.ok && start.selfHeld && retainedSend && targetSessionEntry && mode !== "steer") {
           return retainedSend(start.selfHeld, "followup");
         }
@@ -691,6 +694,11 @@ export async function executeSessionsSend(
           targetIsSubagent,
           isIsolatedCronRequester,
         });
+      } catch (error) {
+        if (!(error instanceof SessionFollowupAccessError)) {
+          throw error;
+        }
+        return sendFollowupAccessFailure(error, runId, followupAccepted);
       } finally {
         communication.close();
       }
