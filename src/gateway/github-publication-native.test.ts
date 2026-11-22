@@ -21,7 +21,6 @@ import {
 } from "./github-personal-publication.test-support.js";
 import { registerPublicationCredentialFixture } from "./github-publication-credential.test-helpers.js";
 import { prepareGitHubPublicationWorkerIdentity } from "./github-publication-execution-identity.js";
-import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   capturePublicationGuest,
   createRequesterPublicationFixture,

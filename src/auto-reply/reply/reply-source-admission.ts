@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -219,7 +220,9 @@ export async function prepareReplyCommandOwnerAuthority(params: {
   hasOperatorAuthority: boolean;
   assertCurrent: () => void;
 }): Promise<void> {
-  const { run, config, operation } = params;
+  const { run, operation } = params;
+  // Command-owner policy belongs to the host, not the model's scoped execution config.
+  const config = getRuntimeConfigSnapshot() ?? params.config;
   const origin = run.requesterOrigin;
   const retainedOwner = getCommandOwnerAuthority(run);
   const ownerReference = retainedOwner?.recoveryReference;

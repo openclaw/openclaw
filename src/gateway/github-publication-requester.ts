@@ -234,6 +234,9 @@ function prepareRequesterPolicy(
       throw error;
     }
   }
+  if (role?.accessPolicyPlugin && role.accessPolicyPlugin !== snapshot.grant?.pluginId) {
+    throw new GitHubPublicationRequesterUnavailableError();
+  }
   const admitted = Object.freeze({ ...snapshot, scopes });
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: admitted.actor,
@@ -254,7 +257,15 @@ function prepareRequesterPolicy(
         "GitHub publication session authorization is unavailable; retry after session storage is ready.",
       );
     }
-    const facts = target.prepared.readCurrent(config);
+    let facts;
+    try {
+      facts = target.prepared.readCurrent(config);
+    } catch (cause) {
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication session authorization is unavailable; retry after session storage is ready.",
+        { cause },
+      );
+    }
     if (
       current &&
       ((admitted.actor.kind === "operator" &&
@@ -289,7 +300,15 @@ function prepareRequesterPolicy(
   });
   const assertCurrent = () => {
     for (const target of targets) {
-      const entry = target.prepared.readCurrent(getCommittedRuntimeConfig()).target.entry;
+      let entry;
+      try {
+        entry = target.prepared.readCurrent(getCommittedRuntimeConfig()).target.entry;
+      } catch (cause) {
+        throw new GitHubPublicationRecoveryPendingError(
+          "GitHub publication session authorization is unavailable; retry after session storage is ready.",
+          { cause },
+        );
+      }
       if (
         entry.sessionId !== target.sessionId ||
         (entry.lifecycleRevision ?? null) !== target.lifecycleRevision ||

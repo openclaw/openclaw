@@ -374,14 +374,6 @@ export async function prepareGatewayOperatorRunAuthority(
     if (references === 0) {
       throw createOperatorAuthorityInactiveError("closure-released", "before-sources", capturedAt);
     }
-    // A replacement context does not revoke admitted policy; disposal still closes effects.
-    if (resolveGatewayContext && !resolveGatewayContext()) {
-      throw createOperatorAuthorityInactiveError(
-        "gateway-identity-retired",
-        "gateway-current",
-        capturedAt,
-      );
-    }
     params.invocationAuthority?.signal?.throwIfAborted();
     params.invocationAuthority?.assertCurrent();
     params.invocationAuthority?.signal?.throwIfAborted();

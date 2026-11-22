@@ -371,10 +371,7 @@ describe("operator role policy", () => {
         expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(originalKey);
         expectModel(narrowed, "b", true);
         expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
-        if (dependencyKind === "gateway resolver") {
-          expect(original.assertCurrent).toThrow("authority is no longer active");
-          expect(narrowed.assertCurrent).toThrow("authority is no longer active");
-        } else if (dependencyKind === "invocation") {
+        if (dependencyKind === "invocation") {
           expect(original.signal?.aborted).toBe(true);
           expect(narrowed.signal?.aborted).toBe(true);
         } else {

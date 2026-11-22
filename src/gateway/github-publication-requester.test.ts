@@ -22,6 +22,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { encodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -302,25 +303,27 @@ describe("shared GitHub publication requester authority", () => {
   });
 
   it.each(backends)(
-    "does not adopt a newly required missing policy for a grant-free %s request",
+    "defers a grant-free %s request when its newly required policy is unavailable",
     async (backend) => {
       const f = await fixture(backend);
       const claim = await holdWorkerTurn(f);
       const guest = await request(f, "before-policy");
-      const staff = await request(f, "independent-staff", f.maintainer);
       const original = f.readRequester(guest.requestId);
       expect(original).toEqual(f.guest.snapshot);
       expect(original?.grant).toBeNull();
-      expect([guest.status, staff.status]).toEqual(["requested", "requested"]);
+      expect(guest.status).toBe("requested");
+      const beforePolicy = structuredClone(f.config);
       requireVisitorPublicationPolicy(f);
       await f.placements.releaseTurn(claim);
       f.guestSource.release();
-      f.maintainerSource.release();
-      const restarted = await resumePublicationFixture(f);
-      await expectResult(restarted, guest.requestId, identityChanged);
+      const restarted = f.restart();
+      await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
+      expectPending(f, guest.requestId);
       expect(f.readRequester(guest.requestId)).toEqual(original);
-      await expectResult(restarted, staff.requestId);
-      expect(f.publishedTitles).toEqual(["independent-staff"]);
+      setRuntimeConfigSnapshot(beforePolicy);
+      await restarted.resumeSessionRequests();
+      await expectResult(restarted, guest.requestId);
+      expect(f.publishedTitles).toEqual(["before-policy"]);
     },
   );
 
@@ -372,27 +375,17 @@ describe("shared GitHub publication requester authority", () => {
         const { original, claim, queued: accepted } = await queueGuest(f, "policy-readiness");
         await f.placements.releaseTurn(claim);
         original.release();
-        interceptTransport(async (argv, options, transport) => {
-          const result = await transport(argv, options);
-          const read =
-            (argv[0] === "git" &&
-              ["config", "rev-parse", "ls-tree", "symbolic-ref"].some((arg) =>
-                argv.includes(arg),
-              )) ||
-            (argv[0] === "gh" &&
-              argv.includes("api") &&
-              !argv.includes("POST") &&
-              !argv.includes("graphql"));
-          if (!availability.reached && read) {
-            if (change === "policy unavailable") {
-              availability.restore = visitors.suspendRegistry();
-            } else {
-              await linkCanonicalUserProfileEmail(email, other.id);
-              await linkCanonicalUserProfileEmail(email, f.guestProfile);
-            }
-            availability.reached = true;
+        const prepare = mocks.prepareIdentity.getMockImplementation()!;
+        mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
+          const identity = await prepare(...args);
+          if (change === "policy unavailable") {
+            availability.restore = visitors.suspendRegistry();
+          } else {
+            await linkCanonicalUserProfileEmail(email, other.id);
+            await linkCanonicalUserProfileEmail(email, f.guestProfile);
           }
-          return result;
+          availability.reached = true;
+          return identity;
         });
         const restarted = f.restart();
         await restarted.resumeSessionRequests();
@@ -592,13 +585,10 @@ describe("shared GitHub publication requester authority", () => {
         await visitors.reopen();
         await visitors.start();
         const restarted = await resumePublicationFixture(f);
-        await expectResult(restarted, ended.requestId, published);
+        await expectResult(restarted, ended.requestId, identityChanged);
         expect(f.readRequester(ended.requestId)).toEqual(original.requester.snapshot);
         await expectResult(restarted, staff.requestId, published);
-        expect(f.publishedTitles).toEqual(
-          expect.arrayContaining(["ended-visitor-grant", "independent-maintainer"]),
-        );
-        expect(f.publishedTitles).toHaveLength(2);
+        expect(f.publishedTitles).toEqual(["independent-maintainer"]);
       } finally {
         vi.useRealTimers();
         await visitors.close();
@@ -870,7 +860,7 @@ describe("shared GitHub publication requester authority", () => {
       expect(f.readReceipt(requestId)?.pull_request_url).toBeNull();
       const acceptedWrites = [...writes];
       await f.revoke();
-      expect(f.guest.assertCurrent).toThrow();
+      expect(f.guest.assertCurrent).not.toThrow();
       const restarted = f.restart();
       const readsBeforeRecovery = unavailableReads;
       await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
@@ -922,6 +912,13 @@ describe("local production-owner proof", () => {
       try {
         if (scenario === "revoked") {
           await f.revoke();
+          await expect(
+            restoreGitHubPublicationRequester(
+              encodeGitHubPublicationRequester(f.guest.snapshot),
+              f.guestSource.session,
+              f.guestSource.context.getCommittedRuntimeConfig,
+            ),
+          ).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
         }
         if (scenario === "reassigned") {
           await placements.startDispatch({ ...identity, agentId: "other-agent" });
@@ -955,7 +952,7 @@ describe("local production-owner proof", () => {
             });
           },
         );
-        if (scenario === "allowed") {
+        if (scenario !== "reassigned") {
           await run;
           expect(events).toEqual([
             "placement-admitted",
@@ -964,11 +961,7 @@ describe("local production-owner proof", () => {
             "network",
           ]);
         } else {
-          if (scenario === "reassigned") {
-            await expect(run).rejects.toThrow("workspace placement identity changed");
-          } else {
-            await expect(run).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
-          }
+          await expect(run).rejects.toThrow("workspace placement identity changed");
           expect(events).not.toContain("credential");
           expect(events).not.toContain("network");
           expect(events).not.toContain("integration-admitted");

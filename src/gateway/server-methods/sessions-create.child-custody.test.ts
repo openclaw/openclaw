@@ -661,7 +661,7 @@ describe("hosted creation transfers accepted child input", () => {
   );
 
   it.each(["host", "signal", "gateway", "replacement"] as const)(
-    "retains the original %s boundary after child ACK and parent closure",
+    "finishes admitted input after %s changes unless its physical target is replaced",
     async (change) => {
       await using fixture = await createHostedChildFixture();
       const accepted = await fixture.send();
@@ -673,10 +673,10 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.revoke[change]();
       }
       await fixture.finish();
-      expect(fixture.provider).not.toHaveBeenCalled();
+      expect(fixture.provider).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
       expect(userMessages(scope)).toEqual(transcript);
       expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
-      expect(fixture.persistenceResult).not.toHaveBeenCalled();
+      expect(fixture.persistenceResult).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
       if (change === "replacement") {
         expect(loadSessionEntry(scope)?.sessionId).toBe("successor-child");
         expect(userMessages({ ...scope, sessionId: "successor-child" })).toEqual([]);

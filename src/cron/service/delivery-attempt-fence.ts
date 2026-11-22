@@ -9,7 +9,10 @@ import {
   CronDeliveryAuthorityError,
   type CronCompletionDeliveryFence,
 } from "../delivery-attempt-fence.js";
-import { CronRunReceiptRevisionError, type CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import {
+  CronRunReceiptRevisionError,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { finishCronRun } from "./run-history.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
