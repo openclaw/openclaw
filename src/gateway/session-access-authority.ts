@@ -2,10 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -132,13 +129,13 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
   const service = readPluginSessionWorkAuthority();
   const serviceOwner =
     service && client?.internal?.pluginRuntimeOwnerId === service.pluginId
       ? service.target
       : undefined;
-  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined) ?? serviceOwner;
+  const owner =
+    tool ?? runtime ?? (ambient?.operationalRunInstance ? ambient : undefined) ?? serviceOwner;
   const inherited = runtime?.sessionSpawnContext?.inheritedToolPolicy;
   const inheritedPolicy = inherited
     ? { allow: [...inherited.allow], deny: [...inherited.deny] }
@@ -157,16 +154,14 @@ export async function prepareGatewaySessionAccessAuthority(request: {
       }
     }
     tool?.assertCurrent?.();
-    if (ambient) {
-      if (
-        !assertAmbient ||
+    if (
+      ambient &&
+      (!ambient.operationalRunInstance ||
         ambient.agentId !== parsed.agentId ||
         ambient.sessionKey !== sessionKey ||
-        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context)
-      ) {
-        denied();
-      }
-      assertAmbient();
+        (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== params.context))
+    ) {
+      denied();
     }
     if (runtime && params.context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
       denied();

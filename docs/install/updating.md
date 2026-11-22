@@ -1286,6 +1286,15 @@ the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
 terminal, then rerun `openclaw update`. Updates that need no migration still
 run while it serves.
 
+Updates stop Gateways, not node services. The update Doctor needs exclusive
+access to `state/openclaw.sqlite`, and a running node host service using the
+same state directory keeps that database open. The update then refuses before
+it stops the Gateway or changes anything, naming the database and the node
+service PID. Run `openclaw node stop`, rerun `openclaw update`, then run
+`openclaw node start`. The installed updater must contain this check. Older
+updaters fail in Doctor with `database is locked` and refuse rollback; run
+`openclaw node stop`, then `openclaw update repair`, then `openclaw node start`.
+
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
 `network`, `config-invalid`, `install-failed`, `state-migration-failed`,
@@ -2202,11 +2211,15 @@ Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
 
-The helper can refuse when retained launcher evidence is missing. In one
-report, the 2026.10.5 helper refused a 2026.9.33 `publication-complete` journal
-whose anchor held only `previous`, with `ENOENT` on
-`<anchor>/launchers`. No supported procedure covers that layout yet. Preserve
-the journal, anchor, and retained generation, and report the exact output.
+On Homebrew Node installs, `brew cleanup` (which Homebrew also runs periodically
+after `brew install` and `brew upgrade`) removes dangling symlinks and empty
+directories below its prefix. That deletes the relative launcher copies retained
+in `<anchor>/launchers` and `<anchor>/previous-launchers`, leaving an anchor that
+holds only `previous`. Older updaters and helpers refuse that layout with
+`ENOENT` on `<anchor>/launchers` ([#197910](https://github.com/openclaw/openclaw/issues/197910)).
+Repair now settles it: settlement never republishes those copies, so an absent
+launcher root is accepted, while a present one must still match its recorded
+identity. The live launchers and all other checks below are still required.
 
 If publication never started and the previous package is still installed, repair
 verifies its full tree fingerprint and unchanged launchers under the same device

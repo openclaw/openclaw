@@ -11,6 +11,7 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -330,7 +331,7 @@ async function inspectUpdateStatus(
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
   const printWarning = (message: string) => defaultRuntime.log(theme.warn(message));
-  const configValidation = validateConfigObjectRaw(config);
+  const configValidation = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(config));
   const configWarnings = configValidation.ok
     ? []
     : [

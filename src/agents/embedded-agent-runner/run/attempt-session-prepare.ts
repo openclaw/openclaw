@@ -169,7 +169,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     }),
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
-    cleanupProviderSessionResourcesOnDispose: false,
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
     resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(

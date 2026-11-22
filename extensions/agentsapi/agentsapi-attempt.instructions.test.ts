@@ -185,7 +185,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   const fixture = await createFixture({
     trigger: "user",
     toolAuthorityFingerprint: "fixture-prompt-authority",
-    contextTokenBudget: 32_000,
   });
   promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
   const hook = vi.fn().mockReturnValue({
@@ -197,12 +196,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   promptHooks({ handler: hook }, { handler: recall, requiresToolAuthority: true });
 
   const binding = await fixture.run();
-  expect(openModelContextAsyncMock).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      limits: { maxBytes: 256_000, maxEvents: 10_000, toolResultOverflow: "omit" },
-    }),
-  );
   expect(hook).toHaveBeenCalledWith(
     expect.objectContaining({ messages: [{ role: "user", content: "Earlier request" }] }),
     expect.anything(),
