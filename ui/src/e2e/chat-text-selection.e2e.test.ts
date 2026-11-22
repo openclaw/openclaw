@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
+import { webkit } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -147,6 +148,49 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
+  it("does not select or paint the gap between turns in WebKit", async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await browser.newPage(createControlUiE2eContextOptions());
+      await installMockGateway(page, {
+        historyMessages: [chatMessage("user", first), chatMessage("assistant", last)],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const prompt = page.getByText(first, { exact: true });
+      const reply = page.getByText(last, { exact: true });
+      await reply.waitFor();
+      const gap = await prompt.evaluate((element) => {
+        const group = element.closest(".chat-group")!.getBoundingClientRect();
+        const row = element.closest(".chat-virtual-row")!.getBoundingClientRect();
+        return {
+          x: Math.floor(row.left + row.width / 2),
+          y: Math.floor((group.bottom + row.bottom) / 2),
+        };
+      });
+      const gapPixels = () => page.screenshot({ clip: { ...gap, width: 8, height: 2 } });
+      await page.mouse.move(gap.x, gap.y);
+      const neutral = await gapPixels();
+      await page.mouse.dblclick(gap.x, gap.y);
+      expect(await page.evaluate(() => document.getSelection()?.isCollapsed)).toBe(true);
+
+      // A real text drag may cross this same gap without tinting it.
+      const from = (await prompt.boundingBox())!;
+      const to = (await reply.boundingBox())!;
+      await page.mouse.move(from.x + 2, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(to.x + 20, to.y + to.height / 2, { steps: 8 });
+      await page.mouse.up();
+      const selected = await page.evaluate(() => document.getSelection()?.toString());
+      expect(selected).toContain(first.slice(2));
+      expect(selected).toContain(last.slice(0, 2));
+      expect(await gapPixels()).toEqual(neutral);
+      await page.mouse.click(gap.x, gap.y);
+      expect(await page.evaluate(() => document.getSelection()?.isCollapsed)).toBe(true);
+    } finally {
+      await browser.close();
+    }
+  });
+
   it.each(["dark", "light"] as const)("paints only text in %s mode", async (colorScheme) => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme },
