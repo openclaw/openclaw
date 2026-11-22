@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runner/compact.types.js";
-import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
+import { createSessionCompactionEntry } from "../agents/sessions/session-compaction-persistence.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions.js";
 import {
   loadSessionEntry,
@@ -39,9 +39,10 @@ test.each([55, undefined])(
     embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(
       async (_params, hostInput) => {
         const host = hostInput as QueuedCompactionHostOptions;
-        const manager = host.preparedSession?.sessionManager;
-        const keptId = manager?.getEntries()[0]?.id;
-        if (!manager || !keptId || !host.withCompactionPersistenceAsync) {
+        const keptId = host.preparedSession?.source?.entries.find(
+          (entry) => entry.type === "message",
+        )?.id;
+        if (!host.preparedSession || !keptId || !host.withCompactionPersistenceAsync) {
           throw new Error("expected prepared Gateway compaction persistence");
         }
         await upsertSessionEntryCore(scope, {
@@ -50,12 +51,20 @@ test.each([55, undefined])(
           label: "Edited during summary",
           compactionCount: 3,
         });
-        const boundary = ["summary", keptId, 120, undefined, undefined, undefined, 80] as const;
-        await withSessionCompactionPersistenceAsync(
-          manager,
-          host.withCompactionPersistenceAsync,
-          () => manager.appendCompactionAsync(...boundary),
-        );
+        await host.withCompactionPersistenceAsync({
+          scope: host.preparedSession.sessionTarget,
+          event: createSessionCompactionEntry(
+            null,
+            "summary",
+            keptId,
+            120,
+            undefined,
+            undefined,
+            undefined,
+            80,
+          ),
+          appendIntent: "active-branch",
+        });
         expect(readEntry()).toMatchObject(committed);
         return {
           ok: true,

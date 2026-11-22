@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawReleaseVersions,
+  compareSemverStrings,
   formatPrereleaseResolutionError,
   isExactSemverVersion,
   isPrereleaseSemverVersion,
@@ -10,6 +11,21 @@ import {
   resolveOpenClawReleaseCohortVersion,
   validateRegistryNpmSpec,
 } from "./npm-registry-spec.js";
+
+it.each([
+  ["2026.6.5", "2026.6.6-beta.1", -1],
+  ["2026.6.6", "2026.6.6-beta.1", 1],
+  ["2026.6.6-beta.2", "2026.6.6-beta.1", 1],
+  ["v2026.6.6", "2026.6.6", 0],
+  ["2026.6.6.beta.2", "2026.6.6-beta.1", 1],
+  ["2026.5.3", "2026.5.3-1", -1],
+  ["2026.5.3-1", "2026.5.3", 1],
+  ["2026.5.3-2", "2026.5.3-1", 1],
+  ["1.0", "1.0.0", null],
+  ["latest", "1.0.0", null],
+] as const)("compares %s against %s as %s", (a, b, expected) => {
+  expect(compareSemverStrings(a, b)).toBe(expected);
+});
 
 function parseSpecOrThrow(spec: string) {
   const parsed = parseRegistryNpmSpec(spec);

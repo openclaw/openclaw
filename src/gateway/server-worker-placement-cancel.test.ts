@@ -75,18 +75,16 @@ it("preserves admitted work when cancellation authority is revoked before the ef
       { once: true },
     );
     const revoked = new Error("worker Stop authority revoked");
-    let current = true;
+    // The ingress check passes; authority is revoked before the cancellation effect checks it.
+    let checks = 0;
     const failure = await cancelGatewayWorkerSessionWork(context, {
       sessionId,
       sessionKeys: [sessionKey],
       agentId: "main",
       assertCurrent: () => {
-        if (!current) {
+        if (checks++ > 0) {
           throw revoked;
         }
-        queueMicrotask(() => {
-          current = false;
-        });
       },
     }).catch((error: unknown) => error);
     expect(owned.activeRunAbort.controller.signal.aborted).toBe(false);

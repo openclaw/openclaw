@@ -13,13 +13,12 @@ import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
-import * as systemPrompt from "./system-prompt.js";
+import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-vi.mock("../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -98,7 +97,7 @@ function preparedOwner(
 
 function buildPrompt(
   params: Omit<Parameters<typeof buildConfiguredAgentSystemPrompt>[0], "workspaceDir">,
-): string {
+): Promise<string> {
   return buildConfiguredAgentSystemPrompt({
     workspaceDir: "/tmp/openclaw",
     ...params,
@@ -119,6 +118,42 @@ function reasoningConfig(
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each([
+    ["OpenClaw", true],
+    ["crestodian", true],
+    ["main", true],
+    ["openclaw", false],
+  ] as const)(
+    "explains only configured reserved-ID collisions in both prompt surfaces (%s, configured=%s)",
+    async (id, configured) => {
+      const config: OpenClawConfig = {
+        agents: {
+          entries: configured
+            ? { [id]: { name: "OpenClaw", tools: { alsoAllow: ["openclaw"] } } }
+            : {},
+        },
+        tools: { exec: { mode: "full" } },
+      };
+      const prompts = [
+        await buildPrompt({ config, agentId: id, toolNames: ["exec"] }),
+        buildAgentHarnessBasePrompt({ config, toolNames: ["exec"] }),
+      ];
+      for (const prompt of prompts) {
+        expect(prompt.includes("reserved for the system agent")).toBe(configured && id !== "main");
+        if (configured && id !== "main") {
+          expect(prompt).toContain(`Agent id "${id.toLowerCase()}" is reserved`);
+          expect(prompt).toContain("preserving its workspace, sessions, bindings, and credentials");
+          expect(prompt).toContain(
+            "Full Access or a tool allowlist does not resolve this collision",
+          );
+        }
+        expect(prompt).toContain("never instruct users to send free-form setup");
+        expect(prompt).toContain("Remote hosts: verify it is not this Gateway");
+        expect(prompt).toContain("do not block on local agent-ID migration");
+      }
+    },
+  );
+
   it.each<[string, string, OpenClawConfig, boolean]>([
     ["disabled routes", "discord", reasoningConfig(false, false), false],
     ["channel disables native", "discord", reasoningConfig(false, true, false), false],
@@ -127,7 +162,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     ["native auto off", "slack", reasoningConfig(false), false],
     ["text enabled", "discord", reasoningConfig(undefined, false), true],
     ["text-only surface", "webchat", reasoningConfig(false, false), true],
-  ])("renders reasoning command guidance for %s", (_name, channel, config, enabled) => {
+  ])("renders reasoning command guidance for %s", async (_name, channel, config, enabled) => {
     const registry = createTestRegistry(
       ["discord", "slack"].map((id) => ({
         pluginId: id,
@@ -145,7 +180,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
     // Command routing consumes process-level channel metadata.
     setActivePluginRegistry(registry);
-    const prompt = buildPrompt({
+    const prompt = await buildPrompt({
       config,
       runtimeInfo: { channel },
       reasoningLevel: "stream",
@@ -155,28 +190,102 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
   });
 
+  it.each([
+    { toolNames: ["exec"] },
+    { toolNames: ["exec", "openclaw"] },
+    { toolNames: ["exec", "gateway", "openclaw"] },
+    { toolNames: ["gateway", "openclaw"] },
+  ])("scopes the in-place Git update exception with tools $toolNames", async ({ toolNames }) => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompts = [
+      await buildPrompt({ config, toolNames }),
+      buildAgentHarnessBasePrompt({ config, toolNames }),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+      expect(prompt).not.toContain("perform the work with `gateway`");
+      expect(prompt).not.toContain("restart, config, channels");
+      expect(prompt).not.toContain("For an update request, use the Control UI");
+      expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+      expect(prompt).toContain("Use the built-in updater for standard installs.");
+      expect(prompt).toContain(
+        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      );
+      expect(prompt).toContain(
+        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
+      );
+      expect(prompt).toContain(
+        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
+      );
+      expect(prompt).toContain(
+        "Shell access is not update authority. Change installation methods only on explicit operator request.",
+      );
+      expect(prompt).toContain("Keep a working restart path before stopping");
+      expect(prompt).toContain(
+        "if runtime admission refuses, report the blocker and never bypass via `exec`",
+      );
+      expect(
+        prompt.includes(
+          "`gateway`: use update.run only when the installation uses the built-in updater",
+        ),
+      ).toBe(toolNames.includes("gateway"));
+    }
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "keeps bounded local config recovery available with tools $toolNames",
+    async ({ toolNames }) => {
+      for (const prompt of [
+        await buildPrompt({ toolNames }),
+        buildAgentHarnessBasePrompt({ toolNames }),
+      ]) {
+        expect(prompt).toContain("blocks an explicit local repair");
+        expect(prompt).toContain("use existing file/exec permissions");
+        expect(prompt).toContain("save a rollback copy");
+        expect(prompt).toContain("validate, and read back");
+        expect(prompt).toContain(
+          "Never override approvals, readonly config, containment, or disabled tools",
+        );
+        expect(prompt).toContain("or edit access/approval/ownership policies");
+        expect(prompt).not.toContain("Exact commands need no helper inference");
+      }
+    },
+  );
+
+  it("teaches exact config recovery on regular and native harness surfaces", async () => {
+    const toolNames = ["openclaw", "exec"];
+    for (const prompt of [
+      await buildPrompt({ toolNames }),
+      buildAgentHarnessBasePrompt({ toolNames }),
+    ]) {
+      expect(prompt).toContain("config set <path> <value>");
+      expect(prompt).toContain("Exact commands need no helper inference");
+      expect(prompt).toContain("normal approval/write checks apply");
+    }
+  });
+
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
-    ({ toolNames }) => {
-      const disabled = buildPrompt({
+    async ({ toolNames }) => {
+      const disabled = await buildPrompt({
         toolNames,
         config: { commands: { restart: false } },
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("Keep a working restart path before stopping");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
-      const enabled = buildPrompt({ toolNames, config: {} });
+      const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
     },
   );
 
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
-    (promptMode) => {
+    async (promptMode) => {
       const hint = vi
-        .spyOn(ttsSettings, "buildTtsSystemPromptHint")
-        .mockReturnValue("Fixture first voice guidance.");
+        .spyOn(ttsSettings, "buildTtsSystemPromptHintAsync")
+        .mockResolvedValue("Fixture first voice guidance.");
       const config = modelConfig({ "fixture/model": "Before" });
       const owner = preparedOwner(config, ["model"]);
       const params = {
@@ -184,27 +293,27 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         preparedModelRuntime: owner,
         includeMemorySection: false,
       };
-      const full = buildPrompt(params);
+      const full = await buildPrompt(params);
       expect(full).toContain("- Before: fixture/model");
       expect(full).toContain("Fixture first voice guidance.");
       hint.mockClear();
       owner.isCurrent.mockClear();
-      const reduced = buildPrompt({ ...params, promptMode });
+      const reduced = await buildPrompt({ ...params, promptMode });
       expect(hint).not.toHaveBeenCalled();
       expect(owner.isCurrent).not.toHaveBeenCalled();
       expect(reduced).not.toContain("## Model Aliases");
       expect(reduced).not.toContain("## Voice (TTS)");
-      expect(buildPrompt(params)).toBe(full);
+      expect(await buildPrompt(params)).toBe(full);
 
       owner.isCurrent.mockReturnValue(false);
       const nextConfig = modelConfig({ "fixture/model": "After" });
       params.config = nextConfig;
       params.preparedModelRuntime = preparedOwner(nextConfig, ["model"]);
-      hint.mockReturnValue("Fixture current voice guidance.");
+      hint.mockResolvedValue("Fixture current voice guidance.");
       hint.mockClear();
-      expect(buildPrompt({ ...params, promptMode })).toBe(reduced);
+      expect(await buildPrompt({ ...params, promptMode })).toBe(reduced);
       expect(hint).not.toHaveBeenCalled();
-      const refreshed = buildPrompt(params);
+      const refreshed = await buildPrompt(params);
       expect(refreshed).toContain("- After: fixture/model");
       expect(refreshed).not.toContain("- Before: fixture/model");
       expect(refreshed).toContain("Fixture current voice guidance.");
@@ -310,7 +419,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   ])(
     "publishes only the supported target for $name",
-    ({
+    async ({
       config,
       modelIds = ["current"],
       agentId = "main",
@@ -321,7 +430,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       excluded = [],
     }) => {
       const owner = preparedOwner(config, modelIds, agentId, metadata, provider);
-      const prompt = buildPrompt({
+      const prompt = await buildPrompt({
         config,
         agentId,
         preparedModelRuntime: owner,
@@ -334,7 +443,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("keeps admitted aliases when their borrowed snapshot retires without rediscovery", () => {
+  it("keeps admitted aliases when their borrowed snapshot retires without rediscovery", async () => {
     const config = modelConfig(
       {
         "fixture/current": "Current",
@@ -349,10 +458,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       .mockImplementation(unexpectedRuntimeWork);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network"));
     const params = { config, agentId: "writer" };
-    expect(buildPrompt(params)).not.toContain("## Model Aliases");
+    expect(await buildPrompt(params)).not.toContain("## Model Aliases");
     let admitted = "";
     for (let index = 0; index < 3; index++) {
-      const prompt = buildPrompt({ ...params, preparedModelRuntime: owner });
+      const prompt = await buildPrompt({ ...params, preparedModelRuntime: owner });
       expect(prompt).toContain("- Current: fixture/current");
       expect(prompt).toContain("- Another: fixture/another");
       expect(prompt).not.toContain("Unavailable");
@@ -360,10 +469,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       admitted = prompt;
     }
     owner.isCurrent.mockReturnValue(false);
-    expect(buildPrompt({ ...params, preparedModelRuntime: owner })).toBe(admitted);
+    expect(await buildPrompt({ ...params, preparedModelRuntime: owner })).toBe(admitted);
     const replacementConfig = modelConfig({ "fixture/current": "Replacement" });
     expect(
-      buildPrompt({
+      await buildPrompt({
         ...params,
         config: replacementConfig,
         preparedModelRuntime: preparedOwner(replacementConfig, ["current"], "writer"),
@@ -378,26 +487,20 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   it.each([
     { name: "absent", config: undefined },
     { name: "empty", config: {} },
-  ])("preserves owner display semantics with $name config", ({ config }) => {
-    const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
-    const prompt = buildPrompt({
+  ])("preserves owner display semantics with $name config", async ({ config }) => {
+    const prompt = await buildPrompt({
       config,
       ownerNumbers: ["owner-a"],
       ownerDisplay: "hash",
       ownerDisplaySecret: "caller-secret", // pragma: allowlist secret
     });
 
-    expect(render).toHaveBeenCalledTimes(1);
-    const renderParams = render.mock.calls[0]?.[0];
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplay")).toBe(true);
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplaySecret")).toBe(true);
-    expect(renderParams?.ownerDisplay).toBe(config ? "raw" : "hash");
-    expect(renderParams?.ownerDisplaySecret).toBe(config ? undefined : "caller-secret");
-    expect(prompt).toMatch(
+    expect(prompt).toContain(
       config
-        ? /Allowlisted senders: owner-a\. Allowlisted != owner\./
-        : /Allowlisted senders: [a-f0-9]{12}\. Allowlisted != owner\./,
+        ? "Allowlisted senders: owner-a. Allowlisted != owner."
+        : "Allowlisted senders: 5e50de41a7a7. Allowlisted != owner.",
     );
+    expect(prompt).not.toContain("caller-secret");
   });
 
   const prefer = { subagents: { delegationMode: "prefer" as const } };
@@ -422,14 +525,15 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       true,
       "coordinator",
     ],
-  ])("%s", (_name, config, sessionKey, expected, agentId) => {
-    const prompt = buildPrompt({
+  ])("%s", async (_name, config, sessionKey, expected, agentId) => {
+    const prompt = await buildPrompt({
       config,
       agentId: agentId ?? "main",
       runtimeInfo: { sessionKey },
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
+    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
+    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

@@ -301,7 +301,11 @@ describe("OnboardingMemoryImport", () => {
       .spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
-    await startImport(request);
+    const element = await mount(createContext(request));
+    const importButton = await waitForAction(element);
+    expect(element.textContent).not.toContain("Already imported");
+    expect(element.textContent).toContain("Conflicts: 1");
+    importButton.click();
 
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
@@ -340,7 +344,7 @@ describe("OnboardingMemoryImport", () => {
     expect(cancel.defaultPrevented).toBe(true);
     pendingApply.resolve(createApplyResult("claude"));
     await waitForAction(element, "continue");
-    expect(element.textContent).toContain("Migrated 1, skipped 0");
+    expect(element.textContent).toContain("Imported 1, skipped 0");
   });
 
   it("retires a displayed offer synchronously on disconnect", async () => {
@@ -382,7 +386,7 @@ describe("OnboardingMemoryImport", () => {
     });
     const element = await startImport(request);
     await waitForSolid(() => expect(element.textContent).toContain("1 failed"));
-    expect(element.textContent).toContain("Migrated 1");
+    expect(element.textContent).toContain("Imported 1");
   });
 
   it("restores pending import results after reactivation without exposing them to another gateway", async () => {
@@ -397,7 +401,7 @@ describe("OnboardingMemoryImport", () => {
     await element.updateComplete;
     pendingApply.resolve(createApplyResult("codex"));
     await waitForAction(element, "continue");
-    expect(element.textContent).toContain("Migrated 1, skipped 0");
+    expect(element.textContent).toContain("Imported 1, skipped 0");
     expect(request).toHaveBeenCalledTimes(2);
     element.context = createContext(vi.fn(async () => createPlan()));
     await element.updateComplete;
@@ -414,7 +418,7 @@ describe("OnboardingMemoryImport", () => {
       await waitForSolid(() => {
         expect(request).toHaveBeenCalledTimes(3);
         expect(element.querySelector("[data-provider-id='codex']")?.textContent).toContain(
-          "Migrated 1, skipped 0",
+          "Imported 1, skipped 0",
         );
         expect(element.querySelector("[data-provider-id='claude']")?.textContent).toContain(
           "Importing",
@@ -452,8 +456,11 @@ describe("OnboardingMemoryImport", () => {
       .filter(([method]) => method === "migrations.memory.apply")
       .map(([, params]) => params?.providerId);
     expect(applyProviders).toEqual(["codex", "claude"]);
+    expect(element.textContent).toContain(
+      "Couldn’t import memory. Continue setup, then try importing again.",
+    );
     expect(element.textContent).toContain("Codex import unavailable: OPENAI_API_KEY=sk-123...cdef");
     expect(element.textContent).not.toContain("sk-1234567890abcdef");
-    expect(element.textContent).toContain("Migrated 1, skipped 0");
+    expect(element.textContent).toContain("Imported 1, skipped 0");
   });
 });

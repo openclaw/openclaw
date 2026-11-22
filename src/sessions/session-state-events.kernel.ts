@@ -227,15 +227,18 @@ export function upsertSeedCursor(params: {
   publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
 }
 
-function updateMaterialCursor(params: {
-  db: EngineConnection;
+type MaterialCursorWrite = Insertable<OpenClawStateKyselyDatabase["session_watch_cursors"]>;
+
+function planMaterialCursor(params: {
   current: SessionWatchCursorRow | undefined;
   watcherSessionKey: string;
   watcherStorePath?: string;
   targetSessionKey: string;
   sequence: number;
   now: number;
-}): { lastSeenSequence: number; queueOnly: boolean; watcherStorePath: string | null } {
+}): Omit<SessionStateNotice, "watcherSessionKey" | "targetSessionKey"> & {
+  write?: MaterialCursorWrite;
+} {
   const { current } = params;
   const watcherStorePath = current
     ? (current.watcher_store_path ?? null)
@@ -248,37 +251,45 @@ function updateMaterialCursor(params: {
   ) {
     return { lastSeenSequence: lastSeen, queueOnly: false, watcherStorePath: null };
   }
-  ensureWatcherStoreColumn(params.db);
   const notified = normalizeOptionalSqliteNumber(current?.notified_sequence) ?? 0;
-  const frozenNotified = notified === lastSeen ? params.sequence : notified;
-  executeSqliteQuerySync(
-    params.db,
-    getSessionStateKysely(params.db)
-      .insertInto("session_watch_cursors")
-      .values({
-        watcher_session_key: params.watcherSessionKey,
-        watcher_store_path: watcherStorePath,
-        target_session_key: params.targetSessionKey,
-        last_seen_sequence: lastSeen,
-        notified_sequence: frozenNotified,
-        material_sequence: params.sequence,
-        provenance: SESSION_WATCH_PROVENANCE_EXPLICIT,
-        updated_at: params.now,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet({
-          notified_sequence: frozenNotified,
-          material_sequence: params.sequence,
-          updated_at: params.now,
-        }),
-      ),
-  );
-  publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
   return {
     lastSeenSequence: lastSeen,
     queueOnly: isAmbientGroupWatchCursor(current),
     watcherStorePath,
+    write: {
+      watcher_session_key: params.watcherSessionKey,
+      watcher_store_path: watcherStorePath,
+      target_session_key: params.targetSessionKey,
+      last_seen_sequence: lastSeen,
+      notified_sequence: notified === lastSeen ? params.sequence : notified,
+      material_sequence: params.sequence,
+      provenance: SESSION_WATCH_PROVENANCE_EXPLICIT,
+      updated_at: params.now,
+    },
   };
+}
+
+function writeMaterialCursors(db: EngineConnection, writes: readonly MaterialCursorWrite[]): void {
+  if (writes.length === 0) {
+    return;
+  }
+  ensureWatcherStoreColumn(db);
+  for (let offset = 0; offset < writes.length; offset += 100) {
+    executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .insertInto("session_watch_cursors")
+        .values(writes.slice(offset, offset + 100))
+        .onConflict((conflict) =>
+          conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet((eb) => ({
+            notified_sequence: eb.ref("excluded.notified_sequence"),
+            material_sequence: eb.ref("excluded.material_sequence"),
+            updated_at: eb.ref("excluded.updated_at"),
+          })),
+        ),
+    );
+  }
+  publishSqliteDatabaseAdmission(db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
 }
 
 const SESSION_STATE_OCCURRED_AT_MAX_SKEW_MS = 24 * 60 * 60_000;
@@ -368,6 +379,7 @@ export function recordSessionStateEventsInDatabase(
             input.sessionKey,
           )
         : undefined;
+    const writes: MaterialCursorWrite[] | undefined = cursors ? [] : undefined;
     for (const watcherSessionKey of watcherSessionKeys) {
       if (input.kind === "child_spawned") {
         upsertSeedCursor({
@@ -383,8 +395,7 @@ export function recordSessionStateEventsInDatabase(
       if (!NOTIFY_BY_KIND[input.kind] || input.actorId === watcherSessionKey) {
         continue;
       }
-      const materialCursor = updateMaterialCursor({
-        db,
+      const { write, ...cursorNotice } = planMaterialCursor({
         current: cursors
           ? cursors.get(watcherSessionKey)
           : readCursor(db, watcherSessionKey, input.sessionKey),
@@ -394,13 +405,18 @@ export function recordSessionStateEventsInDatabase(
         sequence: insertedSequence,
         now,
       });
-      notices.push({
-        watcherSessionKey,
-        watcherStorePath: materialCursor.watcherStorePath,
-        targetSessionKey: input.sessionKey,
-        lastSeenSequence: materialCursor.lastSeenSequence,
-        queueOnly: materialCursor.queueOnly,
-      });
+      if (write) {
+        if (writes) {
+          writes.push(write);
+        } else {
+          // Keys that bind to the same value must see each preceding write.
+          writeMaterialCursors(db, [write]);
+        }
+      }
+      notices.push({ watcherSessionKey, targetSessionKey: input.sessionKey, ...cursorNotice });
+    }
+    if (writes) {
+      writeMaterialCursors(db, writes);
     }
   }
   const finalHeads = [...heads.values()];

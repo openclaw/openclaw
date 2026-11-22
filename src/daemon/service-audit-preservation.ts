@@ -167,6 +167,7 @@ export function auditGatewayInstallPreservation(
       managed.has(upper) ||
       upper === "OPENCLAW_SERVICE_MANAGED_ENV_KEYS" ||
       upper === "OPENCLAW_GATEWAY_PORT" ||
+      (platform === "linux" && key === "MALLOC_ARENA_MAX" && replacement !== undefined) ||
       (upper === "OPENCLAW_SERVICE_VERSION" && /^\d{4}\.\d+\.\d+(?:[-+][\w.-]+)?$/u.test(value))
     ) {
       continue;

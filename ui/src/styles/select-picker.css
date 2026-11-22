@@ -36,34 +36,18 @@
   flex-direction: column;
   overflow: hidden;
   max-width: calc(100vw - 16px);
-  max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
 }
 
-/* Select keeps its own slower presentation; the wrapper alone animates, never its list. */
-:is(.picker-select__menu, .multi-select__menu).oc-overlay {
-  opacity: 0;
-  scale: 0.95;
-  transition:
-    opacity var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    scale var(--oc-overlay-hide-duration, var(--select-exit-duration)) var(--overlay-ease-exit),
-    display var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--select-exit-duration)) allow-discrete;
+/* Select keeps its own slower presentation; the wrapper alone animates, never its list.
+   The shared overlay keyframes, not transitions (see overlay.css). */
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="opening"] {
+  animation: oc-overlay-enter var(--oc-overlay-show-duration, var(--select-enter-duration))
+    var(--overlay-ease-enter);
 }
 
-:is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open:where(
-    :not([data-phase="closing"])
-  ) {
-  opacity: 1;
-  scale: 1;
-  transition-duration: var(--oc-overlay-show-duration, var(--select-enter-duration));
-  transition-timing-function: var(--overlay-ease-enter);
-}
-
-@starting-style {
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay:popover-open {
-    opacity: 0;
-    scale: 0.95;
-  }
+:is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase="closing"] {
+  animation: oc-overlay-exit var(--oc-overlay-hide-duration, var(--select-exit-duration))
+    var(--overlay-ease-exit) forwards;
 }
 
 .picker-select__option,
@@ -73,13 +57,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: var(--menu-item-height);
+  padding: 4px 8px;
   border-radius: var(--menu-item-radius);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(1.25 / 0.875);
   color: var(--text);
   cursor: var(--cursor-action);
+}
+
+/* The model picker keeps its own rows, which carry a provider icon and detail. */
+.model-picker :is(.picker-select__option, .multi-select__option) {
+  min-height: 32px;
+  padding-block: 6px;
 }
 
 /* Windowed rows are absolute, so their gap comes from the virtualizer. */
@@ -141,13 +131,23 @@
   color: var(--accent);
 }
 
+/* The flat list shares the icon and 8px gap (20px artwork, 24px for channels).
+   A window sizer contains the leading icons even when their rows are offscreen. */
+.picker-select__menu:not(.picker-select__menu--grouped):has(.picker-select__leading)
+  .picker-select__copy:first-child {
+  margin-inline-start: var(--picker-icon-inset, 28px);
+}
+
+.channel-picker {
+  --picker-icon-inset: 32px;
+}
+
 .picker-select__leading {
   display: inline-flex;
   align-items: center;
 }
 
 .picker-select__label {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -165,7 +165,6 @@
 }
 
 .picker-select__description {
-  min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 80%, var(--text));
   font-size: 0.75rem;
@@ -230,6 +229,8 @@ openclaw-select-picker {
 .picker-select__chevron,
 .picker-select__check {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 16px;
   width: 16px;
   margin-inline-start: auto;
@@ -241,11 +242,22 @@ openclaw-select-picker {
   height: 16px;
 }
 
+.picker-select__chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
+}
+
 .picker-select__menu.oc-overlay {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
-  width: max-content;
+}
+
+@media (max-width: 640px) {
+  .oc-modal-dialog .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
 }
 
 .picker-select__menu[hidden],
@@ -257,7 +269,8 @@ openclaw-select-picker {
 
 .picker-select__options {
   min-height: 0;
-  overflow: auto;
+  /* Keep the same intrinsic gutter before and after filtering. */
+  overflow: auto scroll;
   outline: none;
 }
 
@@ -387,12 +400,14 @@ openclaw-select-picker {
   animation: picker-sheet-page-in var(--motion-sheet);
 }
 
-.picker-select--sheet .picker-select__options {
+.picker-select--sheet .picker-select__options,
+.picker-select__menu--phone-sheet .picker-select__options {
   flex: 1 1 auto;
   overscroll-behavior: contain;
 }
 
-.picker-select--sheet .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
+:is(.picker-select--sheet, .picker-select__menu--phone-sheet)
+  .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
   flex: none;
 }
 
@@ -444,13 +459,110 @@ openclaw-select-picker {
 
 @media (prefers-reduced-motion: reduce) {
   .picker-select--sheet .picker-select__menu,
-  .picker-select--sheet:dir(rtl) .picker-select__menu {
+  .picker-select--sheet:dir(rtl) .picker-select__menu,
+  :is(.picker-select__menu, .multi-select__menu).oc-overlay[data-phase] {
     animation: none;
   }
 
-  :is(.picker-select__menu, .multi-select__menu).oc-overlay,
   :is(.picker-select__option, .multi-select__option)::before {
     transition: none;
+  }
+}
+
+/* A long list at phone width: the same list and search in a bottom sheet, matching PhoneSheet's
+   panel. The native top layer's backdrop keeps the page behind it from taking taps. */
+.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay {
+  position: fixed;
+  inset: auto var(--safe-area-right) calc(100dvh - var(--shell-canvas-height, 100dvh))
+    var(--safe-area-left) !important;
+  position-area: none;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
+  margin: 0;
+  padding: 0 var(--chat-mobile-edge-inset) calc(var(--space-2) + var(--shell-safe-area-bottom));
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  backdrop-filter: none;
+  animation: picker-sheet-in var(--motion-sheet);
+}
+
+.picker-select__menu--phone-sheet::backdrop {
+  background: var(--overlay-modal-backdrop);
+}
+
+.picker-select__grabber {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  /* The grabber swipes the sheet down; its touch target extends past the pill. */
+  touch-action: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -12px -64px;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.picker-select__sheet-close {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 14px;
+  inset-inline-end: var(--space-2);
+  display: grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.picker-select__sheet-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The title keeps clear of the close button. */
+.picker-select__menu--phone-sheet > .picker-select__page-header {
+  min-height: 44px;
+  padding-inline-end: 36px;
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+/* Filtering shouldn't resize the sheet under the keyboard. */
+.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay:has(
+    .header-search[data-searching]
+  ) {
+  height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
+}
+
+@keyframes picker-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .picker-select__menu.picker-select__menu--phone-sheet.oc-overlay {
+    animation: none;
   }
 }
 
@@ -459,7 +571,8 @@ openclaw-select-picker {
   flex: 0 0 auto;
   width: max-content;
   height: 0;
-  overflow: hidden;
+  /* Match the real list without depending on asynchronous scroll-fade state. */
+  overflow: hidden scroll;
   visibility: hidden;
 }
 
@@ -471,8 +584,4 @@ openclaw-select-picker {
   position: absolute;
   inset-inline: 0;
   top: 0;
-}
-
-.picker-select__menu > .header-search:has(> .picker-select__back) {
-  padding-inline-start: 0;
 }

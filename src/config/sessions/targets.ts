@@ -409,6 +409,7 @@ export function resolveConfiguredAgentDatabaseTargets(
     agentId?: string;
     /** Restrict native roots for inventory callers; configured session claims remain intact. */
     nativeAgentIds?: ReadonlySet<string>;
+    excludeTarget?: SessionStoreTargetReadOptions["excludeTarget"];
   },
 ): Array<{ agentId: string; path: string }> {
   const { env } = params;
@@ -421,11 +422,16 @@ export function resolveConfiguredAgentDatabaseTargets(
   };
   // Physical store collisions still require all configured claims; only the selected
   // agent's native directory needs preparation for a per-agent startup guard.
-  dedupeSessionStoreTargetsBySqliteTarget(resolveConfiguredSessionStoreTargets(cfg, env), {
-    ...params,
-    defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
-    onResolvedTarget: (_selected, physical) => add(physical.agentId, physical.storePath),
-  });
+  dedupeSessionStoreTargetsBySqliteTarget(
+    resolveConfiguredSessionStoreTargets(cfg, env).filter(
+      (target) => !params.excludeTarget?.(target),
+    ),
+    {
+      ...params,
+      defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+      onResolvedTarget: (_selected, physical) => add(physical.agentId, physical.storePath),
+    },
+  );
   for (const agentId of listGatewayOwnedAgentIds(cfg)) {
     if (
       (requested === undefined || agentId === requested) &&

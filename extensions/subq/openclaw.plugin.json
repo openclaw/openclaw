@@ -69,23 +69,19 @@
     },
     "additionalProperties": false
   },
-  "decisionModels": [
-    {
-      "provider": "subq",
-      "id": "subq-snap-preview",
-      "name": "SubQ Snap (preview)",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 16,
-        "maxChoiceAlternatives": 255,
-        "maxScoreLevels": 10,
-        "maxInputTokens": 393216,
-        "confidence": "provider-specific"
+  "modelCatalog": {
+    "providers": {
+      "subq": {
+        "models": []
       }
-    }
-  ]
+    },
+    "suppressions": [
+      {
+        "provider": "subq",
+        "model": "subq-snap-preview",
+        "reason": "SubQ retired Snap preview on 2026-11-11.",
+        "retirement": {}
+      }
+    ]
+  }
 }

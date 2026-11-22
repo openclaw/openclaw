@@ -72,7 +72,7 @@ describe("Beam terminal retry policy", () => {
 
   it("keeps receiver-retained retry state with independent clocks", async () => {
     const targetBeamId = beamMirrorId("claude", "gateway:local", "session-273");
-    const { store: receiverStore, close } = persistentBeamTestStore("beam-capacity");
+    const { store: receiverStore, close } = await persistentBeamTestStore();
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
     const store: BeamStore = {

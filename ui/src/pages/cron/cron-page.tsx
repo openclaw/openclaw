@@ -1,16 +1,17 @@
-import { createEffect, createMemo, Loading } from "solid-js";
+import { createEffect, createMemo, Loading, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
+import { AutomationsFilter } from "../../components/app-sidebar-automations-filter.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { rememberSectionLocation, sectionLocation } from "../../lib/section-navigation.ts";
 import { createCronPage } from "./cron-page-state.ts";
-import { CronRunTranscriptView } from "./run-transcript.tsx";
+import { resolveCronRouteData } from "./route-model.ts";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
@@ -61,44 +62,43 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     revision();
     const page = props.page;
     return {
-      filtered: Boolean(page.cron().cronSessionFilter),
       agents: page.inventories.agents.read().agentsList?.agents ?? [],
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
   };
+  // The Automations sidebar lists every automation, beside the page, in the collapsed rail's peek
+  // or in the phone drawer; there the page is the automation itself, without the section header.
+  // The native embed shows no sidebar, so the page lists the automations under its header.
+  const listsJobs = isNativeEmbedHost();
   return (
     <>
-      <HubPageHeader
-        active="cron"
-        subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
-        docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
-        actions={
-          pageHeader().filtered ? (
-            <a
-              class="btn"
-              href={pathForRoute("cron", props.page.context().basePath)}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.page.context().navigate("cron", { search: "" });
-                }
-              }}
-            >
-              {t("cron.list.showAll")}
-            </a>
-          ) : (
-            <AgentScopeControl
-              agents={pageHeader().agents}
-              selection={props.page.context().agentSelection}
-              selectedId={pageHeader().selectedAgentId}
-            />
-          )
-        }
-      />
-      <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
+      <Show when={listsJobs}>
+        <HubPageHeader
+          active="cron"
+          docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
+          actions={
+            <>
+              <AgentScopeControl
+                agents={pageHeader().agents}
+                selection={props.page.context().agentSelection}
+                selectedId={pageHeader().selectedAgentId}
+              />
+              <AutomationsFilter />
+            </>
+          }
+        />
+      </Show>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
+          listsJobs={listsJobs}
+          onClosePanel={() => {
+            // Closing the automation leaves Automations on its empty state for this tab.
+            viewProps().onClosePanel();
+            const context = props.page.context();
+            rememberSectionLocation(context.gateway, "automations", null);
+            context.replace("cron", { search: "" });
+          }}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           busy={props.page.saving() || viewProps().busy}
@@ -115,10 +115,46 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => context,
     () => props.host,
   );
-  // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
+  // Route changes retarget Gateway job queries.
+  // While the next route loads its search is unknown, not empty, so nothing acts on it.
+  // Effects never compare, and route data republishes the same search, so a memo lets only a
+  // real change through; a stale repeat would otherwise re-record an automation just forgotten.
+  const routeSearch = createMemo(() => props.routeSearch);
   createEffect(
-    () => props.routeSearch ?? "",
-    (search) => page.setRouteSearch(search),
+    () => routeSearch(),
+    (search) => {
+      if (search === undefined) {
+        return;
+      }
+      const route = resolveCronRouteData(search);
+      // Returning to Automations in this tab reopens the automation left open.
+      const opened = sectionLocation(context.gateway, "automations");
+      if (!search && opened) {
+        context.replace(opened.route, opened.options);
+        return;
+      }
+      rememberSectionLocation(
+        context.gateway,
+        "automations",
+        route.jobId
+          ? { route: "cron", options: { search: `?job=${encodeURIComponent(route.jobId)}` } }
+          : route.activity
+            ? { route: "cron", options: { search: "?activity" } }
+            : null,
+      );
+      page.setRouteSearch(search);
+      // `?new` is the sidebar's New automation entry.
+      if (route.create) {
+        page.actions.onOpenCreate();
+      } else if (
+        (!search || route.activity) &&
+        (page.cron().cronEditingJob || page.cron().cronCreateOpen)
+      ) {
+        // The section's own root, as choosing Automations again opens it, and its Activity close
+        // the panel.
+        page.actions.onClosePanel();
+      }
+    },
   );
   return <CronPageContent page={page} />;
 }
@@ -135,7 +171,7 @@ function CronPage(props: { routeSearch?: string }) {
 export function renderSolid(props: SolidRouteProps) {
   return (
     <Loading>
-      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : undefined} />
     </Loading>
   );
 }

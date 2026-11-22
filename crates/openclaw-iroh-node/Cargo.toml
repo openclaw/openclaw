@@ -1,0 +1,33 @@
+[package]
+name = "openclaw-iroh-node"
+version = "0.1.0"
+description = "Node.js (napi-rs) binding for iroh endpoints and streams with Buffer-based I/O"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+# Built and tested by its own workflow (.github/workflows/iroh-node.yml), not by the shared
+# crates/ workspace job: iroh adds ~260 crates and a cdylib needs a Node host to link tests.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Same iroh as the iroh-relay and the browser crate: the wire must match exactly.
+iroh = "=1.4.1"
+napi = { version = "3", default-features = false, features = ["napi8", "async"] }
+napi-derive = "3"
+tokio = { version = "1", features = ["sync", "io-util", "rt", "macros"] }
+
+[build-dependencies]
+napi-build = "2"
+
+[lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

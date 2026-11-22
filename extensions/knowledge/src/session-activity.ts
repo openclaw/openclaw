@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type, type Static } from "typebox";
 import { text, type LoadedRecord } from "./model.js";
 
@@ -123,7 +124,7 @@ export function sessionActivity(
         // SAFETY: appendActivity writes only the read and write actions.
         action: row.action as "read" | "write",
         id: r.id,
-        title: r.title.slice(0, 200),
+        title: truncateUtf16Safe(r.title, 200),
         kind: r.kind,
         type: r.type,
         revision: Number(row.revision),

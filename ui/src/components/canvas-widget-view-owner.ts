@@ -7,7 +7,6 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -17,99 +16,18 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeWindowMessage } from "../lib/reactive/window-message.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import {
-  WidgetSandboxHost,
-  WIDGET_LOAD_NOTICE_MS,
-  WIDGET_LOAD_TIMEOUT_MS,
-} from "../lib/widget-sandbox-host.ts";
+import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
+import {
+  forgetPendingCanvasView,
+  isTerminalCanvasViewError,
+  loadCanvasView,
+  type CanvasWidgetViewBinding,
+} from "./canvas-widget-view-requests.ts";
+import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
-
-type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-
-type CanvasWidgetViewBinding = {
-  client: WidgetClient;
-  generation: number;
-  docId: string;
-  sessionKey: string;
-  operatorRead: boolean;
-};
-
-function isCanvasWidgetLoadRetryEvent(
-  event: GatewayEventFrame,
-  binding: CanvasWidgetViewBinding,
-): boolean {
-  const payload = asOptionalRecord(event.payload);
-  if (binding.operatorRead || payload?.sessionKey !== binding.sessionKey) {
-    return false;
-  }
-  const message = asOptionalRecord(payload.message);
-  return (
-    (event.event === "session.message" &&
-      message?.role === "toolResult" &&
-      message.toolName === "show_widget") ||
-    (event.event === "chat" &&
-      (payload.state === "final" || payload.state === "aborted" || payload.state === "error"))
-  );
-}
-
-const pendingViews = new WeakMap<
-  WidgetClient,
-  {
-    generation: number;
-    requests: Map<string, Promise<CanvasDocumentViewResult>>;
-  }
->();
-
-function canvasViewRequestKey(binding: CanvasWidgetViewBinding): string {
-  return `${binding.sessionKey}\0${binding.docId}\0${binding.operatorRead}`;
-}
-
-function forgetPendingCanvasView(binding: CanvasWidgetViewBinding | undefined): void {
-  if (!binding) {
-    return;
-  }
-  const pending = pendingViews.get(binding.client);
-  if (pending?.generation === binding.generation) {
-    pending.requests.delete(canvasViewRequestKey(binding));
-  }
-}
-
-function loadCanvasView(binding: CanvasWidgetViewBinding): Promise<CanvasDocumentViewResult> {
-  let pending = pendingViews.get(binding.client);
-  if (!pending || pending.generation !== binding.generation) {
-    pending = { generation: binding.generation, requests: new Map() };
-    pendingViews.set(binding.client, pending);
-  }
-  const requestKey = canvasViewRequestKey(binding);
-  const existing = pending.requests.get(requestKey);
-  if (existing) {
-    return existing;
-  }
-  const request = binding.client.request<CanvasDocumentViewResult>(
-    "canvas.document.view",
-    {
-      docId: binding.docId,
-      ...(!binding.operatorRead && binding.sessionKey ? { sessionKey: binding.sessionKey } : {}),
-    },
-    { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-  );
-  // Canvas also supports replacing a named document. Share concurrent reads,
-  // but only the mounted view retains bytes; a remount revalidates the source.
-  if (pending.requests.size < 32) {
-    const requests = pending.requests;
-    requests.set(requestKey, request);
-    void request
-      .finally(() => {
-        if (requests.get(requestKey) === request) {
-          requests.delete(requestKey);
-        }
-      })
-      .catch(() => {});
-  }
-  return request;
-}
 
 type ViewBinding = CanvasWidgetViewBinding & {
   connectionRevision: number;
@@ -121,18 +39,6 @@ type ViewBinding = CanvasWidgetViewBinding & {
 const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
-
-export type CanvasWidgetViewProps = {
-  docId: string;
-  sessionKey: string;
-  messageTimestamp?: number;
-  title: string;
-  preferredHeight?: number;
-  onHeightChange?: (height: number | null, settled?: boolean) => number | undefined;
-  connectionGeneration: number;
-  presentationActive: boolean;
-  allowScripts: boolean;
-};
 
 export function createCanvasWidget(
   props: CanvasWidgetViewProps,
@@ -195,19 +101,23 @@ export function createCanvasWidget(
     view?: CanvasDocumentViewResult;
     error: string;
     accessDenied: boolean;
+    unavailable: boolean;
     awaitingResult: boolean;
     runtimeError: string;
     resourceError: boolean;
     contentHeight?: number;
     sandboxGeneration: number;
+    scriptFrameAdmitted: boolean;
     pending: boolean;
   } = {
     error: "",
     accessDenied: false,
+    unavailable: false,
     awaitingResult: false,
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
+    scriptFrameAdmitted: false,
     pending: false,
   };
   let reportedHeight: number | undefined;
@@ -226,6 +136,7 @@ export function createCanvasWidget(
   let retryTimer: number | undefined;
   let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
+  let cancelFrameAdmission: (() => void) | undefined;
   Object.defineProperties(element, {
     documentHtml: {
       configurable: true,
@@ -253,7 +164,12 @@ export function createCanvasWidget(
       return;
     }
     stopRetryEvents = context.gateway.subscribeEvents((event) => {
-      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
+      if (
+        !isCurrent(binding) ||
+        state.view ||
+        retryTimer !== undefined ||
+        !isCanvasWidgetLoadRetryEvent(event, binding)
+      ) {
         return;
       }
       // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
@@ -282,7 +198,7 @@ export function createCanvasWidget(
       },
       resolveSafeTimeoutDelayMs(Math.max(retryDelayMs, retryAfterMs)),
     );
-    retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+    retryDelayMs *= 2;
   }
 
   function retireScriptPolicy(): void {
@@ -298,6 +214,7 @@ export function createCanvasWidget(
     forgetPendingCanvasView(activeBinding);
     releaseCanvasViewInterest();
     clearRetry();
+    retryDelayMs = 1_000;
     state.awaitingResult = false;
     validatedBinding = undefined;
     ownerBinding = undefined;
@@ -310,6 +227,9 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
+    cancelFrameAdmission?.();
+    cancelFrameAdmission = undefined;
+    state.scriptFrameAdmitted = false;
     scrollNonce = "";
     sandboxHost?.dispose();
     sandboxHost = undefined;
@@ -378,6 +298,7 @@ export function createCanvasWidget(
       activeBinding = undefined;
       releaseCanvasViewInterest();
       clearRetry();
+      retryDelayMs = 1_000;
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
       state.awaitingResult = false;
@@ -408,6 +329,7 @@ export function createCanvasWidget(
     validatedBinding = undefined;
     state.error = "";
     state.accessDenied = false;
+    state.unavailable = false;
     const binding: ViewBinding = {
       client,
       docId: props.docId,
@@ -443,7 +365,8 @@ export function createCanvasWidget(
           (previous.html !== view.html ||
             previous.sandboxUrl !== view.sandboxUrl ||
             previous.sandboxPort !== view.sandboxPort ||
-            previous.sandboxOrigin !== view.sandboxOrigin)
+            previous.sandboxOrigin !== view.sandboxOrigin ||
+            previous.sandboxShellHtml !== view.sandboxShellHtml)
         ) {
           props.onHeightChange?.(null, true);
           clearSandbox();
@@ -469,12 +392,16 @@ export function createCanvasWidget(
           error instanceof GatewayProtocolRequestError &&
           asOptionalRecord(error.details)?.type === "canvas_widget_pending";
         if (
-          isAwaitingGatewayFailure(error, gateway.snapshot) ||
-          error instanceof GatewayProtocolRequestTimeoutError ||
-          (error instanceof GatewayProtocolRequestError &&
-            error.gatewayCode === "UNAVAILABLE" &&
-            error.retryable)
+          retryDelayMs <= 16_000 &&
+          (isAwaitingGatewayFailure(error, gateway.snapshot) ||
+            error instanceof GatewayProtocolRequestTimeoutError ||
+            (error instanceof GatewayProtocolRequestError &&
+              error.gatewayCode === "UNAVAILABLE" &&
+              error.retryable))
         ) {
+          if (!state.awaitingResult) {
+            releaseRetryEvents();
+          }
           scheduleRetry(
             binding,
             error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined,
@@ -488,8 +415,14 @@ export function createCanvasWidget(
         state.pending = false;
         state.accessDenied =
           error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        state.unavailable = isTerminalCanvasViewError(error);
         state.error = formatUiError(error);
-        watchRetryEvents(binding);
+        if (!state.accessDenied) {
+          releaseRetryEvents();
+          releaseCanvasViewInterest();
+        } else {
+          watchRetryEvents(binding);
+        }
       })
       .finally(notify);
   }
@@ -497,6 +430,14 @@ export function createCanvasWidget(
   function syncSandbox(): void {
     const active = props.presentationActive && isCurrent(validatedBinding);
     sandboxHost?.setActive(active);
+    if (!active) {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+    }
+    if (active && props.allowScripts && state.view && !state.error && !state.scriptFrameAdmitted) {
+      scheduleFrameAdmission();
+      return;
+    }
     const frame = frameElement;
     const view = state.view;
     const binding = activeBinding;
@@ -506,11 +447,12 @@ export function createCanvasWidget(
     sandboxOrigin = new URL(frame.src).origin;
     releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin);
     scrollNonce = generateUUID();
-    releaseMessages = observeWindowMessage(window, frame.contentWindow!, handleMessage);
+    releaseMessages = observeWindowMessage(window, frame, handleMessage);
     sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin,
       sandboxUrl: frame.src,
+      sandboxShellHtml: view.sandboxShellHtml,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
       onLoaded: () => {
@@ -535,6 +477,50 @@ export function createCanvasWidget(
       },
     });
     sandboxHost.setActive(active);
+  }
+
+  function scheduleFrameAdmission(): void {
+    if (cancelFrameAdmission) {
+      return;
+    }
+    if (typeof requestIdleCallback !== "function") {
+      // Preserve eager admission where the browser has no idle scheduler.
+      state.scriptFrameAdmitted = true;
+      notify();
+      return;
+    }
+    const binding = validatedBinding;
+    let idleHandle = 0;
+    let quietTimer: number;
+    const admit = () => {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+      if (!isCurrent(binding) || !props.allowScripts || !props.presentationActive) {
+        return;
+      }
+      state.scriptFrameAdmitted = true;
+      notify();
+    };
+    // Browsing-context creation takes ~30 ms. Wait for the transcript to stop
+    // scrolling, then mount with its ready listener in one task. Idle deadlines
+    // can stay short indefinitely, so bound the wait after scrolling settles.
+    const cancelScheduled = () => {
+      window.clearTimeout(quietTimer);
+      cancelIdleCallback(idleHandle);
+    };
+    const waitForQuiet = () => {
+      cancelScheduled();
+      quietTimer = window.setTimeout(() => {
+        idleHandle = requestIdleCallback(admit, { timeout: 250 });
+      }, 120);
+    };
+    const roots = new Set([element.ownerDocument, element.getRootNode()]);
+    const releaseScroll = [...roots].map((root) => listen(root, "scroll", waitForQuiet, true));
+    cancelFrameAdmission = () => {
+      releaseScroll.forEach((release) => release());
+      cancelScheduled();
+    };
+    waitForQuiet();
   }
 
   function syncFrameError(): void {
@@ -696,8 +682,6 @@ export function createCanvasWidget(
     clearView,
     syncSandbox,
     syncFrameError,
-    setFrame: (frame: HTMLIFrameElement) => {
-      frameElement = frame;
-    },
+    setFrame: (frame: HTMLIFrameElement) => (frameElement = frame),
   };
 }

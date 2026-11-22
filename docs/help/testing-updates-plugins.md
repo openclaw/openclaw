@@ -249,14 +249,18 @@ OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 go
 pnpm test:docker:published-upgrade-survivor
 ```
 
-Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
-commit before the update and compare the installed application payload with the
-frozen tarball afterward, before candidate checks. This distinguishes different
-builds with the same version string. npm still owns dependency reification;
-manual tarball runs without a selected source SHA retain their existing contract.
+Source-pinned tarball runs of `base`, `sqlite-volume`, and `legacy-operator-state`
+verify the candidate commit before the update and compare the installed
+application payload with the frozen tarball afterward, before subsequent
+candidate checks. The `2026.9.2`
+legacy scenario first observes deferred-schema Doctor behavior, preserving the
+old updater's natural schema header before this package check. This distinguishes
+different builds with the same version string. npm still owns dependency
+reification; manual tarball runs without a selected source SHA retain their existing contract.
 These generic scenarios do not require a worker-cell baseline identity artifact.
 After the update, missing or unreadable tarballs and installed payloads fail with
-the corresponding candidate identity diagnostic before any candidate checks run.
+the corresponding candidate identity diagnostic before subsequent candidate
+checks run.
 
 Useful published-upgrade survivor variants:
 
@@ -363,9 +367,15 @@ The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
-preserves a workspace skill. It also configures DuckDuckGo without an install
-record: bundled baselines use their own CLI web-search settings; newer baselines
-receive the retained configuration of an already-broken upgrade. The local
+preserves a workspace skill. It explicitly disables autonomous Skill Workshop
+learning through the baseline CLI, selecting `enabled: false` or `mode: "off"` from
+that release's config schema and recording the native field in its baseline receipt.
+After update it requires canonical `mode: "off"`, either in core settings or in the
+marked plugin configuration after Doctor migrates them. Missing, reactivated,
+duplicate settings or a retained `enabled` field fail acceptance. The restrictive
+plugin allowlist remains intact. It also configures DuckDuckGo
+without an install record: bundled baselines use their own CLI web-search settings;
+newer baselines receive the retained configuration of an already-broken upgrade. The local
 registry supplies the candidate's official external DuckDuckGo package. Before
 standalone Doctor or consent repair, assertions require the npm install record,
 candidate package version and integrity, `plugins list` entry, and clean
@@ -680,7 +690,11 @@ Start with the artifact identity:
   config recipe coverage.
 
 The `legacy-operator-state` survivor installs a matching published companion
-through a moving tag (`latest`, `beta`, or `alpha`). If npm confirms that the
+through a moving tag (`latest`, `beta`, or `alpha`). A controlled ClawHub URL
+first serves the independently fetched published companion archive, then serves
+the sealed candidate plugin manifest and archives at that same URL. The recorded
+ClawHub source survives the upgrade; version, archive digests, integrity, and
+capability consent remain checked against the selected artifact. If npm confirms that the
 exact companion version was never published, the row records that companion as
 unavailable in `baselineCompanion` and continues the remaining operator-state
 and external-plugin migration checks. Registry errors still fail fixture setup.

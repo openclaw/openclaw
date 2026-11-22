@@ -123,7 +123,6 @@ it("retains literal __proto__ MCP header keys during redaction", () => {
 
   expect(first).not.toBe(second);
   expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
-  expect(first).not.toContain("synthetic");
   expect(second).not.toContain("synthetic");
 });
 

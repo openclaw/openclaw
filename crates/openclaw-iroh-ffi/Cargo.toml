@@ -1,0 +1,40 @@
+[package]
+name = "openclaw-iroh-ffi"
+version = "0.1.0"
+description = "Native Swift and Kotlin transport primitives for the OpenClaw ID tunnel"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+iroh = "=1.4.1"
+tokio = { version = "=1.54.1", features = ["sync", "rt-multi-thread", "macros", "time"] }
+uniffi = { version = "=0.31.2", default-features = false, features = ["tokio"] }
+# Already in the sibling's locked graph; required to erase our temporary native seed.
+zeroize = "=1.9.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android Application/VM lifetime bridge for iroh's system DNS resolver.
+jni = "=0.22.4"
+
+[lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

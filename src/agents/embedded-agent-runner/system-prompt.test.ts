@@ -9,10 +9,9 @@ import {
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
@@ -67,29 +66,29 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
-  it("lets explicit skill workflow gates override execution bias while preserving user authority and safety", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("lets explicit skill workflow gates override execution bias while preserving user authority and safety", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {},
       tools: [createStubTool("read")],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
     });
-    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain("read exact `<location>`");
     expect(prompt).toContain(
-      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+      "## Execution Bias\n- Act now on actionable requests using available tools; tool policy and approvals gate risk, so do not pre-refuse or ask unrequired permission. Explicit skill gates, user instructions, prior authorization, safety, and tool policy remain authoritative.",
     );
   });
 
   it.each(["available", "source-reply-only", "absent"] as const)(
     "advertises ClawHub from the actual %s message tool schema",
-    (surface) => {
+    async (surface) => {
       const message = createStubTool("message");
       message.parameters = Type.Object({
         message: Type.Optional(Type.String()),
         ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
       });
-      const prompt = buildConfiguredAgentSystemPrompt({
+      const prompt = await buildConfiguredAgentSystemPrompt({
         ...fixedEmbeddedPromptInputs(),
         runtimeInfo: { ...fixedEmbeddedPromptInputs().runtimeInfo, channel: "webchat" },
         tools: surface === "absent" ? [] : [message],
@@ -104,8 +103,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("forwards provider prompt contributions into the embedded prompt", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("forwards provider prompt contributions into the embedded prompt", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       runtimeCwd: "/tmp/task-repo",
       promptContribution: {
@@ -114,12 +113,14 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
-    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain(
+      "Working directory: /tmp/task-repo (tools, deliverables, and relative reply file paths; write other files as absolute paths).",
+    );
     expect(prompt).toContain("Agent workspace: /tmp/openclaw");
   });
 
-  it("keeps post-compaction curated context scoped to the prepared project", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("keeps post-compaction curated context scoped to the prepared project", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       activeProjectKeys: ["github.com/acme/Alpha"],
       contextFiles: [
@@ -141,9 +142,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
 
   it.each(["create", "rename-only", "absent"] as const)(
     "routes explicit task creation from the native %s tool surface in default suggest mode",
-    (surface) => {
+    async (surface) => {
       const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
-      const prompt = buildConfiguredAgentSystemPrompt({
+      const prompt = await buildConfiguredAgentSystemPrompt({
         ...basicPromptInputs(),
         tools: surface === "absent" ? [] : [sessions],
       });
@@ -158,8 +159,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("uses config-backed sub-agent delegation mode", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("uses config-backed sub-agent delegation mode", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         agents: {
@@ -178,8 +179,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).toContain("## Delegation");
   });
 
-  it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       config: {
         tools: {
@@ -191,11 +192,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
-    expect(prompt).not.toContain("never exec-write `/tmp`");
+    expect(prompt).not.toContain(
+      "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+    );
   });
 
-  it("forwards the subagent prompt surface to embedded prompt rendering", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
+  it("forwards the subagent prompt surface to embedded prompt rendering", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       promptSurface: "subagent",
       tools: [{ name: "sessions_spawn" } as never],
@@ -210,14 +213,14 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
     expect(prompt).toContain("## Promised Work");
-    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt).toContain("`running` is not completion.");
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
-  it("can omit base memory guidance for non-legacy context engines", () => {
+  it("can omit base memory guidance for non-legacy context engines", async () => {
     registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
-    const prompt = buildConfiguredAgentSystemPrompt({
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
       includeMemorySection: false,
     });
@@ -225,19 +228,19 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Memory Recall");
   });
 
-  it("includes background process guidance whenever process is callable", () => {
+  it("includes background process guidance whenever process is callable", async () => {
     const params = {
       ...basicPromptInputs(),
       tools: [{ name: "process" } as never],
     } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
-    const prompt = buildConfiguredAgentSystemPrompt(params);
+    const prompt = await buildConfiguredAgentSystemPrompt(params);
 
     expect(prompt).not.toContain("Active exec sessions");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
-    const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
+    const restrictedPrompt = await buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
     expect(restrictedPrompt).not.toContain("Active exec sessions");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
@@ -249,9 +252,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     ["explicit strict agent", { agentId: "strict" }, { agentId: "loose" }, true],
     ["loose runtime agent", {}, { agentId: "loose" }, false],
     ["no agent identity", {}, {}, false],
-  ])("resolves embedded prompt policy for %s", (name, selector, runtime, restricted) => {
+  ])("resolves embedded prompt policy for %s", async (name, selector, runtime, restricted) => {
     const inputs = fixedEmbeddedPromptInputs();
-    const prompt = buildConfiguredAgentSystemPrompt({
+    const prompt = await buildConfiguredAgentSystemPrompt({
       ...inputs,
       ...selector,
       runtimeInfo: { ...inputs.runtimeInfo, ...runtime },
@@ -266,14 +269,20 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       },
     });
     expect(prompt.includes("tools.fs.workspaceOnly ON"), name).toBe(restricted);
+    expect(
+      prompt.includes(
+        "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+      ),
+      name,
+    ).toBe(restricted);
     expect(prompt).toContain("Fixture stable provider guidance.");
     expect(prompt).toContain("Fixture dynamic provider guidance.");
   });
 
   it.each(["full", "minimal", "none"] as const)(
     "preserves the fixed embedded prompt in %s mode",
-    (promptMode) => {
-      const prompt = buildConfiguredAgentSystemPrompt({
+    async (promptMode) => {
+      const prompt = await buildConfiguredAgentSystemPrompt({
         ...fixedEmbeddedPromptInputs(),
         promptMode,
       });
@@ -308,10 +317,10 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       },
       directHint: false,
     },
-  ])("preserves absent optional fields with $name", ({ name, configInput, directHint }) => {
+  ])("preserves absent optional fields with $name", async ({ name, configInput, directHint }) => {
     const inputs = { ...fixedEmbeddedPromptInputs(), ...configInput };
-    const prompt = buildConfiguredAgentSystemPrompt(inputs);
-    const explicitUndefined = buildConfiguredAgentSystemPrompt({
+    const prompt = await buildConfiguredAgentSystemPrompt(inputs);
+    const explicitUndefined = await buildConfiguredAgentSystemPrompt({
       ...inputs,
       reactionGuidance: undefined,
       workspaceNotes: undefined,

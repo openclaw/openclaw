@@ -63,12 +63,13 @@ import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
-import type { ZcaFriend } from "./types.js";
+import type { ZaloSendOptions, ZcaFriend } from "./types.js";
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
 
 type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
   mediaUrl?: string;
+  mediaAccess?: ZaloSendOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
@@ -103,6 +104,7 @@ async function sendZalouserFromContext({
   mediaUrl,
   accountId,
   cfg,
+  mediaAccess,
   mediaLocalRoots,
   mediaReadFile,
   signal,
@@ -120,6 +122,7 @@ async function sendZalouserFromContext({
     onPlatformSendDispatch,
     isGroup: target.isGroup,
     mediaUrl,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     mediaMaxBytes: account.mediaMaxBytes,

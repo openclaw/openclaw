@@ -48,6 +48,27 @@ it("counts directory prefixes toward the compiled-pattern budget", () => {
   expectPaths(scan(nestedDir), [`${first}/${second}`, `${first}/${second}/secret.txt`]);
 });
 
+it.each([".gitignore", ".ignore", ".fdignore"])(
+  "preserves literal whitespace before hashes in root and nested %s rules",
+  (filename) => {
+    const nested = mkdir("nested");
+    const rules = `\uFEFF#${"x".repeat(17_000)}\n #space/\n\t#tab/\n#comment/\n\\#escaped/\n`;
+    write(rules, filename);
+    write(rules, filename, nested);
+    for (const [prefix, dir] of [
+      ["", tempDir],
+      ["nested/", nested],
+    ]) {
+      const ig = scan(dir);
+      expectPaths(
+        ig,
+        [" #space/file", "\t#tab/file", "#escaped/file"].map((p) => prefix + p),
+        ["visible/file", "#comment/file"].map((p) => prefix + p),
+      );
+    }
+  },
+);
+
 it("treats fail-closed subtree paths literally", () => {
   const oversized = comment();
   const unusualNames = [

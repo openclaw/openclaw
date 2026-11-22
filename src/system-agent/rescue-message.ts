@@ -14,6 +14,7 @@ import {
   replaceCorePluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import {
   executeSystemAgentOperation,
   formatSystemAgentPersistentPlan,
@@ -78,11 +79,33 @@ function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
       log: push,
       error: push,
       exit: (code) => {
-        throw new Error(`OpenClaw operation exited with code ${code}`);
+        throw new SystemAgentOperationExitError(code);
       },
     },
     read: () => lines.join("\n").trim(),
   };
+}
+
+/** Run one operation and reply with its output; a non-zero exit is part of that reply. */
+async function runCapturedOperation(
+  operation: SystemAgentOperation,
+  options: Parameters<typeof executeSystemAgentOperation>[2],
+  emptyReply: string,
+): Promise<string> {
+  const capture = createCaptureRuntime();
+  try {
+    await executeSystemAgentOperation(operation, capture.runtime, options);
+  } catch (error) {
+    if (!(error instanceof SystemAgentOperationExitError)) {
+      throw error;
+    }
+    // The command completed and already wrote its findings; failing the message would
+    // make channel ingress retry a finished command (for example doctor with warnings).
+    return [capture.read(), `OpenClaw operation exited with code ${error.code ?? 1}.`]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  return capture.read() || emptyReply;
 }
 
 /** Extract the command body after `/openclaw`, or null when the message is not for rescue. */
@@ -282,14 +305,16 @@ export async function runSystemAgentRescueMessage(
     if (unsupported) {
       return unsupported;
     }
-    const capture = createCaptureRuntime();
-    await executeSystemAgentOperation(operation, capture.runtime, {
-      approved: true,
-      auditDetails: buildAuditDetails(input),
-      deps: input.deps,
-      beforePersistentApply: assertCurrent,
-    });
-    return capture.read() || "OpenClaw rescue change applied.";
+    return await runCapturedOperation(
+      operation,
+      {
+        approved: true,
+        auditDetails: buildAuditDetails(input),
+        deps: input.deps,
+        beforePersistentApply: assertCurrent,
+      },
+      "OpenClaw rescue change applied.",
+    );
   }
 
   if (approvalIntent === "decline") {
@@ -343,11 +368,9 @@ export async function runSystemAgentRescueMessage(
 
   await pendingStore.delete(pendingKey);
   assertCurrent();
-  const capture = createCaptureRuntime();
-  await executeSystemAgentOperation(operation, capture.runtime, {
-    approved: true,
-    auditDetails: buildAuditDetails(input),
-    deps: input.deps,
-  });
-  return capture.read() || "OpenClaw listened, clicked a claw, and found nothing to change.";
+  return await runCapturedOperation(
+    operation,
+    { approved: true, auditDetails: buildAuditDetails(input), deps: input.deps },
+    "OpenClaw listened, clicked a claw, and found nothing to change.",
+  );
 }

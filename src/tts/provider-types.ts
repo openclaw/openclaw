@@ -1,38 +1,16 @@
 import type { TalkProviderConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ResolvedTtsPersona, TtsModelOverrideConfig } from "../config/types.tts.js";
-
-/** Canonical speech provider identifier after provider registry normalization. */
-export type SpeechProviderId = string;
-
-/** Output context requested from a speech provider. */
-export type SpeechSynthesisTarget = "audio-file" | "voice-note" | "telephony";
-
-/** Provider-owned normalized config map. */
-export type SpeechProviderConfig = Record<string, unknown>;
-
-/** Provider-owned per-request directive/persona overrides. */
-export type SpeechProviderOverrides = Record<string, unknown>;
+import type {
+  SpeechProviderConfig,
+  SpeechProviderId,
+  SpeechProviderOverrides,
+  SpeechSynthesisTarget,
+} from "./tts-runtime-types.js";
 
 /** Policy controlling which [[tts:*]] directive fields can affect synthesis. */
 export type SpeechModelOverridePolicy = {
   [Key in keyof TtsModelOverrideConfig]-?: Exclude<TtsModelOverrideConfig[Key], undefined>;
-};
-
-/** Parsed directive overrides grouped by provider. */
-export type TtsDirectiveOverrides = {
-  ttsText?: string;
-  provider?: SpeechProviderId;
-  providerOverrides?: Record<string, SpeechProviderOverrides>;
-};
-
-/** Result of parsing TTS directives from message text. */
-export type TtsDirectiveParseResult = {
-  cleanedText: string;
-  ttsText?: string;
-  hasDirective: boolean;
-  overrides: TtsDirectiveOverrides;
-  warnings: string[];
 };
 
 /** Context for checking whether a provider has enough config to synthesize. */
@@ -63,24 +41,6 @@ export type SpeechProviderPrepareSynthesisContext = SpeechSynthesisRequest & {
   personaProviderConfig?: SpeechProviderConfig;
 };
 
-/** Optional provider-prepared synthesis overrides. */
-export type SpeechProviderPreparedSynthesis = {
-  text?: string;
-  providerConfig?: SpeechProviderConfig;
-  providerOverrides?: SpeechProviderOverrides;
-};
-
-/** Voice metadata returned by provider list-voices hooks. */
-export type SpeechVoiceOption = {
-  id: string;
-  name?: string;
-  category?: string;
-  description?: string;
-  locale?: string;
-  gender?: string;
-  personalities?: string[];
-};
-
 /** Provider voice-listing request with optional direct auth/URL overrides. */
 export type SpeechListVoicesRequest = {
   cfg?: OpenClawConfig;
@@ -106,13 +66,6 @@ export type SpeechDirectiveTokenParseContext = {
   selectedProvider?: SpeechProviderId;
   providerConfig?: SpeechProviderConfig;
   currentOverrides?: SpeechProviderOverrides;
-};
-
-/** Provider directive parser result. */
-export type SpeechDirectiveTokenParseResult = {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
 };
 
 /** Provider hook input for resolving talk-command speech config. */

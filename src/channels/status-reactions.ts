@@ -32,6 +32,7 @@ const TOOL_REACTION_EMOJIS = new Map([
   ["suggest_task", "✨"],
   ["dismiss_task", "🗑️"],
   ["skill_workshop", "🧰"],
+  ["skill_library", "🧰"],
   ["openclaw", "🦀"],
   ["gateway", "🔌"],
   ["plugins", "🧩"],

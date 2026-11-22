@@ -3,6 +3,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
+import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -237,5 +239,35 @@ describe("rendered skills diagnostics", () => {
     });
     expect(systemPrompt.includes(catalog)).toBe(included || workspaceCopy);
     expectSkills(systemPrompt, included ? catalog : "", skillsPrompt);
+  });
+
+  it("keeps exact skill identities in the compact skills_read catalog and its report", () => {
+    const names = ["release  notes", "team:deploy", "deploy (prod)", "deploy (stage)", 'say "hi"'];
+    const skills = names.map((name) => createFixtureSkillEntry(name).skill);
+    // A description quoting catalog XML must not be mistaken for catalog structure.
+    skills[1] = {
+      ...skills[1]!,
+      description: "Explain <skill><name>example</name></skill> elements",
+    };
+    const stored = formatSkillsForPromptCore(skills);
+    let rendered = "";
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read"],
+      skillsPrompt: stored,
+      onRenderedSkillsPrompt: (prompt) => (rendered = prompt),
+    });
+    expect(systemPrompt).toContain('- "release  notes": release notes description');
+    expect(systemPrompt).toContain('- "deploy (prod)": deploy (prod) description');
+    expect(systemPrompt).toContain(
+      '- "team:deploy": Explain <skill><name>example</name></skill> elements',
+    );
+    expect(systemPrompt).not.toContain("<location>");
+    // Embedded runs report the rendered catalog; /context and CLI backends pass the stored one.
+    for (const skillsPrompt of [rendered, stored]) {
+      const report = makeReport({ systemPrompt, skillsPrompt }).skills;
+      expect(report.entries.map(({ name }) => name)).toEqual(names);
+      expect(report.promptChars).toBe(rendered.length);
+    }
   });
 });

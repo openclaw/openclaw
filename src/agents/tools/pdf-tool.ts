@@ -59,14 +59,13 @@ import {
   prepareToolAuthProfileStore,
 } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import { buildPdfExtractionContext, parsePageRange, resolvePdfInputs } from "./pdf-tool.helpers.js";
 import {
-  buildPdfExtractionContext,
   coercePdfModelConfig,
-  parsePageRange,
-  resolvePdfInputs,
+  type PdfToolActiveModel,
+  resolvePdfModelConfigForTool,
   resolvePdfToolMaxTokens,
-} from "./pdf-tool.helpers.js";
-import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+} from "./pdf-tool.model-config.js";
 
 const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
@@ -108,7 +107,6 @@ export function createPdfTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -128,7 +126,6 @@ export function createPdfTool(options?: {
   const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolvePdfModelConfigForTool({
       cfg: options?.config,
-      agentDir,
       workspaceDir: options?.workspaceDir,
       authStore,
       activeModel: options?.activeModel,
@@ -178,7 +175,6 @@ export function createPdfTool(options?: {
     const password = typeof record.password === "string" ? record.password : undefined;
 
     let pdfModelConfig = registrationPdfModelConfig;
-    const authProfileStoreSource = options?.authProfileStoreSource;
     if (!pdfModelConfig) {
       const authStore = await prepareToolAuthProfileStore(options);
       signal?.throwIfAborted();
@@ -341,13 +337,11 @@ export function createPdfTool(options?: {
         : await prepareToolAuthProfileStore({
             agentDir: runtimeAgentDir,
             authProfileStore,
-            authProfileStoreSource,
           });
       signal?.throwIfAborted();
       assertResourcesOpen?.();
       const committedPdfModelConfig = resolvePdfModelConfigForTool({
         cfg: preparedRuntime.config,
-        agentDir: runtimeAgentDir,
         ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
         authStore: runtimeAuthProfileStore,
         activeModel,
@@ -463,6 +457,7 @@ export function createPdfTool(options?: {
                   : undefined;
             if (analyzePdf) {
               const text = await analyzePdf({
+                model,
                 apiKey,
                 modelId,
                 prompt: promptRaw,

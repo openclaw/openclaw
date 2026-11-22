@@ -1,9 +1,12 @@
 // Frame normalization: --mode frames --nodes 4096 --iterations 5 (Node 26.12+).
 // Each iteration sanitizes 20 batches; compare interleaved base/candidate runs.
 // CPU and total allocated bytes are untraced; this is owner cost, not Gateway load.
+// Heap export: --mode heap-export --nodes 9000 --samples 18000 --iterations 5.
+// Replays a synthetic inspector result through the capture owner (no sampling load).
+// Measures summary-only versus full artifact export; temporary artifacts are removed.
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
 import {
@@ -31,7 +34,9 @@ const nodes = Number(option("nodes", "65535"));
 const samples = Number(option("samples", "131072"));
 const allocationBytes = Number(option("allocation-bytes", String(4 * 1024 ** 3)));
 if (
-  !["all", "sanitize", "heap", "cpu", "record", "native-parse", "frames"].includes(mode) ||
+  !["all", "sanitize", "heap", "heap-export", "cpu", "record", "native-parse", "frames"].includes(
+    mode,
+  ) ||
   !Number.isSafeInteger(iterations) ||
   iterations < 1 ||
   !Number.isSafeInteger(nodes) ||
@@ -69,13 +74,13 @@ const metadata = {
   rssAfter: 0,
 };
 
-function syntheticProfile(): SamplingProfile {
+function syntheticProfile(packageRoot = "/synthetic/openclaw"): SamplingProfile {
   const tree: SamplingProfile["head"][] = Array.from({ length: nodes }, (_, index) => ({
     id: index + 1,
     callFrame: {
       functionName: `allocation${index}`,
       scriptId: "1",
-      url: `/synthetic/openclaw/src/module${index % 512}.ts`,
+      url: `${packageRoot}/src/module${index % 512}.ts`,
       lineNumber: index % 2000,
       columnNumber: index % 80,
     },
@@ -198,6 +203,83 @@ if (startAt) {
     throw new Error("Missed --start-at; do not compare unsynchronized pairs");
   }
   await delay(waitMs);
+}
+if (mode === "heap-export") {
+  const profile = syntheticProfile(sourceRoot);
+  const post = Object.getOwnPropertyDescriptor(Session.prototype, "post")!;
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const scratchRoot = path.join(sourceRoot, ".local");
+  await mkdir(scratchRoot, { recursive: true });
+  const stateDir = await mkdtemp(path.join(scratchRoot, "heap-export-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  Object.defineProperty(Session.prototype, "post", {
+    ...post,
+    value: async (method: string) => {
+      if (method === "HeapProfiler.stopSampling") {
+        return { profile };
+      }
+      if (
+        ["HeapProfiler.enable", "HeapProfiler.startSampling", "HeapProfiler.disable"].includes(
+          method,
+        )
+      ) {
+        return {};
+      }
+      throw new Error(`Unexpected inspector operation: ${method}`);
+    },
+  });
+  try {
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+      const cpuBefore = process.threadCpuUsage();
+      const startedAt = performance.now();
+      const outcome = await heap.captureDiagnosticHeapProfile({
+        durationMs: 1,
+        signal: new AbortController().signal,
+        hasAuthority: () => true,
+      });
+      const wallMs = performance.now() - startedAt;
+      const cpuUsed = process.threadCpuUsage(cpuBefore);
+      const allocated = getHeapStatistics().total_allocated_bytes - allocatedBefore;
+      if (outcome.status !== "complete") {
+        throw new Error(`Capture failed: ${outcome.reason}`);
+      }
+      const result = outcome.result;
+      let artifactBytes = 0;
+      let artifactSampleBytes = 0;
+      if ("path" in result && typeof result.path === "string") {
+        const content = await readFile(result.path, "utf8");
+        const saved: SamplingProfile = JSON.parse(content);
+        artifactBytes = Buffer.byteLength(content);
+        artifactSampleBytes = saved.samples.reduce((sum, sample) => sum + sample.size, 0);
+        if (artifactSampleBytes !== allocationBytes) {
+          throw new Error("Artifact lost samples");
+        }
+        await rm(result.path);
+      }
+      reports.push({
+        iteration,
+        nodeCount: nodes,
+        sampleCount: samples,
+        cpuMs: (cpuUsed.user + cpuUsed.system) / 1000,
+        wallMs,
+        allocatedBytes: allocated,
+        artifactBytes,
+        artifactSampleBytes,
+        summarySelfBytes:
+          "summary" in result ? result.summary.reduce((sum, row) => sum + row.selfBytes, 0) : null,
+        responseBytes: Buffer.byteLength(JSON.stringify(result)),
+      });
+    }
+  } finally {
+    Object.defineProperty(Session.prototype, "post", post);
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await rm(stateDir, { recursive: true, force: true });
+  }
 }
 if (mode === "frames") {
   const {
@@ -405,8 +487,9 @@ if (mode === "all" || mode === "cpu") {
       actualDurationMs: result.capture.result.actualDurationMs,
       startBlockedMs: result.capture.result.startBlockedMs,
       nativeSampleCount:
-        result.capture.result.profile?.samples?.length ??
-        ("sampleCount" in result.capture.result ? result.capture.result.sampleCount : 0),
+        "profile" in result.capture.result
+          ? result.capture.result.profile.samples.length
+          : result.capture.result.summary.sampleCount,
       responseBytes: result.responseBytes,
       warnings,
     });

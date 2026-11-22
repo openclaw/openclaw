@@ -20,6 +20,31 @@ import {
 } from "./ops.gateway.test-support.js";
 import type { CronServiceDeps } from "./state.js";
 
+// A booted Gateway serves cron.add from its published model catalog owner. This fixture has no
+// Gateway lifecycle, so without one every add cold-builds a read-only model runtime before
+// reaching validation, which can outlast the in-process request timeout on hosted Node.
+vi.mock("../isolated-agent/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../isolated-agent/model-selection.js")>();
+  const { resolveAgentWorkspaceDir, resolveEffectiveAgentDir } =
+    await import("../../agents/agent-scope-config.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../../plugins/plugin-metadata.test-support.js");
+  return {
+    ...actual,
+    resolveCronModelSelectionOwner: async ({
+      cfg,
+      agentId = "main",
+    }: Parameters<typeof actual.resolveCronModelSelectionOwner>[0]) => ({
+      agentId,
+      agentDir: resolveEffectiveAgentDir(cfg, agentId),
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      config: cfg,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      modelCatalog: { entries: [], routeVariants: [] },
+    }),
+  };
+});
+
 type CallerClosure = "revoked" | "aborted";
 type CallerFixture = CronGatewayFixture & {
   closeCaller: (closure: CallerClosure) => void;
@@ -276,7 +301,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
   );
 
   it.each([true, false])(
-    "preserves a revoked caller's response only for actual queue acceptance: %s",
+    "preserves the completed queue decision after caller revocation (accepted: %s)",
     async (accepted) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
@@ -309,7 +334,12 @@ describe("Cron mutation outcomes through the in-process router", () => {
               processInstanceId,
             });
           } else {
-            await expect(pending).rejects.toThrow(/authority.*no longer active/i);
+            await expect(pending).resolves.toMatchObject({
+              ok: true,
+              ran: false,
+              reason: "not-due",
+              processInstanceId,
+            });
           }
           expect(responseBoundaryObserved).toBe(true);
           const queuedAtMs = (await readJob(fixture, job.id))?.state.queuedAtMs;

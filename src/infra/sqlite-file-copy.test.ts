@@ -75,7 +75,7 @@ it.each([
       throw refusal;
     }
   });
-  const copy = copySqliteFile(source, target, identity, admission);
+  const copy = copySqliteFile(source, target, identity, { beforeByteCopy: admission });
   if (terminal || refused) {
     await expect(copy).rejects.toBe(terminal ? failure : refusal);
   } else {

@@ -13,6 +13,10 @@
  * runs periodic remote revisions after warming every workspace; the other workspaces go idle.
  * Timed mode publishes revision zero before worker creation, matching the inherited startup
  * catalog retained alongside workspace revisions in a running Gateway.
+ * --refresh-rounds 10 replaces the duration deadline with an exact periodic refresh count,
+ * preserving startup, warmup, refresh semantics, spacing (including the final interval), and GC.
+ * --process-memory adds fresh main/descendant-isolate heap observations at periodic checkpoints.
+ * Reports are projected in memory; output contains no report environment, paths, or command lines.
  * Each workspace has a distinct plugin config and synthetic account per provider. Discovery
  * uses the public SDK TTL cache, with --discovery-models rows per provider/account. Run with
  * --runtime-plugin. Timing and allocation passes use the same workload; --snapshot captures
@@ -51,7 +55,9 @@ const { values } = parseArgs({
     "runtime-plugin": { type: "boolean", default: false },
     "idle-seconds": { type: "string", default: "0" },
     "duration-seconds": { type: "string", default: "0" },
+    "refresh-rounds": { type: "string", default: "0" },
     "refresh-seconds": { type: "string", default: "30" },
+    "process-memory": { type: "boolean", default: false },
     "active-workspaces": { type: "string" },
     providers: { type: "string", default: "1" },
     "discovery-models": { type: "string", default: "500" },
@@ -69,22 +75,28 @@ const workspaces = Number(values.workspaces);
 const idleSeconds = Number(values["idle-seconds"]);
 const taskRounds = Number(values["task-rounds"]);
 const durationSeconds = Number(values["duration-seconds"]);
+const refreshRounds = Number(values["refresh-rounds"]);
 const refreshSeconds = Number(values["refresh-seconds"]);
+const periodicRefresh = durationSeconds > 0 || refreshRounds > 0;
 const activeWorkspaces = Number(
   values["active-workspaces"] ?? Math.max(1, Math.floor(workspaces / 2)),
 );
 const providers = Number(values.providers);
 const discoveryModels = Number(values["discovery-models"]);
-const teamShaped = durationSeconds > 0 || providers > 1;
+const teamShaped = periodicRefresh || providers > 1;
 const providerIds = Array.from({ length: providers }, (_, index) =>
   index === 0 ? "fixture-provider" : `fixture-provider-${index}`,
 );
+const remoteCatalogSourceUrl = "https://catalog.invalid/catalog.json";
+const remoteProviderId = "fixture-remote";
 assert(Number.isSafeInteger(rows) && rows > 0);
 assert(Number.isSafeInteger(configuredModels) && configuredModels > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
 assert(Number.isSafeInteger(taskRounds) && taskRounds > 0);
 assert(Number.isSafeInteger(idleSeconds) && idleSeconds >= 0, "--idle-seconds must be nonnegative");
 assert(Number.isSafeInteger(durationSeconds) && durationSeconds >= 0);
+assert(Number.isSafeInteger(refreshRounds) && refreshRounds >= 0);
+assert(!durationSeconds || !refreshRounds, "Choose a duration or an exact refresh count");
 assert(Number.isSafeInteger(refreshSeconds) && refreshSeconds > 0);
 assert(
   Number.isSafeInteger(activeWorkspaces) && activeWorkspaces > 0 && activeWorkspaces <= workspaces,
@@ -92,8 +104,12 @@ assert(
 assert(Number.isSafeInteger(providers) && providers > 0);
 assert(Number.isSafeInteger(discoveryModels) && discoveryModels > 0);
 assert(
-  !durationSeconds || !values["measure-tasks"],
+  !periodicRefresh || !values["measure-tasks"],
   "Timed refreshes and --measure-tasks are separate modes",
+);
+assert(
+  !values["process-memory"] || (periodicRefresh && process.report && !process.versions.bun),
+  "--process-memory requires periodic refreshes on Node",
 );
 assert(providers === 1 || values["runtime-plugin"], "Multiple providers require --runtime-plugin");
 const output = path.join(root, "workers");
@@ -153,9 +169,7 @@ if (values["built-worker"]) {
 }
 await import("./worker-retained-heap-preload.js");
 const workerMetrics =
-  idleSeconds > 0 || durationSeconds > 0
-    ? await import("../../src/infra/worker-cpu.js")
-    : undefined;
+  idleSeconds > 0 || periodicRefresh ? await import("../../src/infra/worker-cpu.js") : undefined;
 workerMetrics?.setTrackedWorkerGcObserver(() => {});
 const { CatalogWorkerTaskPool } =
   await import("../../src/agents/prepared-model-catalog-worker.pool.js");
@@ -169,7 +183,7 @@ const { captureTemplateInstallSchemaVersionFacts } =
 const { prepareSharedAuthStoreOwnership } =
   await import("../../src/agents/auth-profiles/path-resolve.js");
 await prepareSharedAuthStoreOwnership(env);
-const startupCatalog = durationSeconds > 0 ? createRemoteCatalog(0) : undefined;
+const startupCatalog = periodicRefresh ? createRemoteCatalog(0) : undefined;
 if (startupCatalog) {
   const { captureRemoteModelCatalogStartupSnapshot, publishRemoteModelCatalogSnapshot } =
     await import("../../src/model-catalog/remote-overlay.js");
@@ -188,9 +202,21 @@ if (values["runtime-plugin"]) {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: "catalog-retention-fixture",
-      providers: providerIds,
+      providers: [...providerIds, remoteProviderId],
       modelCatalog: {
-        discovery: Object.fromEntries(providerIds.map((provider) => [provider, "runtime"])),
+        // A nonempty manifest declaration owns the remote overlay without adding its
+        // provider to the fixture's runtime discovery or credential scope.
+        providers: {
+          [remoteProviderId]: {
+            api: "openai-completions",
+            baseUrl: "https://remote.invalid/v1",
+            models: [{ id: "fixture-manifest-seed", name: "Manifest seed" }],
+          },
+        },
+        discovery: {
+          [remoteProviderId]: "static",
+          ...Object.fromEntries(providerIds.map((provider) => [provider, "runtime"])),
+        },
         runtimeAugment: true,
       },
       configSchema: {
@@ -240,6 +266,7 @@ const config = {
     : { enabled: false },
   models: {
     mode: values["runtime-plugin"] ? ("merge" as const) : ("replace" as const),
+    catalogRefresh: { url: remoteCatalogSourceUrl },
     providers: {
       "fixture-provider": {
         baseUrl: "https://fixture.invalid/v1",
@@ -330,10 +357,71 @@ const requests: Array<{
   elapsedMs: number;
   entries: number;
   configuredEntries: number;
+  remoteEntries: number;
   runtimeModels: number;
   hash: string;
   runtimeHash: string;
 }> = [];
+function sampleProcessMemory(phase: string, catalogThreadId: number) {
+  type MemoryReport = {
+    header: { threadId: number };
+    javascriptHeap: {
+      usedMemory: number;
+      totalMemory: number;
+      totalCommittedMemory: number;
+      memoryLimit: number;
+      externalMemory: number;
+      mallocedMemory: number;
+    };
+    workers: MemoryReport[];
+  };
+  const isolates: Array<{
+    threadId: number;
+    parentThreadId: number | null;
+    role: "main" | "catalog" | "unknown";
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+    heapCommittedBytes: number;
+    heapLimitBytes: number;
+    externalBytes: number;
+    mallocedBytes: number;
+  }> = [];
+  const project = (report: MemoryReport, parentThreadId: number | null) => {
+    const { threadId } = report.header;
+    const heap = report.javascriptHeap;
+    isolates.push({
+      threadId,
+      parentThreadId,
+      role: threadId === 0 ? "main" : threadId === catalogThreadId ? "catalog" : "unknown",
+      heapUsedBytes: heap.usedMemory,
+      heapTotalBytes: heap.totalMemory,
+      heapCommittedBytes: heap.totalCommittedMemory,
+      heapLimitBytes: heap.memoryLimit,
+      externalBytes: heap.externalMemory,
+      mallocedBytes: heap.mallocedMemory,
+    });
+    for (const worker of report.workers) {
+      project(worker, threadId);
+    }
+  };
+  const before = process.memoryUsage();
+  const started = performance.now();
+  // Native reports interrupt descendant isolates for fresh statistics without forcing GC.
+  // Project immediately: the full report includes private process metadata and must never escape.
+  project(process.report.getReport() as MemoryReport, null);
+  const captureMs = performance.now() - started;
+  const after = process.memoryUsage();
+  console.log(
+    JSON.stringify({
+      phase: `${phase}-process-memory`,
+      commands,
+      captureMs,
+      before,
+      after,
+      isolates,
+    }),
+  );
+}
 async function sample(
   name: string,
   operation: "collect" | "snapshot" | "start" | "stop" = "collect",
@@ -349,6 +437,10 @@ async function sample(
     );
   assert(ready, "Missing catalog-worker instrumentation after completed task");
   const identity = JSON.parse(fs.readFileSync(path.join(output, ready), "utf8"));
+  const processMemory = values["process-memory"] && name.startsWith("refresh-");
+  if (processMemory && operation === "start") {
+    sampleProcessMemory(name, identity.threadId);
+  }
   const reply = identity.commandPath.replace(".command.json", `.${name}.json`);
   fs.writeFileSync(identity.commandPath + ".tmp", JSON.stringify({ id: name, operation }));
   fs.renameSync(identity.commandPath + ".tmp", identity.commandPath);
@@ -370,14 +462,17 @@ async function sample(
       ...result,
     }),
   );
+  if (processMemory && operation !== "start") {
+    sampleProcessMemory(name, identity.threadId);
+  }
 }
 function createRemoteCatalog(revision: number) {
   return {
-    sourceUrl: "https://catalog.invalid/catalog.json",
+    sourceUrl: remoteCatalogSourceUrl,
     revision: `synthetic-revision-${revision}`,
     generatedAt: revision,
     providers: {
-      "fixture-remote": {
+      [remoteProviderId]: {
         api: "openai-completions" as const,
         baseUrl: "https://remote.invalid/v1",
         models: Array.from({ length: rows }, (_, index) => ({
@@ -430,6 +525,34 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
     const runtimeById = new Map(
       result.runtimeModels.get("fixture-provider")?.map((model) => [model.id, model]),
     );
+    const remoteIdPrefix = `fixture-remote-${revision}-`;
+    const firstRemoteId = `${remoteIdPrefix}0`;
+    const lastRemoteId = `${remoteIdPrefix}${rows - 1}`;
+    let remoteEntries = 0;
+    let firstRemote = false;
+    let lastRemote = false;
+    for (const entry of result.snapshot.entries) {
+      if (entry.provider !== remoteProviderId || !entry.id.startsWith(remoteIdPrefix)) {
+        continue;
+      }
+      remoteEntries++;
+      const first = entry.id === firstRemoteId;
+      const last = entry.id === lastRemoteId;
+      if (first || last) {
+        assert.equal(entry.name, `Synthetic model ${revision} ${first ? 0 : rows - 1}`);
+        assert.equal(entry.contextWindow, 128000);
+        assert.equal(entry.api, "openai-completions");
+        assert.equal(entry.baseUrl, "https://remote.invalid/v1");
+        firstRemote ||= first;
+        lastRemote ||= last;
+      }
+    }
+    assert.equal(remoteEntries, values["runtime-plugin"] ? rows : 0);
+    if (values["runtime-plugin"]) {
+      assert(firstRemote && lastRemote, "Missing remote revision boundary models");
+    }
+    // Catalog inventory does not authorize an otherwise unselected runtime provider.
+    assert.equal(result.runtimeModels.get(remoteProviderId)?.length ?? 0, 0);
     for (const model of config.models.providers["fixture-provider"].models) {
       assert(configuredIds.has(model.id));
       const runtimeModel = runtimeById.get(model.id);
@@ -455,6 +578,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
       elapsedMs,
       entries: result.snapshot.entries.length,
       configuredEntries: configuredEntries.length,
+      remoteEntries,
       runtimeModels: [...result.runtimeModels.values()].reduce(
         (total, models) => total + models.length,
         0,
@@ -475,9 +599,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
   if (!values["measure-tasks"] && !timed) {
     await sample(
       `revision-${revision}`,
-      values.snapshot && durationSeconds === 0 && revision === taskRounds - 1
-        ? "snapshot"
-        : "collect",
+      values.snapshot && !periodicRefresh && revision === taskRounds - 1 ? "snapshot" : "collect",
     );
   }
 }
@@ -488,7 +610,7 @@ try {
   if (values["measure-tasks"]) {
     await sample("tasks-stop", "stop");
   }
-  if (durationSeconds > 0) {
+  if (periodicRefresh) {
     await sample("refresh-start", "start");
     const started = performance.now();
     const sampleMemory = () =>
@@ -505,7 +627,11 @@ try {
     const timer = setInterval(sampleMemory, 30_000);
     let revision = taskRounds;
     try {
-      while (performance.now() - started < durationSeconds * 1000) {
+      while (
+        refreshRounds
+          ? revision < taskRounds + refreshRounds
+          : performance.now() - started < durationSeconds * 1000
+      ) {
         const roundStarted = performance.now();
         await runRevision(revision++, activeWorkspaces, true);
         await delay(
@@ -513,7 +639,9 @@ try {
             0,
             Math.min(
               refreshSeconds * 1000 - (performance.now() - roundStarted),
-              durationSeconds * 1000 - (performance.now() - started),
+              refreshRounds
+                ? Number.POSITIVE_INFINITY
+                : durationSeconds * 1000 - (performance.now() - started),
             ),
           ),
         );

@@ -113,7 +113,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         expect(call?.event.modelIterations).toBe(10);
         expect(ctx?.toolNames).toContain("skill_workshop");
         const reviewSource =
-          runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
+          runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.completedTurnSource;
         if (outcome === "provider refusal") {
           expect(result.currentAttemptAssistant).toMatchObject({
             stopReason: "error",

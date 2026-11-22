@@ -57,6 +57,11 @@ else
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # The local mock needs a key without enabling public provider discovery.
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+  export OPENCLAW_UPGRADE_SURVIVOR_API_KEY="sk-openclaw-upgrade-survivor"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
@@ -694,13 +699,39 @@ wait_for_fixture_port() {
 configure_clawhub_fixture() {
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
   [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
-  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  local stage="${1:-candidate}" manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file port=0
   port_file="$fixture_root/port"
-  log_file="$fixture_root/server.log"
+  log_file="$fixture_root/$stage-server.log"
+  if [ -n "$clawhub_fixture_pid" ]; then
+    # Recorded ClawHub sources retain this URL across the baseline/candidate handoff.
+    port="$(cat "$port_file")"
+    node --input-type=module - "http://127.0.0.1:$port" "$fixture_root/requests-baseline.json" <<'NODE'
+import fs from "node:fs";
+const response = await fetch(new URL("/__fixture__/requests", process.argv[2]));
+if (!response.ok) throw new Error(`ClawHub fixture ledger HTTP ${response.status}`);
+fs.writeFileSync(process.argv[3], `${JSON.stringify(await response.json(), null, 2)}\n`);
+NODE
+    openclaw_e2e_stop_process "$clawhub_fixture_pid"
+  fi
+  if [ "$stage" = "baseline" ]; then
+    [ -n "$baseline_plugin_tarball" ] || return 0
+    manifest="$(dirname "$baseline_plugin_tarball")/clawhub-baseline.json"
+    node --input-type=module - "$baseline_plugin_tarball" "$baseline_plugin_version" "$manifest" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const [archive, version, manifest] = process.argv.slice(2);
+fs.writeFileSync(manifest, `${JSON.stringify({ packages: [{
+  name: "@openclaw/discord", version, tarball: path.basename(archive),
+  sha256: createHash("sha256").update(fs.readFileSync(archive)).digest("hex"),
+}] }, null, 2)}\n`);
+NODE
+  fi
   mkdir -p "$fixture_root" && rm -f "$port_file"
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     prepublish-artifacts "$port_file" \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+    "$manifest" "$port" >"$log_file" 2>&1 &
   clawhub_fixture_pid="$!"
   wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
   export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
@@ -878,6 +909,9 @@ NODE
     plugin_registry_pid \
     ${registry_args[@]+"${registry_args[@]}"} || return "$?"
   candidate_selector_registry="$selector_registry"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    configure_clawhub_fixture "$stage"
+  fi
 }
 
 seed_legacy_runtime_deps_symlink() {
@@ -1007,7 +1041,7 @@ initialize_state() {
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$SCENARIO" = "git-release" ]; then
     account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
     if [ -z "$account_home" ]; then
       echo "Could not resolve the current account home" >&2
@@ -1174,9 +1208,13 @@ for (const { durationMs, diagnostics, ...step } of cleanups) {
   assert.deepEqual(step, {
     name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
   }, "second update recovery cleanup did not finish cleanly");
-  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
-    typeof diagnostics[0] === "string" &&
-    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
+  // The summary comes first; one line per removed or kept item may follow.
+  // Earlier releases reported one fixed sentence.
+  assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+    diagnostics.every((line) => typeof line === "string") &&
+    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+      (diagnostics.length === 1 &&
+        /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
     "second update omitted its verified recovery cleanup outcome");
 }
 // Advisory guidance is product prose that releases reword; require one, not its text.
@@ -1388,12 +1426,15 @@ write_update_restart_service_env() {
   local dotenv_path="$OPENCLAW_STATE_DIR/.env"
   local tmp_path="$dotenv_path.tmp.$$"
   if [ -f "$dotenv_path" ]; then
-    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)=' "$dotenv_path" >"$tmp_path" || true
+    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL|OPENCLAW_UPGRADE_SURVIVOR_API_KEY)=' "$dotenv_path" >"$tmp_path" || true
   else
     : >"$tmp_path"
   fi
   # Managed restarts resolve auth and fixture routing from service-owned durable env.
   printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" >>"$tmp_path"
+  fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     printf 'OPENCLAW_CLAWHUB_URL=%s\n' "$OPENCLAW_CLAWHUB_URL" >>"$tmp_path"
   fi
@@ -2446,6 +2487,12 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
+if [ "$SCENARIO" = "git-release" ]; then
+  source scripts/e2e/lib/upgrade-survivor/git-release.sh
+  run_git_release_survivor
+  run_completed="1"
+  exit 0
+fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then
@@ -2756,7 +2803,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$baseline_version" = "2026.9.
   phase prepare-native-assignment-proof prepare_native_assignment_proof
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     candidate "$(package_root)" "$CANDIDATE_SPEC"
 fi
@@ -2767,6 +2814,7 @@ if [ "$SCENARIO" = "missing-configured-plugin-migration" ]; then
   exit 0
 fi
 if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Legacy binds ClawHub after acquiring the independent published companion.
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
 else
   phase configure-clawhub-fixture configure_clawhub_fixture
@@ -2879,7 +2927,7 @@ if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
-  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "legacy-operator-state" ]; }; then
   phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
     installed "$(package_root)" "$CANDIDATE_SPEC"
 fi

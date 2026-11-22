@@ -1,7 +1,10 @@
 /** Retry identity remains valid across a short reconnect or placement interruption. */
 export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 
 export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export const SESSIONS_FILES_STAT_MAX_PATHS = 64;
+export const SESSIONS_FILES_STAT_PATH_MAX_CHARS = 4096;
 
 /** Maximum stable session key length accepted by chat-send protocol requests. */
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;

@@ -66,10 +66,19 @@ afterEach(() => vi.restoreAllMocks());
 async function registerWorktree(origin?: string, bare = false) {
   let root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");
-  await git(root, "config", "user.name", "Publication Fixture");
-  await git(root, "config", "user.email", "publication@example.invalid");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "commit", "--allow-empty", "-m", "fixture");
+  await git(
+    root,
+    "-c",
+    "user.name=Publication Fixture",
+    "-c",
+    "user.email=publication@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "fixture",
+  );
   if (bare) {
     const repository = `${root}/bare.git`;
     const checkout = `${root}/checkout`;
@@ -193,6 +202,7 @@ describe("registered guest publication target discovery", () => {
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       for (let index = 0; index < 2; index++) {
         expectReply(await options(fixture), sharedOptions);
       }
@@ -264,7 +274,7 @@ describe("registered guest publication target discovery", () => {
   );
 
   it.each(["connection", "worktree", "session worktree"] as const)(
-    "rejects a changed %s during repository discovery",
+    "keeps admitted reads across %s changes while fencing the selected workspace",
     async (change) => {
       await withWorktree(async (fixture, worktree) => {
         const identity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
@@ -291,7 +301,12 @@ describe("registered guest publication target discovery", () => {
           }
           pending.resolve(identity);
           await request;
-          expectFailure(respond, { code: "FORBIDDEN" });
+          if (change === "connection") {
+            expectReply(respond, expectedOptions(true));
+            expectFailure(await options(fixture));
+          } else {
+            expectFailure(respond, { code: "FORBIDDEN" });
+          }
           expect(respond).toHaveBeenCalledOnce();
         } finally {
           pending.resolve(identity);
@@ -389,7 +404,7 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
   );
 
   it.each(["scope", "role", "profile", "grant", "connection", "visibility", "lifecycle"] as const)(
-    "rejects %s loss during an awaited receipt read",
+    "keeps admitted reads across transport revocation while fencing %s changes",
     async (change) => {
       await withReadFixture(
         async (fixture) => {
@@ -426,7 +441,20 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
                 lifecycle: () => updateSession({ lifecycleRevision: "replaced-publication" }),
               }[change]();
               await release(receipt);
-              expectFailure(respond);
+              if (change === "grant" || change === "connection") {
+                expectReply(
+                  respond,
+                  method === "options"
+                    ? optionsResult({
+                        shared: null,
+                        sharedUnavailableReason: "unsupported_workspace",
+                      })
+                    : receipt,
+                );
+                expectFailure(await fixture[method]());
+              } else {
+                expectFailure(respond);
+              }
               expect(respond).toHaveBeenCalledOnce();
               expectNoPersonalReads(fixture);
             },

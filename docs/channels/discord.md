@@ -149,6 +149,7 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
   environment or global runtime dotenv, not a workspace `.env`.
 - Grant least-privilege Discord permissions.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
+- Startup command cleanup continues when Discord reports that an obsolete command is already gone (`404`, code `10063`); other deletion errors still fail deployment.
 
 Discord model-picker preferences and thread bindings use SQLite. Their old
 `discord/model-picker-preferences.json` and `discord/thread-bindings.json` files

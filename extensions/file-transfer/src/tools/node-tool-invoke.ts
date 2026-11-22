@@ -8,6 +8,7 @@ import {
 import {
   asNullableRecord,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { bindFileTransferAudit } from "../shared/audit-context.js";
 import type { FileTransferAuditOp } from "../shared/audit.js";
@@ -24,7 +25,8 @@ export function readRequiredNodePath(params: Record<string, unknown>): {
   requestedPath: string;
 } {
   const node = normalizeOptionalString(params.node);
-  const requestedPath = normalizeOptionalString(params.path);
+  // Paths name exact node targets; trimming can select a different sibling.
+  const requestedPath = readNonBlankString(params.path);
   if (!node) {
     throw new Error("node required");
   }

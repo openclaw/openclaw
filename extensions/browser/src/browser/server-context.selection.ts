@@ -1,6 +1,7 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
+import { isOperatorOnlyBrowserPageUrl } from "./cdp-target-filter.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -178,16 +179,16 @@ export function createProfileSelectionOps({
     if (!chosen) {
       throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
-    runtime.lastTargetId = chosen.targetId;
+    // Operator-only pages never become the implicit tab for agent calls without a targetId.
+    if (!isOperatorOnlyBrowserPageUrl(chosen.url)) {
+      runtime.lastTargetId = chosen.targetId;
+    }
     return chosen;
   };
 
-  const resolveTargetIdOrThrow = async (
-    targetId: string,
-    options?: BrowserTabTargetOptions,
-  ): Promise<string> => {
+  const resolveTabOrThrow = async (targetId: string, options?: BrowserTabTargetOptions) => {
     const tabs = await listTabs(options);
-    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
+    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId);
   };
 
   // /json/close answers 200 "Target is closing" once Chrome has requested the close,
@@ -278,15 +279,17 @@ export function createProfileSelectionOps({
   };
 
   const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
-    const focus = await prepareTabOperation("focus", resolvedTargetId, options);
+    const tab = await resolveTabOrThrow(targetId, options);
+    const focus = await prepareTabOperation("focus", tab.targetId, options);
     options?.signal?.throwIfAborted();
     await focus();
-    runtime.lastTargetId = resolvedTargetId;
+    if (!isOperatorOnlyBrowserPageUrl(tab.url)) {
+      runtime.lastTargetId = tab.targetId;
+    }
   };
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    const resolvedTargetId = (await resolveTabOrThrow(targetId, options)).targetId;
     const close = await prepareTabOperation("close", resolvedTargetId, options);
     options?.signal?.throwIfAborted();
     await dispatchBrowserTabClose(resolvedTargetId, profile.name, () => {

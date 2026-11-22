@@ -1,5 +1,7 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -10,6 +12,35 @@ import {
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
 registerSkillsBrowserEnglish();
+
+/** A skill's own mark: its image, else its emoji, else the default skill icon. */
+export function SkillTile(props: {
+  emoji?: string;
+  imageUrl?: string;
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
+}) {
+  return (
+    <span
+      class={[
+        "skill-tile",
+        props.class,
+        { "skill-tile--default": !props.imageUrl && !props.emoji },
+      ]}
+      aria-hidden="true"
+    >
+      <Show
+        when={props.imageUrl}
+        fallback={
+          <Show when={props.emoji} fallback={<Icon name="bookOpenText" />}>
+            {props.emoji}
+          </Show>
+        }
+      >
+        {(url) => <img src={url()} alt="" loading="lazy" />}
+      </Show>
+    </span>
+  );
+}
 
 export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBadge?: boolean }) {
   return (
@@ -26,6 +57,15 @@ export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBa
       </Show>
     </div>
   );
+}
+
+/** The registry reference an installed ClawHub skill was added from, as search results name it. */
+export function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
 }
 
 export function verdictForSkill(
@@ -48,57 +88,62 @@ export function verdictForSkill(
   );
 }
 
-export function SkillStateStatus(props: {
+type SkillStateProps = {
   skill: SkillStatusEntry | { disabled: boolean };
   verdict?: ClawHubSkillSecurityVerdict | null;
-}) {
-  const status = createMemo(() => {
-    const skill = props.skill;
-    const verdict = props.verdict;
-    const invalid =
-      "clawhub" in skill && skill.clawhub?.status === "invalid" ? skill.clawhub.reason : null;
-    const available = "eligible" in skill ? isSkillAvailable(skill) : !skill.disabled;
-    const flagged = verdict && (!verdict.ok || verdict.decision !== "pass");
-    const blocked = flagged && verdict.securityStatus === "malicious";
-    const tone =
-      invalid || blocked
-        ? "danger"
-        : flagged
-          ? "warn"
-          : skill.disabled
-            ? "muted"
+};
+
+function skillStateStatus({ skill, verdict }: SkillStateProps) {
+  const invalid =
+    "clawhub" in skill && skill.clawhub?.status === "invalid" ? skill.clawhub.reason : null;
+  const available = "eligible" in skill ? isSkillAvailable(skill) : !skill.disabled;
+  const flagged = verdict && (!verdict.ok || verdict.decision !== "pass");
+  const blocked = flagged && verdict.securityStatus === "malicious";
+  const tone: "danger" | "warn" | "muted" | "ok" =
+    invalid || blocked
+      ? "danger"
+      : flagged
+        ? "warn"
+        : skill.disabled
+          ? "muted"
+          : available
+            ? "ok"
+            : "warn";
+  const label = flagged
+    ? t(blocked ? "skillsPage.verdict.blocked" : "skillsPage.verdict.review")
+    : invalid
+      ? t("skillsPage.invalidLink")
+      : t(
+          skill.disabled
+            ? "skillsPage.tabs.disabled"
             : available
-              ? "ok"
-              : "warn";
-    const label = flagged
-      ? t(blocked ? "skillsPage.verdict.blocked" : "skillsPage.verdict.review")
-      : invalid
-        ? t("skillsPage.invalidLink")
-        : t(
-            skill.disabled
-              ? "skillsPage.tabs.disabled"
-              : available
-                ? "eligible" in skill
-                  ? "skillsPage.tabs.ready"
-                  : "skillsPage.enabled"
-                : "skillsPage.tabs.needsSetup",
-          );
-    const details =
-      "missing" in skill
-        ? [...computeSkillReasons(skill), ...computeSkillMissing(skill)]
-        : [t("skillDiscovery.libraryStatus")];
-    return {
-      tone,
-      tooltip: [label, invalid, ...(flagged ? (verdict.reasons ?? []) : []), ...details]
-        .filter(Boolean)
-        .join(" · "),
-    };
-  });
+              ? "eligible" in skill
+                ? "skillsPage.tabs.ready"
+                : "skillsPage.enabled"
+              : "skillsPage.tabs.needsSetup",
+        );
+  const details =
+    "missing" in skill
+      ? [...computeSkillReasons(skill), ...computeSkillMissing(skill)]
+      : [t("skillDiscovery.libraryStatus")];
+  return {
+    label,
+    tone,
+    tooltip: [label, invalid, ...(flagged ? (verdict.reasons ?? []) : []), ...details]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
+export function SkillStateStatus(props: SkillStateProps & { showLabel?: boolean }) {
+  const status = createMemo(() => skillStateStatus(props));
   return (
     <span
       class={[
-        "plugin-catalog-card__status settings-status",
+        "settings-status",
         {
+          "plugin-catalog-card__status": !props.showLabel,
+          "skill-row-status": props.showLabel,
           "settings-status--danger": status().tone === "danger",
           "settings-status--warn": status().tone === "warn",
           "settings-status--muted": status().tone === "muted",
@@ -111,6 +156,11 @@ export function SkillStateStatus(props: {
       title={status().tooltip}
     >
       <span class="settings-status__dot" aria-hidden="true" />
+      {props.showLabel ? (
+        status().label
+      ) : (
+        <span class="plugin-catalog-card__status-label">{status().label}</span>
+      )}
     </span>
   );
 }

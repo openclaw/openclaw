@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const suite = createControlUiE2eSuite({ name: "Workboard card notes" });
@@ -28,7 +28,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     try {
-      await installMockGateway(page, {
+      await installNativePluginMockGateway(page, {
         ...workboardUi,
         methodResponses: {
           "config.get": {

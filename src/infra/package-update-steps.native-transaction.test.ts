@@ -11,6 +11,7 @@ import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.j
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { packageUpdateStepResult, writePackageRoot } from "./package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
 const readText = (file: string) => fs.readFile(file, "utf8");
@@ -169,6 +170,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         let cleanupRejected = false;
         const originalRename = fs.rename.bind(fs);
         const originalUnlink = fs.unlink.bind(fs);
+        // A project root that no rename can move has no exchange either.
+        const exchangeSpy =
+          rollbackFailure === "backup-cleanup" ? publishWithoutPathExchange() : undefined;
         const backupRenameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           if (rollbackFailure === "backup-cleanup" && String(args[0]) === project) {
             throw Object.assign(new Error("cross-device move"), { code: "EXDEV" });
@@ -299,6 +303,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
         }
         const result = await update.finally(() => {
+          exchangeSpy?.mockRestore();
           backupRenameSpy.mockRestore();
           backupUnlinkSpy.mockRestore();
         });

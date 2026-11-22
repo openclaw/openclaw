@@ -1,6 +1,9 @@
 import type { TextQuery } from "../../infra/database-engine/text-contract.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
 
 export const SESSION_SEARCH_SNIPPET_TOKENS = 48;
 const SEARCH_SNIPPET_MAX_CHARS = 500;
@@ -26,7 +29,7 @@ export function sessionTranscriptSearchTerms(input: string): string[] {
 export function sessionTranscriptSearchFtsQuery(
   query: string,
   match: SessionTranscriptSearchParams["match"],
-): TextQuery {
+) {
   // Implicit AND lets FTS5 discard empty phrases using its own tokenizer.
   return {
     kind: "all",
@@ -35,15 +38,37 @@ export function sessionTranscriptSearchFtsQuery(
       text,
       prefix: match === "prefix" && index === tokens.length - 1,
     })),
-  };
+  } satisfies TextQuery;
 }
 
 export function sessionTranscriptSearchLimit(limit?: number): number {
   return Math.min(Math.max(1, limit ?? 10), SEARCH_LIMIT_MAX);
 }
 
-export function boundSessionTranscriptSearchSnippet(snippet: string): string {
+export function boundSessionTranscriptSearchSnippet(text: string, substring?: string): string {
+  let snippet = text;
+  if (substring) {
+    const start = Math.max(0, snippet.toLowerCase().indexOf(substring.toLowerCase()) - 160);
+    snippet = `${start > 0 ? "… " : ""}${snippet.slice(start)}`;
+  }
   return snippet.length > SEARCH_SNIPPET_MAX_CHARS
     ? `${truncateUtf16Safe(snippet, SEARCH_SNIPPET_MAX_CHARS)}…`
     : snippet;
+}
+
+type OrderedSearchHit = Pick<
+  SessionTranscriptSearchResult["hits"][number],
+  "score" | "timestamp" | "sessionKey"
+> & { messageId?: string };
+
+export function compareSessionTranscriptSearchHits(
+  left: OrderedSearchHit,
+  right: OrderedSearchHit,
+): number {
+  return (
+    right.score - left.score ||
+    right.timestamp - left.timestamp ||
+    left.sessionKey.localeCompare(right.sessionKey) ||
+    (left.messageId ?? "").localeCompare(right.messageId ?? "")
+  );
 }

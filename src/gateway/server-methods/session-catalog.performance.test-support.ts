@@ -249,7 +249,7 @@ export async function createComposedCatalogFixture(
     const service = builder.registry.services.find(
       (entry) => entry.service.id === "codex-session-catalog",
     )?.service;
-    if (!service) {
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
       throw new Error("Codex did not register its catalog lifecycle");
     }
     const serviceContext = {

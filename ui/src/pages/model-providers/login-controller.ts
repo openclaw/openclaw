@@ -21,6 +21,7 @@ import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
 import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
+import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -78,8 +79,17 @@ export function createModelProviderLogin(options: {
     onBackgroundCompletion: (completion) => run(() => Promise.resolve(completion), true),
     requestFailedMessage: () => t("modelProviders.requestFailed"),
     sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
+    recovery: {
+      onRetry: () => restartSignIn?.(),
+      onOpenSettings: () => {
+        reset();
+        options.getScope().context.navigate("connection");
+      },
+    },
   });
   const runner = wizard.runner;
+  // The last started sign-in, so a typed failure can offer to start it again.
+  let restartSignIn: (() => void) | undefined;
   const completionCatalog = new ModelCatalogReader(notify, {
     onResult: (catalog) => {
       const available = (model: ModelCatalogEntry) =>
@@ -196,16 +206,7 @@ export function createModelProviderLogin(options: {
     });
   }
 
-  function connectProvider(models: ModelCatalogEntry[]): Promise<void> {
-    return open(undefined, {
-      allowSetup: !models.some((model) => model.available !== false),
-    });
-  }
-
-  async function open(
-    providers?: string[],
-    { allowSetup = Boolean(options.onManualProvider) }: { allowSetup?: boolean } = {},
-  ): Promise<void> {
+  async function open(providers?: string[]): Promise<void> {
     if (!options.canStart() || busy()) {
       return;
     }
@@ -214,6 +215,9 @@ export function createModelProviderLogin(options: {
     if (!client || !scope.agentId) {
       return;
     }
+    // Setup always chooses a model; elsewhere a sign-in only chooses one for an
+    // agent without a configured primary, never replacing the operator's choice.
+    const allowSetup = Boolean(options.onManualProvider) || !selection().modelRef;
     const currentGeneration = ++generation;
     const request = {
       controller: new AbortController(),
@@ -355,16 +359,17 @@ export function createModelProviderLogin(options: {
       ? loginProviders(picker.providers, authStatus, picker.allowSetup)
       : [];
     const provider = groups.find((group) => group.id === providerSelection());
-    const accounts =
-      provider && authStatus
+    const accountsFor = (group: (typeof groups)[number]) =>
+      authStatus
         ? buildModelProviderCards({
             authStatus,
             models: null,
             providerUsage: null,
           }).filter((card) =>
-            provider.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
+            group.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
           )
         : [];
+    const accounts = provider ? accountsFor(provider) : [];
     const docsUrl =
       provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
       "https://docs.openclaw.ai/concepts/model-providers";
@@ -409,6 +414,19 @@ export function createModelProviderLogin(options: {
         if (!canSelect()) {
           return;
         }
+        const selected = groups.find((group) => group.id === providerId);
+        // Only a key and nothing saved: the method step would be one button, so go to the form.
+        if (
+          selected?.apiKeyProvider &&
+          !selected.choices.length &&
+          !authStatus?.unavailable &&
+          !hasProviderAccounts(accountsFor(selected))
+        ) {
+          const apiKeyProvider = selected.apiKeyProvider;
+          reset();
+          options.onApiKey?.(apiKeyProvider);
+          return;
+        }
         setProvider(providerId);
         focusPicker = "method";
         notify();
@@ -425,17 +443,19 @@ export function createModelProviderLogin(options: {
         }
         authProviderId = canonicalModelAuthProviderId(selected.authProvider);
         currentPicker = null;
-        const selectingModel = picker.allowSetup && selected.requiresSetup;
-        loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
+        // Browser and device sign-ins can select a model; a pasted secret only saves. A
+        // credential-only sign-in still succeeds when its account offers no usable model.
+        const selectingModel = picker.allowSetup && selected.kind !== "secret";
+        loginMode = selected.requiresSetup ? (selectingModel ? "activate" : "access") : "auth";
         refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
-        void run(() =>
-          runner.start(
-            selected.id,
-            "models.authLogin",
-            selectingModel ? { selectModel: true } : {},
-          ),
-        );
+        const { id, kind, label, brandId } = selected;
+        restartSignIn = () => {
+          runner.prepareSignIn(kind, label, brandId);
+          void run(() =>
+            runner.start(id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
+          );
+        };
+        restartSignIn();
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -713,7 +733,6 @@ export function createModelProviderLogin(options: {
     setApiKeyChoice(element: HTMLButtonElement) {
       apiKeyChoice = element;
     },
-    connectProvider,
     open,
     invalidateInventory,
     reset,

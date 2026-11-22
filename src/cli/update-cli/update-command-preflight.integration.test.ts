@@ -72,8 +72,8 @@ it(
         protocol: 1,
         mode: "preflight",
         status: "ready",
-        phase: "readiness",
-        coverage: "isolated-core-startup",
+        phase: "runtime",
+        coverage: "candidate-runtime",
       });
       expect(await fs.readFile(configPath, "utf8")).toBe(original);
       expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);

@@ -4,7 +4,6 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
-  type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -23,7 +22,6 @@ import {
   type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
 import { commandReply } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -91,23 +89,8 @@ function buildProviderLoginFlowKey(params: HandleCommandsParams): string {
   ].join(":");
 }
 
-function assertProviderLoginAuthority(
-  params: HandleCommandsParams,
-  config: typeof params.cfg,
-): void {
-  params.opts?.abortSignal?.throwIfAborted();
-  if (params.opts?.assertProviderLoginAuthority) {
-    params.opts.assertProviderLoginAuthority();
-    return;
-  }
-  const authorization = resolveCommandAuthorization({
-    cfg: config,
-    ctx: { ...params.ctx, SenderId: params.command.senderId, AccountId: params.command.accountId },
-    commandAuthorized: params.command.isAuthorizedSender,
-  });
-  if (!authorization.senderIsOwner || !authorization.isAuthorizedSender) {
-    throw new Error("Provider login authority is no longer active.");
-  }
+function readProviderLoginConfig(params: HandleCommandsParams): typeof params.cfg {
+  return params.opts?.getProviderLoginConfig?.() ?? getRuntimeConfigSnapshot() ?? params.cfg;
 }
 
 async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
@@ -127,7 +110,6 @@ async function switchLoginSessionProfile(params: {
   loginProvider: string;
   nextProfileId: string;
   signal: AbortSignal;
-  assertCurrent: SessionSourceAssertion;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
@@ -180,7 +162,7 @@ async function switchLoginSessionProfile(params: {
         },
         {
           ...sessionEntryCommitGuardOptions(
-            composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+            composeSessionSourceAssertion([], (assertSource) => {
               params.signal.throwIfAborted();
               assertSource();
             }),
@@ -202,7 +184,6 @@ async function switchLoginSessionProfile(params: {
       persistedEntry = persisted;
     } else {
       params.signal.throwIfAborted();
-      params.assertCurrent();
     }
     commandParams.sessionEntry = persistedEntry;
     sessionStore[commandParams.sessionKey] = persistedEntry;
@@ -225,7 +206,7 @@ async function runChannelProviderLogin(
   const sendReply = commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
-      text: `${choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(choice.command)}\` again.`,
+      text: `${choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the OpenClaw app or a private chat and send \`${formatProviderLoginCommand(choice.command)}\` again.`,
     };
   }
 
@@ -242,25 +223,16 @@ async function runChannelProviderLogin(
   }
 
   const flowSignal = reservation.record.signal;
-  const readConfig =
-    commandParams.opts?.getProviderLoginConfig ??
-    (() => getRuntimeConfigSnapshot() ?? commandParams.cfg);
-  const assertCurrent = (config = readConfig()) => {
-    assertProviderLoginAuthority(commandParams, config);
-  };
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice,
       agentId: commandParams.agentId,
       config: commandParams.cfg,
-      readConfig,
+      readConfig: () => readProviderLoginConfig(commandParams),
       runtime: defaultRuntime,
       signal: flowSignal,
-      assertCurrent,
       sendMessage: (text) => emitLoginMessage(commandParams, text),
       sendReply,
-      unsupportedPromptMessage:
-        "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
     flowSignal.throwIfAborted();
     const nextProfileId = loginResult.profiles.find(
@@ -272,14 +244,15 @@ async function runChannelProviderLogin(
           loginProvider: choice.providerId,
           nextProfileId,
           signal: flowSignal,
-          assertCurrent,
         })
       : "failed";
     const terminalMessage = formatProviderLoginCompletion(
       choice,
       loginResult.authRefresh,
       switchResult === "failed",
-      nextProfileId ? { model: commandParams.model, profileId: nextProfileId } : undefined,
+      nextProfileId && commandParams.model
+        ? { model: commandParams.model, profileId: nextProfileId }
+        : undefined,
     );
     return {
       text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),
@@ -314,9 +287,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     refreshAuth: () =>
       refreshProviderLoginAuthState({
         agentId: params.agentId,
-        readConfig:
-          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
-        assertCurrent: (config) => assertProviderLoginAuthority(params, config),
+        readConfig: () => readProviderLoginConfig(params),
       }),
     cancelLogin: () =>
       cancelProviderLoginFlow({

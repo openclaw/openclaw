@@ -5,6 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
+import { AUTOMATIC_RECOVERY_CLEANUP_STEP } from "../../infra/update-automatic-cleanup-result.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
@@ -26,6 +27,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
 import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 // One command owns each observer. The final report flushes it before printing so
@@ -35,8 +37,18 @@ const activeUpdateProgress = new Map<
   {
     finish: (record: UpdateRunRecord | undefined) => void;
     pause: () => void;
+    suspendForDoctor: () => Promise<() => void>;
   }
 >();
+
+/**
+ * Update Doctor children take exclusive SQLite custody of shared state. Any open
+ * parent reader blocks that lock, so observation stops, and its in-flight read
+ * settles, before the caller closes parent handles and spawns the child.
+ */
+export async function suspendUpdateProgressForDoctor(runId: string): Promise<() => void> {
+  return (await activeUpdateProgress.get(runId)?.suspendForDoctor()) ?? (() => {});
+}
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
 
@@ -87,6 +99,7 @@ export function createUpdateProgress(
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentRecord: UpdateRunRecord | undefined;
   let pendingRead: AbortController | undefined;
+  let pendingPoll: Promise<void> | undefined;
   let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
@@ -173,18 +186,45 @@ export function createUpdateProgress(
     } finally {
       pendingRead = undefined;
       if (polling && observation === "active") {
-        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer = setTimeout(startPoll, UPDATE_PROGRESS_POLL_MS);
         timer.unref?.();
       }
     }
   };
+  const startPoll = () => {
+    pendingPoll = poll();
+  };
+  const suspend = () => {
+    if (observation === "active") {
+      observation = "suspended";
+      currentRecord = undefined;
+      pausePolling();
+      stop();
+    }
+  };
+  const resume = () => {
+    if (observation === "suspended") {
+      observation = "active";
+      polling = true;
+      startPoll();
+    }
+  };
   if (run) {
-    void poll();
+    startPoll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
         pausePolling();
         stop();
+      },
+      suspendForDoctor: async () => {
+        // Another owner's suspension stays theirs to resume.
+        if (observation !== "active") {
+          return () => {};
+        }
+        suspend();
+        await pendingPoll;
+        return resume;
       },
     });
   }
@@ -215,21 +255,8 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    suspend: () => {
-      if (observation === "active") {
-        observation = "suspended";
-        currentRecord = undefined;
-        pausePolling();
-        stop();
-      }
-    },
-    resume: () => {
-      if (observation === "suspended") {
-        observation = "active";
-        polling = true;
-        void poll();
-      }
-    },
+    suspend,
+    resume,
     dispose: () => finalize(currentRecord, true),
   };
 }
@@ -372,9 +399,16 @@ export async function prepareResult(
     defaultRuntime.log(theme.heading(outputReport.headline));
     if (reportPath) {
       defaultRuntime.log(`Report: ${reportPath}`);
+      defaultRuntime.log(formatUpdateReportReadHint(reportPath));
     }
     for (const line of outputReport.lines) {
       defaultRuntime.log(line);
+    }
+    // Cleanup states what it removed and kept even when nothing needs attention.
+    for (const step of additionalSteps) {
+      if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
+        defaultRuntime.log(step.diagnostics[0]);
+      }
     }
   };
 }

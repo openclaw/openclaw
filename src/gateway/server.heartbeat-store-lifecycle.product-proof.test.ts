@@ -179,12 +179,24 @@ describe("session notification store ownership through the Gateway", () => {
           // Startup observers settle separately from startupSettled.
           await withinTest(sweepSettled.promise, signal);
           const parentKey = `agent:main:store-proof-${randomUUID()}`;
-          const wait = (runId: string) =>
-            gateway!.client.request<{ status: string }>(
-              "agent.wait",
-              { runId, timeoutMs: 120_000 },
-              { timeoutMs: 125_000 },
+          const wait = (runId: string) => {
+            const deadline = performance.now() + 120_000;
+            return vi.waitUntil(
+              async () => {
+                const timeoutMs = Math.max(1, Math.ceil(deadline - performance.now()));
+                const result = await gateway!.client.request<{ status: string }>(
+                  "agent.wait",
+                  { runId, timeoutMs },
+                  { timeoutMs: timeoutMs + 5_000 },
+                );
+                // Queued observations are nonterminal; retain the original wait budget.
+                return result.status !== "pending" || performance.now() >= deadline
+                  ? result
+                  : false;
+              },
+              { timeout: 125_000, interval: 100 },
             );
+          };
           const sendAndWait = async (
             method: "agent" | "chat.send",
             sessionKey: string,

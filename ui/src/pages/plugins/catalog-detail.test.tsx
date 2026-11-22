@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -22,7 +22,6 @@ afterEach(cleanupSolid);
 const detailProps = (result = createDiscoveryDetail(), overrides: Partial<Props> = {}): Props => ({
   connected: true,
   result,
-  read: { receipt: () => null, value: () => null },
   backHref: "/plugins",
   onBack: vi.fn(),
   onRetry: vi.fn(),
@@ -48,7 +47,6 @@ it.each([false, true])(
     const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
     expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask OpenClaw" : "Install");
     expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
-    expect(actions.querySelector("button")).toBe(primaryButton);
     primaryButton.click();
     expect(onInstall).not.toHaveBeenCalled();
     const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -75,34 +73,30 @@ it("renders complete catalog content in capability order", () => {
     iconUrls: { [imageUrl]: "blob:package-icon" },
   });
   expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
-  expect(query(".plugin-capabilities button")).toBeNull();
+  expect(query(".plugin-capabilities button, .plugin-capabilities h2 svg")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
-    "Capabilities3",
-    "Skills1",
-    "Tools1",
-    "MCP Server1",
+    "Capabilities",
+    "Extensions",
+    "Skills",
+    "Tools",
+    "MCP server",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
 
-it("retains catalog controls while refreshing the same accepted plugin", async () => {
-  const pending = Promise.withResolvers<void>();
-  onTestFinished(() => pending.resolve());
+it("retains catalog controls when the same accepted plugin is enriched", async () => {
   let refresh = () => {};
   const initialResult = createDiscoveryDetail(createPlugin({ installed: false }));
   const onInstall = vi.fn();
   const view = mountSolid(() => {
     const [result, setResult] = createSignal(initialResult);
-    const [receipt, setReceipt] = createSignal({ result: Promise.resolve() });
-    const value = createMemo(async () => {
-      await receipt().result;
-      return null;
-    });
     refresh = () => {
-      setResult({ ...initialResult });
-      setReceipt({ result: pending.promise });
+      setResult({
+        ...initialResult,
+        detail: { ...initialResult.detail, readme: "Updated content" },
+      });
     };
-    return <Detail {...detailProps(result(), { read: { receipt, value }, onInstall })} />;
+    return <Detail {...detailProps(result(), { onInstall })} />;
   });
   await waitForSolid(() => expect(view.container.querySelector("button.primary")).not.toBeNull());
   const button = view.container.querySelector<HTMLButtonElement>("button.primary")!;
@@ -178,10 +172,9 @@ it("normalizes shorthand repositories and keeps documentation separate", () => {
   const { container, all, query, attr, text } = render(() => metadata(result));
   expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
   expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
-  expect([...all("section")].map((section) => section.querySelector("h2")?.textContent)).toEqual([
-    "Repository",
-    "Documentation",
-  ]);
+  const links = [...all(".plugin-metadata__link-value a")];
+  expect(links.map((link) => link.getAttribute("href"))).toEqual([repository, documentation]);
+  expect(links.every((link) => link.getAttribute("rel") === "noopener noreferrer")).toBe(true);
   expect(container.textContent).not.toContain("View on ClawHub");
   expect(query(`a[href="${documentation}"]`)).not.toBeNull();
 });
@@ -215,3 +208,23 @@ it.each([
   expect(all(".is-filled")).toHaveLength(count);
   expect(attr("a", "href")).toBe(url);
 });
+
+it.each(["clean", "review", "custom-status"])(
+  "localizes known audit badges but preserves %s protocol values",
+  (status) => {
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized audit label");
+    onTestFinished(() => translate.mockRestore());
+    const result = createDiscoveryDetail();
+    result.detail.security = { status, verdict: status, auditUrl: "https://example.com/audit" };
+    const { query } = render(() => metadata(result));
+    expect(query(".plugin-catalog-detail__security-verdict")?.textContent).toBe(
+      status === "custom-status" ? status : "localized audit label",
+    );
+    if (status !== "custom-status") {
+      expect(translate).toHaveBeenCalledWith(
+        status === "clean" ? "pluginsPage.auditClean" : "pluginsPage.auditReview",
+        undefined,
+      );
+    }
+  },
+);

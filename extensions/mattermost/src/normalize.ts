@@ -1,4 +1,5 @@
 import {
+  agentControlText,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationControlValue,
@@ -90,7 +91,8 @@ export function resolveMattermostPresentation(params: {
                     },
                   ];
             }
-            if (action) {
+            // Typed callbacks render only when a message action authored them for the agent.
+            if (action && !(action.type === "callback" && agentControlText(action.value))) {
               return [];
             }
             const value = resolveMessagePresentationControlValue(button);

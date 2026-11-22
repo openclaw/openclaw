@@ -24,7 +24,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -61,7 +61,11 @@ function withCallers<T>(identities: Caller[], run: () => T | Promise<T>): Promis
 
 const runInstance = (name: string) => ({ instanceId: `${name}-instance`, runId: `${name}-run` });
 const operator = (profileId: string, assertCurrent: () => void) =>
-  createAdmittedRunOperatorAuthority({ profileId, scopes: ["operator.write"], assertCurrent });
+  createTestOperatorAuthority({
+    profileId,
+    scopes: ["operator.write"],
+    assertCurrent,
+  });
 const admittedCaller = (name: string, turnSourceChannel: string, admitted = true) => ({
   agentId: name,
   sessionKey: `agent:${name}:session`,
@@ -452,6 +456,34 @@ describe("gateway caller context wrapper", () => {
     await withCallers(
       [outer, inner].map((fullPermission) => ({ fullPermission })),
       () => expect(getCaller()?.fullPermission).toBe(expected),
+    );
+  });
+
+  it("preserves every same-run automatic delegation assertion", async () => {
+    let outerActive = true;
+    let innerActive = true;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
+    await withCallers(
+      [{ assertAutoApproveChangesCurrent: outer }, { assertAutoApproveChangesCurrent: inner }],
+      () => {
+        const assertCurrent = getCaller()?.assertAutoApproveChangesCurrent;
+        expect(assertCurrent).toBeDefined();
+        expect(assertCurrent).not.toThrow();
+        outerActive = false;
+        expect(assertCurrent).toThrow("outer revoked");
+        outerActive = true;
+        innerActive = false;
+        expect(assertCurrent).toThrow("inner revoked");
+      },
     );
   });
 

@@ -45,6 +45,7 @@ export async function inspectManagedHandoffRepairFacts(
   discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
   familyExited = false,
+  processState?: (identity: ManagedHandoffLease["helper"]) => "live" | "dead" | "unknown",
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -52,7 +53,12 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (!familyExited && Date.now() - previous.updatedAt < grace) {
+  const ownersExited =
+    processState &&
+    [previous.helper, previous.executor, ...(discovered.drivers ?? [])].every(
+      (owner) => processState(owner) === "dead",
+    );
+  if (!familyExited && !ownersExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
@@ -182,6 +188,8 @@ export async function readManagedHandoffRepairFacts(
   }));
   for (const run of runs) {
     if (
+      // Child leases are owned by their run; adoption drops a dead updater from the drivers.
+      run.runId === lease.owner ||
       recordedUpdateRunDrivers(run).some((driver) =>
         owners.some((owner) => sameUpdateRunDriver(driver, owner)),
       )

@@ -550,7 +550,7 @@ describe("buildAttemptSystemPrompt", () => {
         );
         expect(capabilityToolNames.has("write")).toBe(true);
         expect(capabilityToolNames.has("read")).toBe(false);
-        expect(system).not.toContain("read exact <location>");
+        expect(system).not.toContain("read exact `<location>`");
       } else {
         expect(/"name":"(?:read|skills_read)"/.test(JSON.stringify(payload.tools))).toBe(expected);
       }
@@ -576,7 +576,7 @@ describe("buildAttemptSystemPrompt", () => {
       expect(prepared.systemPromptText).toContain(skillsCatalog);
       const hidden = await refreshSystemPrompt(prepared.systemPromptText, [write]);
       expect(hidden).not.toContain(skillsCatalog);
-      expect(hidden).not.toContain("read exact <location>");
+      expect(hidden).not.toContain("read exact `<location>`");
       expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
       expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(codeModeActive);
 
@@ -622,6 +622,25 @@ describe("buildAttemptSystemPrompt", () => {
     }
   });
 
+  it("keeps the session prompt when a completion wake inherits its producer's tool ceiling", async () => {
+    const ceiling = { skills: { prompt: "", toolsAllow: ["read", "write", "exec"] } };
+    const userTurn = await preparePermissionPrompt({ attemptOverrides: { trigger: "user" } });
+    const wake = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: {
+        trigger: "event",
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+      },
+    });
+    expect(wake.prepared.systemPromptText).toBe(userTurn.prepared.systemPromptText);
+    // A narrowly scoped run that is not a host wake keeps the minimal prompt.
+    const scoped = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: { trigger: "user" },
+    });
+    expect(scoped.prepared.systemPromptText).not.toBe(userTurn.prepared.systemPromptText);
+  });
+
   it("keeps model instructions identical when only reasoning effort changes", async () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {
@@ -656,7 +675,7 @@ describe("buildAttemptSystemPrompt", () => {
     const fixture = await preparePermissionPrompt();
     const { attempt, capabilityToolNames, prepared, read, refreshSystemPrompt, write } = fixture;
     const initialPrompt = prepared.systemPromptText;
-    expectText(initialPrompt, ["- exec:", "exec approval-pending:"]);
+    expectText(initialPrompt, ["- exec:", "Approval-pending:"]);
 
     attempt.permissionMode = "workspace";
     capabilityToolNames.delete("exec");
@@ -686,7 +705,7 @@ describe("buildAttemptSystemPrompt", () => {
         "Current runtime addition",
         "permissions to read-only",
       ],
-      ["- write:", "- exec:", "exec approval-pending:", "permissions to workspace"],
+      ["- write:", "- exec:", "Approval-pending:", "permissions to workspace"],
     );
     expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
     expect(await refreshSystemPrompt(refreshed, [read])).toBe(refreshed);

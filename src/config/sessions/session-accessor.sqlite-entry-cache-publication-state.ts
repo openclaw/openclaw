@@ -51,6 +51,13 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   "close-and-restart",
 );
 
+export class SessionSharingAuthorityUnknownError extends Error {
+  constructor() {
+    super("Session sharing authority is unknown until the Gateway restarts");
+    this.name = "SessionSharingAuthorityUnknownError";
+  }
+}
+
 /** ID selection cannot pass a worker commit whose identity facts are not yet published. */
 export function isSessionIdSelectionPublished(params: {
   databaseIdentity: string;
@@ -260,11 +267,17 @@ export function publishRetainedSessionEntryChange(
   known: boolean,
   metadataEntry?: SessionEntry,
   fullEntry?: SessionEntry,
+  membership?: ReadonlySet<string>,
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, metadataEntry, known, { fullEntry });
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
+    if (read.acquisition && membership) {
+      // A complete actor postimage supersedes older deltas and an in-flight read's membership.
+      read.acquisition.membershipPostimage = membership;
+      read.acquisition.membership.clear();
+    }
     publishRetainedSessionGeneration(read, entry, known);
     const previous = read.facts;
     read.facts =
@@ -273,7 +286,7 @@ export function publishRetainedSessionEntryChange(
       ((previous.entry.sessionId === entry.sessionId &&
         (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)) ||
         (read.followTranscript && previous.entry.lifecycleRevision === entry.lifecycleRevision))
-        ? { entry, membership: previous.membership }
+        ? { entry, membership: membership ?? previous.membership }
         : undefined;
   }
 }
@@ -397,7 +410,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
-      if (!active || !acquisition || unknownSharingAuthorities.has(key)) {
+      if (unknownSharingAuthorities.has(key)) {
+        throw new SessionSharingAuthorityUnknownError();
+      }
+      if (!active || !acquisition) {
         throw new Error("Session sharing acquisition is no longer current");
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);

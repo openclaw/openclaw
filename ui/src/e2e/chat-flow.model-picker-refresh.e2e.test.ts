@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { sanitizeChatHistoryMessages } from "../../../src/gateway/chat-display-projection.sanitize.ts";
-import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModel, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
   controlUiSessionUrl,
@@ -86,7 +86,7 @@ suite.define(() => {
     const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
     await dialog.waitFor();
     await dialog
-      .getByText("This conversation is cached for Demo model A.", { exact: false })
+      .getByText("Switching re-sends the whole conversation to Demo model B", { exact: false })
       .waitFor();
     await dialog.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -235,6 +235,88 @@ suite.define(() => {
     expect(new URL(page.url()).searchParams.get("provider")).toBe("openai");
     expect(new URL(page.url()).searchParams.has("connect")).toBe(false);
     await page.locator('[data-provider-id="openai"]').waitFor({ state: "visible" });
+  });
+
+  it("keeps historical work with its author when switching routed models", async () => {
+    const page = await newChatPage(suite);
+    const key = "agent:main:dashboard:routed-history";
+    const claude = modelInfo("anthropic/claude-sonnet", "Claude", "clawrouter");
+    const gpt = modelInfo("openai/gpt-5", "GPT", "clawrouter");
+    const history = [claude, gpt].flatMap(({ id, name, provider }, i) => {
+      const runId = `run-${i}`;
+      const start = i * 100_000;
+      return [
+        {
+          role: "user",
+          timestamp: start + 1_000,
+          content: `Check the ${name} example.`,
+          __openclaw: { idempotencyKey: `${runId}:user` },
+        },
+        {
+          role: "assistant",
+          timestamp: start + 2_000,
+          content: [
+            { type: "text", text: `Finding from ${name}.` },
+            { type: "toolCall", name: "read", id: runId, arguments: { path: "retry.yaml" } },
+          ],
+          stopReason: "toolUse",
+          provider,
+          model: id,
+          __openclaw: { runId },
+        },
+        {
+          role: "toolResult",
+          timestamp: start + 3_000,
+          content: "retries: 3",
+          toolName: "read",
+          toolCallId: runId,
+          __openclaw: { runId },
+        },
+        {
+          role: "assistant",
+          timestamp: start + 4_000,
+          content: `Answer from ${name}.`,
+          provider,
+          model: id,
+          stopReason: "stop",
+          __openclaw: { runId },
+        },
+      ];
+    });
+    const gateway = await installMockGateway(page, {
+      sessionKey: key,
+      agentModel: `clawrouter/${claude.id}`,
+      sessions: [
+        {
+          key,
+          kind: "direct",
+          sessionId: "routed-history",
+          modelProvider: "clawrouter",
+          model: claude.id,
+          updatedAt: 3000,
+        },
+      ],
+      models: [claude, gpt],
+      historyMessages: history,
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    const worked = thread.getByRole("button", { name: /^Worked/ });
+    const expectHistory = async () => {
+      await thread.getByText("Finding from Claude.", { exact: true }).waitFor();
+      await thread.getByText("Answer from GPT.", { exact: true }).waitFor();
+      expect(await worked.count()).toBe(1);
+      expect(await thread.getByText("Finding from GPT.", { exact: true }).isVisible()).toBe(false);
+    };
+    await expectHistory();
+    const selected = `clawrouter/${gpt.id}`;
+    await selectChatModel(page, selected);
+    await page.getByRole("button", { name: "Switch model", exact: true }).click();
+    await expectPatch(gateway, { key, model: selected });
+    await expect.poll(() => selectedModel(pickerFor(page))).toBe(selected);
+    await expectHistory();
+    await worked.click();
+    await thread.getByText("Finding from GPT.", { exact: true }).waitFor();
   });
 
   it("applies provider-specific reasoning after the selected model is saved", async () => {
@@ -435,7 +517,7 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       expect(await stop.count()).toBe(1);
       await gateway.emitChatFinal({ runId, text: "The first reply finished normally." });
       await bubble(page, "The first reply finished normally.");

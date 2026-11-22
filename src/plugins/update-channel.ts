@@ -33,7 +33,6 @@ import {
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "./install-transaction.js";
-import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
@@ -264,8 +263,7 @@ async function syncPluginsForUpdateChannelWithLease(
         logger.warn?.(warning);
       };
       const install = async (source: "npm" | "clawhub", spec: string) => {
-        // A catalog digest authenticates only its original npm target, including
-        // a return to that target after a beta miss, never another source/version.
+        // A catalog digest authenticates only its original npm target, never another source/version.
         const expectedIntegrity =
           source === "npm" && spec === npmSpec ? bridge.expectedIntegrity?.trim() : undefined;
         // Each source attempt owns its staged review; a registry fallback cannot inherit approval.
@@ -331,18 +329,16 @@ async function syncPluginsForUpdateChannelWithLease(
       } = await installWithSourceFallback({
         sources,
         install: (source) =>
-          installWithChannelFallback({
-            installSpec: source.spec,
-            fallbackSpec: (source.source === "npm" ? channelNpmSpecs : channelClawHubSpecs)
-              ?.fallbackSpec,
-            install: (spec) => install(source.source, spec),
-            isRetryable: (attempt) =>
-              !attempt.result.ok &&
-              (source.source === "npm"
-                ? isUnavailableNpmTarget(attempt.result)
-                : isUnavailableClawHubTarget(attempt.result)),
-            onFallback,
-          }),
+          source.source === "npm"
+            ? install("npm", source.spec)
+            : installWithChannelFallback({
+                installSpec: source.spec,
+                fallbackSpec: channelClawHubSpecs?.fallbackSpec,
+                install: (spec) => install("clawhub", spec),
+                isRetryable: (attempt) =>
+                  !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
+                onFallback,
+              }),
         result: (attempt) => attempt.result,
         onFallback,
       });

@@ -312,8 +312,6 @@ export function createCodexAttemptServerRequestController(
           suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
           params.onToolOutcome?.({
             toolName: call.tool,
-            argsHash: "",
-            resultHash: "",
             toolCallOrdinal,
             terminalPresentation: undefined,
             presentationOnly: true,
@@ -334,7 +332,11 @@ export function createCodexAttemptServerRequestController(
           compactionPlanState.recordProgressCardInput(progressCardInput);
         }
         if (shouldEmitDynamicToolProgress) {
-          const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          const progressResponse = toCodexDynamicToolProgressResponse(
+            response,
+            protocolResponse,
+            call.tool,
+          );
           const activity = projectAgentToolActivity({
             toolCallId: call.callId,
             name: call.tool,

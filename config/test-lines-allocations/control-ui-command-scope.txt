@@ -1,2 +1,0 @@
-# Scope-grant command-menu regression and authenticated catalog fixtures.
-33

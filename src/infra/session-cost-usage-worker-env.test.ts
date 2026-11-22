@@ -189,16 +189,49 @@ it("inventories retained usage by transcript recency and logical agent after wri
   await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject(
     inventory(["first", 2000], ["second", 2000]),
   );
-  // The smallest transcript is oldest: refresh priority is independent of inventory recency.
-  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toMatchObject({
+  // Admit the metadata-ordered batch before reading sizes; deferred transcripts stay queued.
+  let batch = await run(prepared, { kind: "refresh", maxFiles: 1 });
+  expect(batch).toMatchObject({
     kind: "refresh",
     changed: true,
     remainingFiles: [
-      { sessionFile: expect.stringContaining(":first:") },
       { sessionFile: expect.stringContaining(":second:") },
+      { sessionFile: expect.stringContaining(":old:") },
     ],
   });
+  for (const remaining of [1, 0]) {
+    assert(batch.kind === "refresh" && batch.remainingFiles);
+    batch = await run(prepared, {
+      kind: "refresh",
+      maxFiles: 1,
+      sessionFiles: batch.remainingFiles.map((file) => file.sessionFile),
+    });
+    expect(batch).toMatchObject({ kind: "refresh", changed: true });
+    assert(batch.kind === "refresh");
+    expect(batch.remainingFiles?.length ?? 0).toBe(remaining);
+  }
+  await expect(
+    run(prepared, {
+      kind: "summary",
+      pricingFingerprint: await fingerprint(prepared.config, prepared.agentDir),
+      startMs: 0,
+      endMs: Date.UTC(2026, 9, 1) - 1,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  ).resolves.toMatchObject({
+    kind: "summary",
+    summary: { cacheStatus: { status: "fresh", cachedFiles: 3 } },
+  });
+  // Restart discovery must not enqueue continuations for windows it can certify as fresh.
+  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toEqual({
+    kind: "refresh",
+    changed: false,
+  });
   appendUsage("old", 4000);
+  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toEqual({
+    kind: "refresh",
+    changed: true,
+  });
   await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject(
     inventory(["old", 4000], ["first", 2000], ["second", 2000]),
   );
@@ -209,9 +242,17 @@ it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {
   open(scope, databasePath);
   const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
   const prepared = prepare({ ...scope, storePath, sessionFiles });
-  await expect(run(prepared, { kind: "inventory", sessionFiles })).resolves.toMatchObject({
-    kind: "inventory",
-    files: sessionFiles.map((sourcePath) => ({ kind: "sqlite", sourcePath })),
+  await expect(
+    run(prepared, {
+      kind: "sessions",
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      pricingFingerprint: "synthetic",
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  ).resolves.toMatchObject({
+    kind: "sessions",
+    summaries: [null, null],
+    staleSessionFiles: sessionFiles,
   });
 });
 

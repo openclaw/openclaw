@@ -29,12 +29,11 @@ export type ResolvePluginWebProvidersParams = {
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
+  installRecords?: PluginLoadOptions["installRecords"];
+  pendingStateMigrations?: PluginLoadOptions["pendingStateMigrations"];
 };
 
-export type ResolveRuntimeWebProvidersParams = Omit<
-  ResolvePluginWebProvidersParams,
-  "mode" | "sandboxed"
->;
+export type ResolveRuntimeWebProvidersParams = Omit<ResolvePluginWebProvidersParams, "mode">;
 
 export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (
@@ -130,6 +129,7 @@ export function resolvePluginWebProviders<TEntry>(
           workspaceDir,
           env,
           logger: pluginRuntimeLoaderLogger,
+          installRecords: params.installRecords,
           ...(params.manifestRecords
             ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
             : {}),
@@ -138,6 +138,7 @@ export function resolvePluginWebProviders<TEntry>(
           onlyPluginIds: pluginIds,
           cache: true,
           activate: false,
+          pendingStateMigrations: params.pendingStateMigrations,
         },
       ),
     );
@@ -190,6 +191,7 @@ export function resolvePluginWebProviders<TEntry>(
       workspaceDir,
       env,
       logger: pluginRuntimeLoaderLogger,
+      installRecords: params.installRecords,
       manifestRegistry: params.manifestRecords
         ? { plugins: [...params.manifestRecords], diagnostics: [] }
         : undefined,
@@ -197,6 +199,7 @@ export function resolvePluginWebProviders<TEntry>(
     {
       cache: true,
       activate: false,
+      pendingStateMigrations: params.pendingStateMigrations,
       ...(hasExplicitPluginIdScope(candidatePluginIds)
         ? { onlyPluginIds: candidatePluginIds }
         : {}),
@@ -284,7 +287,7 @@ export function resolvePluginWebProviders<TEntry>(
         plugins: [...inspectedManifests],
         diagnostics: current.loadContext.manifestRegistry?.diagnostics ?? [],
       },
-      installRecords: current.loadContext.installRecords,
+      installRecords: current.loadContext.installRecords ?? params.installRecords,
       preferBuiltPluginArtifacts: current.loadContext.preferBuiltPluginArtifacts,
       expectedSourceDigests: current.loadContext.expectedSourceDigests,
     };

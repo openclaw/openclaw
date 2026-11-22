@@ -4,7 +4,7 @@ public enum OpenClawSidebarAgentAvatarSource {
     public static let maximumBytes = 2 * 1024 * 1024
     static let maximumCharacters = ((maximumBytes + 2) / 3) * 4 + "data:image/svg+xml;base64,".utf16.count
 
-    static func inlineData(_ source: String) -> Data? {
+    public static func inlineData(_ source: String) -> Data? {
         guard source.utf16.count <= self.maximumCharacters,
               source.lowercased().hasPrefix("data:image/"), let comma = source.firstIndex(of: ",")
         else { return nil }

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush, untrack } from "solid-js";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -12,6 +12,7 @@ import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 registerEnglishCatalog(registerModelSetupEnglish);
 
 beforeEach(() => onTestFinished(installDialogPolyfill()));
+afterEach(() => vi.useRealTimers());
 
 const wizardDefaults = {
   mode: "auth" as const,
@@ -52,13 +53,11 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
 
   expect(container.querySelector("openclaw-modal-dialog")).toBe(modal);
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
-  expect(document.activeElement).toBe(input);
-  expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
 
   setSaving(true);
   flush();
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
-  expect(input.value).toBe("initial typed");
+  expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
   expect(input.disabled).toBe(true);
   expect(container.querySelector('[role="status"][aria-busy="true"]')?.textContent).toContain(
     "Working",
@@ -67,9 +66,11 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
     (button) => button.textContent?.trim() === "Cancel",
   );
   expect(cancel?.disabled).toBe(false);
+  cancel?.focus();
   setSaving(false);
   flush();
   expect(input.disabled).toBe(false);
+  expect(document.activeElement).toBe(input);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");
@@ -97,6 +98,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   ));
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const wizard = container.querySelector(".model-setup-wizard");
   expect(document.activeElement?.textContent).toContain("Continue");
   const deviceStep = {
     id: "device-code",
@@ -130,6 +132,10 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
+  expect(container.querySelectorAll(".model-setup-wizard")).toHaveLength(1);
+  expect(container.querySelector(".model-setup-wizard")).toBe(wizard);
+  expect(wizard?.textContent).toContain("Provider is connected");
+  expect(container.querySelector(".wizard-sign-in")).toBeNull();
   const primary = container.querySelector<HTMLButtonElement>("[data-login-start-chat]")!;
   expect(document.activeElement).toBe(primary);
   expect(container.querySelector(".wizard-step__spinner")).toBeNull();
@@ -150,9 +156,6 @@ const redirectStep = {
 
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const cancel = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
@@ -201,9 +204,6 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}
@@ -234,7 +234,80 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   flush();
   expect(container.querySelector("code")).toBeNull();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "This code expired. Nothing was connected.",
+    "This code expired. No account was added.",
   );
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
+});
+
+it.each([
+  ["device_code_expired", "Start sign-in again", "retry"],
+  ["consent_denied", "Retry this step", "retry"],
+  ["callback_port_busy", "Open settings", "settings"],
+  ["rate_limited", undefined, "Wait a few minutes, then start sign-in again."],
+  ["admin_blocked", undefined, "Ask your administrator to allow this sign-in."],
+] as const)("offers the one recovery core owns for %s", async (reason, button, outcome) => {
+  const recovery = { onRetry: vi.fn(), onOpenSettings: vi.fn() };
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{ phase: "error", message: "The provider said no.", reason }}
+      busy={false}
+      value={undefined}
+      recovery={recovery}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const actions = [...container.querySelectorAll(".model-setup-wizard__footer button")];
+  if (!button) {
+    expect(actions).toHaveLength(0);
+    expect(container.textContent).toContain(outcome);
+    return;
+  }
+  expect(actions.map((action) => action.textContent?.trim())).toEqual(["Close", button]);
+  (actions[1] as HTMLButtonElement).click();
+  expect(
+    outcome === "settings" ? recovery.onOpenSettings : recovery.onRetry,
+  ).toHaveBeenCalledOnce();
+  // The failure shows only its own sentence: no CLI command and no earlier notes.
+  expect(container.textContent).not.toMatch(/openclaw models auth login/);
+});
+
+it.each([
+  ["waiting browser sign-in", "progress", false],
+  ["pasted-address sign-in", "text", true],
+] as const)("shows why an open %s has not finished", async (_name, type, externalAuthInput) => {
+  const message = "Sign-in was not allowed. Go back to the sign-in page and allow access.";
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{
+        ...stepState({
+          id: "sign-in",
+          type,
+          executor: type === "progress" ? "gateway" : "client",
+          externalUrl: "https://provider.example/sign-in",
+          progressMessage: message,
+          reason: "consent_denied",
+        }),
+        externalAuthInput,
+      }}
+      busy={false}
+      value={undefined}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const alert = container.querySelector("[role=alert]");
+  expect(alert?.textContent).toBe(message);
+  // The waiting dialog keeps its way back to the provider; the paste field shows it beneath.
+  expect(container.querySelector(".wizard-sign-in, .wizard-sign-in--paste")?.contains(alert!)).toBe(
+    !externalAuthInput,
+  );
+  if (externalAuthInput) {
+    const input = container.querySelector("#model-setup-wizard-text-input")!;
+    expect(input.compareDocumentPosition(alert!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } else {
+    expect(container.querySelector(".wizard-step__external-link.primary")).not.toBeNull();
+  }
 });

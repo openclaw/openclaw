@@ -177,11 +177,13 @@ it("consumes once across fallback admission and closes the exact prepared owner"
   });
 
   expect(() => prepared.assertSourceCurrent()).not.toThrow();
+  expect(prepared.assertCurrent).not.toThrow();
   expect(identityWork).toHaveLength(0);
   const first = await prepared.admit("embedded");
   const fallback = await prepared.admit("embedded");
 
   expect(fallback).toBe(first);
+  expect(prepared.assertCurrent).not.toThrow();
   expect(envelope()).toMatchObject({
     invoker: { state: "present", kind: "person" },
     assurance: [
@@ -203,6 +205,7 @@ it("consumes once across fallback admission and closes the exact prepared owner"
 
   prepared.close();
   expect(() => prepared.assertSourceCurrent()).not.toThrow();
+  expect(prepared.assertCurrent).toThrow("already closed");
   await expect(prepared.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );
@@ -243,6 +246,7 @@ it("does not consume a cancelled pre-admission carrier", async () => {
   const evidence = createEvidence();
   const cancelled = prepare({ runId: "cancelled-run", evidence });
   cancelled.close();
+  expect(cancelled.assertCurrent).toThrow("already closed");
   await expect(cancelled.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );

@@ -68,3 +68,25 @@ Preserve the relevant behavior assertions and structural budgets in these tests.
 Asset-size checks cover a different boundary. This procedure composes existing
 primitives; verify whether a shared interaction profiler or complete manifest
 exists before claiming either is available.
+
+## Page visits over simulated RTT
+
+`scripts/bench-control-ui-engines.ts --steps page-cron-visit,page-cron-revisit
+--network-profiles localhost,rtt-100ms` compares the first route visit after a
+settled New Session with a same-document warm return. Use `--page-origin chat`
+to start with the existing 400-message boot transcript and enabled composer
+instead; the default remains `new-session`. Nonlocal profiles accept
+only cold/warm boot and page visit/revisit phases; actions and memory scenes
+remain localhost-only. The profile delays each HTTP response and each incoming
+mock Gateway frame, including the connection challenge, without a bandwidth cap.
+
+Page observations retain the asset ResourceTiming waterfall relative to route
+navigation, plus assets completed by the browser-local route-ready boundary.
+The HTTP/1.1 wave floor is `ceil(ready assets / 6)` when all those assets report
+HTTP/1.1. It is a connection-capacity lower bound, not measured dependency depth;
+inspect the waterfall before attributing readiness to serial waves. In-flight
+resources have no completed ResourceTiming entry yet. A warm return retains
+loaded modules, while mock routing disables the browser HTTP cache. Compare
+historical results only after matching their initial page and fixture state.
+These profiles have no throughput cap; a historical 10 Mbps measurement is not
+a directly comparable readiness timing even when asset counts match.

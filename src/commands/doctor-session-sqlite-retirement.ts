@@ -26,7 +26,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-o
 import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   protectRecoveryDependencies,
   resolveRecoveryArtifact,
   summarizeRecoveryCleanup,
@@ -44,6 +44,8 @@ import {
   retireUnmanifestedRecovery,
   selectUnmanifestedRecovery,
 } from "./update-cleanup-unmanifested.js";
+import { discardDatabaseSnapshotServerCaptures } from "./update-database-snapshot-cleanup.js";
+import { retireDisplacedDatabases } from "./update-displaced-database-cleanup.js";
 
 type RecoveryCleanupProgress = {
   phase: "verifying" | "claiming" | "removing-capture" | "removing-unmanifested";
@@ -64,10 +66,8 @@ function assertRecoveryOriginal(
       ? artifact.disposal.claimPath
       : archivePath;
   if (!statMigrationPath(currentPath)) {
-    if (
-      artifact.disposal.state === "pending-disposal" &&
-      artifact.disposal.phase === "unlink-pending"
-    ) {
+    // A consented disposal whose bytes are already gone has nothing left to retain.
+    if (artifact.disposal.state === "pending-disposal") {
       return undefined;
     }
     throw new Error("artifact is unexpectedly missing");
@@ -231,14 +231,19 @@ export async function retireOwnedSessionSqliteRecovery(
 ): Promise<RecoveryCleanupReport> {
   authority.assertCurrent();
   const cfg = await params.readConfig();
-  const inventory = collectUpdateCleanupInventory({ cfg, env: params.env });
+  const inventory = await collectUpdateCleanupInventoryAsync({
+    cfg,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
   const unmanifested = selectUnmanifestedRecovery({
     inventory,
     cfg,
     env: params.env,
     paths: params.includeUnmanifested,
   });
-  const { report, references, manifestPaths, captureIdentities } = inventory;
+  const { report, references, manifestPaths, captureIdentities, displacedRetirement } = inventory;
   authority.assertCurrent();
   if (
     report.stateDir !== params.preview.stateDir ||
@@ -256,7 +261,7 @@ export async function retireOwnedSessionSqliteRecovery(
   );
   const originals = report.artifacts.filter(
     (item) =>
-      item.kind !== "update-capture" &&
+      item.kind === undefined &&
       !unmanifested.has(item.path) &&
       (item.outcome === "candidate" || item.outcome === "verification-required"),
   );
@@ -323,11 +328,7 @@ export async function retireOwnedSessionSqliteRecovery(
   }
   // Historical adoption also opens SQLite readers; finish those before fencing sidecar state.
   for (const item of report.artifacts) {
-    if (
-      item.outcome !== "candidate" ||
-      item.kind === "update-capture" ||
-      unmanifested.has(item.path)
-    ) {
+    if (item.outcome !== "candidate" || item.kind !== undefined || unmanifested.has(item.path)) {
       continue;
     }
     try {
@@ -349,23 +350,34 @@ export async function retireOwnedSessionSqliteRecovery(
   const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
   const explicit = candidates.filter((item) => unmanifested.has(item.path));
   const selected = candidates.filter(
-    (item) => item.kind !== "update-capture" && !unmanifested.has(item.path),
+    (item) => item.kind === undefined && !unmanifested.has(item.path),
   );
   const captures = candidates.filter(
-    (item) => item.kind === "update-capture" && !unmanifested.has(item.path),
+    (item) =>
+      (item.kind === "update-capture" || item.kind === "database-snapshot") &&
+      !unmanifested.has(item.path),
+  );
+  const displaced = candidates.filter(
+    (item) => item.kind === "displaced-database" && !unmanifested.has(item.path),
   );
   if (!(await params.confirm(verified))) {
     return { ...verified, status: "refused" };
   }
   authority.assertCurrent();
   const currentConfig = await params.readConfig();
-  const rechecked = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
+  const rechecked = await collectUpdateCleanupInventoryAsync({
+    cfg: currentConfig,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
   const currentUnmanifested = selectUnmanifestedRecovery({
     inventory: rechecked,
     cfg: currentConfig,
     env: params.env,
     paths: params.includeUnmanifested,
   });
+  authority.assertCurrent();
   assertUnmanifestedSelectionCurrent(unmanifested, currentUnmanifested);
   // Existing artifacts can become protected during confirmation, not only newly added manifests.
   // Revalidate the whole selection before retiring any dependent originals.
@@ -432,6 +444,12 @@ export async function retireOwnedSessionSqliteRecovery(
     selected: captures,
     identities: captureIdentities,
     assertCurrent: () => authority.assertCurrent(),
+    // Server-side captures go first; their manifests stay until the drop succeeds.
+    beforeRemove: async (item) => {
+      if (item.kind === "database-snapshot") {
+        await discardDatabaseSnapshotServerCaptures(item.path, currentConfig);
+      }
+    },
     onProgress: (item, index) =>
       params.onProgress?.({
         phase: "removing-capture",
@@ -441,6 +459,11 @@ export async function retireOwnedSessionSqliteRecovery(
         bytes: item.bytes,
       }),
   });
+  await retireDisplacedDatabases({
+    selected: displaced,
+    retirement: displacedRetirement,
+    assertCurrent: () => authority.assertCurrent(),
+  });
   await retireUnmanifestedRecovery({
     selected: explicit,
     identities: unmanifested,
@@ -448,13 +471,19 @@ export async function retireOwnedSessionSqliteRecovery(
     assertReferences: async (item) => {
       const effectConfig = await params.readConfig();
       authority.assertCurrent();
-      const fresh = collectUpdateCleanupInventory({ cfg: effectConfig, env: params.env });
+      const fresh = await collectUpdateCleanupInventoryAsync({
+        cfg: effectConfig,
+        env: params.env,
+        current: true,
+      });
+      authority.assertCurrent();
       const selection = selectUnmanifestedRecovery({
         inventory: fresh,
         cfg: effectConfig,
         env: params.env,
         paths: [item.path],
       });
+      authority.assertCurrent();
       assertUnmanifestedSelectionCurrent(
         new Map([[item.path, unmanifested.get(item.path)!]]),
         selection,
