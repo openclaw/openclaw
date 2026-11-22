@@ -594,7 +594,8 @@ async function verifyCrossHumanAdmission(
   allowCollaborativeSteering: boolean | undefined,
   conversation: "same" | "different" = "same",
 ) {
-  const collaborative = allowCollaborativeSteering === true && conversation === "same";
+  const effectiveCollaborativeSteering = allowCollaborativeSteering ?? true;
+  const collaborative = effectiveCollaborativeSteering && conversation === "same";
   const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
   const scenario = createScenario(
     {
@@ -625,12 +626,9 @@ async function verifyCrossHumanAdmission(
       agentId: "deployment",
     });
   }
-  await configureProofCollaboration(
-    allowCollaborativeSteering,
-    allowCollaborativeSteering === true,
-  );
+  await configureProofCollaboration(allowCollaborativeSteering, effectiveCollaborativeSteering);
   expect(getRuntimeConfig().messages?.queue?.allowCollaborativeSteering).toBe(
-    allowCollaborativeSteering,
+    effectiveCollaborativeSteering,
   );
   running.alice = runHuman(scenario, "alice", scenario.incumbentPrompt, "steer", signal).then(
     (result) => {
@@ -657,7 +655,7 @@ async function verifyCrossHumanAdmission(
     // The receipt waits for transcript commitment, which needs Alice's held
     // tool to finish. Observe real admission before releasing that tool.
     await steering.waitForAdmission(running.bob, signal);
-  } else if (allowCollaborativeSteering !== true) {
+  } else if (!effectiveCollaborativeSteering) {
     expect(await running.bob).toMatchObject({ collaborativeSteeringRefused: true });
     expect(scenario.sourceRequests).toEqual([]);
     expect(scenario.incumbentCompleted).toBe(false);
@@ -667,12 +665,11 @@ async function verifyCrossHumanAdmission(
   } else {
     expect((await running.bob).deferredToActiveRun).toBe("followup");
   }
-  const expectedReplies = collaborative
+  // Automatic followup fallback is quiet; only strict refusal and the
+  // subsequent explicit /followup command send an immediate reply.
+  const expectedReplies = effectiveCollaborativeSteering
     ? []
-    : (allowCollaborativeSteering === true
-        ? [FOLLOWUP_REPLY]
-        : [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
-      ).map((text) => ({ sender: "bob", text }));
+    : [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY].map((text) => ({ sender: "bob", text }));
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
   );

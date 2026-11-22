@@ -88,6 +88,7 @@ import {
 } from "./run/model-admission.js";
 import {
   bindRunToPreparedModelRuntime,
+  initializeReadOnlyRunModelCatalog,
   resolvePreparedRuntimeWorkspaces,
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -366,14 +367,18 @@ async function runEmbeddedAgentForSession(
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
-          const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
           let preparedLeaseActive = true;
           try {
+            const ownerSnapshot = await initializeReadOnlyRunModelCatalog(
+              params,
+              preparedModelRuntimeLease.snapshot,
+              requestedRuntimeSelection,
+              laneController.abortSignal,
+            );
             throwIfAborted();
             if (
               params.pluginGeneration &&
-              preparedModelRuntimeOwnerSnapshot.metadataSnapshot !==
-                params.pluginGeneration.pluginMetadataSnapshot
+              ownerSnapshot.metadataSnapshot !== params.pluginGeneration.pluginMetadataSnapshot
             ) {
               throw new Error("prepared model runtime replaced the admitted plugin generation");
             }
@@ -383,18 +388,16 @@ async function runEmbeddedAgentForSession(
               runParams: params,
               requestedWorkspaceResolution,
               preserveExecutionWorkspace,
-              preparedModelRuntime: preparedModelRuntimeOwnerSnapshot,
+              preparedModelRuntime: ownerSnapshot,
             });
             params = rebound.runParams;
             const workspaceResolution = rebound.workspaceResolution;
             const projects = await prepareAgentPromptProjects({
-              config: params.config,
+              ...params,
               workspaceDir: workspaceResolution.workspaceDir,
-              cwd: params.cwd,
-              sessionId: params.sessionId,
             });
             const preparedModelRuntime = Object.freeze({
-              ...preparedModelRuntimeOwnerSnapshot,
+              ...ownerSnapshot,
               ...projects,
             });
             const runPrepared = async () => {
@@ -585,7 +588,7 @@ async function runEmbeddedAgentForSession(
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,
                   runWithPreparedRuntime,
-                  () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
+                  () => (preparedLeaseActive ? ownerSnapshot : undefined),
                 )
               : await runWithPreparedRuntime();
           } finally {

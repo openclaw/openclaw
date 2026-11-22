@@ -610,10 +610,13 @@ export async function runSessionColdStorageMaintenance(params: {
   nextStore = start + 1;
   let remainingTranscripts = MAX_TRANSCRIPTS_PER_PASS;
   let remainingBytes = MAX_BATCH_BYTES;
-  for (const { databaseOptions, ownerStorePath, readIdentity, readCustody } of [
-    ...stores.slice(start),
-    ...stores.slice(0, start),
-  ]) {
+  for (const {
+    databaseOptions,
+    ownerStorePath,
+    readIdentity,
+    readCustody,
+    coldMaintenanceNeeded,
+  } of [...stores.slice(start), ...stores.slice(0, start)]) {
     if (retentionMs != null) {
       const { prunePublishedSessionArchivesByRetention } =
         await import("./session-accessor.sqlite-archive-store.js");
@@ -628,7 +631,14 @@ export async function runSessionColdStorageMaintenance(params: {
         assertCurrent,
       });
     }
-    if (!config.enabled || remainingTranscripts <= 0 || remainingBytes <= 0) {
+    // The ordered inventory already inspected this store. Concurrent new work
+    // after an empty snapshot belongs to the next sweep, not a new archive worker.
+    if (
+      !config.enabled ||
+      remainingTranscripts <= 0 ||
+      remainingBytes <= 0 ||
+      coldMaintenanceNeeded === false
+    ) {
       continue;
     }
     assertCurrent();

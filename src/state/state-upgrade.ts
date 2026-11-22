@@ -23,12 +23,16 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
 import { VERSION } from "../version.js";
-import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
-import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
-import type { AgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.types.js";
+import {
+  createRetainedAgentDatabaseMatcherFromSnapshot,
+  type AgentDatabaseDeletionDiscoverySnapshot,
+} from "./agent-deletion-discovery.js";
+import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
+import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
@@ -117,7 +121,7 @@ function discoverDatabases(stateDir: string, env: NodeJS.ProcessEnv) {
   } catch {
     // No agents yet.
   }
-  let deletionSnapshot: AgentDatabaseDeletionSnapshot | undefined;
+  let deletionSnapshot: AgentDatabaseDeletionDiscoverySnapshot | undefined;
   const realStateDir = fs.realpathSync(stateDir);
   const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
     if (!isSqliteFile(pathname)) {
@@ -136,9 +140,21 @@ function discoverDatabases(stateDir: string, env: NodeJS.ProcessEnv) {
       try {
         const schemaVersion = readVersion(db, kind);
         if (kind === "state" && schemaVersion !== 0 && agents.length > 0) {
-          // Startup has file-only custody, not a runtime schema lease. Reuse this
-          // raw inspection handle and resolve recorded paths against the live source.
-          deletionSnapshot = readAgentDatabaseDeletionWorkerSnapshot(db, pathname, "maintenance");
+          // Discovery precedes migration, so read legacy registry identities rather
+          // than requiring the runtime schema that this upgrade is about to install.
+          // Keep deletion and registration facts in one source snapshot.
+          deletionSnapshot = runSqliteReadSnapshotSync(
+            db,
+            () => ({
+              retainedDeletions: readRetainedAgentDeletionsFromDatabase(
+                db,
+                pathname,
+                "maintenance",
+              ),
+              registeredAgentDatabases: readAgentDatabasePreflightTargets(db, pathname),
+            }),
+            { operationLabel: "stateUpgrade.discovery" },
+          );
         }
         return schemaVersion;
       } finally {

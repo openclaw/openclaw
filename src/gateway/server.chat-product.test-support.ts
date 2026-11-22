@@ -13,6 +13,9 @@ export const createProductState = (label: string) =>
       VITEST: process.env.VITEST,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      // Product providers are owned loopback fixtures; preserve external proxy routing.
+      NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
+      no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
     },
   });
 

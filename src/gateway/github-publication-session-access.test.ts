@@ -14,6 +14,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
+import * as sessionSlug from "../agents/session-slug.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -263,6 +264,8 @@ describe("local checkout publication", () => {
   });
 
   it.each(LOCAL_CHECKOUT_OUTCOMES)("local checkout outcome: %s", async (outcome) => {
+    const slug = vi.spyOn(sessionSlug, "createCrustaceanSlug").mockReturnValue("publication-task");
+    onTestFinished(() => slug.mockRestore());
     const f = await createLocalPublicationFixture();
     await useRealSessionReads();
     const source = f.local!;
@@ -624,6 +627,7 @@ describe("local checkout publication", () => {
     const children = await listSessionChildEntriesReadOnly(scope);
     expect(children).toHaveLength(1);
     const task = children[0]!;
+    const taskCwd = task.entry.spawnedCwd!;
     expect(parent.projectId).toBe(projectId);
     expect(task.entry.projectId).toBe(projectId);
     expect(task.entry).toMatchObject({
@@ -634,9 +638,7 @@ describe("local checkout publication", () => {
       inheritedToolDeny: ["exec"],
       permissionMode: "guarded",
     });
-    expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
-      "accepted\n",
-    );
+    expect(await fs.readFile(path.join(taskCwd, "artifact.txt"), "utf8")).toBe("accepted\n");
     expect(await readPublicationWorktreeState(source)).toEqual(before);
     expect(source.effects).toEqual(["push", "pull_request"]);
     expect(
@@ -687,7 +689,7 @@ describe("local checkout publication", () => {
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
 
     if (outcome === "task access") {
-      const taskHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      const taskHead = await source.git("-C", taskCwd, "rev-parse", "HEAD");
       await fs.writeFile(path.join(source.cwd, "artifact.txt"), "guest follow-up\n");
       await source.git("commit", "-am", "Guest follow-up");
       requesterClient = f.guestSource.client;
@@ -696,7 +698,7 @@ describe("local checkout publication", () => {
         undefined,
         { message: expect.stringContaining("requester is no longer authorized") },
       ]);
-      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
+      expect(await source.git("-C", taskCwd, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
       requesterClient = f.maintainerSource.client;
       let revoked = false;
@@ -715,7 +717,7 @@ describe("local checkout publication", () => {
       onTestFinished(() => observeGit.mockRestore());
       const revokedResult = await invoke(source.cwd, true, "revoked-task-follow-up");
       expect(revoked).toBe(true);
-      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
+      expect(await source.git("-C", taskCwd, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);
       expect(revokedResult).toMatchObject([
         false,
@@ -753,18 +755,14 @@ describe("local checkout publication", () => {
       await fs.writeFile(path.join(source.cwd, "artifact.txt"), text);
       expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
       await source.git(...args);
-      const acceptedHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      const acceptedHead = await source.git("-C", taskCwd, "rev-parse", "HEAD");
       expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
-      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(
-        acceptedHead,
-      );
+      expect(await source.git("-C", taskCwd, "rev-parse", "HEAD")).toBe(acceptedHead);
       expect(await invoke(source.cwd, true, text)).toMatchObject([
         true,
         { status: "published", ...publicationTarget },
       ]);
-      expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
-        text,
-      );
+      expect(await fs.readFile(path.join(taskCwd, "artifact.txt"), "utf8")).toBe(text);
     }
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
     expect(source.effects).toEqual(["push", "pull_request", "push", "push"]);
@@ -828,6 +826,7 @@ describe("local checkout publication", () => {
       true,
       { status: "published" },
     ]);
+    expect(nextPublication[1].branch).not.toBe(publicationTarget.branch);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(2);
     expect(loadSessionEntryReadOnly(scope)?.spawnedCwd).toBe(root);
     expect(await readPublicationWorktreeState(source)).toEqual(before);

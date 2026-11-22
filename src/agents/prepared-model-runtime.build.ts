@@ -130,29 +130,6 @@ async function buildSnapshotBatch(
     pluginGeneration: PreparedModelRuntimePluginGeneration,
     catalogFacts: PreparedModelRuntimeCatalogFacts,
   ) => {
-    const { input, inventoryOwner } = candidate;
-    if (
-      inventoryOwner?.provenance === "configured" &&
-      !input.readOnly &&
-      (inventoryOwner.catalogInventory ||
-        inventoryOwner.catalogAttempt ||
-        input.config.gateway?.controlUi?.enabled !== false)
-    ) {
-      const agentId = input.agentId ?? resolveAuthProfileDatabaseOwnerId(input.agentDir);
-      const env = agentFacts.env;
-      // Background catalog saves must not create the shared session database underneath
-      // the first chat's missing-store facts. Admit local storage before publishing its
-      // configured owner; provider discovery remains asynchronous. Existing read-only
-      // startup admissions already have a database and must not borrow write permission.
-      if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-        await prepareOpenClawAgentDatabaseExecution(
-          { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-          () => assertBuildCurrent(input),
-          candidate.retirementSignal,
-        );
-        assertBuildCurrent(input);
-      }
-    }
     const catalogAccess = await createFullModelCatalogAccess(
       {
         catalogOwner: candidate.catalogOwner,
@@ -273,23 +250,13 @@ async function buildSnapshotBatch(
           // Otherwise file creation can retire the credentials this build just captured.
           // Discovery stays asynchronous; read-only admission must not borrow write permission.
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
-            try {
-              await prepareOpenClawAgentDatabaseExecution(
-                { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
-                () => assertBuildCurrent(input),
-                candidate.retirementSignal,
-              );
-            } catch (error) {
-              // Database admission can return the retired generation's raw abort reason.
-              // Recover the owning publication's supersession before startup joins it.
-              if (
-                candidate.retirementSignal.aborted &&
-                error === candidate.retirementSignal.reason
-              ) {
-                assertBuildCurrent(input);
-              }
-              throw error;
-            }
+            // Admission belongs to this build, not the individual catalog generation.
+            // Auth changes can retire that generation while this publication drains them.
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
+              () => assertBuildCurrent(input),
+              signal,
+            );
             assertBuildCurrent(input);
           }
         }

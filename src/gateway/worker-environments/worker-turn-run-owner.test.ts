@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   isEmbeddedAgentRunHandleActive,
   resolveActiveEmbeddedRunOwner,
@@ -30,6 +34,10 @@ import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import {
+  expectWorkerFixtureCancellation,
+  type WorkerFixtureCancellationProbe,
+} from "./worker-turn-cancellation.test-support.js";
+import {
   ENVIRONMENT_ID,
   OWNER_EPOCH,
   SESSION_ID,
@@ -40,6 +48,7 @@ import {
   createWorkerTurnTunnel,
   placements,
   reconcileUnchangedLocalWorkspace,
+  root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -115,172 +124,219 @@ describe("cloud worker run ownership", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
-  it.each([
+  async function checkRemoteToolLifetime(
+    {
+      cancellation,
+      firstToolDelayMs,
+      collisionAt,
+    }: {
+      cancellation: "user" | "deadline";
+      firstToolDelayMs: number;
+      collisionAt: "cancellation" | "progress";
+    },
+    signal: AbortSignal,
+    probe?: WorkerFixtureCancellationProbe,
+  ) {
+    let now = Date.UTC(2026, 7, 29);
+    const turnStartedAtMs = now;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    await seedActivePlacement();
+    const launched = createDeferred();
+    const finishLaunch = createDeferred();
+    let workerSignal: AbortSignal | undefined;
+    const environments = workerTurnEnvironments(
+      createWorkerTurnTunnel({
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+        launchTurn: async (request) => {
+          request.onDispatchReady?.();
+          workerSignal = request.signal;
+          launched.resolve();
+          // User cancellation retains producer custody through its final receipt.
+          await (cancellation === "user"
+            ? finishLaunch.promise
+            : new Promise<void>((resolve) => {
+                request.signal?.addEventListener("abort", () => resolve(), { once: true });
+              }));
+          throw new Error("worker turn cancelled");
+        },
+      }),
+      {
+        acknowledgeCredentialDelivery: async () => true,
+        stopTunnel: vi.fn(),
+        destroy: vi.fn(async () => attachedEnvironment()),
+      },
+    );
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      ...(probe
+        ? {
+            resolveWorkspace: async () => {
+              await probe.pause();
+              return { kind: "local" as const, path: root };
+            },
+          }
+        : {}),
+    });
+    const operation = boundReplyOperation();
+    let otherOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const collideSessionId = () => {
+      otherOperation = boundReplyOperation(`${sessionTarget.storePath}.other`);
+    };
+    operation.setPhase("running");
+    const runId = "run-bounded-worker-tool";
+    registerAgentRunContext(runId, {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    const input = {
+      ...turn(runId),
+      timeoutMs: 30 * 60_000,
+      replyOperation: operation,
+      abortSignal: AbortSignal.any([operation.abortSignal, signal]),
+    };
+    const execution = provider
+      .executeTurn(workerTurnRequest(runId), input, vi.fn())
+      .finally(() => operation.complete());
+    const attempt = execution.catch((error: unknown) => error);
+    const receiver = createWorkerLiveEventReceiver();
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(launched.promise, execution, "Worker did not dispatch"),
+        signal,
+      );
+      const active = expectDefined(placements.get(SESSION_ID), "expected active placement");
+      const turnClaim = expectDefined(
+        projectWorkerSessionTurnClaim(active),
+        "expected admitted worker turn",
+      );
+      const turnCapability = expectDefined(
+        getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
+        "expected worker turn capability",
+      );
+      const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
+        protocolFeatures: ["worker-live-event-v1"],
+        credentialExpiresAtMs: Date.now() + input.timeoutMs,
+      });
+      const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
+        receiver.apply({
+          readAckedSeq: () => 0,
+          source: turnCapability,
+          identity: sender,
+          request: { runEpoch: OWNER_EPOCH, lastAckedSeq: seq - 1, seq, runId, event },
+        });
+      const acknowledge = async (event: WorkerLiveEventParams["event"], seq: number) => {
+        expect(await receive(event, seq)).toEqual({ ok: true, result: { ackedSeq: seq } });
+      };
+      now = turnStartedAtMs + firstToolDelayMs;
+      setDiagnosticsEnabledForProcess(true);
+      logSessionStateChange({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        state: "processing",
+      });
+      if (collisionAt === "progress") {
+        collideSessionId();
+      }
+      await acknowledge(toolEvent("start"), 1);
+      now = turnStartedAtMs + 20 * 60_000 + 1;
+
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(isReplyRunEvidenceStale(operation)).toBe(false);
+      expect(workerSignal?.aborted).toBe(false);
+      expect(placements.validateTurnClaim(turnClaim)).toBe(true);
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID })).toMatchObject({
+        activeWorkKind: "tool_call",
+        activeToolName: "sessions_spawn",
+        hasActiveEmbeddedRun: true,
+      });
+      await expect(
+        steerSessionControllerOperation({ operation, text: "follow up", options: {} }),
+      ).resolves.toMatchObject({
+        status: "rejected",
+        reason: "injection_unavailable",
+      });
+      if (cancellation === "user") {
+        collideSessionId();
+        expect(resolveActiveEmbeddedRunOwnerForOperation(operation)?.abort()).toBe(true);
+        expect(placements.validateTurnClaim(turnClaim)).toBe(true);
+        await expect(turnCapability.run(async () => "late effect")).rejects.toThrow();
+        const finishing = {
+          kind: "lifecycle" as const,
+          payload: { phase: "finishing" as const, aborted: true, endedAt: now },
+        };
+        const lateEvent = vi.fn();
+        const unsubscribe = onAgentEventForRun(runId, lateEvent);
+        try {
+          expect(
+            await receive(finishing, 2, {
+              ...identity,
+              turnClaim: { ...turnClaim, claimId: "foreign-claim" },
+            }),
+          ).toEqual({ ok: false, details: { reason: "invalid-event" } });
+          await acknowledge(finishing, 2);
+          expect(lateEvent).not.toHaveBeenCalled();
+        } finally {
+          unsubscribe();
+        }
+      } else {
+        await acknowledge(toolEvent("update"), 2);
+        now = turnStartedAtMs + input.timeoutMs - 1;
+        expect(isReplyRunEvidenceStale(operation)).toBe(false);
+        now += 1;
+        expect(isReplyRunEvidenceStale(operation)).toBe(true);
+        await operation.watchdog.tick();
+        expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+      }
+      expect(workerSignal?.aborted).toBe(true);
+      expect(otherOperation?.abortSignal.aborted).toBe(false);
+      finishLaunch.resolve();
+      await attempt;
+      await operation.ownerSettlement;
+      expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
+      ).toBeUndefined();
+      expect(environments.destroy).not.toHaveBeenCalled();
+    } finally {
+      probe?.onCleanup();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
+      finishLaunch.resolve();
+      operation.abortByUser();
+      await attempt;
+      otherOperation?.complete();
+      receiver.clear();
+      clock.mockRestore();
+    }
+  }
+
+  it("joins a cancelled fixture before worker dispatch and restores its clock", async ({
+    signal,
+  }) => {
+    const originalNow = Date.now;
+    await expectWorkerFixtureCancellation(
+      (testSignal, probe) =>
+        checkRemoteToolLifetime(
+          { cancellation: "user", firstToolDelayMs: 0, collisionAt: "cancellation" },
+          testSignal,
+          probe,
+        ),
+      signal,
+    );
+    expect(Date.now).toBe(originalNow);
+    expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
+  it.for([
     { cancellation: "user", firstToolDelayMs: 0, collisionAt: "cancellation" },
     { cancellation: "deadline", firstToolDelayMs: 10 * 60_000, collisionAt: "progress" },
   ] as const)(
     "keeps a bounded remote tool alive until $cancellation cancellation with a shared session ID at $collisionAt",
-    async ({ cancellation, firstToolDelayMs, collisionAt }) => {
-      let now = Date.UTC(2026, 7, 29);
-      const turnStartedAtMs = now;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      await seedActivePlacement();
-      const launched = createDeferred();
-      const finishLaunch = createDeferred();
-      let workerSignal: AbortSignal | undefined;
-      const environments = workerTurnEnvironments(
-        createWorkerTurnTunnel({
-          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-          launchTurn: async (request) => {
-            request.onDispatchReady?.();
-            workerSignal = request.signal;
-            launched.resolve();
-            // User cancellation retains producer custody through its final receipt.
-            await (cancellation === "user"
-              ? finishLaunch.promise
-              : new Promise<void>((resolve) => {
-                  request.signal?.addEventListener("abort", () => resolve(), { once: true });
-                }));
-            throw new Error("worker turn cancelled");
-          },
-        }),
-        {
-          acknowledgeCredentialDelivery: async () => true,
-          stopTunnel: vi.fn(),
-          destroy: vi.fn(async () => attachedEnvironment()),
-        },
-      );
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const operation = boundReplyOperation();
-      let otherOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const collideSessionId = () => {
-        otherOperation = boundReplyOperation(`${sessionTarget.storePath}.other`);
-      };
-      operation.setPhase("running");
-      const runId = "run-bounded-worker-tool";
-      registerAgentRunContext(runId, {
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-      });
-      const input = {
-        ...turn(runId),
-        timeoutMs: 30 * 60_000,
-        replyOperation: operation,
-        abortSignal: operation.abortSignal,
-      };
-      const execution = provider
-        .executeTurn(workerTurnRequest(runId), input, vi.fn())
-        .finally(() => operation.complete());
-      const attempt = execution.catch((error: unknown) => error);
-      const receiver = createWorkerLiveEventReceiver();
-      const previousDiagnostics = areDiagnosticsEnabledForProcess();
-      try {
-        await awaitGateBeforeSettlement(launched.promise, execution, "Worker did not dispatch");
-        const active = expectDefined(placements.get(SESSION_ID), "expected active placement");
-        const turnClaim = expectDefined(
-          projectWorkerSessionTurnClaim(active),
-          "expected admitted worker turn",
-        );
-        const turnCapability = expectDefined(
-          getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
-          "expected worker turn capability",
-        );
-        const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
-          protocolFeatures: ["worker-live-event-v1"],
-          credentialExpiresAtMs: Date.now() + input.timeoutMs,
-        });
-        const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
-          receiver.apply({
-            readAckedSeq: () => 0,
-            source: turnCapability,
-            identity: sender,
-            request: { runEpoch: OWNER_EPOCH, lastAckedSeq: seq - 1, seq, runId, event },
-          });
-        const acknowledge = async (event: WorkerLiveEventParams["event"], seq: number) => {
-          expect(await receive(event, seq)).toEqual({ ok: true, result: { ackedSeq: seq } });
-        };
-        now = turnStartedAtMs + firstToolDelayMs;
-        setDiagnosticsEnabledForProcess(true);
-        logSessionStateChange({
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          state: "processing",
-        });
-        if (collisionAt === "progress") {
-          collideSessionId();
-        }
-        await acknowledge(toolEvent("start"), 1);
-        now = turnStartedAtMs + 20 * 60_000 + 1;
-
-        expect(operation.abortSignal.aborted).toBe(false);
-        expect(isReplyRunEvidenceStale(operation)).toBe(false);
-        expect(workerSignal?.aborted).toBe(false);
-        expect(placements.validateTurnClaim(turnClaim)).toBe(true);
-        expect(getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID })).toMatchObject({
-          activeWorkKind: "tool_call",
-          activeToolName: "sessions_spawn",
-          hasActiveEmbeddedRun: true,
-        });
-        await expect(
-          steerSessionControllerOperation({ operation, text: "follow up", options: {} }),
-        ).resolves.toMatchObject({
-          status: "rejected",
-          reason: "injection_unavailable",
-        });
-        if (cancellation === "user") {
-          collideSessionId();
-          expect(resolveActiveEmbeddedRunOwnerForOperation(operation)?.abort()).toBe(true);
-          expect(placements.validateTurnClaim(turnClaim)).toBe(true);
-          await expect(turnCapability.run(async () => "late effect")).rejects.toThrow();
-          const finishing = {
-            kind: "lifecycle" as const,
-            payload: { phase: "finishing" as const, aborted: true, endedAt: now },
-          };
-          const lateEvent = vi.fn();
-          const unsubscribe = onAgentEventForRun(runId, lateEvent);
-          try {
-            expect(
-              await receive(finishing, 2, {
-                ...identity,
-                turnClaim: { ...turnClaim, claimId: "foreign-claim" },
-              }),
-            ).toEqual({ ok: false, details: { reason: "invalid-event" } });
-            await acknowledge(finishing, 2);
-            expect(lateEvent).not.toHaveBeenCalled();
-          } finally {
-            unsubscribe();
-          }
-        } else {
-          await acknowledge(toolEvent("update"), 2);
-          now = turnStartedAtMs + input.timeoutMs - 1;
-          expect(isReplyRunEvidenceStale(operation)).toBe(false);
-          now += 1;
-          expect(isReplyRunEvidenceStale(operation)).toBe(true);
-          await operation.watchdog.tick();
-          expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
-        }
-        expect(workerSignal?.aborted).toBe(true);
-        expect(otherOperation?.abortSignal.aborted).toBe(false);
-        finishLaunch.resolve();
-        await attempt;
-        await operation.ownerSettlement;
-        expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
-        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-        expect(
-          getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
-        ).toBeUndefined();
-        expect(environments.destroy).not.toHaveBeenCalled();
-      } finally {
-        setDiagnosticsEnabledForProcess(previousDiagnostics);
-        finishLaunch.resolve();
-        operation.abortByUser();
-        await attempt;
-        otherOperation?.complete();
-        receiver.clear();
-        clock.mockRestore();
-      }
-    },
+    async (scenario, { signal }) => checkRemoteToolLifetime(scenario, signal),
   );
 
   it("uses accepted approval expiry and live custody without trusting worker events", async () => {

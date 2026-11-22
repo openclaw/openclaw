@@ -1131,7 +1131,10 @@ describe("anthropic transport stream", () => {
             : []),
         ],
       } as unknown as AnthropicStreamContext,
-      { apiKey: "sk-ant-api", ...(!withValid ? { toolChoice: "auto" } : {}) },
+      {
+        apiKey: "sk-ant-api",
+        toolChoice: withValid ? { type: "tool", name: "good_plugin_tool" } : "auto",
+      },
     );
 
     if (!withValid) {
@@ -1141,6 +1144,10 @@ describe("anthropic transport stream", () => {
       return;
     }
 
+    expect(latestAnthropicRequest().payload.tool_choice).toEqual({
+      type: "tool",
+      name: "good_plugin_tool",
+    });
     expect(latestAnthropicRequest().payload.tools).toEqual([
       expect.objectContaining({
         name: "good_plugin_tool",

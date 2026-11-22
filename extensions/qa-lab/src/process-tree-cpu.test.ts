@@ -127,6 +127,15 @@ describe("POSIX process tree metrics", () => {
     usePsOutput("101 0 nope\n102 0 -1\n103 0 0x10", "darwin");
     expect([100, 101, 102, 103].map(readProcessTreeRssBytes)).toEqual([null, null, null, null]);
   });
+  it("includes live memory when a fully exited child is awaiting reaping", () => {
+    usePsOutput("100 0 1024\n101 100 0");
+    readFileSyncMock.mockImplementation((path: string) =>
+      path === "/proc/100/status" ? "VmRSS:\t1024 kB\n" : "State:\tZ (zombie)\nThreads:\t1\n",
+    );
+
+    expect(readProcessTreeRssBytes(100)).toBe(1_048_576);
+  });
+
   it("reports unavailable RSS when a zombie leader still has live threads", () => {
     usePsOutput("100 0 0");
     readFileSyncMock.mockReturnValue("State:\tZ (zombie)\nThreads:\t2\n");

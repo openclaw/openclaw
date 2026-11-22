@@ -2200,6 +2200,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-store-target-inventory.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSessionStoreTargetInventory.prepareRead"],
+        evidence:
+          "Only session-transcript.worker.ts calls readSessionStoreTargetInventory. Its prepareRead closure owns the cold-maintenance database probe; other exports perform host filesystem qualification and remain unclassified.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-inventory.ts",
     [
       {

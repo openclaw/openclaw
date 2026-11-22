@@ -8,8 +8,12 @@ import {
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -88,6 +92,35 @@ it("archives by default after 30 days, respects opt-out, and restores history", 
   await restoreSessionColdTranscript(defaultFixture.scope);
   expect(defaultFixture.snapshot()).toEqual(old);
 });
+
+it.each([false, true])(
+  "skips an empty archive carrier only without free pages: %s",
+  async (freePages) => {
+    const storePath = state.statePath(`empty-${freePages}.sqlite`);
+    const database = requireNativeSqliteDatabase(
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath }).db,
+    );
+    if (freePages) {
+      database.exec(`CREATE TABLE test_free_pages (value BLOB);
+      INSERT INTO test_free_pages VALUES (zeroblob(1048576));
+      DROP TABLE test_free_pages;`);
+    }
+    expect(Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count) > 0).toBe(
+      freePages,
+    );
+    await closeOpenClawAgentDatabasesAsync();
+    const prepare = vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch");
+    await expect(maintain(maintenanceConfig(storePath))).resolves.toMatchObject({
+      archivedTranscripts: 0,
+      externalizedTranscripts: 0,
+    });
+    expect(prepare).toHaveBeenCalledTimes(freePages ? 1 : 0);
+    const after = requireNativeSqliteDatabase(
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath }).db,
+    );
+    expect(after.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
+  },
+);
 
 function delayPreparation() {
   const entered = createDeferred();

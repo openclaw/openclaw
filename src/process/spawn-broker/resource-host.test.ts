@@ -48,6 +48,29 @@ function fixture() {
   return { claims, capture, transmit, callbacks, closeRequest };
 }
 
+it("references unsettled work without making idle native custody pin process exit", async () => {
+  const { claims, capture, closeRequest } = fixture();
+  const lease = capture(1);
+  expect(claims.needsReference).toBe(true);
+  lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
+  lease.receive({ type: "resource-created", id: 1 });
+  expect(claims.needsReference).toBe(false);
+  expect(claims.hasOpenClaims).toBe(true);
+
+  const { sequence } = lease.ownerMessage("active delivery");
+  expect(claims.needsReference).toBe(true);
+  lease.receive({ type: "resource-owner-received", id: 1, sequence });
+  expect(claims.needsReference).toBe(false);
+
+  const closing = lease.close();
+  expect(claims.needsReference).toBe(true);
+  await Promise.resolve();
+  lease.receive({ type: "resource-closed", id: 1, requestId: closeRequest().requestId });
+  await closing;
+  expect(claims.needsReference).toBe(false);
+  expect(claims.hasOpenClaims).toBe(false);
+});
+
 const capacityCases = [
   { dimension: "messages", payload: "", count: 4 },
   { dimension: "bytes", payload: "x".repeat(700), count: 1 },

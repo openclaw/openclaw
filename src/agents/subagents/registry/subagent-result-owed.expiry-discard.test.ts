@@ -50,7 +50,7 @@ afterEach(async () => {
 
 it("records a visible failure notice when a suspended required result expires", async () => {
   // Silence the operator warning; the requester-visible notice is the contract here.
-  using _warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+  using _ = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const suspendedAt = Date.now();
   const resultText = "Expiry case: the finished child found the missing invoice.";
   const target = {

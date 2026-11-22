@@ -531,7 +531,15 @@ on:
         required: false
       BYTEPLUS_API_KEY:
         required: false
+      CELERIS_API_KEY:
+        required: false
       CEREBRAS_API_KEY:
+        required: false
+      FASTINO_API_KEY:
+        required: false
+      NACE_API_KEY:
+        required: false
+      PERPLEXITY_API_KEY:
         required: false
       DEEPINFRA_API_KEY:
         required: false
@@ -578,6 +586,20 @@ on:
       PIXVERSE_API_KEY:
         required: false
       QWEN_API_KEY:
+        required: false
+      PARALLEL_API_KEY:
+        required: false
+      REQUESTY_API_KEY:
+        required: false
+      SENSEAUDIO_API_KEY:
+        required: false
+      SUBQ_API_KEY:
+        required: false
+      SUBQ_DECISION_MODEL:
+        required: false
+      TYPESAFE_API_KEY:
+        required: false
+      XIAOMI_API_KEY:
         required: false
       FAL_KEY:
         required: false
@@ -1761,6 +1783,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -2185,6 +2214,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -4087,6 +4123,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -4257,6 +4300,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
       Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -4519,11 +4569,10 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
-            # The release workspace does not enable Global regions, so the active DeepSeek V4
-            # routes reject every request, and upstream metadata deprecated
-            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. These GLM refs
-            # were proven reachable from the release workspace.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # Keep this lane on GLM: the release workspace does not enable Global regions
+            # for DeepSeek. Pins follow the public Go listing observed on 2026-11-20;
+            # authenticated availability is still verified by the live suite.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4537,14 +4586,14 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiMo
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.6-flash,opencode-go/mimo-v2.6-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiniMax/Qwen
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m3.1-flash,opencode-go/minimax-m3,opencode-go/qwen3.7-plus,opencode-go/qwen3.8-flash node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4553,9 +4602,9 @@ jobs:
             # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
             # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
             # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
-            # workspace enables Global. Release-workspace discovery stopped listing glm-5.3 on
-            # 2026-10-18, so the smoke pins glm-5.2.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # workspace enables Global. Use the current GLM Flash route, matching the full
+            # native lane and Docker qualification rather than retired glm-5.2.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
@@ -4591,7 +4640,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-test
             label: Native live test harnesses
-            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test
+            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_CODEX_GOAL_RESUME=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 OPENCLAW_LIVE_RESEARCH_ACCEPTANCE=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna node .release-harness/scripts/test-live-shard.mjs native-live-test
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -4626,6 +4675,10 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      CELERIS_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.CELERIS_API_KEY || '' }}
+      FASTINO_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.FASTINO_API_KEY || '' }}
+      NACE_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.NACE_API_KEY || '' }}
+      PERPLEXITY_API_KEY: ${{ matrix.suite_id == 'native-live-test' && secrets.PERPLEXITY_API_KEY || '' }}
       ELEVENLABS_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.ELEVENLABS_API_KEY || '' }}
       MODEL_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-l-n' && secrets.MODEL_API_KEY || '' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4657,6 +4710,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -4726,6 +4786,19 @@ jobs:
         uses: ./.release-harness/.github/actions/setup-release-harness
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Muse CLI for native live tests
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-extensions-l-n'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MUSE_INSTALL_DIR="$RUNNER_TEMP/muse/bin"
+          export MUSE_NO_MODIFY_PATH=1
+          curl -fsSL https://dev.meta.ai/install.sh -o "$RUNNER_TEMP/muse-install.sh"
+          bash "$RUNNER_TEMP/muse-install.sh"
+          export PATH="$MUSE_INSTALL_DIR:$PATH"
+          echo "$MUSE_INSTALL_DIR" >> "$GITHUB_PATH"
+          muse --version
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
@@ -4857,6 +4930,13 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
@@ -5137,6 +5217,13 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+      REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
+      SENSEAUDIO_API_KEY: ${{ secrets.SENSEAUDIO_API_KEY }}
+      SUBQ_API_KEY: ${{ secrets.SUBQ_API_KEY }}
+      SUBQ_DECISION_MODEL: ${{ secrets.SUBQ_DECISION_MODEL }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
       DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}

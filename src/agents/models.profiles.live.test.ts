@@ -1,10 +1,8 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
-import { writeSync } from "node:fs";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
-import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
-import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
@@ -20,12 +18,8 @@ import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import { resolveLiveSystemPrompt } from "./live-model-session-id.js";
 import {
-  resolveLiveCompletionSessionId,
-  resolveLiveSystemPrompt,
-} from "./live-model-session-id.js";
-import {
-  createSingleUserPromptMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
@@ -52,6 +46,11 @@ import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
 import type { StreamFn } from "./runtime/index.js";
+import {
+  createLiveModelCompletion,
+  formatElapsedSeconds,
+  logProgress,
+} from "./test-helpers/live-model-completion.js";
 import {
   appendLiveModelCandidates,
   applyLiveProviderPluginDiscoveryCompat,
@@ -121,6 +120,11 @@ const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "host.orb.internal",
 ]);
 let activeLiveCompletionConfig: OpenClawConfig | undefined;
+const { completeSimpleWithTimeout, completeOkWithRetry, withLiveHeartbeat } =
+  createLiveModelCompletion({
+    getConfig: () => activeLiveCompletionConfig,
+    heartbeatMs: LIVE_HEARTBEAT_MS,
+  });
 
 type OllamaRuntimeApi = {
   createConfiguredOllamaStreamFn: (params: {
@@ -475,32 +479,6 @@ function isIpv4PrivateRange(host: string): boolean {
 function isIpv6LocalRange(host: string): boolean {
   const lower = host.toLowerCase();
   return /^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower);
-}
-
-function logProgress(message: string): void {
-  writeSync(2, `[live] ${message}\n`);
-}
-
-function formatElapsedSeconds(ms: number): string {
-  return `${Math.max(1, Math.round(ms / 1_000))}s`;
-}
-
-async function withLiveHeartbeat<T>(operation: Promise<T>, context: string): Promise<T> {
-  const startedAt = Date.now();
-  let heartbeatCount = 0;
-  const timer = setInterval(() => {
-    heartbeatCount += 1;
-    logProgress(`${context}: still running (${formatElapsedSeconds(Date.now() - startedAt)})`);
-  }, LIVE_HEARTBEAT_MS);
-  timer.unref?.();
-  try {
-    return await operation;
-  } finally {
-    clearInterval(timer);
-    if (heartbeatCount > 0) {
-      logProgress(`${context}: completed after ${formatElapsedSeconds(Date.now() - startedAt)}`);
-    }
-  }
 }
 
 async function withLiveStageTimeout<T>(
@@ -1216,54 +1194,6 @@ describe("resolveLiveSystemPrompt", () => {
   });
 });
 
-async function completeSimpleWithTimeout<TApi extends Api>(
-  model: Model<TApi>,
-  context: Parameters<typeof completeSimple<TApi>>[1],
-  options: Parameters<typeof completeSimple<TApi>>[2],
-  timeoutMs: number,
-  progressContext: string,
-) {
-  const maxTimeoutMs = Math.max(1, timeoutMs);
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => {
-    controller.abort();
-  }, maxTimeoutMs);
-  abortTimer.unref?.();
-  let hardTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    hardTimer = setTimeout(() => {
-      reject(new Error(`model call timed out after ${maxTimeoutMs}ms`));
-    }, maxTimeoutMs);
-    hardTimer.unref?.();
-  });
-  try {
-    const completionModel = prepareModelForSimpleCompletion({
-      apiRegistry: defaultApiRegistry,
-      model,
-      cfg: activeLiveCompletionConfig,
-    });
-    const reasoning =
-      options?.reasoning === undefined ? undefined : resolveLiveTestReasoning(completionModel);
-    return await withLiveHeartbeat(
-      Promise.race([
-        completeSimple(completionModel, context, {
-          ...options,
-          sessionId: options?.sessionId ?? resolveLiveCompletionSessionId(model),
-          reasoning,
-          signal: controller.signal,
-        }),
-        timeout,
-      ]),
-      progressContext,
-    );
-  } finally {
-    clearTimeout(abortTimer);
-    if (hardTimer) {
-      clearTimeout(hardTimer);
-    }
-  }
-}
-
 function requireToolChoicePayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return undefined;
@@ -1291,43 +1221,6 @@ describe("requireToolChoicePayload", () => {
     expect(requireToolChoicePayload({ model: "gpt", tools: [] })).toBeUndefined();
   });
 });
-
-async function completeOkWithRetry(params: {
-  model: Model;
-  apiKey: string;
-  timeoutMs: number;
-  progressLabel: string;
-}) {
-  const runOnce = async (maxTokens: number) => {
-    const res = await completeSimpleWithTimeout(
-      params.model,
-      {
-        systemPrompt: resolveLiveSystemPrompt(params.model),
-        messages: createSingleUserPromptMessage("Reply with the word ok."),
-      },
-      {
-        apiKey: params.apiKey,
-        reasoning: resolveLiveTestReasoning(params.model),
-        maxTokens,
-      },
-      params.timeoutMs,
-      `${params.progressLabel}: prompt call (maxTokens=${maxTokens})`,
-    );
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
-    return { res, text };
-  };
-
-  const first = await runOnce(64);
-  if (first.text.length > 0) {
-    return first;
-  }
-  // Some providers (for example Moonshot Kimi and MiniMax M2.5) may emit
-  // reasoning blocks first and only return text once token budget is higher.
-  return await runOnce(256);
-}
 
 function isDeepSeekV4Model(model: Pick<Model, "id" | "provider">): boolean {
   return (
@@ -1507,12 +1400,8 @@ async function runExtraTurnProbes(params: {
         params.timeoutMs,
         attemptLabel,
       );
-      if (image.stopReason === "error" || image.stopReason === "aborted") {
-        const fallback =
-          image.stopReason === "aborted"
-            ? `${attemptLabel} was aborted`
-            : `${attemptLabel} returned error with no message`;
-        throw new Error(image.errorMessage || fallback);
+      if (image.stopReason === "error") {
+        throw new Error(image.errorMessage || `${attemptLabel} returned error with no message`);
       }
       return extractEmbeddedAssistantText(image);
     },

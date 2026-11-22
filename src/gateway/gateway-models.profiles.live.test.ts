@@ -3474,7 +3474,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   sessionKey: string;
   thinkingLevel: string;
 }): Promise<void> {
-  const { listSubagentRunsForRequester } =
+  const { listSubagentRunsForRequester, prepareSubagentRunsByRunIds } =
     await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
@@ -3541,7 +3541,15 @@ async function verifyGatewayUltraSubagentHandoff(params: {
     );
   }
   expect(run?.execution.outcome?.status).toBe("ok");
-  expect(run?.completion?.resultText).toContain(childToken);
+  // Settled resident rows retain lifecycle facts but evict result text. Read the
+  // selected child's durable payload rather than treating its compact row as full.
+  const childRunId = expectDefined(run, "expected completed sessions_spawn child").runId;
+  const prepared = await prepareSubagentRunsByRunIds([childRunId]);
+  expect(
+    prepared.consume((runs) => {
+      expect(runs.get(childRunId)?.completion?.resultText).toContain(childToken);
+    }),
+  ).toEqual({ ready: true, value: undefined });
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");
   expect(run?.model).toBe(params.modelKey);

@@ -565,7 +565,7 @@ export function resolveCatalogHookProviderPluginIds(
   return resolveHookProviderPluginIds(
     { ...params, registry, manifestRegistry },
     (pluginId) => providerSurfacePluginIds.has(pluginId) && runtimeAugmentPluginIds.has(pluginId),
-    normalizePluginsConfigWithRegistry(params.config?.plugins, registry),
+    normalizePluginsConfigWithRegistry(params.config?.plugins, registry, { manifestRegistry }),
   );
 }
 

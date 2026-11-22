@@ -6,7 +6,14 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
-import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
+import {
+  beginPromptCacheObservation,
+  clearPromptCacheObservations,
+} from "../prompt-cache-observability.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  retainEmbeddedSessionPromptState,
+} from "../session-prompt-state.js";
 import {
   createActiveSession,
   createBoundaryInputDefaults,
@@ -16,6 +23,66 @@ import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
+  it("declares transient runtime-context movement after attempt disposal and session recreation", async () => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const sessionId = "boundary-disposed-lease";
+      const observe = (messages: Parameters<typeof beginPromptCacheObservation>[0]["messages"]) =>
+        beginPromptCacheObservation({
+          sessionId,
+          provider: "test-provider",
+          modelId: "test-model",
+          modelApi: "google-interactions",
+          streamStrategy: "test",
+          systemPrompt: "stable",
+          tools: [],
+          messages,
+        });
+      const prepare = async () => {
+        const { activeSession } = createActiveSession();
+        activeSession.agent.convertToLlm = convertHarnessMessages;
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession,
+          appendOnlyRuntimeContext: false,
+          attempt: { sessionId, prompt: "fixture" },
+          getUserTranscriptContexts: () => undefined,
+          ...createBoundaryInputDefaults(),
+        });
+        return activeSession;
+      };
+      const user = { role: "user" as const, content: "first question", timestamp: 1 };
+      const firstLease = retainEmbeddedSessionPromptState(sessionId);
+      try {
+        {
+          const first = await prepare();
+          const messages = await first.agent.convertToLlm([
+            buildRuntimeContextCustomMessage("first context")!,
+            user,
+          ]);
+          expect(observe(messages).changes).toBeNull();
+        }
+        firstLease[Symbol.dispose]();
+        {
+          using lease = retainEmbeddedSessionPromptState(sessionId);
+          void lease;
+          const next = await prepare();
+          const messages = await next.agent.convertToLlm([
+            user,
+            makeAssistantMessageFixture({ content: [{ type: "text", text: "first answer" }] }),
+            buildRuntimeContextCustomMessage("next context")!,
+            { role: "user", content: "read fixture", timestamp: 2 },
+          ]);
+          expect(observe(messages).changes).toEqual([
+            expect.objectContaining({ code: "runtimeContextCarrier" }),
+          ]);
+        }
+      } finally {
+        firstLease[Symbol.dispose]();
+        clearEmbeddedSessionPromptStates([sessionId]);
+        clearPromptCacheObservations(sessionId);
+      }
+    });
+  });
+
   it("strips persisted carriers when a session switches to transient replay", async () => {
     const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
     const previousCarrier: AgentMessage = buildRuntimeContextCustomMessage("persisted context")!;

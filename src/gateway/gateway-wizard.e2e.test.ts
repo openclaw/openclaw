@@ -158,7 +158,7 @@ describe("gateway wizard e2e", () => {
   );
 
   it(
-    "keeps the starting operator's revocable grant after the start reply",
+    "keeps admitted setup authority across reconnect and device revocation",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       let gate = { entered: createDeferredCore(), resume: createDeferredCore() };
@@ -225,12 +225,8 @@ describe("gateway wizard e2e", () => {
             sessionId: start.sessionId,
           });
         } while (!result.done);
-        // A fresh login collects the outcome but never revives the revoked grant.
-        expect(result, label).toMatchObject(
-          scenario.revoke
-            ? { status: "error", error: expect.stringContaining("authority") }
-            : { status: "done" },
-        );
+        // A fresh login collects the outcome; revocation does not cancel admitted setup work.
+        expect(result, label).toMatchObject({ status: "done" });
       }
     },
   );

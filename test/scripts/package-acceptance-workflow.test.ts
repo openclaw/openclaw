@@ -2164,7 +2164,6 @@ describe("frozen admission workflow barriers", () => {
       "release_execution_plan",
       "release_decision",
       "diagnostic_drain",
-      "cleanup_boat_release_runners",
     ]);
     const outputs = new Proxy(
       {
@@ -2805,6 +2804,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, { default?: boolean | number | string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -9457,7 +9457,6 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
     const terminalNeeds = [
-      "boat_release_runners",
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
@@ -9466,15 +9465,14 @@ test "$package_manager" = "pnpm@12.1.0"
       "release_execution_plan",
     ];
     expect(decision.uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@8ddb0bb7784a3cde6475e7e436b077af15c8df54",
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@359602511237fb5e448cdea288c0e9ca3d961a78",
     );
     expect(drain.uses).toBe(decision.uses);
     expect(decision.with?.mode).toBe("decision");
     expect(drain.with?.mode).toBe("drain");
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
-    const waiterCondition =
-      "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
+    const waiterCondition = "always()";
     expect(decision.if).toBe(waiterCondition);
     expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
@@ -10780,6 +10778,91 @@ describe("package artifact reuse", () => {
     expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
 
+  it("installs Muse before the selected native L-N live suite", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const install = workflowStep(job, "Install Muse CLI for native live tests");
+    expect(install.if).toBe(
+      "steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-extensions-l-n'",
+    );
+    expect(install.shell).toBe("bash");
+    expect(install.run).toContain("https://dev.meta.ai/install.sh");
+    expect(install.run).toContain('bash "$RUNNER_TEMP/muse-install.sh"');
+    expect(install.run).toContain('export MUSE_INSTALL_DIR="$RUNNER_TEMP/muse/bin"');
+    expect(install.run).toContain("export MUSE_NO_MODIFY_PATH=1");
+    expect(install.run).toContain('export PATH="$MUSE_INSTALL_DIR:$PATH"');
+    expect(install.run).toContain('echo "$MUSE_INSTALL_DIR" >> "$GITHUB_PATH"');
+    expect(install.run).toContain("muse --version");
+    const names = job.steps?.map((step) => step.name) ?? [];
+    expect(names.indexOf(install.name)).toBeGreaterThan(names.indexOf("Setup Node environment"));
+    expect(names.indexOf(install.name)).toBeLessThan(names.indexOf("Run ${{ matrix.label }}"));
+  });
+
+  it("enables mandatory native harness proofs with their configured credentials", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const suite = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-test",
+    );
+    const names = [
+      "OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT",
+      "OPENCLAW_LIVE_CODEX_GOAL_RESUME",
+      "OPENCLAW_LIVE_OWNER_ASSIGNMENT",
+      "OPENCLAW_LIVE_RESEARCH_ACCEPTANCE",
+      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH",
+      "OPENCLAW_LIVE_CODEX_HARNESS_MODEL",
+    ];
+    // Execute the actual workflow assignments, replacing only the live child.
+    // This proves shell scoping without credentials or paid provider calls.
+    const result = spawnSync("bash", ["-c", ["node() { env; };", suite.command].join("\n")], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const assigned = Object.fromEntries(
+      result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const index = line.indexOf("=");
+          return [line.slice(0, index), line.slice(index + 1)];
+        }),
+    );
+    expect(Object.fromEntries(names.map((name) => [name, assigned[name]]))).toEqual({
+      OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT: "1",
+      OPENCLAW_LIVE_CODEX_GOAL_RESUME: "1",
+      OPENCLAW_LIVE_OWNER_ASSIGNMENT: "1",
+      OPENCLAW_LIVE_RESEARCH_ACCEPTANCE: "1",
+      OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
+      OPENCLAW_LIVE_CODEX_HARNESS_MODEL: "openai/gpt-5.6-luna",
+    });
+    expect(suite.profiles).toBe("stable full");
+    for (const name of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
+      expect(job.env?.[name]).toBe(
+        "${{ matrix.suite_id == 'native-live-test' && secrets." + name + " || '' }}",
+      );
+      for (const path of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+        expect(readWorkflow(path).on?.workflow_call?.secrets?.[name]).toEqual({ required: false });
+      }
+      for (const [path, jobName] of [
+        [SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"],
+        [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
+        [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance_registry"],
+      ] as const) {
+        expect(workflowJob(path, jobName).secrets, `${path}: ${jobName}`).toMatchObject({
+          [name]: "${{ secrets." + name + " }}",
+        });
+      }
+    }
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
@@ -10998,7 +11081,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
       "suite_id: native-live-src-infra",
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
-      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
+      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_CODEX_GOAL_RESUME=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 OPENCLAW_LIVE_RESEARCH_ACCEPTANCE=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna node .release-harness/scripts/test-live-shard.mjs native-live-test",
       "suite_id: native-live-src-gateway-profiles-anthropic-smoke",
       "suite_id: native-live-src-gateway-profiles-anthropic-opus",
       "suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku",
@@ -11154,11 +11237,11 @@ describe("package artifact reuse", () => {
       profiles: "full",
     });
     expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash,opencode-go/glm-5.3 ",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
     expect(openCodeGoSmoke.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash OPENCLAW_LIVE_GATEWAY_SMOKE=1",
     );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });
@@ -11183,7 +11266,7 @@ describe("package artifact reuse", () => {
     );
 
     expect(openCodeModels).toMatchObject({
-      models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+      models: "opencode-go/glm-5.3-flash,opencode-go/glm-5.3",
       max_models: "2",
     });
     expect(kimi.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code");
@@ -11191,7 +11274,7 @@ describe("package artifact reuse", () => {
     expect(openRouter.command).toContain("OPENCLAW_LIVE_GATEWAY_THINKING=off");
   });
 
-  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+  it("pins OpenCode Go MiMo live profiles to both current V2.6 model refs", () => {
     const mimo = workflowMatrixEntry(
       LIVE_E2E_WORKFLOW,
       "validate_live_provider_suites",
@@ -11200,7 +11283,7 @@ describe("package artifact reuse", () => {
 
     expect(mimo).toMatchObject({
       command:
-        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.6-flash,opencode-go/mimo-v2.6-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
       suite_group: "native-live-src-gateway-profiles-opencode-go",
     });
@@ -11453,6 +11536,102 @@ describe("package artifact reuse", () => {
     expect(script).not.toMatch(
       /Droid Docker ACP bind requires FACTORY_API_KEY[\s\S]{0,160}(exit 0|continue)/u,
     );
+  });
+
+  it("forwards remaining release integration prerequisites through live hydration", () => {
+    const keys = [
+      "PARALLEL_API_KEY",
+      "REQUESTY_API_KEY",
+      "SENSEAUDIO_API_KEY",
+      "SUBQ_API_KEY",
+      "SUBQ_DECISION_MODEL",
+      "TYPESAFE_API_KEY",
+      "XIAOMI_API_KEY",
+    ];
+    for (const jobName of ["live_repo_e2e_release_checks", "docker_e2e_release_checks"]) {
+      const secrets = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName).secrets;
+      expect(secrets, jobName).toMatchObject(
+        Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+      );
+    }
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
+      const reusable = readWorkflow(workflowPath);
+      for (const key of keys) {
+        expect(reusable.on?.workflow_call?.secrets?.[key], key).toEqual({ required: false });
+      }
+      for (const [jobName, job] of Object.entries(reusable.jobs ?? {})) {
+        if (job.uses === `./${LIVE_E2E_WORKFLOW}`) {
+          expect(job.secrets, jobName).toMatchObject(
+            Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+          );
+        }
+      }
+    }
+    const reusable = readWorkflow(LIVE_E2E_WORKFLOW);
+    for (const [jobName, job] of Object.entries(reusable.jobs ?? {})) {
+      if (job.env?.QWEN_API_KEY) {
+        expect(job.env, jobName).toMatchObject(
+          Object.fromEntries(keys.map((key) => [key, "${{ secrets." + key + " }}"])),
+        );
+      }
+    }
+    const home = tempDirs.make("remaining-live-auth-");
+    const profile = resolve(home, "live.profile");
+    const values = Object.fromEntries(keys.map((key) => [key, key + "-synthetic"]));
+    const hydrated = spawnSync("bash", [CI_HYDRATE_LIVE_AUTH_SCRIPT, profile], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { PATH: process.env.PATH, HOME: home, ...values },
+    });
+    expect(hydrated.status, hydrated.stderr).toBe(0);
+    const restored = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-euc",
+        'source "$1"; shift; for key in "$@"; do printf "%s\n" "${!key}"; done',
+        "check-profile",
+        profile,
+        ...keys,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { PATH: process.env.PATH, HOME: home },
+      },
+    );
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(restored.stdout.trim().split("\n")).toEqual(Object.values(values));
+  });
+
+  it("uses documented Qwen credential aliases in release live lanes", () => {
+    for (const jobName of ["live_repo_e2e_release_checks", "docker_e2e_release_checks"]) {
+      const secrets = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName).secrets;
+      if (!secrets || typeof secrets === "string") {
+        throw new Error(`${jobName} must forward explicit live credentials`);
+      }
+      const expression = secrets.QWEN_API_KEY;
+      for (const [primary, modelstudio, dashscope, expected] of [
+        ["primary", "compat", "legacy", "primary"],
+        ["", "compat", "legacy", "compat"],
+        ["", "", "legacy", "legacy"],
+        ["", "", "", ""],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            secrets: {
+              QWEN_API_KEY: primary,
+              MODELSTUDIO_API_KEY: modelstudio,
+              DASHSCOPE_API_KEY: dashscope,
+            },
+          }),
+        ).toBe(expected);
+      }
+    }
   });
 
   it("plumbs live credentials through planned Docker E2E live lanes", () => {
@@ -16115,7 +16294,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ) =>
       timeoutForProfile(
         workflow.jobs?.[job]?.uses ===
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@8ddb0bb7784a3cde6475e7e436b077af15c8df54"
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@359602511237fb5e448cdea288c0e9ca3d961a78"
           ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
           : workflow.jobs?.[job]?.["timeout-minutes"],
         profile,

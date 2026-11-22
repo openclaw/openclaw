@@ -550,7 +550,16 @@ if (args[0] === 'run' && process.env.CHECK_WRITABLE_PREFIX === '1') {
   const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
   if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
 }
+if (args[0] === 'run' && process.env.CHECK_WRITABLE_OUTPUT === '1') {
+  const suffix = ':/app/.artifacts/qa-e2e/npm-telegram-live-output';
+  const mount = args.find(arg => arg.endsWith(suffix));
+  if (mount) {
+    const mode = fs.statSync(mount.slice(0, -suffix.length)).mode & 0o007;
+    if (mode !== 0o007) throw new Error('artifact output is inaccessible to the container user: ' + mode);
+  }
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
+if (args.includes('-i') && args.some(arg => arg.endsWith(':/app/.artifacts/qa-e2e/npm-telegram-live-output'))) process.exit(Number(process.env.MOCK_SUITE_EXIT || 0));
 `,
   );
   const result = run({
@@ -576,10 +585,34 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
   return { root, candidate, result, runs };
 }
 
-it("makes the disposable npm prefix writable to the container user", () => {
-  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+it.each(["PREFIX", "OUTPUT"])("makes the mounted %s writable to the container user", (mount) => {
+  const { result } = captureDocker({ [`CHECK_WRITABLE_${mount}`]: "1" });
   expect(result.status, result.stderr).toBe(0);
 });
+
+it.each([0, 23])(
+  "returns private artifacts to the host owner while preserving suite exit %s",
+  (suiteExit) => {
+    const { root, result, runs } = captureDocker({ MOCK_SUITE_EXIT: String(suiteExit) });
+    expect(result.status, result.stderr).toBe(suiteExit);
+    expect(runs[2]).toEqual(
+      expect.arrayContaining([
+        "--user",
+        "0:0",
+        "--network",
+        "none",
+        "--entrypoint",
+        "chown",
+        `${path.join(root, "output")}:/qa-output`,
+        "-hR",
+        `${process.getuid?.()}:${process.getgid?.()}`,
+        "/npm-global",
+        "/qa-output",
+      ]),
+    );
+    expect(runs[2]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
+  },
+);
 
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
@@ -600,6 +633,7 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
     ]),
+    expect.arrayContaining(["--entrypoint", "chown", "/npm-global", "/qa-output"]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);

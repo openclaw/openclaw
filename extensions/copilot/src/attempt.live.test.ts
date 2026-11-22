@@ -71,6 +71,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
     createOpenClawCodingTools: vi.fn(() => [
       {
         name: liveToolState.toolName,
+        // This smoke test asserts the SDK metadata for a directly exposed custom tool.
+        catalogMode: "direct-only",
         label: liveToolState.toolName,
         description: "Echo the requested text for the copilot live smoke test.",
         parameters: {

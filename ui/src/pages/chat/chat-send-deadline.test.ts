@@ -7,6 +7,7 @@ import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { requestChatSend } from "./chat-send-request.ts";
@@ -29,12 +30,15 @@ function requestFixture(id: string, startup = false) {
       ? pending.request(wire, method, params, options)
       : Promise.resolve({ messages: [], status: "aborted" }),
   );
-  return {
-    pending,
-    wire,
-    issued,
-    host: makeChatHost({ client, currentSessionId: "deadline-session" }),
-  };
+  const host = makeChatHost({ client, currentSessionId: "deadline-session" });
+  // A visible pane retains its outbox owner throughout delivery and discard.
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
+  onTestFinished(() => {
+    // A retired fixture must not drain the next test's outbox through its old client.
+    host.connected = false;
+    unsubscribe();
+  });
+  return { pending, wire, issued, host };
 }
 
 it.each(["send", "send-consumed"] as const)("bounds %s without a client deadline", async (kind) => {

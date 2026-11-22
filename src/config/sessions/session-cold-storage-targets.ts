@@ -50,6 +50,7 @@ export async function withSessionColdStorageInventory<T>(
     assertDiscoveryCurrent();
     const inventory = await discovery.readTargetInventory({
       ...prepared,
+      coldMaintenance: kind === "maintenance" ? true : undefined,
       registeredDatabases:
         registry.result.status === "available"
           ? registry.result.entries
@@ -105,6 +106,7 @@ export async function prepareSessionColdStorageTargets(
               ownerStorePath: target.storePath,
               readIdentity: reads[index]!.readIdentity,
               readCustody: reads[index]!.readCustody,
+              coldMaintenanceNeeded: reads[index]!.coldMaintenanceNeeded,
             }))
           : [],
       ),

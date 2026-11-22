@@ -19,7 +19,6 @@ import {
   gateTask,
   history,
   runWithLiveSubagentGateway,
-  until,
 } from "../subagents/announce/subagent-challenges.live.test-support.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../subagents/registry/subagent-registry-persistence.js";
@@ -32,10 +31,10 @@ const describeLive = enabled ? describe : describe.skip;
 describeLive("retained native child continuation", () => {
   it(
     "continues the same child through sessions_send after display retention expires",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"], sessionVisibility: "tree" },
-        async ({ gateway, gates, start, record, waitForDescendantSettlement }) => {
+        async ({ gateway, gates, start, record, waitForDescendantSettlement, until }) => {
           const id = randomUUID().replaceAll("-", "");
           const parent = "agent:main:dashboard:retained-parent-" + id;
           const first = "INITIAL_" + id;
@@ -389,7 +388,8 @@ describeLive("retained native child continuation", () => {
                     runId: foreignRunId,
                     timeoutMs: 1000,
                   });
-                  return ended.status === "ok" ? true : undefined;
+                  // Cleanup joins terminal failure too; it is not a success assertion.
+                  return ended.status !== "timeout" ? true : undefined;
                 });
               }
             }
@@ -495,6 +495,7 @@ describeLive("retained native child continuation", () => {
             details: watchedSend?.details,
           });
         },
+        testContext,
       );
     },
     10 * 60_000,

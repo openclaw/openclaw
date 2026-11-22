@@ -288,8 +288,16 @@ describeLive("session event wake through a live Gateway", () => {
           completedMessages.slice(foregroundMessages.length),
           "user",
         );
-        expect(completionUsers).toMatch(
-          new RegExp(`Exec completed \\([^)]*, code ${exitCode}, [^)]+\\):\\s*${completionReply}`),
+        // Match raw content: JSON serialization escapes the newline after the header.
+        expect(completedMessages.slice(foregroundMessages.length)).toContainEqual(
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringMatching(
+              new RegExp(
+                `Exec completed \\([^)]*, code ${exitCode}, [^)]+\\):\\s*${completionReply}`,
+              ),
+            ),
+          }),
         );
         expect(completionUsers).not.toContain(monitorPrompt);
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(

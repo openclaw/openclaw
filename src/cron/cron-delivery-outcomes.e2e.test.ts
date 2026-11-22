@@ -249,6 +249,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       });
       const job = await addJob(cron, "60-second monitor", {
         delivery: failureDelivery(receiver.url),
+        failureAlert: { after: 2 },
       });
 
       for (let index = 0; index < 21; index += 1) {

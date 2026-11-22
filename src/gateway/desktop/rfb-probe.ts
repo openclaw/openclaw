@@ -20,8 +20,6 @@ export type RfbProbeResult =
 const MAX_RFB_DESKTOP_NAME_BYTES = 4096;
 const RFB_SERVER_INIT_BYTES = 24;
 
-export { parseRfbVersionBanner };
-
 class SocketEndedError extends Error {
   constructor(readonly buffered: Buffer) {
     super("RFB server closed the handshake early");

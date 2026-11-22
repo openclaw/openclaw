@@ -261,7 +261,7 @@ it.for(["archived", "done", "killed", "failed", "unset"] as const)(
             sessionId,
             "0".repeat(64),
           );
-          retainSessionColdNavigationInTransaction(database, sessionId, -1, 100);
+          retainSessionColdNavigationInTransaction(database, sessionId);
         },
         { agentId: "main" },
       );

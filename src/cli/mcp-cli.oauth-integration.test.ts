@@ -308,7 +308,7 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       expect(requests.slice(1).map((request) => request.headers.authorization)).toEqual(
         Array(3).fill("Bearer fixture-refreshed-access-token"),
       );
-      // A live owner must keep this CLI from refreshing or clearing its credentials.
+      // A live owner prevents offline credential access and owns routed config changes.
       const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,
         ownerId: "synthetic-other-process-owner",
@@ -317,18 +317,18 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       });
       const requestCount = fixture.mcpRequests().length;
       try {
-        for (const args of [
-          ["login", "fixture", "--code", "fixture-code"],
-          ["logout", "fixture"],
-          ["probe", "fixture"],
-          ["doctor", "fixture", "--probe"],
-          ["set", "fixture", '{"url":"https://replacement.example.com"}'],
-          ["configure", "fixture", "--clear-auth"],
-          ["tools", "fixture", "--clear"],
-          ["unset", "fixture"],
-        ]) {
+        for (const [args, code] of [
+          [["login", "fixture", "--code", "fixture-code"], "OWNER_UNAVAILABLE"],
+          [["logout", "fixture"], "OWNER_UNAVAILABLE"],
+          [["probe", "fixture"], "OWNER_UNAVAILABLE"],
+          [["doctor", "fixture", "--probe"], "OWNER_UNAVAILABLE"],
+          [["set", "fixture", '{"url":"https://replacement.example.com"}'], "OWNER_REFUSED"],
+          [["configure", "fixture", "--clear-auth"], "OWNER_REFUSED"],
+          [["tools", "fixture", "--clear"], "OWNER_REFUSED"],
+          [["unset", "fixture"], "OWNER_REFUSED"],
+        ] as const) {
           await expect(run(...args)).rejects.toMatchObject({
-            code: "OWNER_UNAVAILABLE",
+            code,
             message: expect.stringContaining("stop the Gateway"),
           });
         }

@@ -85,10 +85,6 @@ import {
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 
-function modelRef(model: string) {
-  return { provider: "fixture", model };
-}
-
 function acceptedCaller(fixture: RecoveryFixture) {
   const caller = captureGatewayDeviceRevocation(
     fixture.context,
@@ -345,7 +341,7 @@ describe("scheduled authenticated operator source", () => {
                       await releaseWrite.promise;
                     }
                   },
-                  readFile,
+                  readFile: (file, signal) => readFile(file, { signal }),
                   statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                   writeFile: async (file, content) => {
                     writes += 1;
@@ -639,13 +635,13 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
-  it("keeps tokenless continuation device revocation independent of its accepting request", () =>
+  it("keeps an admitted tokenless continuation after revocation and refuses the next start", () =>
     withRecovery(
       async (fixture) => {
         const caller = acceptedCaller(fixture);
         const captured = expectDefined(await caller.capture(), "accepted source");
-        expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
-          captured.authority;
+        const internal = expectDefined(fixture.client.internal, "authenticated client");
+        internal.operatorRunAuthority = captured.authority;
         const continuation = expectDefined(
           await captureGatewayOperatorContinuation({
             client: fixture.client,
@@ -653,14 +649,34 @@ describe("scheduled authenticated operator source", () => {
           }),
           "detached continuation",
         );
+        let descendant: typeof continuation | undefined;
         try {
           expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
           caller.release();
           captured.release();
           expect(continuation.authority.assertCurrent).not.toThrow();
+          // The next turn starts from the detached authority, not the original caller.
+          internal.operatorRunAuthority = continuation.authority;
+          descendant = expectDefined(
+            await captureGatewayOperatorContinuation({
+              client: fixture.client,
+              context: fixture.context,
+            }),
+            "retained descendant",
+          );
+          continuation.release();
+          expect(descendant.authority.reauthorize).not.toThrow();
+          internal.operatorRunAuthority = descendant.authority;
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-          expect(continuation.authority.assertCurrent).toThrow();
+          expect(descendant.authority.assertCurrent).not.toThrow();
+          await expect(
+            captureGatewayOperatorContinuation({
+              client: fixture.client,
+              context: fixture.context,
+            }),
+          ).rejects.toThrow();
         } finally {
+          descendant?.release();
           continuation.release();
         }
       },
@@ -986,46 +1002,4 @@ describe("scheduled authenticated operator source", () => {
       expect(restored.authority.assertCurrent).toThrow();
     }),
   );
-
-  it("intersects the original model ceiling with current policy without widening the admitted role", () =>
-    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const profile = ensureProfileForEmail("model@example.test");
-      setUserProfileRole(profile.id, "operator");
-      const operator = {
-        sessions: { others: "none" },
-        agents: ["main"],
-        scopes: ["operator.admin"],
-        sandbox: "required",
-        modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-      } satisfies GatewayOperatorRoleDefinition;
-      const cfg = {
-        agents: { defaults: { model: "fixture/a" } },
-        gateway: { roles: { default: "operator", definitions: { operator } } },
-      } satisfies OpenClawConfig;
-      const fixture = await recoveryFixture(state.stateDir, profile.id, {
-        config: cfg,
-      });
-      const current = structuredClone(cfg);
-      current.gateway.roles.definitions.operator.modelPolicy = {
-        allow: ["fixture/b", "fixture/c"],
-      };
-      fixture.setConfig(current);
-      const restored = expectDefined(await fixture.restore(), "model-restricted recovery");
-      using _ = { [Symbol.dispose]: restored.release };
-
-      expect(restored.authority.rolePolicy).toMatchObject({
-        agents: ["main"],
-        sandboxRequired: true,
-        sessionAccessCap: "none",
-      });
-      expect(restored.authority.modelPolicy?.allows(modelRef("a"))).toBe(false);
-      expect(restored.authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
-      expect(restored.authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
-      const widened = structuredClone(current);
-      widened.gateway.roles.definitions.operator.modelPolicy = {
-        allow: ["fixture/a", "fixture/b", "fixture/c"],
-      };
-      fixture.setConfig(widened);
-      expect(restored.authority.modelPolicy?.models).toEqual([modelRef("b")]);
-    }));
 });

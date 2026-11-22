@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { join } from "node:path";
+import type * as CommandSurface from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import type * as NativeCommandRegistry from "openclaw/plugin-sdk/native-command-registry";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type {
   OpenClawPluginCommandDefinition,
@@ -49,11 +49,10 @@ import {
 } from "./send.telegram-http.test-support.js";
 
 const { loadCommandArgMenuModelCatalog } = vi.hoisted(() => ({
-  loadCommandArgMenuModelCatalog:
-    vi.fn<typeof NativeCommandRegistry.loadCommandArgMenuModelCatalog>(),
+  loadCommandArgMenuModelCatalog: vi.fn<typeof CommandSurface.loadCommandArgMenuModelCatalog>(),
 }));
-vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof NativeCommandRegistry>()),
+vi.mock("openclaw/plugin-sdk/command-surface", async (importOriginal) => ({
+  ...(await importOriginal<typeof CommandSurface>()),
   loadCommandArgMenuModelCatalog,
 }));
 

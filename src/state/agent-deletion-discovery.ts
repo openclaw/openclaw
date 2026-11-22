@@ -9,7 +9,6 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.read.js";
 import type {
-  AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.types.js";
@@ -33,6 +32,10 @@ export async function listRetainedDeletedAgentIdsForCleanup(
 }
 
 type Target = { agentId: string; path: string };
+export type AgentDatabaseDeletionDiscoverySnapshot = {
+  retainedDeletions: AgentDeletionJournalDisposition;
+  registeredAgentDatabases: readonly Target[];
+};
 type ReadConfiguredTargets = (
   excludeTarget: (pathname: string, agentId?: string) => boolean,
 ) => readonly Target[];
@@ -211,7 +214,7 @@ export function createRetainedAgentDatabaseMatcher(
 export function createRetainedAgentDatabaseMatcherFromSnapshot(
   env: NodeJS.ProcessEnv,
   readConfiguredTargets: ReadConfiguredTargets,
-  snapshot: AgentDatabaseDeletionSnapshot | undefined,
+  snapshot: AgentDatabaseDeletionDiscoverySnapshot | undefined,
   namespace: RetainedAgentDatabaseNamespace = "database",
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ) {

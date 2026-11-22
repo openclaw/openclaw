@@ -230,10 +230,11 @@ async function executePreparedReplyAgentRunWithCompletion(
 
   replyOperation.setPhase("running");
   const runStartedAt = Date.now();
-  await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+  // Reauthorize queued input before persistence transfers its receipt to execution.
+  await admitFollowupRunLifecycle(followupRun, () =>
+    admitUserTurn(followupRun.userTurnTranscriptRecorder),
+  );
   activeSessionEntry = getActiveSessionEntry();
-  // Adoption transfers the accepted input into ordinary execution custody.
-  await admitFollowupRunLifecycle(followupRun);
   const runWithGoalReturn = createGoalContinuationReturn(
     sessionKey &&
       storePath &&

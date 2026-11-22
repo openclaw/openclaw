@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  assertStableProviderPrefix,
+  snapshotProviderPrefix,
+} from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -24,6 +28,7 @@ import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
+  prompt_cache_key?: string;
   max_output_tokens?: number;
   tools?: Array<{ name?: string }>;
 };
@@ -47,6 +52,9 @@ async function withResponsesProvider(
 }
 
 const GATEWAY_ENV = {
+  // Both provider fixtures are local, even when the host routes HTTP through a proxy.
+  NO_PROXY: "127.0.0.1,localhost,::1",
+  no_proxy: "127.0.0.1,localhost,::1",
   OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
@@ -80,7 +88,7 @@ beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Gateway automatic Workshop learning", () => {
   it(
-    "sends one bounded review request and stops on a provider TPM rate limit",
+    "preserves the session context and output limit and stops on a provider TPM rate limit",
     { timeout: 60_000 },
     async () => {
       const state = await createOpenClawTestState({
@@ -89,8 +97,8 @@ describe("Gateway automatic Workshop learning", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const requests: string[] = [];
-      const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
-      const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
+      const oldHistory = "EARLY_HISTORY_MUST_SURVIVE_REVIEW ".repeat(20_000);
+      const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_MUST_SURVIVE_REVIEW";
       const recentEvidence =
         "RECENT_VERIFIED_PROCEDURE: confirm the public generation matches the release.";
       const startup = createStartupGate();
@@ -130,6 +138,7 @@ describe("Gateway automatic Workshop learning", () => {
                 apiKey: "synthetic-workshop-provider-key",
               },
             );
+            candidate.config.agents!.defaults!.workspace = state.workspaceDir;
             candidate.config.models!.providers!.openai!.models[0]!.maxTokens = 128_000;
             candidate.config.agents!.defaults!.models![
               "openai/gpt-workshop-rate-limit-test"
@@ -163,14 +172,15 @@ describe("Gateway automatic Workshop learning", () => {
             expect(providerErrors).toEqual([]);
             expect(requests).toHaveLength(1);
             const serialized = requests[0]!;
-            expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024);
+            // Reviews use the session model context, not a separate excerpt or token budget.
+            expect(serialized).toContain(oldHistory);
             expect(serialized).toContain(recentEvidence);
-            for (const excluded of ["OLD_HISTORY_NOT_NEEDED_FOR_REVIEW", workspaceInstructions]) {
-              expect(serialized).not.toContain(excluded);
-            }
+            expect(serialized).toContain(workspaceInstructions);
             const payload = JSON.parse(serialized) as ProviderRequest;
-            expect(payload.max_output_tokens).toBe(2_048);
-            expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);
+            expect(payload.max_output_tokens).toBe(128_000);
+            expect(payload.tools?.map((tool) => tool.name)).toEqual(
+              expect.arrayContaining(["read", "dispatch_action"]),
+            );
           },
         );
       } finally {
@@ -198,6 +208,7 @@ describe("Gateway automatic Workshop learning", () => {
       const releaseReview = createDeferred();
       let reviewActions: Array<{ name: string; args: Record<string, unknown> }> = [];
       let foregroundRequests = 0;
+      let parentRequest: ProviderRequest | undefined;
       const outsideFile = path.join(state.workspaceDir, "operator-owned.txt");
       const outsideContent = "OUTSIDE_WORKSHOP_SENTINEL_MUST_NOT_ENTER_REVIEW\n";
       const oldRule = "Declare publication complete when the health check is green.";
@@ -230,6 +241,7 @@ Retain the distinct rollback procedure after verifying the previous public gener
           async (body, response) => {
             const payload = JSON.parse(body) as ProviderRequest;
             if (foregroundRequests < 10) {
+              parentRequest = payload;
               foregroundRequests += 1;
               if (foregroundRequests < 10) {
                 writeToolCall(
@@ -268,6 +280,8 @@ Retain the distinct rollback procedure after verifying the previous public gener
           },
           async (baseUrl, providerErrors) => {
             const provider = buildMockOpenAiResponsesProvider(baseUrl, "workshop-learning");
+            // Local compatible routes opt in to the cache-key capability they implement.
+            provider.config.models[0].compat = { supportsPromptCacheKey: true };
             const token = "isolated-workshop-learning-token";
             const config = {
               agents: {
@@ -303,9 +317,10 @@ Retain the distinct rollback procedure after verifying the previous public gener
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
+            // Forks retain the session tool surface, where plugin tools use the catalog.
             const workshopCall = (action: string, args: Record<string, unknown> = {}) => ({
-              name: "skill_workshop",
-              args: { action, name: "map-publication", ...args },
+              name: "dispatch_action",
+              args: { id: "skill_workshop", args: { action, name: "map-publication", ...args } },
             });
             const patch = { old_text: oldRule, new_text: newRule, reason };
             reviewActions = [
@@ -370,7 +385,17 @@ Retain the distinct rollback procedure after verifying the previous public gener
             expect(providerErrors).toEqual([]);
             expect(reviewRequests).toHaveLength(reviewActions.length + 1);
             expect(outside).toBe(outsideContent);
+            const parentPrefix = snapshotProviderPrefix("openai-responses", parentRequest);
+            expect(parentRequest?.prompt_cache_key).toEqual(expect.any(String));
+            expect(parentPrefix.history.length).toBeGreaterThan(0);
             for (const reviewRequest of reviewRequests) {
+              // All review requests retain the foreground system, tools, cache key and history.
+              assertStableProviderPrefix(
+                parentPrefix,
+                snapshotProviderPrefix("openai-responses", reviewRequest),
+                { label: "Workshop review extends foreground prefix" },
+              );
+              expect(reviewRequest.max_output_tokens).toBe(parentRequest?.max_output_tokens);
               const evidence = JSON.stringify(reviewRequest);
               expect(evidence).not.toContain(outsideContent.trim());
             }

@@ -116,8 +116,8 @@ it("releases prompt payloads while completed attempts' resource owners remain re
   const createRetainedReview = (release: boolean) => {
     const owner = createEmbeddedAttemptSessionResources(new AbortController().signal);
     const lease = retainEmbeddedSessionPromptState(`retained-review-${sequence++}`);
-    lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
-    payloads.push(new WeakRef(lease.state.removedRuntimeContextKeys));
+    lease.state.toolResults.frozen = new PromptPayload(["tool-result"]);
+    payloads.push(new WeakRef(lease.state.toolResults.frozen));
     owner.resources.promptStateLease = lease;
     if (release) {
       owner.takeForCleanup();

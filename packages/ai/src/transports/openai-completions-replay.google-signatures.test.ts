@@ -168,12 +168,14 @@ it.each([
     );
   }
   const request = buildOpenAICompletionsParams(model, context, undefined);
-  const calls = request.messages.flatMap((message) =>
-    message.role === "assistant" ? (message.tool_calls ?? []) : [],
-  );
+  const calls: unknown[] = request.messages.flatMap((message) => {
+    const record = expectRecordFields(message, {});
+    return record.role === "assistant" && Array.isArray(record.tool_calls) ? record.tool_calls : [];
+  });
   expect(calls).toHaveLength(4);
   calls.forEach((call, index) => {
-    expect(call.function.arguments).toBe(JSON.stringify({ index }));
+    const record = expectRecordFields(call, {});
+    expectRecordFields(record.function, { arguments: JSON.stringify({ index }) });
     const expectedSignature = signatures[index];
     if (expectedSignature) {
       expect(call).toMatchObject(

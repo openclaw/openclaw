@@ -1520,7 +1520,7 @@ describe("FRV required registry admission", () => {
         check(result.targetSha).not.toBe(result.toolingSha);
         check(result.effects).toContain("Provision trusted admission parser");
         check(result.effects).toContain("Admit publication source");
-        check(result.registryCalls).toContainEqual(isolatedWorker);
+        check(result.registryCalls, result.stderr).toContainEqual(isolatedWorker);
         const actualRequests = result.registryCalls.filter((entry) => entry.kind === "request");
         check(actualRequests.length).toBeGreaterThan(0);
         if (registry === "healthy") {

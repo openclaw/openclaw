@@ -426,6 +426,29 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
     }
   });
 
+  it("keeps OpenCode qualification on the current GLM selections", () => {
+    const plan = createReleaseWorkflowMatrixPlan({
+      releaseProfile: "full",
+      includeLiveSuites: true,
+    });
+    expect(
+      plan.liveModels.matrix.include.find(
+        (entry: MatrixEntry) => entry.providers === "opencode-go",
+      ),
+    ).toMatchObject({
+      models: "opencode-go/glm-5.3-flash,opencode-go/glm-5.3",
+      max_models: "2",
+    });
+    const source = readFileSync(
+      ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+      "utf8",
+    );
+    expect(source).not.toContain("opencode-go/glm-5.2");
+    expect(source).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3-flash OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+    );
+  });
+
   it("builds provider owners used by every direct and Gateway Docker live lane", () => {
     const definition = workflow();
     const bash = process.platform === "darwin" ? resolveWorkflowBash() : "bash";

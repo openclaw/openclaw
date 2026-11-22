@@ -97,6 +97,9 @@ it(
       const bob = await gateway.connectAs(BOB);
       const queued = await session.send("/followup Bob queued before losing access.", bob);
       await session.chat(queued.runId);
+      expect((await session.history()).pendingInputs).toMatchObject({
+        items: [{ state: "queued", runId: queued.runId }],
+      });
 
       const { paired } = await gateway.alice.request<{
         paired: Array<{ deviceId: string; deviceFamily?: string }>;
@@ -108,7 +111,7 @@ it(
       first.release();
       expect(await session.wait(original.runId)).toMatchObject({ status: "ok" });
       expect(await session.wait(queued.runId)).toMatchObject({ status: "error" });
-      expect(session.chatStates(queued.runId).at(-1)).toBe("aborted");
+      expect(session.chatStates(queued.runId).at(-1)).toBe("error");
       expect(deliveries(session, "Bob queued before losing access.")).toEqual([0]);
       expect(session.executedRuns()).toEqual([original.runId]);
       // Cancellation stays readable; it must retain no executable queue custody.

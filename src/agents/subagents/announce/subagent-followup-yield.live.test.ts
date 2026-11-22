@@ -24,7 +24,7 @@ const describeLive = enabled ? describe : describe.skip;
 describeLive("watched child follow-up yield", () => {
   it(
     "yields for a queued follow-up after the child's original completion was delivered",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"] },
         async ({ gateway, gates, start, waitForFinal, record }) => {
@@ -196,6 +196,7 @@ describeLive("watched child follow-up yield", () => {
           ).toBe(false);
           record("watched-followup-delivered-once", { parentKey, childSessionKey, reply });
         },
+        testContext,
       );
     },
     15 * 60_000,

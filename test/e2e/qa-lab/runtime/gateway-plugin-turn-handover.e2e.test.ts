@@ -166,7 +166,9 @@ it.for(scenarios)(
     const events = path.join(home, "engine.log");
     const engineId = plugins.find((plugin) => plugin.contextEngine)?.id;
     await Promise.all(
-      [stateDir, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
+      [stateDir, workspaceDir, bundledPluginsDir].map((dir) =>
+        fs.mkdir(dir, { recursive: true, mode: 0o700 }),
+      ),
     );
     const written = bundled
       ? [{ ...bundled, root: "" }]
@@ -219,7 +221,11 @@ it.for(scenarios)(
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
+                  // The fixture returns one-line JSON; the repeat guard can append guidance.
+                  ...(JSON.parse((output.output ?? "{}").split("\n", 1)[0]!) as Pick<
+                    Step,
+                    "plugin" | "generation"
+                  >),
                 });
                 // The bundled tool is fast; slow its steps so the reload lands mid-turn.
                 if (bundled) {

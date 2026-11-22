@@ -29,6 +29,32 @@ afterEach(async () => {
   }
 });
 
+describe("legacy registry upgrade discovery", () => {
+  it.each(["2026.7.1", "2026.7.1-blob", "2026.7.35"])(
+    "discovers %s without requiring the runtime registry schema or changing it",
+    (release) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-discovery-"));
+      dirs.push(stateDir);
+      fs.cpSync(
+        fileURLToPath(
+          new URL(`../../test/fixtures/state-corpus-populated/${release}/state/`, import.meta.url),
+        ),
+        stateDir,
+        { recursive: true },
+      );
+      const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const before = fs.readFileSync(statePath);
+      expect(
+        isStateUpgradePending({
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        }),
+      ).toBe(true);
+      expect(fs.readFileSync(statePath)).toEqual(before);
+    },
+  );
+});
+
 describe("startup reader replacement", () => {
   it("reopens shared-state workers after the copy-and-swap upgrade", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-readers-"));

@@ -61,7 +61,6 @@ import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-ar
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { bindPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
-import { validatePluginConfig } from "../plugins/schema-validator.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -70,6 +69,7 @@ import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { validatePluginConfig } from "../plugins/schema-validator.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {

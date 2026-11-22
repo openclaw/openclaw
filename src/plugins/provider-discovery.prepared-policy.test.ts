@@ -142,6 +142,10 @@ describe("prepared discovery policy", () => {
     });
     const resolver = createProviderRegistryResolver({
       loadOpenClawPlugins: load,
+      acquirePluginRegistryForInspection: async (options) => ({
+        registry: load(options),
+        release: async () => {},
+      }),
       resolveRuntimePluginRegistry: load,
       isPluginRegistryLoadInFlight: () => false,
     });

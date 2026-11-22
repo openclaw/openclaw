@@ -97,6 +97,10 @@ exec /usr/bin/install "\${args[@]}"`,
       `
 printf 'apt %s noninteractive=%s\\n' "$*" "$DEBIAN_FRONTEND" >> "$FIXTURE_LOG"
 [[ "\${FIXTURE_INSTALL_FAIL:-}" != true ]] || exit 100
+if [[ "\${FIXTURE_UNRELATED_SOURCE_ERROR:-}" == true && "$*" == *' update' && "$*" != *'Dir::Etc::sourceparts=-'* ]]; then
+  echo "Unrelated repository changed its Label" >&2
+  exit 100
+fi
 if [[ "$*" == *'--no-install-recommends git' ]]; then
   attempt=0
   [[ ! -f "$FIXTURE_CAPABLE.attempts" ]] || read -r attempt < "$FIXTURE_CAPABLE.attempts"
@@ -177,6 +181,14 @@ fi`,
     );
     expect(commands.match(/^timeout /gm)).toHaveLength(2);
     expect(commands.includes("sudo -n")).toBe(uid !== "0");
+  });
+
+  it("upgrades Git when an unrelated repository rejects metadata refresh", () => {
+    const setup = fixture();
+    const result = setup.run({ FIXTURE_UNRELATED_SOURCE_ERROR: "true" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(setup.capable)).toBe(true);
+    expect(readFileSync(setup.unrelatedSource, "utf8")).toBe("existing source\n");
   });
 
   it("replaces only its dedicated PPA files on another required upgrade", () => {

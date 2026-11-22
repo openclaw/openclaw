@@ -31,7 +31,7 @@ const describeLive = enabled ? describe : describe.skip;
 describeLive("OpenAI subagent yield and operator resume stress", () => {
   it(
     "limits siblings per spawning session while independent parents and nested children run",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { maxConcurrent: 1 },
         async ({ gateway, gates, start, record, waitForFinal }) => {
@@ -179,14 +179,16 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           ).toBe(true);
           record("session-capacity-settled", { lane: await readSubagentLane() });
         },
+        testContext,
       );
     },
     15 * 60_000,
   );
 
-  it.each([false, true])(
+  it.for([false, true])(
     "keeps CLI coordination in the task completion path for visible=%s children and later turns",
-    async (visible) => {
+    { timeout: 20 * 60_000 },
+    async (visible, testContext) => {
       await runWithLiveSubagentGateway(
         {},
         async ({ gateway, state, start, record, sessionsSendCliArgs, waitForFinal }) => {
@@ -339,14 +341,14 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             reply: operatorReply,
           });
         },
+        testContext,
       );
     },
-    20 * 60_000,
   );
 
   it(
     "settles concurrent children and preserves a resumed worker's lineage and parent batch",
-    async () => {
+    async (testContext) => {
       const batches = boundedCount("OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES", 2, 5);
       const childrenPerBatch = boundedCount("OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN", 3, 6);
       await runWithLiveSubagentGateway(
@@ -538,278 +540,291 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             `[subagent-handoff-stress] ${JSON.stringify({ phase: "passed", batches, childrenPerBatch, successfulFanoutChildren: batches * childrenPerBatch, parentYields, automaticParentFinals: batches + 1, operatorResumes: 1, operatorReplays: 1, sameNativeLineage: true, remappedBatch: true })}`,
           );
         },
+        testContext,
       );
     },
     30 * 60_000,
   );
 
-  it.each(["timeout", "cancellation", "service_failure"] as const)(
+  it.for(["timeout", "cancellation", "service_failure"] as const)(
     "reports a child's %s truthfully while preserving its successful sibling",
-    async (interruption) => {
-      await runWithLiveSubagentGateway({}, async (context) => {
-        const { gates, start, record, interrogate, waitForDescendantSettlement } = context;
-        const id = randomUUID().replaceAll("-", "");
-        const parentKey = `agent:main:live-${interruption}:${id}`;
-        const marker = `OUTCOME_${id}`;
-        const goodGate = gates.create();
-        const interruptedGate = gates.create();
-        const goodResult = `RESULT_${randomUUID()}`;
-        const lateResult = `LATE_${randomUUID()}`;
-        const serviceError = `UPSTREAM_UNAVAILABLE_${randomUUID()}`;
-        const spawns = [
-          { taskName: "result_worker", task: gateTask(goodGate.url) },
-          {
-            taskName: "interrupted_worker",
-            task: gateTask(interruptedGate.url),
-            ...(interruption === "timeout" ? { runTimeoutSeconds: 90 } : {}),
-          },
-        ];
-        await start(
-          parentKey,
-          [
-            "Delegate the following two independent retrieval jobs. Start both before waiting. Do not read files, run commands, fetch results yourself, or create replacement workers.",
-            ...spawns.map(
-              (spawn) =>
-                `sessions_spawn input: ${JSON.stringify({ ...spawn, cleanup: "keep", context: "isolated" })}`,
+    { timeout: 15 * 60_000 },
+    async (interruption, testContext) => {
+      await runWithLiveSubagentGateway(
+        {},
+        async (context) => {
+          const { gates, start, record, interrogate, waitForDescendantSettlement } = context;
+          const id = randomUUID().replaceAll("-", "");
+          const parentKey = `agent:main:live-${interruption}:${id}`;
+          const marker = `OUTCOME_${id}`;
+          const goodGate = gates.create();
+          const interruptedGate = gates.create();
+          const goodResult = `RESULT_${randomUUID()}`;
+          const lateResult = `LATE_${randomUUID()}`;
+          const serviceError = `UPSTREAM_UNAVAILABLE_${randomUUID()}`;
+          const spawns = [
+            { taskName: "result_worker", task: gateTask(goodGate.url) },
+            {
+              taskName: "interrupted_worker",
+              task: gateTask(interruptedGate.url),
+              ...(interruption === "timeout" ? { runTimeoutSeconds: 90 } : {}),
+            },
+          ];
+          await start(
+            parentKey,
+            [
+              "Delegate the following two independent retrieval jobs. Start both before waiting. Do not read files, run commands, fetch results yourself, or create replacement workers.",
+              ...spawns.map(
+                (spawn) =>
+                  `sessions_spawn input: ${JSON.stringify({ ...spawn, cleanup: "keep", context: "isolated" })}`,
+              ),
+              "Call sessions_yield after both are accepted. Continue handling the existing jobs until both have settled, including any failure or cancellation.",
+              "Use state values queued, running, waiting, completed, failed, timed_out, cancelled, or unknown. Your final report must distinguish successful retrieval from any unsuccessful worker. workComplete means both requested results were successfully obtained. Never report a result you did not receive.",
+              "Copy received result values and error evidence verbatim, preserving every character of their identifiers in the JSON report.",
+              `Reply with ${marker} on the first line, then a JSON object with workComplete (boolean) and workers (array of {taskName, state, waitingFor, result, error}). result is the successfully retrieved value; error is the worker's failure evidence. Use null when absent or unknown.`,
+            ].join("\n"),
+          );
+          await until("both independent requests are held", () =>
+            goodGate.snapshot().waiting === 1 && interruptedGate.snapshot().waiting === 1
+              ? true
+              : undefined,
+          );
+          const children = listSubagentRunsForRequester(parentKey);
+          expect(
+            children
+              .map((run) => run.taskName ?? "")
+              .toSorted((left, right) => left.localeCompare(right)),
+          ).toEqual(["interrupted_worker", "result_worker"]);
+          expect(children.every((run) => run.execution.status === "running")).toBe(true);
+          expect(
+            finalReplies(await history(parentKey), marker),
+            "parent cannot complete before either gate opens",
+          ).toEqual([]);
+          record("both-waiting", {
+            interruption,
+            gates: [goodGate.snapshot(), interruptedGate.snapshot()],
+          });
+
+          goodGate.release(goodResult);
+          const goodRun = await until("successful sibling execution settled", () =>
+            listSubagentRunsForRequester(parentKey).find(
+              (run) => run.taskName === "result_worker" && run.execution.status === "terminal",
             ),
-            "Call sessions_yield after both are accepted. Continue handling the existing jobs until both have settled, including any failure or cancellation.",
-            "Use state values queued, running, waiting, completed, failed, timed_out, cancelled, or unknown. Your final report must distinguish successful retrieval from any unsuccessful worker. workComplete means both requested results were successfully obtained. Never report a result you did not receive.",
-            "Copy received result values and error evidence verbatim, preserving every character of their identifiers in the JSON report.",
-            `Reply with ${marker} on the first line, then a JSON object with workComplete (boolean) and workers (array of {taskName, state, waitingFor, result, error}). result is the successfully retrieved value; error is the worker's failure evidence. Use null when absent or unknown.`,
-          ].join("\n"),
-        );
-        await until("both independent requests are held", () =>
-          goodGate.snapshot().waiting === 1 && interruptedGate.snapshot().waiting === 1
-            ? true
-            : undefined,
-        );
-        const children = listSubagentRunsForRequester(parentKey);
-        expect(
-          children
-            .map((run) => run.taskName ?? "")
-            .toSorted((left, right) => left.localeCompare(right)),
-        ).toEqual(["interrupted_worker", "result_worker"]);
-        expect(children.every((run) => run.execution.status === "running")).toBe(true);
-        expect(
-          finalReplies(await history(parentKey), marker),
-          "parent cannot complete before either gate opens",
-        ).toEqual([]);
-        record("both-waiting", {
-          interruption,
-          gates: [goodGate.snapshot(), interruptedGate.snapshot()],
-        });
+          );
+          record("successful-sibling-terminal", {
+            runId: goodRun.runId,
+            outcome: goodRun.execution.outcome,
+          });
+          expect(goodRun.execution.outcome?.status, "the retrieval sibling succeeded").toBe("ok");
+          const interruptedChild = children.find((run) => run.taskName === "interrupted_worker")!;
+          expect(
+            goodRun.execution.status,
+            "child execution can finish while its parent is unfinished",
+          ).toBe("terminal");
+          expect(interruptedGate.snapshot().released).toBe(false);
+          expect(
+            finalReplies(await history(parentKey), marker),
+            "one child's execution success is not parent completion",
+          ).toEqual([]);
+          record("partial-completion", {
+            successfulRun: goodRun,
+            interruptedRun: interruptedChild,
+            gate: interruptedGate.snapshot(),
+          });
 
-        goodGate.release(goodResult);
-        const goodRun = await until("successful sibling execution settled", () =>
-          listSubagentRunsForRequester(parentKey).find(
-            (run) => run.taskName === "result_worker" && run.execution.status === "terminal",
-          ),
-        );
-        record("successful-sibling-terminal", {
-          runId: goodRun.runId,
-          outcome: goodRun.execution.outcome,
-        });
-        expect(goodRun.execution.outcome?.status, "the retrieval sibling succeeded").toBe("ok");
-        const interruptedChild = children.find((run) => run.taskName === "interrupted_worker")!;
-        expect(
-          goodRun.execution.status,
-          "child execution can finish while its parent is unfinished",
-        ).toBe("terminal");
-        expect(interruptedGate.snapshot().released).toBe(false);
-        expect(
-          finalReplies(await history(parentKey), marker),
-          "one child's execution success is not parent completion",
-        ).toEqual([]);
-        record("partial-completion", {
-          successfulRun: goodRun,
-          interruptedRun: interruptedChild,
-          gate: interruptedGate.snapshot(),
-        });
-
-        if (interruption === "cancellation") {
-          let claimObserved:
-            | { runId: string; requestedAt: number; pendingRequests: number }
-            | undefined;
-          // The production persistence event observes the claim before admission draining.
-          const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-            if (claimObserved) {
-              return;
+          if (interruption === "cancellation") {
+            let claimObserved:
+              | { runId: string; requestedAt: number; pendingRequests: number }
+              | undefined;
+            // The production persistence event observes the claim before admission draining.
+            const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+              if (claimObserved) {
+                return;
+              }
+              const current = listSubagentRunsForRequester(parentKey).find(
+                (run) => run.runId === interruptedChild.runId,
+              );
+              if (!current?.killIntent) {
+                return;
+              }
+              const observation = {
+                runId: current.runId,
+                requestedAt: current.killIntent.requestedAt,
+                pendingRequests: interruptedGate.snapshot().waiting,
+              };
+              interruptedGate.release(lateResult);
+              claimObserved = observation;
+            });
+            try {
+              // Exercise the native public tool, including its controller scope
+              // and exact-run fences, rather than calling the kill helper directly.
+              const result = await createSubagentsTool({
+                agentSessionKey: parentKey,
+                agentId: "main",
+              }).execute(randomUUID(), { action: "cancel", runId: interruptedChild.runId });
+              record("cancel-response", {
+                runId: interruptedChild.runId,
+                claimObserved,
+                result: result.details,
+                gate: interruptedGate.snapshot(),
+              });
+              expect(result.details, "the active child accepts native cancellation").toMatchObject({
+                action: "cancel",
+                runId: interruptedChild.runId,
+                sessionKey: interruptedChild.childSessionKey,
+                found: true,
+                killed: true,
+              });
+              expect(result.details).not.toHaveProperty("error");
+              expect(
+                claimObserved,
+                "the real cancellation owner claims the run before late stdout is released",
+              ).toMatchObject({ runId: interruptedChild.runId, pendingRequests: 1 });
+            } finally {
+              unsubscribe();
             }
-            const current = listSubagentRunsForRequester(parentKey).find(
+          } else if (interruption === "service_failure") {
+            interruptedGate.release(serviceError, 503);
+            record("service-error-released", { responseCode: 503, serviceError });
+          }
+          const terminalRun = await until("interrupted native child settles", () =>
+            listSubagentRunsForRequester(parentKey).find(
+              (run) =>
+                run.runId === interruptedChild.runId &&
+                run.execution.status === "terminal" &&
+                run.pauseReason === undefined &&
+                run.execution.outcome !== undefined,
+            ),
+          );
+          expect(terminalRun.execution.outcome?.status).toBe(
+            interruption === "timeout"
+              ? "timeout"
+              : interruption === "cancellation"
+                ? "error"
+                : "ok",
+          );
+          if (interruption === "cancellation") {
+            expect(terminalRun.endedReason).toBe("subagent-killed");
+          } else {
+            expect(terminalRun.endedReason).toBe("subagent-complete");
+          }
+          if (interruption === "service_failure") {
+            const failures = commandOutcomes(await history(interruptedChild.childSessionKey));
+            expect(
+              failures.some(
+                (outcome) => outcome.exitCode === 1 && outcome.text.includes(serviceError),
+              ),
+              "the child actually observes the service error through a failed command",
+            ).toBe(true);
+            const child = listSubagentRunsForRequester(parentKey).find(
               (run) => run.runId === interruptedChild.runId,
             );
-            if (!current?.killIntent) {
-              return;
-            }
-            const observation = {
-              runId: current.runId,
-              requestedAt: current.killIntent.requestedAt,
-              pendingRequests: interruptedGate.snapshot().waiting,
-            };
-            interruptedGate.release(lateResult);
-            claimObserved = observation;
-          });
+            expect(
+              child?.execution.outcome?.status,
+              "the agent turn completed normally even though retrieval failed",
+            ).toBe("ok");
+            record("service-failure-observed", { run: terminalRun, commands: failures });
+          }
+          const reply = await until(
+            "automatic parent outcome after mixed child outcomes",
+            async () => finalReplies(await history(parentKey), marker)[0],
+          );
+          record("primary-parent-reply", { sessionKey: parentKey, reply });
           try {
-            // Exercise the native public tool, including its controller scope
-            // and exact-run fences, rather than calling the kill helper directly.
-            const result = await createSubagentsTool({
-              agentSessionKey: parentKey,
-              agentId: "main",
-            }).execute(randomUUID(), { action: "cancel", runId: interruptedChild.runId });
-            record("cancel-response", {
-              runId: interruptedChild.runId,
-              claimObserved,
-              result: result.details,
-              gate: interruptedGate.snapshot(),
+            const report = statusReport(reply);
+            expect(report.workComplete, "a missing child result prevents overall success").toBe(
+              false,
+            );
+            expect(report.workers).toHaveLength(2);
+            const success = report.workers.find((worker) => worker.taskName === "result_worker");
+            const failure = report.workers.find(
+              (worker) => worker.taskName === "interrupted_worker",
+            );
+            expect(success).toMatchObject({
+              state: "completed",
+              waitingFor: null,
+              result: goodResult,
             });
-            expect(result.details, "the active child accepts native cancellation").toMatchObject({
-              action: "cancel",
-              runId: interruptedChild.runId,
-              sessionKey: interruptedChild.childSessionKey,
-              found: true,
-              killed: true,
-            });
-            expect(result.details).not.toHaveProperty("error");
             expect(
-              claimObserved,
-              "the real cancellation owner claims the run before late stdout is released",
-            ).toMatchObject({ runId: interruptedChild.runId, pendingRequests: 1 });
-          } finally {
-            unsubscribe();
-          }
-        } else if (interruption === "service_failure") {
-          interruptedGate.release(serviceError, 503);
-          record("service-error-released", { responseCode: 503, serviceError });
-        }
-        const terminalRun = await until("interrupted native child settles", () =>
-          listSubagentRunsForRequester(parentKey).find(
-            (run) =>
-              run.runId === interruptedChild.runId &&
-              run.execution.status === "terminal" &&
-              run.pauseReason === undefined &&
-              run.execution.outcome !== undefined,
-          ),
-        );
-        expect(terminalRun.execution.outcome?.status).toBe(
-          interruption === "timeout" ? "timeout" : interruption === "cancellation" ? "error" : "ok",
-        );
-        if (interruption === "cancellation") {
-          expect(terminalRun.endedReason).toBe("subagent-killed");
-        } else {
-          expect(terminalRun.endedReason).toBe("subagent-complete");
-        }
-        if (interruption === "service_failure") {
-          const failures = commandOutcomes(await history(interruptedChild.childSessionKey));
-          expect(
-            failures.some(
-              (outcome) => outcome.exitCode === 1 && outcome.text.includes(serviceError),
-            ),
-            "the child actually observes the service error through a failed command",
-          ).toBe(true);
-          const child = listSubagentRunsForRequester(parentKey).find(
-            (run) => run.runId === interruptedChild.runId,
-          );
-          expect(
-            child?.execution.outcome?.status,
-            "the agent turn completed normally even though retrieval failed",
-          ).toBe("ok");
-          record("service-failure-observed", { run: terminalRun, commands: failures });
-        }
-        const reply = await until(
-          "automatic parent outcome after mixed child outcomes",
-          async () => finalReplies(await history(parentKey), marker)[0],
-        );
-        record("primary-parent-reply", { sessionKey: parentKey, reply });
-        try {
-          const report = statusReport(reply);
-          expect(report.workComplete, "a missing child result prevents overall success").toBe(
-            false,
-          );
-          expect(report.workers).toHaveLength(2);
-          const success = report.workers.find((worker) => worker.taskName === "result_worker");
-          const failure = report.workers.find((worker) => worker.taskName === "interrupted_worker");
-          expect(success).toMatchObject({
-            state: "completed",
-            waitingFor: null,
-            result: goodResult,
-          });
-          expect(
-            interruption === "timeout"
-              ? ["failed", "timed_out"]
-              : interruption === "cancellation"
-                ? ["cancelled"]
-                : ["failed"],
-          ).toContain(failure?.state);
-          expect(
-            failure?.result,
-            "failed or cancelled worker has no successful retrieval",
-          ).toBeNull();
-          if (interruption === "service_failure") {
+              interruption === "timeout"
+                ? ["failed", "timed_out"]
+                : interruption === "cancellation"
+                  ? ["cancelled"]
+                  : ["failed"],
+            ).toContain(failure?.state);
             expect(
-              failure?.error,
-              "the parent carries the actual hidden service failure",
-            ).toContain(serviceError);
-          }
-          expect(reply, "late cancelled stdout is not a delivered result").not.toContain(
-            lateResult,
-          );
-          await waitForDescendantSettlement(parentKey);
-          const finalMessages = await history(parentKey);
-          expect(finalReplies(finalMessages, marker)).toHaveLength(1);
-          expect(successfulYields(finalMessages)).toBeGreaterThan(0);
-          expect(
-            finalMessages.some(
-              (message) =>
-                message.role === "toolResult" &&
-                ["read", "exec", "process"].includes(String(message.toolName)),
-            ),
-            "parent consumes child delivery rather than obtaining hidden data",
-          ).toBe(false);
-          const finalRuns = listSubagentRunsForRequester(parentKey);
-          expect(finalRuns).toHaveLength(2);
-          const finalGoodRun = finalRuns.find((run) => run.runId === goodRun.runId);
-          expect(finalGoodRun).toMatchObject({
-            runId: goodRun.runId,
-            childSessionKey: goodRun.childSessionKey,
-            execution: { status: "terminal", outcome: { status: "ok" } },
-            completion: { resultText: goodResult },
-            delivery: { status: "delivered" },
-          });
-          const finalInterruptedRun = finalRuns.find((run) => run.runId === interruptedChild.runId);
-          if (interruption === "service_failure") {
-            expect(finalInterruptedRun).toMatchObject({
+              failure?.result,
+              "failed or cancelled worker has no successful retrieval",
+            ).toBeNull();
+            if (interruption === "service_failure") {
+              expect(
+                failure?.error,
+                "the parent carries the actual hidden service failure",
+              ).toContain(serviceError);
+            }
+            expect(reply, "late cancelled stdout is not a delivered result").not.toContain(
+              lateResult,
+            );
+            await waitForDescendantSettlement(parentKey);
+            const finalMessages = await history(parentKey);
+            expect(finalReplies(finalMessages, marker)).toHaveLength(1);
+            expect(successfulYields(finalMessages)).toBeGreaterThan(0);
+            expect(
+              finalMessages.some(
+                (message) =>
+                  message.role === "toolResult" &&
+                  ["read", "exec", "process"].includes(String(message.toolName)),
+              ),
+              "parent consumes child delivery rather than obtaining hidden data",
+            ).toBe(false);
+            const finalRuns = listSubagentRunsForRequester(parentKey);
+            expect(finalRuns).toHaveLength(2);
+            const finalGoodRun = finalRuns.find((run) => run.runId === goodRun.runId);
+            expect(finalGoodRun).toMatchObject({
+              runId: goodRun.runId,
+              childSessionKey: goodRun.childSessionKey,
               execution: { status: "terminal", outcome: { status: "ok" } },
+              completion: { resultText: goodResult },
               delivery: { status: "delivered" },
             });
-          } else if (interruption === "cancellation") {
-            expect(finalInterruptedRun).toMatchObject({
-              endedReason: "subagent-killed",
-              execution: { status: "terminal", outcome: { status: "error" } },
+            const finalInterruptedRun = finalRuns.find(
+              (run) => run.runId === interruptedChild.runId,
+            );
+            if (interruption === "service_failure") {
+              expect(finalInterruptedRun).toMatchObject({
+                execution: { status: "terminal", outcome: { status: "ok" } },
+                delivery: { status: "delivered" },
+              });
+            } else if (interruption === "cancellation") {
+              expect(finalInterruptedRun).toMatchObject({
+                endedReason: "subagent-killed",
+                execution: { status: "terminal", outcome: { status: "error" } },
+              });
+            }
+            record("mixed-outcome", {
+              interruption,
+              report,
+              interruptedRun: finalInterruptedRun,
+              successfulRun: finalGoodRun,
             });
+          } catch (error) {
+            // A diagnostic follow-up never turns a failed primary answer into a pass.
+            try {
+              const report = await interrogate(parentKey, `DIAGNOSTIC_${id}`, 90_000);
+              record("diagnostic-after-primary-failure", { sessionKey: parentKey, report });
+            } catch (diagnosticError) {
+              record("diagnostic-failed", {
+                error:
+                  diagnosticError instanceof Error
+                    ? diagnosticError.message
+                    : String(diagnosticError),
+              });
+            }
+            throw error;
           }
-          record("mixed-outcome", {
-            interruption,
-            report,
-            interruptedRun: finalInterruptedRun,
-            successfulRun: finalGoodRun,
-          });
-        } catch (error) {
-          // A diagnostic follow-up never turns a failed primary answer into a pass.
-          try {
-            const report = await interrogate(parentKey, `DIAGNOSTIC_${id}`, 90_000);
-            record("diagnostic-after-primary-failure", { sessionKey: parentKey, report });
-          } catch (diagnosticError) {
-            record("diagnostic-failed", {
-              error:
-                diagnosticError instanceof Error
-                  ? diagnosticError.message
-                  : String(diagnosticError),
-            });
-          }
-          throw error;
-        }
-      });
+        },
+        testContext,
+      );
     },
-    15 * 60_000,
   );
 });

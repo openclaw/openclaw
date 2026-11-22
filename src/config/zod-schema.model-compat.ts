@@ -73,6 +73,8 @@ export const ModelCompatSchema = z
      * prompt in `input` unless set true here after verifying against that endpoint.
      */
     supportsInstructions: z.boolean().optional(),
+    /** Whether the model caches top-level `instructions`; false embeds them on native OpenAI routes. */
+    cachesInstructions: z.boolean().optional(),
     /**
      * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
      * streaming responses. Default: true.

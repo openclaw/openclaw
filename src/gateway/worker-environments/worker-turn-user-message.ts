@@ -38,6 +38,7 @@ export async function persistWorkerTurnUserMessage(params: {
     "prompt" | "transcriptPrompt" | "media" | "onUserMessagePersisted"
   >;
   manager: SessionManager;
+  timestamp: number;
   transcriptTarget: BoundAgentRunSessionTarget;
   media: Pick<Awaited<ReturnType<typeof prepareWorkerTurnMedia>>, "images" | "imageFactIndexes">;
   assertRunCurrent?: () => void;
@@ -45,6 +46,7 @@ export async function persistWorkerTurnUserMessage(params: {
 }): Promise<string | null> {
   const { turn, manager, transcriptTarget, media } = params;
   const canonical = buildPersistedUserTurnMessage({
+    timestamp: params.timestamp,
     text: turn.transcriptPrompt ?? turn.prompt,
     media: turn.media,
     mediaImageLayout: {

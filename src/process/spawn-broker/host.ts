@@ -60,7 +60,7 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease, SpawnBrokerHost };
+export type { SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
@@ -215,7 +215,7 @@ class BrokerHost implements SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
-    if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
+    if (this.closing || this.resourceClaims.needsReference || this.requests.size > 0) {
       this.process.ref();
       process.ref(this.process.stderr);
       // Newer Bun releases, like Node, reference IPC independently of the child.

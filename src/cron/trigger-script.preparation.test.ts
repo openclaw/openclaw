@@ -133,7 +133,8 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
 }
 
 it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  // Cold Gateway loading starts the native capture socket, whose connection retries need real timers.
+  vi.useFakeTimers({ toFake: ["Date", "performance"] });
   const loadGateway = async (cfg: OpenClawConfig) => {
     const input = { config: cfg, workspaceDir: state.workspaceDir };
     const metadata = loadPluginMetadataSnapshot(input);

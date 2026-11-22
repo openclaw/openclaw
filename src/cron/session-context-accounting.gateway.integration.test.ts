@@ -31,7 +31,13 @@ it(
     await withOpenClawTestState(
       {
         label: "scheduled-context-accounting",
-        env: { ...createAuthorityGatewayTestEnv(), OPENCLAW_SKIP_CRON: undefined },
+        env: {
+          ...createAuthorityGatewayTestEnv(),
+          OPENCLAW_SKIP_CRON: undefined,
+          // The synthetic provider is local even when the host routes HTTP through a proxy.
+          NO_PROXY: "127.0.0.1,localhost,::1",
+          no_proxy: "127.0.0.1,localhost,::1",
+        },
       },
       async (state) => {
         const shortKey = "agent:main:scheduled-accounting";

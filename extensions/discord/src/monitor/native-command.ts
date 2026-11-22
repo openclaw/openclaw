@@ -1,12 +1,12 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
+import { loadCommandArgMenuModelCatalog } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  loadCommandArgMenuModelCatalog,
   parseCommandArgs,
   resolveCommandArgMenuAsync,
   serializeCommandArgs,

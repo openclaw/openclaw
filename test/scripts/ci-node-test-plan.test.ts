@@ -2526,6 +2526,50 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("bounds hosted system-runtime envelopes despite stale timing estimates", async () => {
+    const owner = "core-runtime-infra-system-runtime";
+    const config = configPath("infra");
+    const files = Array.from(
+      { length: 279 },
+      (_, index) => "src/infra/system-fixture-" + String(index).padStart(3, "0") + ".test.ts",
+    );
+    mockProject("core-runtime", config, "src/infra", files, { [owner]: 1 });
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? files : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? files : []),
+      listWholeConfigSplitFiles: (candidate) => (candidate === owner ? files : undefined),
+    });
+    mockUnbuiltRuntime();
+    const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
+      "build",
+      "database",
+      "inventory",
+    ]);
+    const native = createPlan({ compactMode: "pull-request", runnerBackend: "blacksmith" });
+    const options = {
+      compactMode: "pull-request" as const,
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeProofTests: false,
+    };
+    const plan = createPlan(options);
+    const groups = plan.flatMap(jobGroups);
+    expectPlanFiles(plan, files, requiredPatterns);
+    for (const group of groups) {
+      expect(requiredPatterns(group).length).toBeLessThanOrEqual(64);
+    }
+    expect(groups).toHaveLength(5);
+    expectEvery(groups, (group) => group.configs.length === 1 && group.configs[0] === config);
+    expectEvery(groups, (group) => group.env === undefined && !group.pretestBuildMode);
+    expectEvery(plan, (job) => job.planConcurrency === 1 && !job.requiresDist);
+    expect(createPlan(options)).toEqual(plan);
+    expect(createPlan({ compactMode: "pull-request", runnerBackend: "blacksmith" })).toEqual(
+      native,
+    );
+  });
+
   it("applies native solo prices without changing placement or hosted prices", async () => {
     const config = agentVitestProjectOwners.support.config;
     const file = "src/agents/harness/lifecycle.test.ts";

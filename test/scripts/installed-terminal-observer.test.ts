@@ -577,7 +577,11 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
       });
       expect(JSON.parse(observed.stdout).ran).toBe(mode === "encoding");
       if (mode === "max-buffer-array") {
-        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+        // Node versions classify invalid maxBuffer differently; preserve the native error exactly.
+        expect(JSON.parse(observed.stdout).outcome).toEqual({
+          ...JSON.parse(plain.stdout).outcome,
+          sentinel: false,
+        });
       }
     }
     expect(() => readInstalledTerminalEvents(f.spec.directory), mode).toThrow(
@@ -1787,7 +1791,7 @@ it.each([false, true])(
     assert(typeof probeSource === "string");
     if (!historical) {
       expect(createHash("sha256").update(probeSource).digest("hex")).toBe(
-        "d20c4ee82bfef4b497e1608d1a4eab79f60ea69e70dc41fa625579d27f888b8e",
+        "02e12b274d9f787d51706475841791520196127c340143b13a8f077072e1bd6c",
       );
     }
     fs.writeFileSync(probe, probeSource);

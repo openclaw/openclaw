@@ -918,7 +918,6 @@ packages/ai/src/transports/anthropic-transport-stream.ts	3
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	1
 packages/ai/src/transports/openai-completions-params.ts	3
-packages/ai/src/transports/openai-completions-replay.ts	1
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-transport.ts	5
 packages/ai/src/transports/openai-responses-client.ts	8
@@ -1022,7 +1021,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	3
+src/agents/agent-tools.read.ts	2
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -2077,7 +2076,6 @@ src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
-src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
@@ -2108,7 +2106,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	4
+src/plugins/schema-validator.ts	2
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2

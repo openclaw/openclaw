@@ -7,7 +7,11 @@ import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
-import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import {
+  isInlineUpdateCompatibilityExport,
+  readUpdateCompatibilityInventory,
+  resolveUpdateCompatibilityOrigin,
+} from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
@@ -157,6 +161,8 @@ const repositoryScriptEntries = [
   ".github/workflows/labeler.yml!",
   // Stable closeout imports its recovery verifier from the trusted tooling checkout.
   ".github/workflows/openclaw-stable-main-closeout.yml!",
+  // Full Release Validation launches this reuse lookup by path in its selected checkout.
+  "scripts/find-reusable-release-child.mjs!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -429,6 +435,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -1025,6 +1032,10 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
   for (const release of inventory.releases) {
     for (const chunk of release.chunks) {
       for (const { origin } of chunk.exports) {
+        // Inline compatibility shims do not consume a current runtime binding.
+        if (isInlineUpdateCompatibilityExport(origin)) {
+          continue;
+        }
         recordedOrigins.set(`${origin.module}:${origin.symbol}`, origin);
       }
     }
@@ -1035,22 +1046,17 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
   );
   for (const [index, origin] of origins.entries()) {
     const sourceFile = path.join(rootDir, origin.module);
-    if (graph.names(sourceFile).includes(origin.symbol)) {
-      imports.push(
-        `import { ${origin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${origin.module}`)};`,
-      );
-      continue;
-    }
-    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
-    if (
-      !currentOrigin ||
-      (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
-      !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
-    ) {
+    const currentOrigin = graph.names(sourceFile).includes(origin.symbol)
+      ? origin
+      : resolveUpdateCompatibilityOrigin(origin, rootDir, graph);
+    if (!graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)) {
       throw new Error(
         `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
       );
     }
+    imports.push(
+      `import { ${currentOrigin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${currentOrigin.module}`)};`,
+    );
   }
   return imports;
 }

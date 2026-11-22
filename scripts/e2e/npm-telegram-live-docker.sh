@@ -226,8 +226,8 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
-# The disposable package prefix is shared with the container's non-root appuser.
-chmod a+rwx "$npm_prefix_host"
+# Both host-created mounts are shared with the container's non-root appuser.
+chmod a+rwx "$npm_prefix_host" "$OUTPUT_DIR_HOST"
 harness_root="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-harness.XXXXXX")"
 harness_package_json="$harness_root/package.json"
 cp "$ROOT_DIR/package.json" "$harness_package_json"
@@ -235,6 +235,16 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
+  # QA intentionally creates private (0700/0600) artifacts. Return only these
+  # two owned mounts to the host UID before reading evidence or removing npm.
+  # Keep their modes private; do not grant other users access to live evidence.
+  if ! docker_e2e_docker_with_timeout 60s run --rm --network none --user 0:0 \
+    --entrypoint chown \
+    -v "$npm_prefix_host:/npm-global" -v "$OUTPUT_DIR_HOST:/qa-output" \
+    "$IMAGE_NAME" -hR "$(id -u):$(id -g)" /npm-global /qa-output; then
+    echo "Could not return Telegram package artifacts to the host owner" >&2
+    if [ "$rc" -eq 0 ]; then rc=1; fi
+  fi
   printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
   rm -rf "$npm_prefix_host"
   rm -rf "$harness_root"

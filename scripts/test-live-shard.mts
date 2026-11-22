@@ -18,6 +18,16 @@ import {
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   // Whole-file opt-in gates: without the flag every case skips, so the file has no pass evidence.
+  ["extensions/agentsapi/agentsapi-harness.live.test.ts", ["OPENCLAW_LIVE_AGENTSAPI"]],
+  ["extensions/comfy/comfy.live.test.ts", ["COMFY_LIVE_TEST"]],
+  [
+    "extensions/codex/src/app-server/isolated-completion.acceptance.live.test.ts",
+    ["OPENCLAW_LIVE_RESEARCH_ACCEPTANCE"],
+  ],
+  [
+    "extensions/codex/src/app-server/isolated-completion.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_OUTPUT_SCHEMA"],
+  ],
   ["extensions/anthropic/cli-output.compaction.live.test.ts", ["OPENCLAW_LIVE_CLAUDE_COMPACTION"]],
   [
     "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",

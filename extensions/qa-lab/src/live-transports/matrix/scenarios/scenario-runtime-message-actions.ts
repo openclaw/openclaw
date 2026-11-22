@@ -94,16 +94,8 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
   };
 
   try {
-    // The topology gives SUT room ownership; inspect actual permissions rather than granting more.
-    const power = await read("state/m.room.power_levels");
-    const users = record(power.users, "Matrix power-level users");
-    const events = isRecord(power.events) ? power.events : {};
-    const sutPower = users[context.sutUserId] ?? power.users_default ?? 0;
-    const pinPower = events["m.room.pinned_events"] ?? power.state_default ?? 50;
-    assert(
-      typeof sutPower === "number" && typeof pinPower === "number" && sutPower >= pinPower,
-      "SUT must already have permission to set the room's pinned events",
-    );
+    // Creator authority can be implicit (room v12); prove permission through the
+    // actual pin and independent homeserver reads, not duplicated power arithmetic.
     assert(await observer.prime(), "Matrix observer needs a pre-action sync cursor");
 
     const sent = await action("send", { to: room.roomId, message: marker });
@@ -175,7 +167,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     return {
       details: [
         "Five public Gateway message.action operations independently observed on Matrix.",
-        `SUT room power=${sutPower}; pin requirement=${pinPower}`,
         ...completed,
       ].join("\n"),
     } satisfies MatrixQaScenarioExecution;

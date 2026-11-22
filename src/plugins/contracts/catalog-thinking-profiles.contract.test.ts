@@ -9,7 +9,7 @@ import type { ProviderThinkingRegistry } from "../provider-thinking.types.js";
 import { resolveProviderContractProvidersForPluginIds } from "./registry.js";
 
 // Rows that set compat.defaultThinkingLevel own their thinking profile; no provider hook runs.
-// Each expectation is the profile the deleted provider hook returned for that row.
+// Record each owned ladder and default independently of its manifest data.
 const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "deepseek/deepseek-flash": deepSeekV4(),
   "deepseek/deepseek-v4-flash": deepSeekV4(),
@@ -22,6 +22,14 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "mistral/mistral-medium-3-5": mistralReasoning(),
   "mistral/mistral-small-2603": mistralReasoning(),
   "mistral/mistral-small-latest": mistralReasoning(),
+  "openai/gpt-6.2-astra": {
+    levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultLevel: "medium",
+  },
+  "openai/gpt-6.2-sol": {
+    levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultLevel: "medium",
+  },
   "particle/particle-ai/particle-1": deepSeekV4(),
   "moonshot/kimi-k2.7-code": { levels: ["low:on"], defaultLevel: "low" },
   "moonshot/kimi-k2.7-code-highspeed": { levels: ["low:on"], defaultLevel: "low" },

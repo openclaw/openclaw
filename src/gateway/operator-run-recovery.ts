@@ -601,7 +601,8 @@ export async function captureGatewayOperatorContinuation(
     // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
-  // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
+  // A distinct continuation re-admits before retaining its origin's fixed restriction.
+  inherited.reauthorize?.();
   const releaseInherited = inherited.retain?.();
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: facts,
@@ -611,21 +612,29 @@ export async function captureGatewayOperatorContinuation(
     releaseInherited?.();
     throw error;
   });
-  // A tokenless source has no credential in its recovery snapshot, but an
-  // in-process continuation still belongs to its explicitly revocable device.
-  // Carry only that owner's revocation, never the accepting request/turn checks.
-  const deviceRevocation = new AbortController();
-  const stopDeviceRevocation = onGatewayDeviceSourceRevoked(inherited.assertCurrent, () => {
-    deviceRevocation.abort(new Error("Gateway device authorization was revoked"));
-  });
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
-    signal: AbortSignal.any([
-      deviceRevocation.signal,
-      ...(restored.authority.signal ? [restored.authority.signal] : []),
-    ]),
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
+    // Tokenless snapshots omit the device; later starts still check its original source.
+    reauthorize: () => {
+      inherited.reauthorize?.();
+      restored.authority.reauthorize?.();
+    },
+    // Each descendant must keep both owners used by reauthorization alive.
+    retain: () => {
+      const releaseSource = inherited.retain?.();
+      try {
+        const releaseRestored = restored.authority.retain?.();
+        return () => {
+          releaseRestored?.();
+          releaseSource?.();
+        };
+      } catch (error) {
+        releaseSource?.();
+        throw error;
+      }
+    },
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
     get modelPolicy() {
       return restored.authority.modelPolicy;
@@ -635,7 +644,6 @@ export async function captureGatewayOperatorContinuation(
   return {
     authority,
     release: () => {
-      stopDeviceRevocation?.();
       restored.release();
       releaseInherited?.();
     },

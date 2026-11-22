@@ -95,6 +95,7 @@ async function providerFixture(signal: AbortSignal) {
     name: Case | "child";
     current: string;
     resumeInput: boolean;
+    completionInput: boolean;
     ordinal: number;
   }> = [];
   const summaries: Array<{ cycle: number; ordinal: number }> = [];
@@ -173,16 +174,21 @@ async function providerFixture(signal: AbortSignal) {
               : CASES.find((candidate) => candidate === match?.[2]);
           assert(name, `Unexpected synthetic model input: ${current}`);
           const cycle = Number(name === "child" ? child?.[1] : match?.[1]);
+          const completionInput =
+            name === "parent" &&
+            current.includes(`restart_child_${cycle}`) &&
+            current.includes("status: error: Gateway stopped");
           calls.push({
             cycle,
             name,
             current,
             resumeInput: hasNewResumeInput(body),
+            completionInput,
             ordinal: requestOrdinal,
           });
           if (name === "child") {
             gate(`child:${cycle}`).resolve();
-            // The parent resumes; its child settles quietly instead of being adopted.
+            // Shutdown reports this child through its completion owner, without restarting it.
             return;
           }
           const toolOutput = asRecord(
@@ -204,7 +210,7 @@ async function providerFixture(signal: AbortSignal) {
             );
           };
           if (restarting) {
-            if (hasNewResumeInput(body)) {
+            if (hasNewResumeInput(body) || completionInput) {
               gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
                 heldResumes.set(cycle, { response, ordinal: requestOrdinal });
@@ -1318,7 +1324,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
+            // The yielded parent wakes once from the owed child outcome, not a competing resume.
+            expect(calls.filter((call) => call.completionInput)).toHaveLength(
+              name === "parent" ? 1 : 0,
+            );
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

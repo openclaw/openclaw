@@ -146,11 +146,13 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const observeInlineWait = vi
       .spyOn(runWait, "waitForAgentRunReply")
       .mockImplementation((params) => {
-        const pending = waitForReply(params);
-        if (params.timeoutMs === 1_000) {
+        if (params.timeoutMs > 0 && params.timeoutMs <= 1_000) {
+          // Reply preparation consumes part of the one-second deadline. Admission
+          // uses real asynchronous work; only own the remaining inline reply clock.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           inlineWaitStarted.resolve();
         }
-        return pending;
+        return waitForReply(params);
       });
     const dispatch = completionDelivery.runAnnounceAgentCall;
     const observeRequesterAdmission = vi
@@ -317,7 +319,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
           ),
           "original owner capability",
         );
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const sent = withGatewayToolCallerIdentity(
           {
             agentId: "main",

@@ -85,6 +85,8 @@ describe("check-deadcode-exports", () => {
       "config/knip.all-exports.config.ts!",
       "config/knip.scripts-exports.config.ts!",
       "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/find-reusable-release-child.mjs!",
+      "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
       "scripts/generate-static-validators.mts!",
       "scripts/perf/agent-exec-cgroup-proof.ts!",
       "scripts/perf/backup-verify-fixture.mjs!",
@@ -911,6 +913,10 @@ function other(lineageCompletion: typeof lineageWriter) {
     const manifest = fs.readFileSync("package.json", "utf8");
     const compile = knipConfig.compilers.json;
     const compiled = compile(manifest, "package.json");
+    expect(compiled).not.toContain("isImmutableManagedServiceUpdateHandoffProcess");
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     expect(compiled).toMatch(
       /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
     );

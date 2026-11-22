@@ -56,7 +56,7 @@ describeLive("OpenCode Go live dynamic catalog", () => {
     ["glm-5.3-flash", "openai-completions"],
     ["gpt-5.6-luna", "openai-responses"],
     ["qwen3.8-flash", "anthropic-messages"],
-    ["gemini-4-argon-contributor", "google-generative-ai"],
+    ["gemini-4-argon", "google-generative-ai"],
   ] as const)(
     "runs discovered %s through %s",
     async (modelId, api) => {
