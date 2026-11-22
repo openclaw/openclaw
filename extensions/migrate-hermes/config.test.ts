@@ -159,7 +159,7 @@ mcp_servers:
         url: "https://mcp.example/rpc",
         transport: "streamable-http",
         auth: "oauth",
-        oauth: { scope: "read" },
+        oauth: { scope: "read", clientId: "placeholder" },
         toolFilter: { include: ["search", "prompts_list", "prompts_get"] },
         [["client", "Cert"].join("")]: "placeholder",
         [["client", "Key"].join("")]: "placeholder",
@@ -175,9 +175,13 @@ mcp_servers:
         "lifecycle",
         "keepalive",
         "oauth-login",
-        "oauth-client",
+        "oauth-client-secret",
       ].map((name) => `mcp-server-${name}:remote`),
       "mcp-server-client-cert-password:protected",
+    );
+    expect(item(plan, "manual:mcp-server-oauth-client:remote")).toBeUndefined();
+    expect(item(plan, "manual:mcp-server-oauth-client-secret:remote")?.reason).toContain(
+      "openclaw config set mcp.servers.remote.oauth.clientSecret --ref-source env",
     );
   });
 

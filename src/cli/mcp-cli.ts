@@ -701,6 +701,7 @@ export function registerMcpCli(program: Command) {
     .option("--oauth-scope <scope>", "OAuth scope")
     .option("--oauth-redirect-url <url>", "OAuth redirect URL")
     .option("--oauth-client-metadata-url <url>", "OAuth client metadata URL")
+    .option("--oauth-client-id <id>", "Pre-registered OAuth client ID (skips dynamic registration)")
     .option("--include <csv>", "Comma-separated MCP tool names or '*' globs to expose")
     .option("--exclude <csv>", "Comma-separated MCP tool names or '*' globs to hide")
     .option("--timeout <seconds>", "Per-request timeout in seconds")
@@ -852,6 +853,7 @@ export function registerMcpCli(program: Command) {
     .option("--oauth-scope <scope>", "OAuth scope")
     .option("--oauth-redirect-url <url>", "OAuth redirect URL")
     .option("--oauth-client-metadata-url <url>", "OAuth client metadata URL")
+    .option("--oauth-client-id <id>", "Pre-registered OAuth client ID (skips dynamic registration)")
     .option("--ssl-verify <boolean>", "Verify HTTPS certificates: true or false")
     .option("--client-cert <path>", "HTTP mutual TLS client certificate path")
     .option("--client-key <path>", "HTTP mutual TLS client key path")
@@ -913,7 +915,10 @@ export function registerMcpCli(program: Command) {
 
   registerMcpOAuthCommands(mcp, {
     fail,
-    loadServer: async (name) => requireMcpServer(await loadMcpConfig(), name),
+    loadServer: async (name) => {
+      const loaded = await loadMcpConfig();
+      return { config: loaded.config, server: requireMcpServer(loaded, name) };
+    },
   });
 
   mcp
