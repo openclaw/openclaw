@@ -862,8 +862,11 @@
 }
 
 .sw-file-chip {
-  height: 28px;
-  padding: 0 10px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 10px;
+  overflow-wrap: anywhere;
+  text-align: start;
   border: 0;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 6%, transparent);
