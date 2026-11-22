@@ -106,6 +106,72 @@ async function expectDetailRequests(gateway: Gateway) {
 }
 
 suite.define(() => {
+  it("wraps a fallback speaker ID inside the phone reader without hiding the timestamp", () =>
+    suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const speakerId =
+          "@release_readiness_transcript_captioning_service:collaboration.example.invalid";
+        await installMockGateway(page, {
+          methodResponses: {
+            "transcripts.list": { sessions: [meeting], nextCursor: null },
+            "transcripts.get": {
+              ...detail,
+              utterances: [
+                {
+                  sequence: 1,
+                  speakerId,
+                  startedAt: meeting.startedAt,
+                  text: "Here is the checkpoint.",
+                  final: true,
+                },
+                {
+                  sequence: 2,
+                  speakerId,
+                  speakerLabel: "Ada",
+                  startedAt: meeting.startedAt,
+                  text: "I can review it.",
+                  final: true,
+                },
+              ],
+            } satisfies TranscriptsGetResult,
+          },
+        });
+        await page.goto(suite.server.baseUrl + "meetings");
+        await page.getByRole("link", { name: /Design review/u }).tap();
+        const reader = page.locator(".transcripts-reader");
+        await reader.getByRole("tab", { name: "Transcript", exact: true }).tap();
+        const byline = reader.locator(".transcripts-utterance__byline").first();
+        await byline.getByText(speakerId, { exact: true }).waitFor();
+        expect(
+          await byline.evaluate((el) => {
+            const bounds = el.getBoundingClientRect();
+            const label = document.createRange();
+            label.selectNodeContents(el.querySelector("strong")!);
+            const lines = [...label.getClientRects()];
+            const time = el.querySelector("time")!.getBoundingClientRect();
+            return (
+              lines.length > 1 &&
+              lines.every((r) => r.left >= bounds.left && r.right <= bounds.right + 1) &&
+              time.left >= bounds.left &&
+              time.right <= bounds.right + 1
+            );
+          }),
+        ).toBe(true);
+        expect(
+          await reader.locator(".transcripts-utterance__byline strong").nth(1).textContent(),
+        ).toBe("Ada");
+        await reader.getByRole("link", { name: "Back to library" }).press("Enter");
+        await expect
+          .poll(() =>
+            page
+              .getByRole("searchbox", { name: "Search meetings" })
+              .evaluate((el) => el === document.activeElement),
+          )
+          .toBe(true);
+      },
+    ));
+
   it("returns from capture settings to the same meeting and preserves native new-tab links", () =>
     suite.withPage(
       { viewport: { width: 1440, height: 900 }, locale: "en-US" },
