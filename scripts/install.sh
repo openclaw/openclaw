@@ -651,7 +651,7 @@ run_quiet_step() {
     shift
 
     if [[ "$VERBOSE" == "1" ]]; then
-        run_with_spinner "$title" "$@"
+        run_with_spinner "$title" "$@" < /dev/null
         return $?
     fi
 
