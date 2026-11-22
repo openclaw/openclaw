@@ -3066,10 +3066,28 @@ workboard-inline-text {
 }
 
 .workboard-detail__labels-popover {
+  height: var(--workboard-popover-above-height, auto);
   width: min(300px, calc(100vw - 24px));
   overflow: auto;
   padding: 12px;
   border-radius: var(--radius-lg);
+}
+
+.workboard-detail__labels-popover:popover-open {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.workboard-detail__text-editor--labels {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.workboard-detail__text-editor--labels .workboard-label-choices {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workboard-detail__text-editor--labels .workboard-label-choices__list {
+  align-content: start;
 }
 
 .workboard-detail__text-editor .settings-input {

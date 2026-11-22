@@ -160,7 +160,14 @@ export function workboardPopoverRef(
         "--workboard-popover-max-height",
         `${Math.max(64, opensBelow ? below : above)}px`,
       );
+      if (opensBelow) {
+        element.style.removeProperty("--workboard-popover-above-height");
+      }
       const bounds = element.getBoundingClientRect();
+      if (!opensBelow && !element.style.getPropertyValue("--workboard-popover-above-height")) {
+        // Filterable menus can keep the search field and the trigger at stable edges.
+        element.style.setProperty("--workboard-popover-above-height", `${bounds.height}px`);
+      }
       const left = align === "end" ? anchor.right - bounds.width : anchor.left;
       element.style.left = `${Math.max(12, Math.min(left, innerWidth - bounds.width - 12))}px`;
       element.style.top = `${opensBelow ? anchor.bottom + 6 : Math.max(12, anchor.top - bounds.height - 6)}px`;
@@ -170,6 +177,7 @@ export function workboardPopoverRef(
       if (element.matches(":popover-open")) {
         stopPosition ??= observePopoverPosition(element.ownerDocument, position);
       } else {
+        element.style.removeProperty("--workboard-popover-above-height");
         stopPosition?.();
         stopPosition = undefined;
       }
