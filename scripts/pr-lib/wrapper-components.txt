@@ -666,6 +666,7 @@ src/config/gateway-portal-ingress.ts
 src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/implicit-agent-roster.ts
+src/config/implicit-primary-era.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
 src/config/io.audit.ts
@@ -3075,3 +3076,12 @@ src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts
 src/state/user-channel-authorization-reference.ts
+src/infra/gateway-resource-profile.ts
+src/infra/shared-worker-host-endpoint.ts
+src/infra/shared-worker-host.ts
+src/infra/shared-worker-host.types.ts
+src/infra/shared-worker-host.worker.ts
+src/infra/sqlite-worker-backend-loader.ts
+packages/worker-runtime/src/worker-task-pool-memory.ts
+src/infra/worker-memory-budget-ledger.ts
+src/infra/worker-memory-budget.ts

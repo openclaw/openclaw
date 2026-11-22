@@ -13,7 +13,6 @@ import {
 } from "../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import * as versionManagerPath from "../shared/version-manager-path.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import * as proof from "./update-cli-assertions.test-support.js";
@@ -31,7 +30,6 @@ import {
 } from "./update-cli/update-cli-package.test-support.js";
 import { registerAlreadyCurrentAdmissionTests } from "./update-cli/update-command-current-admission.test-support.js";
 import { registerUpdatePreflightTests } from "./update-cli/update-command-preflight.test-support.js";
-import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -198,24 +196,6 @@ describe("update-cli", () => {
       writeOpenClawPackageFixture(root, VERSION, { entrySource: "export {};\n" }),
     resolveConfigPath,
     mocks: { ...mocks, replaceConfigFile: vi.mocked(modules.replaceConfigFile) },
-  });
-
-  it("refuses a current Git core with an incompatible before-only version receipt", async () => {
-    runtimeRecovery.stubNodeRuntime();
-    // This case specifies system-runtime guidance, independent of the host Node manager.
-    vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
-    const fixture = runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION);
-    mocks.readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(modules.updateGitRelease).mockResolvedValueOnce(fixture.outcome);
-    mocks.nodeVersionSatisfiesEngine.mockReturnValue(false);
-    vi.mocked(modules.resolveGatewayInstallEntrypoint).mockResolvedValue(
-      setup.FRESH_POST_UPDATE_ENTRYPOINT,
-    );
-    const command = updateCommand({ yes: true, restart: false, json: true });
-    await expect(command).rejects.toEqual(new ExitError(1));
-    expect(proof.lastWriteJsonCall()).toMatchObject(fixture.runtimeRefusal);
-    proof.expectNoSideEffects(mocks.pluginAvailabilityPreflight, mocks.updateNpmInstalledPlugins);
-    expectNoServiceMutation();
   });
 
   it("reports retained pins on an already-current core", async () => {

@@ -112,7 +112,7 @@ describe("personal publication definitive outcomes", () => {
     },
   );
 
-  it("does not resume shared GitHub writes after the RPC request loses write permission", async () => {
+  it("does not resume shared GitHub writes after the RPC session changes owner", async () => {
     fixture.client.internal = {
       ...fixture.client.internal,
       operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(fixture.owner, fixture.config),

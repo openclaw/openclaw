@@ -20,7 +20,7 @@ it.each(["stale-attempt", "revoked-capability"] as const)(
       const f = createSessionCompoundWorkerFixture();
       const jobId = "source-reply-job";
       const runId = "source-reply-run";
-      const marker = jobs.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+      const marker = jobs.markCronJobActive(jobId);
       let current = true;
       const stale = new Error("delivery attempt is no longer current");
       const cfg = { session: { store: f.database.path } };

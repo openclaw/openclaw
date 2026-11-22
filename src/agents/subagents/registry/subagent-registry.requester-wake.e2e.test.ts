@@ -208,7 +208,7 @@ describe("requester settle wake product flow", () => {
     process.env.OPENCLAW_TEST_FAST = "1";
     const config: OpenClawConfig = {
       agents: {
-        defaults: { subagents: { archiveAfterMinutes: 0 } },
+        defaults: { model: "openai/gpt-6-astra", subagents: { archiveAfterMinutes: 0 } },
         entries: { main: {}, research: {} },
       },
       session: { mainKey: "main", scope: "per-sender" },
@@ -715,7 +715,10 @@ describe("requester settle wake product flow", () => {
       const cfg = loadConfigMock();
       loadConfigMock.mockReturnValue({
         ...cfg,
-        agents: { ...cfg.agents, defaults: { subagents: { archiveAfterMinutes } } },
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, subagents: { archiveAfterMinutes } },
+        },
       });
       sessionStore[cronRunSessionKey] = { sessionId: "sess-cron", updatedAt: 1 };
       await replaceSessionEntry(

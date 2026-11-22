@@ -867,11 +867,7 @@ function shouldRedactStructuredStringField(
   objectPath: boolean,
 ): boolean {
   return (
-    shouldRedactStructuredAuthorizationCode(
-      key.toLowerCase(),
-      path,
-      objectPath ? value : undefined,
-    ) ||
+    shouldRedactStructuredAuthorizationCode(key.toLowerCase(), path, value, objectPath) ||
     (isSensitiveFieldKey(key) && !preservesStructuredReference(key, value))
   );
 }

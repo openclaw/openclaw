@@ -470,7 +470,7 @@ test.each([undefined, "agent:main:dashboard:memory-core-parent"])(
         : { main: sessionStoreEntry("operator-owned-main") },
     });
     const pluginClient = {
-      connect: { scopes: ["operator.write"] },
+      connect: { scopes: ["operator.write"], client: { id: "test" } },
       internal: { pluginRuntimeOwnerId: "memory-core" },
     } as never;
 
@@ -520,7 +520,7 @@ test("sessions.create prevents plugin runtimes from adopting, linking, or forkin
     },
   });
   const pluginClient = {
-    connect: { scopes: ["operator.write"] },
+    connect: { scopes: ["operator.write"], client: { id: "test" } },
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
 
