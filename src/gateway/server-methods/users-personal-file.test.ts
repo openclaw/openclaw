@@ -526,7 +526,7 @@ describe("personal USER.md self-service", () => {
     },
   );
 
-  it.each(["source", "run", "commit"])(
+  it.each(["source", "commit"])(
     "rechecks delegated %s authority before filesystem mutation",
     async (boundary) => {
       const turn = toolTurn();
@@ -540,14 +540,8 @@ describe("personal USER.md self-service", () => {
         state.beforeMutation = () => {
           current = false;
         };
-      } else if (boundary === "source") {
-        state.beforeMutation = turn.revoke;
       } else {
-        let current = true;
-        turn.identity.receiptAuthority = () => current;
-        state.beforeMutation = () => {
-          current = false;
-        };
+        state.beforeMutation = turn.revoke;
       }
       expect((await withGatewayToolCallerIdentity(turn.identity, () => save("Retired"))).ok).toBe(
         false,

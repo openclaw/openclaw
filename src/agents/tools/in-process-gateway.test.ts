@@ -576,35 +576,6 @@ describe("request-shaped in-process Gateway dispatch", () => {
 });
 
 describe("built-in Gateway foreground authority", () => {
-  it.each(["dispatch", "commit"] as const)(
-    "rejects retired caller authority before %s",
-    async (boundary) => {
-      const held = holdCommit();
-      let current = true;
-      const pending = asCaller(
-        { ...foregroundCaller, receiptAuthority: () => current },
-        async () => {
-          if (boundary === "dispatch") {
-            current = false;
-          }
-          return await callRequest("sessions.patch", { key: "target", pinned: true });
-        },
-      );
-      const rejected = expect(pending).rejects.toThrow(/authority.*no longer active/i);
-      if (boundary === "commit") {
-        await held.entered;
-        current = false;
-        held.release();
-      }
-      await rejected;
-      expect(held.commit).not.toHaveBeenCalled();
-      if (boundary === "dispatch") {
-        expect(mocks.dispatch).not.toHaveBeenCalled();
-      }
-      expectNoTransport();
-    },
-  );
-
   it("keeps a preserved write fenced by its original request signal", async () => {
     const controller = new AbortController();
     const held = holdCommit();

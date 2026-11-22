@@ -509,7 +509,7 @@ src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
 src/agents/tools/cron-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
-src/agents/tools/gateway-caller-context.ts	5
+src/agents/tools/gateway-caller-context.ts	2
 src/agents/tools/image-generate-review-actions.ts	7
 src/agents/tools/media-generate-background-completion.ts	4
 src/agents/tools/media-generate-background-shared.ts	1
