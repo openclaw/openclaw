@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PLUGIN_COHORT_REPLACED_INSTALLATION_STEP } from "../../infra/update-run-codec.js";
 import {
@@ -122,25 +124,38 @@ describe.skipIf(process.platform === "win32")(
         expect(replacedWarning(killed.runId)).toContain(`recorded OpenClaw ${candidate} serving.`);
       }));
 
-    it("keeps a begun commit's refusal when the version from before it is installed again", () =>
-      fixtures.lifetime.run(async () => {
-        const install = await linkedInstallation();
-        const killed = await updater(install.key, { ...verified, root: install.slot });
-        writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
-          ...loadPluginCohortRecovery(killed.runId)!.cohort,
-          disposition: "commit",
-        });
-        // The original core in a fresh directory: committing would keep the candidate's changes over it.
-        await replacePackageDirectory(install, { version: "2026.11.3" });
-        const before = reserved(killed.runId);
+    // The original core in a fresh directory: committing would keep the candidate's changes over
+    // it. Without the original build ID, the same version still does not show that core gone.
+    it.each([
+      { name: "with the same identity", previousBuildId: undefined },
+      { name: "without the build ID it had", previousBuildId: "build-previous" },
+    ])(
+      "keeps a begun commit's refusal when the earlier version is installed again $name",
+      ({ previousBuildId }) =>
+        fixtures.lifetime.run(async () => {
+          const install = await linkedInstallation();
+          if (previousBuildId) {
+            fs.writeFileSync(
+              path.join(install.key, "dist", "build-info.json"),
+              JSON.stringify({ buildId: previousBuildId }),
+            );
+          }
+          const killed = await updater(install.key, { ...verified, root: install.slot });
+          writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
+            ...loadPluginCohortRecovery(killed.runId)!.cohort,
+            disposition: "commit",
+          });
+          await replacePackageDirectory(install, { version: "2026.11.3" });
+          const before = reserved(killed.runId);
 
-        await expect(runRepair(install.slot)).rejects.toThrow(
-          "Plugin cohort commit does not match the installed candidate version and build.",
-        );
+          await expect(runRepair(install.slot)).rejects.toThrow(
+            "Plugin cohort commit does not match the installed candidate version and build.",
+          );
 
-        expect(reserved(killed.runId)).toEqual(before);
-        expect(replacedWarning(killed.runId)).toBeUndefined();
-      }));
+          expect(reserved(killed.runId)).toEqual(before);
+          expect(replacedWarning(killed.runId)).toBeUndefined();
+        }),
+    );
 
     // Each control removes one piece of evidence; both entries refuse and change nothing.
     const triage = "Run openclaw triage";

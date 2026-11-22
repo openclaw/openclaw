@@ -292,12 +292,16 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const installed = (core: { version: string; buildId: string | null }) =>
     version === core.version && (buildId ?? null) === core.buildId;
   const { from, to } = current.reservation;
+  // Only a readable, different version or build proves the original core is gone.
+  const originalGone =
+    version !== null &&
+    (version !== from.version || (buildId !== null && buildId !== from.buildId));
   // A proven successor may be a different build installed after the candidate served,
-  // but never the original core reinstalled.
+  // but only one that shows the original core is no longer installed.
   if (
     current.cohort.disposition === "commit" &&
     !installed(to) &&
-    (!params.replaced || installed(from))
+    !(params.replaced && originalGone)
   ) {
     throw new Error(
       "Plugin cohort commit does not match the installed candidate version and build.",
@@ -313,9 +317,7 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
-    // Only a readable, different version or build proves the original core is gone.
-    version !== null &&
-    (version !== from.version || (buildId !== null && buildId !== from.buildId)) &&
+    originalGone &&
     // A moved package directory's cohort is settled from its successor.
     ![current.cohort.installKey, resolveUpdateInstallRoot(params.root)].some((key) =>
       hasPackageRecoveryAuthority(key),
