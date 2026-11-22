@@ -215,9 +215,7 @@ export function listSetupInferencePrepareOptions(
     include: (choice) => choice.appGuidedDiscovery === true,
     project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
-      ...(choice.appGuidedActionLabel?.trim()
-        ? { actionLabel: choice.appGuidedActionLabel.trim() }
-        : {}),
+      actionLabel: choice.appGuidedActionLabel?.trim() || choice.choiceLabel,
     }),
   });
 }

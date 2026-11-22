@@ -86,8 +86,20 @@ function SetupActionRow(props: {
   option: AuthOption | ModelSetupPrepareOption;
 }) {
   const groupLabel = () => ("kind" in props.option ? props.option.groupLabel : undefined);
+  const useChoiceLabel = () => {
+    const option = props.option;
+    // Native overrides leave the existing web auth treatment intact.
+    return (
+      "kind" in option &&
+      (option.kind === "oauth" || option.kind === "device-code") &&
+      option.actionLabel === undefined
+    );
+  };
   const actionLabel = () => {
     const option = props.option;
+    if (useChoiceLabel()) {
+      return option.label;
+    }
     return "kind" in option
       ? t(
           option.kind === "install"
@@ -107,10 +119,18 @@ function SetupActionRow(props: {
       <div class="model-setup__provider-copy">
         {renderProviderIcon(props.view, props.option)}
         <div>
-          <strong>{props.option.label}</strong>
-          <Show when={groupLabel()}>
-            <div class="muted">{groupLabel()}</div>
-          </Show>
+          {useChoiceLabel() ? (
+            <Show when={groupLabel() && groupLabel() !== props.option.label}>
+              <strong>{groupLabel()}</strong>
+            </Show>
+          ) : (
+            <>
+              <strong>{props.option.label}</strong>
+              <Show when={groupLabel()}>
+                <div class="muted">{groupLabel()}</div>
+              </Show>
+            </>
+          )}
           <Show when={props.option.hint}>
             <div class="muted">{props.option.hint}</div>
           </Show>
