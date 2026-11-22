@@ -417,7 +417,7 @@ describe("balanced JSON extraction", () => {
       let units = 0;
       let calls = 0;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        units += String(text).length;
+        units += text.length;
         calls += 1;
         return parse(text, reviver);
       });
@@ -584,23 +584,30 @@ describe("balanced JSON extraction", () => {
     for (const depth of [256, 1024]) {
       const raw = '["line one\nline two"]\n'.repeat(depth) + records.join(" ");
       const pop = Array.prototype.pop;
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
       const slice = String.prototype.slice;
       let pops = 0;
       let copiedUnits = 0;
       let result: ReturnType<typeof extractBalancedJsonFragments>;
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       Array.prototype.pop = function (this: unknown[]) {
         pops++;
         return Reflect.apply(pop, this, []);
       };
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       String.prototype.slice = function (this: string, start, end) {
         const value = Reflect.apply(slice, this, [start, end]);
-        if (String(this) === raw) copiedUnits += value.length;
+        if (this === raw) {
+          copiedUnits += value.length;
+        }
         return value;
       };
       try {
         result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
       } finally {
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         Array.prototype.pop = pop;
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         String.prototype.slice = slice;
       }
       expect(result).toEqual(fragmentsAt(raw, records));
@@ -709,10 +716,12 @@ describe("balanced JSON extraction", () => {
       let lookups = 0;
       let pops = 0;
       let result: ReturnType<typeof extractBalancedJsonFragments>;
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       Array.prototype.at = function (this: unknown[], index) {
         lookups++;
         return Reflect.apply(at, this, [index]);
       };
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       Array.prototype.pop = function (this: unknown[]) {
         pops++;
         return Reflect.apply(pop, this, []);
@@ -720,7 +729,9 @@ describe("balanced JSON extraction", () => {
       try {
         result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
       } finally {
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         Array.prototype.at = at;
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         Array.prototype.pop = pop;
       }
       expect(result).toEqual(fragmentsAt(raw, [leaf, ...records]));
@@ -884,18 +895,21 @@ describe("balanced JSON extraction", () => {
     for (const damaged of [false, true]) {
       const raw = damaged ? `[warning\n${nested}\n{]${"}]".repeat(depth)}` : nested;
       const pop = Array.prototype.pop;
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
       const slice = String.prototype.slice;
       let pops = 0;
       let sourceCopies = 0;
       let copiedUnits = 0;
       let result: ReturnType<typeof extractBalancedJsonFragments>;
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       Array.prototype.pop = function (this: unknown[]) {
         pops++;
         return Reflect.apply(pop, this, []);
       };
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       String.prototype.slice = function (this: string, start, end) {
         const value = Reflect.apply(slice, this, [start, end]);
-        if (String(this) === raw) {
+        if (this === raw) {
           sourceCopies++;
           copiedUnits += value.length;
         }
@@ -904,7 +918,9 @@ describe("balanced JSON extraction", () => {
       try {
         result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
       } finally {
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         Array.prototype.pop = pop;
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         String.prototype.slice = slice;
       }
       expect(result).toEqual(fragmentsAt(raw, [nested]));
@@ -998,9 +1014,12 @@ describe("balanced JSON extraction", () => {
       const complete = incomplete + "0" + "]".repeat(512);
       const push = Array.prototype.push;
       let objectEntries = 0;
+      // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
       Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
         for (const item of items) {
-          if (item !== null && typeof item === "object") objectEntries++;
+          if (item !== null && typeof item === "object") {
+            objectEntries++;
+          }
         }
         return Reflect.apply(push, this, items);
       };
@@ -1010,6 +1029,7 @@ describe("balanced JSON extraction", () => {
         completed = extractBalancedJsonPrefix(complete, { skipQuotedOpeners });
         unfinished = extractBalancedJsonPrefix(incomplete, { skipQuotedOpeners });
       } finally {
+        // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
         Array.prototype.push = push;
       }
       expect(completed).toEqual({ json: complete, startIndex: 0, endIndex: complete.length - 1 });

@@ -1,3 +1,5 @@
+import { expectDefined } from "./expect.js";
+
 type JsonOpeningDelimiter = "{" | "[";
 
 type BalancedJsonFragment = {
@@ -67,9 +69,12 @@ function advanceQuotedText(
   if (state.damaged && atLineStart) {
     // A recovered child suspends its parent's damaged quote. Only retiring
     // that owner or consuming its original closing quote ends its lifetime.
-    if (char === "{" || char === "[") return "suspend";
-    if ((char === "}" && activeOpeners["{"] > 0) || (char === "]" && activeOpeners["["] > 0))
+    if (char === "{" || char === "[") {
+      return "suspend";
+    }
+    if ((char === "}" && activeOpeners["{"] > 0) || (char === "]" && activeOpeners["["] > 0)) {
       return "retire";
+    }
   }
   if (recover && (char === "\n" || char === "\r")) {
     const invalidated = !state.damaged;
@@ -77,9 +82,13 @@ function advanceQuotedText(
     state.escaped = false;
     return invalidated ? "invalidated" : "consumed";
   }
-  if (state.escaped) state.escaped = false;
-  else if (char === "\\") state.escaped = true;
-  else if (char === '"') state.quoted = state.damaged = false;
+  if (state.escaped) {
+    state.escaped = false;
+  } else if (char === "\\") {
+    state.escaped = true;
+  } else if (char === '"') {
+    state.quoted = state.damaged = false;
+  }
   return "consumed";
 }
 
@@ -91,7 +100,7 @@ function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; st
   let phase: 0 | 1 = 0;
   let escaped = false;
   const pop = (stack: T[]) => {
-    const entry = stack.pop()!;
+    const entry = expectDefined(stack.pop(), "JSON structure entry");
     protectedOwners.delete(entry.start);
     return entry;
   };
@@ -115,7 +124,9 @@ function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; st
             closed = pop(stack);
           } else {
             // Each mismatched forest is discarded once, without an ancestry scan.
-            while (stack.length && !isProtected(stack.at(-1), index)) pop(stack);
+            while (stack.length && !isProtected(stack.at(-1), index)) {
+              pop(stack);
+            }
           }
         }
       }
@@ -133,7 +144,9 @@ function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; st
       // The owner's checkpoint survives structural warning expiry; restoring a
       // global parity would corrupt a crossing owner in the other forest.
       for (const stack of stacks) {
-        while (stack.length && stack.at(-1)!.start >= start) pop(stack);
+        while (stack.length && expectDefined(stack.at(-1), "JSON structure entry").start >= start) {
+          pop(stack);
+        }
       }
       phase = context.phase;
       escaped = context.escaped;
@@ -152,12 +165,16 @@ function indexOriginalJsonContainers(source: string) {
   });
   for (let index = 0; index < source.length; index++) {
     const closed = matcher.advance(source[index], index);
-    if (closed) closed.end = index;
+    if (closed) {
+      closed.end = index;
+    }
   }
   // Within each forest, own intervals are disjoint. Across both, reconstruction
   // visits at most twice the source plus two placeholder bytes per child edge.
-  for (const node of nodes.reverse()) {
-    if (node.end < 0 || node.children.some((child) => !child.valid)) continue;
+  for (const node of nodes.toReversed()) {
+    if (node.end < 0 || node.children.some((child) => !child.valid)) {
+      continue;
+    }
     const parts: string[] = [];
     let offset = node.start;
     for (const child of node.children) {
@@ -215,13 +232,15 @@ function extractStrictJsonFragments(
   let spanEnd = -1;
   let spanOpaque = false;
   const retireOwnersFrom = (stackIndex: number) => {
-    const first = owners[stackIndex]!;
+    const first = expectDefined(owners[stackIndex], "first retiring JSON owner");
     warningMatcher.retireFrom(first.start, first.matcherContext);
     while (owners.length > stackIndex) {
-      const owner = owners.pop()!;
+      const owner = expectDefined(owners.pop(), "retiring JSON owner");
       activeOpeners[owner.opener] -= 1;
       warningDepth -= Number(owner.warning);
-      if (owner.end >= 0) ownerClosures.delete(owner.end);
+      if (owner.end >= 0) {
+        ownerClosures.delete(owner.end);
+      }
       warnings.delete(owner.start);
     }
   };
@@ -274,27 +293,33 @@ function extractStrictJsonFragments(
       const transition = advanceQuotedText(
         quote,
         char,
-        !!opts.recoverAtLineStart && parent !== undefined,
+        Boolean(opts.recoverAtLineStart) && parent !== undefined,
         atLineStart,
         activeOpeners,
       );
       consumed = transition === "consumed" || transition === "invalidated";
-      if (!consumed) hidesCandidates = false;
+      if (!consumed) {
+        hidesCandidates = false;
+      }
     }
     if (!consumed && (char === "}" || char === "]")) {
       const opener = char === "}" ? "{" : "[";
       if (activeOpeners[opener] > 0) {
         let survivor = owners.length - 1;
-        while (owners[survivor]!.opener !== opener && owners[survivor]!.end < index) {
+        let survivingOwner = expectDefined(owners[survivor], "surviving JSON owner");
+        while (survivingOwner.opener !== opener && survivingOwner.end < index) {
           survivor--;
+          survivingOwner = expectDefined(owners[survivor], "surviving JSON owner");
         }
-        if (owners[survivor]!.end < index) {
+        if (survivingOwner.end < index) {
           // Consume an actual lexical exit before its token can expire an
           // enclosing warning through a retired child's stale quote phase.
           retireOwnersFrom(survivor);
           continue;
         }
-        if (survivor + 1 < owners.length) retireOwnersFrom(survivor + 1);
+        if (survivor + 1 < owners.length) {
+          retireOwnersFrom(survivor + 1);
+        }
         // A protected survivor still owns this token; its matcher protection
         // handles it below without replaying a delimiter after retirement.
       }
@@ -314,7 +339,7 @@ function extractStrictJsonFragments(
       (char === "{" || char === "[") &&
       discovery === char &&
       openers.includes(char) &&
-      (warningDepth === 0 || (!!opts.recoverAtLineStart && atLineStart))
+      (warningDepth === 0 || (Boolean(opts.recoverAtLineStart) && atLineStart))
     ) {
       const endIndex = validEnds.get(index);
       if (endIndex !== undefined) {
@@ -323,11 +348,16 @@ function extractStrictJsonFragments(
         candidateClosures.set(endIndex, record);
       }
     }
-    if (consumed) continue;
+    if (consumed) {
+      continue;
+    }
     if (char === '"') {
       const state = { quoted: true, escaped: false, damaged: false };
-      if (parent) parent.quote = state;
-      else Object.assign(rootQuote, state);
+      if (parent) {
+        parent.quote = state;
+      } else {
+        Object.assign(rootQuote, state);
+      }
     } else if (char === "{" || char === "[") {
       const end = validEnds.get(index) ?? -1;
       const owner: StrictJsonOwner = {
@@ -347,7 +377,9 @@ function extractStrictJsonFragments(
         ownerClosures.set(end, owner);
         warningMatcher.protect(index, end);
       }
-      if (owner.warning) warnings.set(index, owner);
+      if (owner.warning) {
+        warnings.set(index, owner);
+      }
     }
   }
   const fragments: BalancedJsonFragment[] = [];
@@ -429,7 +461,7 @@ function extractRecoverableJsonFragments(
   let lineStart = true;
   let epoch = 0;
   const pop = () => {
-    const frame = stack.pop()!;
+    const frame = expectDefined(stack.pop(), "JSON recovery frame");
     activeOpeners[frame.opener] -= 1;
     selectedDepth -= Number(frame.selected);
     return frame;
@@ -451,12 +483,19 @@ function extractRecoverableJsonFragments(
         atLineStart,
         activeOpeners,
       );
-      if (transition === "invalidated") epoch += 1;
-      if (transition === "consumed" || transition === "invalidated") continue;
+      if (transition === "invalidated") {
+        epoch += 1;
+      }
+      if (transition === "consumed" || transition === "invalidated") {
+        continue;
+      }
     }
     if (char === '"') {
-      if (parent) parent.quote = { quoted: true, escaped: false, damaged: false };
-      else rootQuote.quoted = true;
+      if (parent) {
+        parent.quote = { quoted: true, escaped: false, damaged: false };
+      } else {
+        rootQuote.quoted = true;
+      }
     } else if (char === "{" || char === "[") {
       const selected = openers.includes(char);
       // Selection belongs to the original owner, including filtered containers.
@@ -473,11 +512,15 @@ function extractRecoverableJsonFragments(
       selectedDepth += Number(selected);
     } else if (char === "}" || char === "]") {
       const opener = char === "}" ? "{" : "[";
-      if (activeOpeners[opener] === 0) continue;
-      while (stack.at(-1)!.opener !== opener) {
+      if (activeOpeners[opener] === 0) {
+        continue;
+      }
+      while (expectDefined(stack.at(-1), "JSON recovery frame").opener !== opener) {
         // Abandoned selected delimiters invalidate enclosing candidates, but
         // filtered-only retirement preserves delimiter-filtered extraction.
-        if (pop().selected) epoch += 1;
+        if (pop().selected) {
+          epoch += 1;
+        }
       }
       const closed = pop();
       if (closed.eligible && closed.epoch === epoch) {
@@ -489,7 +532,8 @@ function extractRecoverableJsonFragments(
     }
   }
   return spans.map((span) => ({
-    ...span,
+    startIndex: span.startIndex,
+    endIndex: span.endIndex,
     json: raw.slice(span.startIndex, span.endIndex + 1),
   }));
 }
@@ -507,12 +551,18 @@ export function extractBalancedJsonFragments(
   raw: string,
   opts: BalancedJsonFragmentOptions = {},
 ): BalancedJsonFragment[] {
-  if (opts.strictJson) return extractStrictJsonFragments(raw, opts);
-  if (opts.recoverAtLineStart) return extractRecoverableJsonFragments(raw, opts);
+  if (opts.strictJson) {
+    return extractStrictJsonFragments(raw, opts);
+  }
+  if (opts.recoverAtLineStart) {
+    return extractRecoverableJsonFragments(raw, opts);
+  }
   const fragments: BalancedJsonFragment[] = [];
   for (let offset = 0; offset < raw.length;) {
     const fragment = extractBalancedJsonAt(raw, opts, offset);
-    if (!fragment) break;
+    if (!fragment) {
+      break;
+    }
     fragments.push(fragment);
     offset = fragment.endIndex + 1;
   }

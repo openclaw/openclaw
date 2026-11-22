@@ -22,7 +22,9 @@ export function scanAnsiOscAt(input: string, index: number): AnsiOscScan | undef
   // Reset the sticky matcher when callers interleave segment iterators.
   ansiOscAtIndexRegex.lastIndex = index;
   const match = ansiOscAtIndexRegex.exec(input);
-  if (!match) return undefined;
+  if (!match) {
+    return undefined;
+  }
   const terminator = match[1];
   // On failure, nested C1 openers before bodyEnd meet the same blocking byte.
   // A forward caller can reuse that failure without skipping the underlying text.
@@ -271,7 +273,9 @@ export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void
     }
 
     const scan = index < failedOscUntil ? undefined : scanAnsiOscAt(input, index);
-    if (scan && !scan.value) failedOscUntil = scan.bodyEnd;
+    if (scan && !scan.value) {
+      failedOscUntil = scan.bodyEnd;
+    }
     const osc = scan?.value;
     const csi = osc ? undefined : scanAnsiCsiAt(input, index);
     const value = osc ?? csi?.value;
