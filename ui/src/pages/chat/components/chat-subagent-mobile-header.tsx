@@ -2,10 +2,10 @@ import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo, createSignal } from "solid-js";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
 import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 import "./chat-subagents-mobile.css";
@@ -86,12 +86,21 @@ export function MobileStop(props: {
   );
 }
 
-function MobileTitle(props: { title: string }) {
-  const titleRef = useScrollState(true, false);
+export function SubagentReaderTitle(props: { title: string; mobile?: boolean }) {
+  // Only an overflowing title needs a tab stop. Back and Stop stay outside its scroll area.
+  const titleRef = createScrollStateRef(
+    (element, state) => {
+      element.tabIndex = state.scrollable ? 0 : -1;
+    },
+    { content: () => props.title, trackScroll: false },
+  );
   return (
-    <span class="chat-subagents-mobile__title" ref={titleRef}>
+    <strong
+      ref={titleRef}
+      class={props.mobile ? "chat-subagents-mobile__title" : "subagents-desktop__child-name"}
+    >
       {props.title}
-    </span>
+    </strong>
   );
 }
 
@@ -115,9 +124,7 @@ export function ChatSubagentMobileHeader(props: {
         <Icon name="chevronLeft" />
       </button>
       <SubagentDesktopAvatar sessionKey={props.sessionKey} />
-      <Show when={props.title} keyed>
-        {(title) => <MobileTitle title={title} />}
-      </Show>
+      <SubagentReaderTitle mobile title={props.title} />
       <Show when={props.stop && !props.stop.disabled ? props.stop : undefined}>
         {(stop) => <MobileStop action={stop()} />}
       </Show>
