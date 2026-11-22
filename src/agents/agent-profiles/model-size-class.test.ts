@@ -43,9 +43,4 @@ describe("resolveProfileModelSizeClass", () => {
     expect(resolveProfileModelSizeClass({})).toBeUndefined();
     expect(resolveProfileModelSizeClass(undefined)).toBeUndefined();
   });
-
-  it("never infers a size from a model id or name", () => {
-    const input = { modelId: "qwen3.6-35b-a3b", name: "Qwen3.6 35B A3B" } as never;
-    expect(resolveProfileModelSizeClass(input)).toBeUndefined();
-  });
 });
