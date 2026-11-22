@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 
@@ -20,4 +21,19 @@ export function resolveSessionHistoryUnavailableMessage(error: unknown): string 
     default:
       return undefined;
   }
+}
+
+export type ChatHistoryMethod =
+  | "chat.history"
+  | "chat.startup"
+  | "chat.message.get"
+  | "chat.predict"
+  | "chat.pendingInputs.dismiss";
+
+export function chatHistoryUnavailableError(method: ChatHistoryMethod, message: string) {
+  return errorShape(ErrorCodes.UNAVAILABLE, message, {
+    details: { method },
+    retryable: true,
+    retryAfterMs: 250,
+  });
 }

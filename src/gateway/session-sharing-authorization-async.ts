@@ -12,6 +12,7 @@ import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { SessionSharingAcquisitionSupersededError } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
   bindSynchronousSessionSource,
@@ -42,6 +43,7 @@ import {
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
+import { chatHistoryUnavailableError } from "./session-history-error.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
@@ -668,6 +670,16 @@ export async function resolveSessionMutationAuthorizationAsync(
     };
   } catch (error) {
     release();
+    if (
+      params.method === "chat.history" &&
+      error instanceof SessionMutationFactsUnavailableError &&
+      error.cause instanceof SessionSharingAcquisitionSupersededError
+    ) {
+      request.assertInvocationCurrent?.();
+      return {
+        error: chatHistoryUnavailableError("chat.history", "session changed while reading history"),
+      };
+    }
     if (
       !talk &&
       !(error instanceof AgentSelectionRequiredError) &&

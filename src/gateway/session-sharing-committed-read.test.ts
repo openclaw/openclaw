@@ -8,6 +8,8 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { SessionSharingAuthorityUnknownError } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import * as sharingAcquisition from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import {
   addSessionMember,
@@ -344,3 +346,48 @@ it.each(["before", "after"] as const)(
       inWriterTransaction(owner.db, () => expectCurrent(authorization));
     }),
 );
+
+it("reauthorizes an invited history reader after a superseded sharing acquisition", () =>
+  withSharingState(async ({ seed, cfg }) => {
+    const sessionKey = "agent:main:invited-history";
+    const { scope, shared } = seed(sessionKey, "first");
+    const client = roleClient("invited");
+    const identityId = client.authenticatedUserProfile!.profileId;
+    addSessionMember(scope, { identityId, addedBy: "owner" });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const authorize = async (method: string) => {
+      const result = await resolveSessionMutationAuthorizationAsync({
+        method,
+        client,
+        context,
+        requestParams: { sessionKey },
+      });
+      result.authorization?.release?.();
+      return result.error;
+    };
+    expect(await authorize("chat.history")).toBeNull();
+    const reconcile = sharingAcquisition.reconcileSessionSharingAcquisition;
+    using pending = vi.spyOn(sharingAcquisition, "reconcileSessionSharingAcquisition");
+    for (const failure of [
+      new SessionSharingAuthorityUnknownError(),
+      new Error("Session sharing acquisition is no longer current"),
+    ]) {
+      pending.mockImplementationOnce(() => {
+        throw failure;
+      });
+      await expect(authorize("chat.history")).rejects.toMatchObject({ cause: failure });
+    }
+    pending.mockImplementationOnce((acquisition, snapshot) =>
+      reconcile({ ...acquisition, invalidated: true }, snapshot),
+    );
+    await expect(authorize("chat.send")).rejects.toThrow();
+    pending.mockImplementationOnce((acquisition, snapshot) => {
+      removeSessionMember(scope, identityId);
+      replaceSessionEntrySync(scope, { ...shared, sessionId: "replacement" });
+      return reconcile(acquisition, snapshot);
+    });
+    expect(await authorize("chat.history")).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    const denied = await authorize("chat.history");
+    expect(denied).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(denied?.retryable).not.toBe(true);
+  }));

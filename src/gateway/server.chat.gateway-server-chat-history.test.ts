@@ -3,6 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import * as sharingAcquisition from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
@@ -79,13 +81,71 @@ describe("gateway server chat", () => {
 
   const replaceMainTranscriptMessages = async (
     messages: Record<string, unknown>[],
+    sessionId = "sess-main",
   ): Promise<void> => {
     await writeMainChatSessionTranscript(
       messages.map((message, index) => ({ message, id: `message-${index}`, type: "message" })),
-      "sess-main",
+      sessionId,
       { sessionKey: "main" },
     );
   };
+
+  test("chat.history reports a superseded sharing acquisition before returning a transcript", async () => {
+    await withMainSessionStore(
+      async (dir) => {
+        const client = await connectWebchatClient({ port, scopes: ["operator.read"] });
+        const read = () =>
+          rpcReq<{ sessionId: string; messages: unknown[] }>(client, "chat.history", {
+            sessionKey: "main",
+          });
+        try {
+          await replaceMainTranscriptMessages([{ role: "user", content: "original transcript" }]);
+          expect(collectHistoryTextValues((await read()).payload?.messages ?? [])).toEqual([
+            "original transcript",
+          ]);
+          const reconcile = sharingAcquisition.reconcileSessionSharingAcquisition;
+          using pending = vi
+            .spyOn(sharingAcquisition, "reconcileSessionSharingAcquisition")
+            .mockImplementationOnce((acquisition, snapshot) => {
+              replaceSessionEntrySync(
+                {
+                  storePath: path.join(dir, "sessions.json"),
+                  agentId: "main",
+                  sessionKey: "agent:main:main",
+                },
+                { sessionId: "replacement", updatedAt: Date.now() },
+              );
+              return reconcile(acquisition, snapshot);
+            });
+          const first = await read();
+          expect(pending).toHaveBeenCalled();
+          expect(first).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              details: { method: "chat.history" },
+              retryable: true,
+              retryAfterMs: 250,
+            },
+          });
+          expect(first.payload).toBeUndefined();
+          await replaceMainTranscriptMessages(
+            [{ role: "user", content: "new transcript" }],
+            "replacement",
+          );
+          const fresh = await read();
+          expect(fresh.ok).toBe(true);
+          expect(fresh.payload?.sessionId).toBe("replacement");
+          expect(collectHistoryTextValues(fresh.payload?.messages ?? [])).toEqual([
+            "new transcript",
+          ]);
+        } finally {
+          client.close();
+        }
+      },
+      { freshStore: true },
+    );
+  });
 
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await sendChat("idem-null-byte-1", { message: "hello\u0000world" });
