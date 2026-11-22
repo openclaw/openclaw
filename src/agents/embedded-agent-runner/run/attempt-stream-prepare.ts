@@ -29,7 +29,6 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import { log } from "../logger.js";
-import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -635,7 +634,6 @@ function prepareStream(
       return {
         model: attempt.model,
         promptCacheKey: attempt.promptCacheKey,
-        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,

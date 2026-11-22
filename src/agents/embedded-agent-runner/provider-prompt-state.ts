@@ -15,7 +15,6 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";
-import type { PreparedProviderRequest } from "../../sessions/session-fork-context.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { log } from "./logger.js";
@@ -61,14 +60,6 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
   const state = providerPromptStates.get(runId) ?? {};
   providerPromptStates.set(runId, state);
   return state;
-}
-
-// Request content never joins the serialized identity state; it lives and dies with it.
-const preparedRequests = new WeakMap<ProviderPromptState, PreparedProviderRequest>();
-
-export function readPreparedProviderRequest(runId: string): PreparedProviderRequest | undefined {
-  const state = providerPromptStates.get(runId);
-  return state && preparedRequests.get(state);
 }
 
 export function clearProviderPromptState(runId: string): void {
@@ -217,7 +208,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
     context: Parameters<StreamFn>[1],
     options: Parameters<StreamFn>[2],
   ) => Promise<unknown>;
-  /** Last edit before the body is recorded and sent; a session fork replays its parent here. */
+  /** Last edit before the body is recorded and sent; forks disable provider-hosted tools here. */
   finalizePayload?: (payload: Record<string, unknown>) => void;
 }): StreamFn {
   return async (model, context, options) => {
@@ -235,10 +226,8 @@ export function wrapStreamFnWithProviderPromptState(params: {
           typeof preparedPayload === "object" &&
           !Array.isArray(preparedPayload)
         ) {
-          // SAFETY: the guard admits a non-array request object. Replay before final policy.
+          // SAFETY: the guard admits a non-array request object. Finalize before final policy.
           params.finalizePayload?.(preparedPayload as Record<string, unknown>);
-          // Shallow: transports reassign top-level fields after the hook; items stay shared.
-          preparedRequests.set(params.state, { model: payloadModel, body: { ...preparedPayload } });
         }
         // Encoding transports may still alter the payload after onPayload.
         // Their final gate runs at encode; other transports gate here.

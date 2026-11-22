@@ -534,8 +534,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       : workspaceDir;
 
   const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
-  // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
-  // request carry the session's system prompt and tool definitions too.
+  // The fork rebuilds history with the session's pinned system prompt and tool definitions.
   const pin = await readSessionForkPin(sessionManager, scoped, params.model, abortSignal);
   await markRunningToolCalls(sessionManager);
   // Background runs stay out of the Control UI and never project into a user session.
@@ -592,7 +591,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       retryTransientErrors: false,
       allowAuthProfileFallback: false,
       authProfileFailurePolicy: "local_transient",
-      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      // A subscription login runs on its own CLI, within plan limits; API keys stay embedded.
       cliBackendDispatch: "subscription-auth",
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
@@ -601,11 +600,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       toolExecutionAllow: params.tools.filter(
         (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
       ),
-      sessionForkRequest: {
-        ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
-        ...(pin ? { pin } : {}),
-        ownOutputLimit: params.maxTokens !== undefined,
-      },
+      sessionForkRequest: pin ? { pin } : {},
       ...(live?.promptCacheKey ? { promptCacheKey: live.promptCacheKey } : {}),
       ...(params.maxTokens !== undefined ? { streamParams: { maxTokens: params.maxTokens } } : {}),
       // Thinking is part of the cached prefix on Anthropic and OpenAI; follow the session.
