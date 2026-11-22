@@ -411,7 +411,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       readProviderReview,
-      hideComposerSessionCards: this.inputRegion === "dock",
+      hideComposerSessionCards: this.inputRegion === "dock" && !this.onBackToSubagents,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
