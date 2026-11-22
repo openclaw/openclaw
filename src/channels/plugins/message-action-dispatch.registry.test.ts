@@ -36,7 +36,7 @@ function expectDelivery(request: ReturnType<typeof dispatchChannelMessageAction>
 
 function scopedReader(read: boolean) {
   const base = createChannelTestPluginBase({ id: "scoped-delivery" });
-  const handleRootAction = vi.fn(async () => receipt);
+  const handleRootAction = vi.fn(async (_ctx: ChannelMessageActionContext) => receipt);
   const handleScopedAction = vi.fn(async () => receipt);
   const registryFor = (origin: "config" | "bundled", handleAction?: typeof handleRootAction) => {
     const actions = handleAction && { handleAction, providerOwnedReadGates: read || undefined };
@@ -76,6 +76,22 @@ function pauseRead(fixture: Pick<ReturnType<typeof registerOfficial>, "handleAct
 afterEach(() => {
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
+});
+
+describe("agent-authored controls", () => {
+  it("marks direct Gateway message actions once, round-tripping an authored mark", async () => {
+    const { dispatch, handleRootAction } = scopedReader(false);
+    const buttons = (value: string) => ({
+      blocks: [{ type: "buttons", buttons: [{ label: "A", action: { type: "callback", value } }] }],
+    });
+    for (const value of ["pick:a", "::pick:a"]) {
+      await dispatch({ params: { to: "recipient", message: "hi", presentation: buttons(value) } });
+    }
+    expect(handleRootAction.mock.calls.map(([ctx]) => ctx.params.presentation)).toEqual([
+      buttons("::pick:a"),
+      buttons("::::pick:a"),
+    ]);
+  });
 });
 
 describe("message action registration ownership", () => {

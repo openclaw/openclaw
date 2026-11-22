@@ -29,12 +29,15 @@ const state = vi.hoisted(() => ({
   approve: vi.fn(),
   assertCaller: vi.fn(),
   task: undefined as unknown,
-  caller: { agentId: "main", sessionKey: "agent:main:source" },
+  caller: {
+    agentId: "main",
+    sessionKey: "agent:main:source",
+    operationalRunInstance: { runId: "source-run" },
+  },
 }));
 vi.mock("./gateway-caller-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => state.caller,
-  captureGatewayToolCallerAssertion: () => state.assertCaller,
   resolveGatewayToolOperatorSelection: () => ({ assertCurrent: state.assertCaller }),
 }));
 vi.mock("./in-process-gateway.js", async (importOriginal) => ({
@@ -173,42 +176,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
-  it.each([false, true])(
-    "retains durable delivery identity for owned-task fallback=%s",
-    async (ownedTask) => {
-      const source = endpoint("source");
-      const target = ownedTask ? childOf(source) : endpoint("target");
-      if (ownedTask) {
-        state.task = {
-          runId: "task",
-          requesterSessionKey: source.sessionKey,
-          requesterAgentId: "main",
-        };
-      }
-      const input = operation(source, target);
-      const inputProvenance = {
-        kind: "inter_session" as const,
-        sourceTool: "sessions_send",
-        sourceSessionKey: input.source.sessionKey,
-      };
-      input.callGateway.mockImplementation(async () => {
-        const admitted = readSessionSendDeliveryAdmission({
-          agentId: "main",
-          sessionKey: input.target.sessionKey,
-          sessionId: "target",
-          runId: "saved-peer",
-        });
-        expect(admitted).toBeDefined();
-        expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
-        expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+  it("retains durable delivery identity for peer input", async () => {
+    const input = operation(endpoint("source"), endpoint("target"));
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceTool: "sessions_send",
+      sourceSessionKey: input.source.sessionKey,
+    };
+    input.callGateway.mockImplementation(async () => {
+      const admitted = readSessionSendDeliveryAdmission({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        sessionId: "target",
+        runId: "saved-peer",
       });
-      using gate = await openGate({ ...input, inputProvenance });
-      await (ownedTask ? gate.callDurableGateway : gate.callGateway)(
-        agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }),
-      );
-      expect(input.callGateway).toHaveBeenCalledOnce();
-    },
-  );
+      expect(admitted).toBeDefined();
+      expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
+      expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+    });
+    using gate = await openGate({ ...input, inputProvenance });
+    await gate.callGateway(agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }));
+    expect(input.callGateway).toHaveBeenCalledOnce();
+  });
 
   it.each([
     [undefined, undefined, false],

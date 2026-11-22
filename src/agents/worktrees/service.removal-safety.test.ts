@@ -2,7 +2,9 @@ import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import timers from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
@@ -117,15 +119,26 @@ describe("managed removal custody", () => {
     }
   });
 
-  it("releases the checkout name while retired file deletion is pending", async () => {
+  it("preserves retired files through a yielded pass while releasing the checkout name", async () => {
     const created = await materialize("background-delete");
     const run = commandRunner.runCommandWithTimeout;
     const pending = createDeferred();
     const started = createDeferred();
     const completed = createDeferred();
     let retired = "";
+    let passes = 0;
+    const pause = timers.setTimeout;
+    vi.spyOn(timers, "setTimeout").mockImplementation(async (ms, value, options) => {
+      if (ms !== 30_000) {
+        return await pause(ms, value, options);
+      }
+      started.resolve();
+      await pending.promise;
+      return value;
+    });
+    syncBuiltinESMExports();
     vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      const target = argv.at(-1)!;
+      const target = argv.find((arg) => arg.includes(".openclaw-removing-")) ?? argv.at(-1)!;
       if (
         !target.includes(".openclaw-removing-") ||
         path.dirname(target) !== path.dirname(created.path)
@@ -133,8 +146,16 @@ describe("managed removal custody", () => {
         return await run(argv, options);
       }
       retired = target;
-      started.resolve();
-      await pending.promise;
+      if (passes++ === 0) {
+        return {
+          stdout: "",
+          stderr: "",
+          code: 75,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
       try {
         return await run(argv, options);
       } finally {
@@ -145,6 +166,8 @@ describe("managed removal custody", () => {
       const removed = await remove(created.id);
       await started.promise;
       expect(await read(retired)).toBe("base\n");
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect(await read(retired)).toBe("base\n");
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await git(repo, "branch", "--list", created.branch)).toBe("");
       const restored = await service.restore({ id: created.id });
@@ -153,6 +176,8 @@ describe("managed removal custody", () => {
     } finally {
       pending.resolve();
       await completed.promise;
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
     }
   });
 

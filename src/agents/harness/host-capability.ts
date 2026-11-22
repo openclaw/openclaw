@@ -20,6 +20,7 @@ import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-trans
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { loadSkillLibrarySelection } from "../../skills/library/selection.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { prepareSkillReadIndex } from "../../skills/runtime/skill-read-index.js";
 import type { SkillEntry } from "../../skills/types.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -32,6 +33,7 @@ import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
+import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
@@ -229,6 +231,9 @@ export function createAgentHarnessHostCapabilities(params: {
         })
       : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
+  if (skillsSnapshot) {
+    prepareSkillReadIndex(skillsSnapshot);
+  }
   const getInstalledSkills = bindHostSkillCatalog({
     snapshot: skillsSnapshot,
     workspaceDir:
@@ -400,11 +405,13 @@ export function createAgentHarnessHostCapabilities(params: {
   ) => {
     assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
+    const resourceSnapshot = skillResourceSnapshot(options);
     return {
       options: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        sessionProjectMoveEligible: attempt.sessionProjectMoveEligible,
         // Native harnesses own creation-time listings and have no embedded prompt pin.
         githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
@@ -422,14 +429,12 @@ export function createAgentHarnessHostCapabilities(params: {
         pluginExecutionAuthority: callerIdentity?.operatorAuthority,
         pluginExecutionSkillsSnapshot: skillsSnapshot,
         assertInvocationCurrent: assertCurrent,
+        prepareHostFileMutation: assertActive.prepareSessionSourceStorageEffect,
         nativeHarnessExecution: !denyToolCalls ? nativeLocalExecution : undefined,
         // Tool creation cannot certify the harness's additional execution gates.
         unverifiedExecutionPolicy: true as const,
       },
-      skillReadResources: resolveSkillResourceCandidates(
-        skillResourceSnapshot(options),
-        libraryEntries,
-      ),
+      skillReadResources: resolveSkillResourceCandidates(resourceSnapshot, libraryEntries),
     };
   };
   const bindCreatedTools = (
@@ -489,6 +494,10 @@ export function createAgentHarnessHostCapabilities(params: {
     preparedEnvironment: () => {
       assertActive.assertScopeCurrent();
       return preparedRunEnvironment;
+    },
+    prepareLocalExecScratch: ({ cwd }) => {
+      assertActive();
+      return prepareAgentExecScratch(cwd);
     },
     activeComputerContext: () => {
       assertActive();

@@ -37,16 +37,34 @@ import {
   createSystemPackageOwnershipInspection,
   SystemPackageOwnershipError,
 } from "../../infra/update-system-package-ownership.js";
+import { updateInstallationMismatch } from "../../update/installation-identity.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /** Native params are returned only when this request still belongs to the native updater. */
-export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOptions) {
+export async function admitGatewayUpdateRequest(
+  request: GatewayRequestHandlerOptions,
+  installedRoot?: string | null,
+) {
   const { params, respond, context } = request;
   if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
     return null;
+  }
+  // Before any owner takes the request: a CLI from another installation must not update this one.
+  if (params.checkout && installedRoot) {
+    const mismatch = await updateInstallationMismatch(params.checkout, installedRoot);
+    if (mismatch) {
+      respond(true, {
+        runId: null,
+        ok: false,
+        code: "installation-mismatch",
+        message: mismatch,
+        result: { status: "skipped", reason: "installation-mismatch" },
+      });
+      return null;
+    }
   }
   const authority = readGatewayRequestMutationAuthority(request);
   const root = await resolveOpenClawPackageRoot({
@@ -94,6 +112,17 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     );
     return null;
   }
+  if (params.acceptCapabilities) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities.",
+      ),
+    );
+    return null;
+  }
   const run = await manager.start(
     authority.assertCurrent,
     normalizeUpdateChannel(context.getRuntimeConfig().update?.channel),
@@ -116,6 +145,22 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
+export function makeUpdateRefusal({ mode, root }: UpdateInstallSurface) {
+  return (
+    status: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status,
+    mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
+}
+
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
@@ -123,15 +168,18 @@ export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
+  publishAppUpdate?: (run: UpdateRunRecord) => void,
 ): Promise<void> {
   const reason = "immutable-native-updater-required";
   await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  await finishUpdateRun(runId, { status: "skipped", reason });
+  const run = await finishUpdateRun(runId, { status: "skipped", reason });
+  publishAppUpdate?.(run);
   respond(true, {
     runId,
     ok: false,
+    ...(publishAppUpdate ? { noticeInApp: true } : {}),
     message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",

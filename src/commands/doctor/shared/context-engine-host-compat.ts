@@ -10,7 +10,6 @@ import {
 } from "../../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { getRegisteredAgentHarness } from "../../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -133,8 +132,6 @@ function collectConfiguredContextEngineAgentRunHosts(cfg: OpenClawConfig): HostC
 
   if (cfg.agents?.defaults?.model !== undefined) {
     pushModel(cfg.agents.defaults.model, "agents.defaults.model");
-  } else {
-    pushModelRef(`${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`, "agents.defaults.model (default)");
   }
   pushModelMap(cfg.agents?.defaults?.models, "agents.defaults.models");
 

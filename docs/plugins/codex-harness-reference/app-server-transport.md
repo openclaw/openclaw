@@ -93,7 +93,9 @@ Gateway restart repeats the selection, which picks up Codex installs, upgrades,
 and removals.
 
 The binary selection does not decide which OpenAI models the picker shows. The
-ChatGPT subscription model list reports the newest published Codex version (see
+ChatGPT subscription model list reports the OpenClaw version, with a `99.0.0`
+fallback when it is unavailable or not a calendar version with a four-digit
+year of 2026 or later (see
 [Model discovery](/plugins/codex-harness-reference/model-discovery)), so it can
 list a model that the selected Codex binary is too old to run. A Codex-harness
 turn on such a model fails with a message that names the running Codex version
@@ -106,6 +108,11 @@ never installs or updates Codex.
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
 always win. Login-status checks, node exec-servers, and the Doctor package check
 always use the shipped binary.
+
+Verified setup and repair inference also fingerprints the selected local runtime.
+For standalone packages, this includes the installer-created `codex -> bin/codex`
+link and the regular target inside the same package. Other package symlinks remain
+unsupported, and a changed link or target invalidates the captured artifact.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When
@@ -193,6 +200,7 @@ managed stdio or the local Unix control socket for production workloads.
 | `args`                           | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `url`                            | unset                                                  | WebSocket App Server URL or `unix://` URL. An empty explicit Unix path selects the standard user-home control socket.                                                                                                                                                                                                                                                                                                                                                        |
 | `authToken`                      | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                                                                                                           |
+| `tlsPeerCertificate`             | unset                                                  | Exact PEM leaf certificate for a WSS endpoint. The client checks the certificate and hostname before sending the bearer or WebSocket frames. Supply the new certificate when admitting a replacement server.                                                                                                                                                                                                                                                                 |
 | `headers`                        | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                                                            |
 | `clearEnv`                       | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                                                          |
 | `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches are rejected; uploads retain the configured channel identity and app-server request timeout.                                                                                     |

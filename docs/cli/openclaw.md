@@ -222,10 +222,19 @@ Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahe
 ### Change history
 
 The Ask OpenClaw page can show recent applied system-agent operations, Doctor
-migrations, Settings and CLI config writes, and manual edits to
-`openclaw.json`. The config journal detects external edits while the Gateway
-is watching, during an OpenClaw-owned write, or at the next startup after an
-offline edit.
+migrations, Settings and CLI config writes, manual edits to `openclaw.json`,
+and role assignments. The config journal detects external edits while the
+Gateway is watching, during an OpenClaw-owned write, or at the next startup
+after an offline edit.
+
+A committed `users.setRole` change is listed as an operation with source
+`config-rpc` (shown as "settings"). Its summary names the target profile, the
+previous and new role (or that the role was cleared), and the requester's
+profile, or its device when it has no profile. Refused requests and requests
+that leave the role unchanged are not recorded. Recording is best effort: if
+the history write fails after the role committed, the role change still
+succeeds and the Gateway logs a warning, so a missing entry does not prove the
+role is unchanged. Check `users.list` for the current role.
 
 History is stored in the `diagnostic_events` table of the shared
 `~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
@@ -309,6 +318,12 @@ never changes config; the app automatically walks down the ladder and finally
 offers a manual key/token step populated from the Gateway's active
 text-inference provider plugins. The selected provider owns its starter model
 and config, and the credential is verified the same way before it is saved.
+While detection still probes local tools and services, the app and the Control
+UI list the provider sign-in and key/token choices that
+`openclaw.setup.options` reads from config and plugin manifests, so you can
+start one right away. Results that arrive later add detected candidates without
+moving focus, changing your selection, or interrupting a sign-in or test you
+already started.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is

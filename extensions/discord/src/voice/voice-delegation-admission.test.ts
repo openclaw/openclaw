@@ -72,7 +72,7 @@ defineDiscordVoiceTests(
           scheduler: createTestPluginServiceScheduler(),
           readPolicy,
           client: client as never,
-          cfg,
+          readConfig: () => cfg,
           discordConfig,
           accountId: "default",
           runtime: createRuntime(),

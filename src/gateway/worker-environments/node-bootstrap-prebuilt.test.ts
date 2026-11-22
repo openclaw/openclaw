@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it } from "vitest";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,

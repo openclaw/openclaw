@@ -27,8 +27,8 @@ import {
   MISSING_REPLY_NOTICE_TEXT,
   resolveReplyExpectation,
   shouldDeliverMissingReplyNotice,
-  type ReplyDeliveryState,
 } from "../../reply-completion.js";
+import { hasPendingSessionToolHandoff } from "../../tools/session-tool-handoff.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
@@ -56,7 +56,6 @@ import {
   isRejectedBeforeDispatch,
   resolveNonVisibleTurnRetryInstructions,
   resolveSettledToolBatchEvidence,
-  resolveSettledToolTerminalContinuation,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import {
@@ -91,63 +90,6 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
-
-export function resolveSettledTurnFinalizationRequest(input: {
-  runParams: TerminalRunParams;
-  attempt: EmbeddedRunAttemptResult;
-  activeErrorContext: { provider: string; model: string };
-  modelApi: string | undefined;
-  executionContract: string | undefined;
-  payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
-  recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
-  hasTerminalToolPresentation: boolean;
-  terminalState: EmbeddedRunTerminalState;
-  settledTurnFinalizationAvailable: boolean;
-  replyDeliveryState?: ReplyDeliveryState;
-}): string | null {
-  if (
-    !input.settledTurnFinalizationAvailable ||
-    resolveReplyExpectation(input.runParams) === "optional" ||
-    isTerminalAssistantError(resolveCurrentAttemptAssistant(input.attempt)) ||
-    (input.replyDeliveryState ?? "missing") !== "missing"
-  ) {
-    return null;
-  }
-  const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
-  const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  // Generated errors and pre-tool commentary are fallback surfaces, not authored answers.
-  const preparedPayloadCount = countSettledTurnDeliveryPayloads({
-    payloads: input.payloadsWithToolMedia,
-    attempt: input.attempt,
-  });
-  const payloadCount =
-    input.recoveredFinalAssistantPayloadsAfterPromptTimeout?.length ?? preparedPayloadCount;
-  const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
-    payloadCount,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt: input.attempt,
-  });
-  if (emptyAssistantReplyIsSilent) {
-    return null;
-  }
-  const continuation = resolveSettledToolTerminalContinuation({
-    provider: input.activeErrorContext.provider,
-    modelId: input.activeErrorContext.model,
-    modelApi: input.modelApi,
-    executionContract: input.executionContract,
-    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
-    replyDeliveryState: input.replyDeliveryState ?? "missing",
-    allowEmptyStopContinuation: true,
-    payloadCount,
-    hasTerminalToolPresentation: input.hasTerminalToolPresentation,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt: input.attempt,
-  });
-  return continuation?.disableTools ? continuation.instruction : null;
-}
 
 export async function resolveEmbeddedRunTerminal(input: {
   runParams: TerminalRunParams;
@@ -226,11 +168,15 @@ export async function resolveEmbeddedRunTerminal(input: {
   });
   const authoredSilenceRequiresResult =
     replyExpectation === "result-required" && classifyAssistantTurn(terminalFacts).silent;
+  const continuationPending =
+    hasPendingSessionToolHandoff(runParams.replyOperation) ||
+    shouldContinueInteractiveAcceptedSessionSpawns({ attempt, run: runParams });
   const replyRecoverySuppressed =
     !authoredSilenceRequiresResult &&
     // Optional replies may be silent, but a rejected call is not authored silence.
     ((replyExpectation === "optional" && !isRejectedBeforeDispatch(attempt)) ||
       emptyAssistantReplyIsSilent ||
+      continuationPending ||
       input.prepared.replyDeliveryState !== "missing");
   const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
   const [nextReasoningOnlyRetryInstruction, nextEmptyResponseRetryInstruction] =
@@ -364,6 +310,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return completeEmbeddedRun({
       ...input,
+      continuationPending,
       incompleteTurnText: MISSING_REPLY_NOTICE_TEXT,
       payloadCount: 0,
       incompleteTurnFallbackSafe,
@@ -395,6 +342,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return completeEmbeddedRun({
       ...input,
+      continuationPending,
       incompleteTurnText,
       payloadCount: terminalFacts.payloadCount,
       incompleteTurnFallbackSafe,
@@ -428,6 +376,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
   return completeEmbeddedRun({
     ...input,
+    continuationPending,
     payloadCount: terminalFacts.payloadCount,
     payloadsForTerminalPath,
     emptyAssistantReplyIsSilent,
@@ -437,6 +386,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
 async function completeEmbeddedRun(
   input: Parameters<typeof resolveEmbeddedRunTerminal>[0] & {
+    continuationPending: boolean;
     payloadCount: number;
     payloadsForTerminalPath?: EmbeddedAgentRunResult["payloads"];
     emptyAssistantReplyIsSilent?: boolean;
@@ -549,12 +499,7 @@ async function completeEmbeddedRun(
     });
     input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   }
-  const acceptedSessionSpawnContinuation =
-    !error &&
-    shouldContinueInteractiveAcceptedSessionSpawns({
-      attempt: input.attempt,
-      run: input.runParams,
-    });
+  const continuationPending = !error && input.continuationPending;
   // Label only partial assistant prose: terminal tool output already completes
   // the reply, and a silent cron result must not gain a visible notice.
   const hasPartialAssistantText =
@@ -663,7 +608,7 @@ async function completeEmbeddedRun(
               ...(input.attempt.yieldAcknowledgment
                 ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
                 : {}),
-              ...(acceptedSessionSpawnContinuation ? { continuationPending: true as const } : {}),
+              ...(continuationPending ? { continuationPending: true as const } : {}),
               ...(input.intentionalTerminalCompletion
                 ? { intentionalTerminalCompletion: "tool-batch" as const }
                 : {}),

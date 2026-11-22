@@ -19,6 +19,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
+  recordRetainedUpdateRuntimeOwner,
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
@@ -194,6 +195,8 @@ async function runWithRetainedUpdateRuntime<T>(
           if (!outsideMutation(privateRoot)) {
             throw new Error("Retained updater directory overlaps an installation being replaced");
           }
+          await recordRetainedUpdateRuntimeOwner(privateRoot);
+          assertCurrent();
           const nativeGateSource = resolveRuntimeWorkerUrl(
             runtimeProcessEntrypoints.updateNativeGate,
           );

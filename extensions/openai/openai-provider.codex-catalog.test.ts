@@ -12,16 +12,6 @@ import {
   buildOpenAICodexLiveProviderConfig,
 } from "./test-support/live-catalog.test-support.js";
 
-// mock-isolation: these tests spy on global fetch for the model list; the npm Codex
-// version read is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./codex-client-version.js")>();
-  return {
-    ...actual,
-    resolveOpenAICodexClientVersion: async () => actual.OPENAI_CODEX_CLIENT_VERSION_FLOOR,
-  };
-});
-
 const catalogContext = {
   config: { auth: { profiles: {} } },
   agentDir: "/tmp/openai-agent",

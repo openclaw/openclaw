@@ -318,6 +318,11 @@ Restarts preserve retained entries, dismissals, and their original expiry times.
 Loading stored state does not replay browser notifications or scan transcripts
 to reconstruct old mentions.
 
+Concurrent Inbox list requests share one maintenance pass. Dismissals and other
+mutations retain FIFO ordering; a list arriving after a queued mutation joins a
+new read wave. Unchanged reads prepare only their viewer's retained targets, and
+each response checks current access before publication.
+
 ### ACP replay accounting
 
 The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge

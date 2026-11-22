@@ -215,6 +215,7 @@ it("retries a declined recovery once readiness changes", async () => {
   await router.navigateLocation(missingLocation, { label: "test" });
   await flushPromises();
   expect(onNotFound).toHaveBeenCalledTimes(1);
+  expect(outlet.textContent).not.toContain("Page not found");
   for (const [ready, calls] of [
     [false, 1],
     [true, 2],
@@ -223,6 +224,7 @@ it("retries a declined recovery once readiness changes", async () => {
     outlet.setInputs({ notFoundRecoveryReady: ready });
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(calls);
+    expect(outlet.textContent?.includes("Page not found")).toBe(ready);
   }
 });
 

@@ -6,6 +6,7 @@ import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
@@ -292,13 +293,38 @@ export async function finalizeNativePackageStage(
     stage.liveProjectRoot,
     relocations,
   );
-  for (const entry of await fs.readdir(stage.binDir, { withFileTypes: true })) {
+  const entries = await fs.readdir(stage.binDir, { withFileTypes: true });
+  // Only the launchers the swap publishes can strand the CLI; other shims stay staged.
+  const published = new Set(
+    resolvePackageUpdateLauncherNames(
+      packageName,
+      entries.map((entry) => entry.name),
+    ),
+  );
+  for (const entry of entries) {
     const file = path.join(stage.binDir, entry.name);
     const destinationFile = path.join(stage.liveBinDir, entry.name);
     if (entry.isSymbolicLink()) {
       await relocateRuntimeSymlink(file, file, destinationFile, relocations);
     } else if (entry.isFile()) {
       await relocateRuntimeLauncher(file, file, destinationFile, relocations);
+    } else {
+      continue;
+    }
+    if (!published.has(entry.name)) {
+      continue;
+    }
+    // Activation moves the stage away; a launcher still naming it would leave no CLI.
+    // Refuse here, while the previous Gateway and launchers are untouched.
+    const content = entry.isSymbolicLink()
+      ? await fs.readlink(file)
+      : await fs.readFile(file, "utf8");
+    if (content.includes(path.basename(stage.projectRoot))) {
+      throw new Error(
+        `The staged ${entry.name} launcher still points into the update stage after relocation; the installation was left unchanged. ` +
+          `To install the update directly, run \`pnpm add -g --allow-build=${packageName} ${packageName}@<version>\` as the account that owns this install, then \`openclaw gateway install --force\` and \`openclaw gateway restart\`. ` +
+          "Run `openclaw triage` to diagnose the launcher.",
+      );
     }
   }
   // Candidate installation rewrites shared locks and pnpm group links. Capture their

@@ -11,7 +11,11 @@ import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-sta
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
-import type { WorktreeWarmPoolRequest } from "./template-registry.js";
+import {
+  worktreeTemplateMutationKey,
+  type WorktreeWarmPoolRequest,
+  type RecentWorktreeTemplate,
+} from "./template-registry.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;
@@ -43,6 +47,7 @@ type MutationAuthority = { validating: boolean };
 const mutationAuthority = new AsyncLocalStorage<MutationAuthority>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
+  const recentTemplates = new Map<string, RecentWorktreeTemplate>();
   let warmPoolListener: ((request: WorktreeWarmPoolRequest) => void) | undefined;
   let retired = false;
   let uncertain = false;
@@ -76,6 +81,15 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     return [...selected];
   };
   const owner = {
+    recentTemplates() {
+      const expiresBefore = Date.now() - 24 * 60 * 60_000;
+      for (const [key, recipe] of recentTemplates) {
+        if (recipe.usedAt <= expiresBefore) {
+          recentTemplates.delete(key);
+        }
+      }
+      return recentTemplates;
+    },
     onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void) {
       warmPoolListener = listener;
       return () => {
@@ -86,6 +100,25 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     },
     requestWarmPool(request: WorktreeWarmPoolRequest) {
       owner.assertRegistryAdmission();
+      const recipes = owner.recentTemplates();
+      const key = worktreeTemplateMutationKey(request.template.cacheKey);
+      let nextFetchAt = 0;
+      for (const recipe of recipes.values()) {
+        if (recipe.request.template.repoRoot === request.template.repoRoot) {
+          nextFetchAt = Math.max(nextFetchAt, recipe.nextFetchAt);
+        }
+      }
+      recipes.delete(key);
+      recipes.set(key, {
+        request,
+        usedAt: Date.now(),
+        nextFetchAt,
+        targetCommit: request.template.sourceCommit,
+        preparedCommit: request.template.sourceCommit,
+      });
+      if (recipes.size > 32) {
+        recipes.delete(recipes.keys().next().value!);
+      }
       warmPoolListener?.(request);
     },
     prepareSourcePaths: createPreparedWorktreePathIndex(),
@@ -290,6 +323,10 @@ export function onWorktreeWarmPoolNeeded(
 
 export function requestWorktreeWarmPool(env: NodeJS.ProcessEnv, request: WorktreeWarmPoolRequest) {
   lifetime(captureWorktreeRunEndContext(env)).requestWarmPool(request);
+}
+
+export function recentWorktreeTemplates(env: NodeJS.ProcessEnv) {
+  return lifetime(captureWorktreeRunEndContext(env)).recentTemplates();
 }
 
 export function withWorktreeRunEnd<T>(

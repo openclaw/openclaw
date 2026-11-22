@@ -3,7 +3,7 @@ import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { preserveSessionCatalogHistory } from "../../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
-import type { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import type { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { createGatewaySession } from "../session-create-service.js";
 import type { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import type { SessionCatalogThreadVisibility } from "./session-catalog-visibility.js";
@@ -11,7 +11,7 @@ import { createSessionMutationTestContext } from "./sessions-mutations.owner.tes
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn<typeof createGatewaySession>(),
-  captureOperator: vi.fn<typeof captureGatewayOperatorRunAuthority>(),
+  captureOperator: vi.fn<typeof prepareGatewayOperatorRunAuthority>(),
   preserve: vi.fn<typeof preserveSessionCatalogHistory>(),
   record: vi.fn(),
   authorize: vi.fn<typeof resolveSessionMutationAuthorizationAsync>(),
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../session-create-service.js", () => ({ createGatewaySession: mocks.create }));
 // mock-isolation: Keep live operator/profile authority outside this orchestration fixture.
 vi.mock("../operator-run-authority.js", () => ({
-  captureGatewayOperatorRunAuthority: mocks.captureOperator,
+  prepareGatewayOperatorRunAuthority: mocks.captureOperator,
 }));
 vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionStateEventAsync: mocks.record,
