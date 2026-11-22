@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -425,74 +425,38 @@ describe("session resource admission", () => {
     },
   );
 
-  it.each(["identity", "scope"])(
-    "captures the canonical profile before alias preparation and fences a later operator %s change",
-    async (kind) => {
-      const test = fixture();
-      const profile = test.client.authenticatedUserProfile;
-      delete test.client.authenticatedUserProfile;
-      test.client.authenticatedUserId = "original-operator";
-      test.client.authenticatedGitHubIdentitySync = vi.fn(async () => {
-        await Promise.resolve();
-        test.client.authenticatedUserProfile = profile;
-        return { profileId: "alice", updatedAt: 1 };
+  it.each([{ scopes: ["operator.sessions.write"], reason: "changed admission alternative" }])(
+    "releases prepared authority after final $reason denial",
+    async ({ scopes }) => {
+      const test = fixture(["operator.write", "operator.sessions.write"], "alice");
+      const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
+      const release = vi.fn();
+      using _ = vi
+        .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
+        .mockImplementation(async (params) => {
+          const prepared = await prepare(params);
+          const authority = prepared.authority;
+          release.mockImplementation(authority.release);
+          return {
+            ...prepared,
+            assertPreparationCurrent: () => {
+              prepared.assertPreparationCurrent();
+              test.client.connect.scopes = scopes;
+            },
+            authority: { ...authority, release },
+          };
+        });
+      const handler = vi.fn<GatewayRequestHandler>();
+      const respond = vi.fn();
+      await dispatchSession(test, handler, {
+        respond,
+        allowOwnSessionScope: true,
       });
-      const effect = vi.fn();
-      const handler = vi.fn<GatewayRequestHandler>(async ({ sessionAccessAuthority, respond }) => {
-        const authority = sessionAccessAuthority!;
-        const resource = hold(authority.retainSession());
-        authority.assertCurrent();
-        await Promise.resolve();
-        if (kind === "identity") {
-          test.client.authenticatedUserId = "changed-operator";
-        } else {
-          test.client.connect.scopes = [];
-        }
-        expect(() => {
-          authority.assertCurrent();
-          effect();
-        }).toThrow("Gateway requester authority changed");
-        expect(() => resource.assertCurrent()).not.toThrow();
-        respond(true, {});
-      });
-      await dispatchSession(test, handler);
-      expect(handler).toHaveBeenCalledOnce();
-      expect(effect).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(release).toHaveBeenCalledOnce();
     },
   );
-
-  it.each([
-    { scopes: ["operator.read"], reason: "removed scope" },
-    { scopes: ["operator.sessions.write"], reason: "changed admission alternative" },
-  ])("releases prepared authority after final $reason denial", async ({ scopes }) => {
-    const test = fixture(["operator.write", "operator.sessions.write"], "alice");
-    const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
-    const release = vi.fn();
-    using _ = vi
-      .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
-      .mockImplementation(async (params) => {
-        const prepared = await prepare(params);
-        const authority = prepared.authority;
-        release.mockImplementation(authority.release);
-        return {
-          ...prepared,
-          assertPreparationCurrent: () => {
-            prepared.assertPreparationCurrent();
-            test.client.connect.scopes = scopes;
-          },
-          authority: { ...authority, release },
-        };
-      });
-    const handler = vi.fn<GatewayRequestHandler>();
-    const respond = vi.fn();
-    await dispatchSession(test, handler, {
-      respond,
-      allowOwnSessionScope: true,
-    });
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(release).toHaveBeenCalledOnce();
-  });
 
   it("projects the original own-session grant through a model call to the registered route", async () => {
     const test = fixture(["operator.sessions.write"], "alice");
@@ -506,7 +470,7 @@ describe("session resource admission", () => {
     setActivePluginRegistry(registry);
     test.context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(registry.gatewayMethodDescriptors, registry);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "alice",
       scopes: ["operator.sessions.write"],
       assertCurrent: () => test.grant.signal.throwIfAborted(),

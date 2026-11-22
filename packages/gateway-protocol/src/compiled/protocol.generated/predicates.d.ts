@@ -412,6 +412,11 @@ export function isSkillsUpdateParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
 >;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
+>;
 export function isSkillsSearchParams(
   value: unknown,
 ): value is import("typebox").Static<

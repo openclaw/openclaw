@@ -41,6 +41,7 @@ export {
   isSkillsUploadChunkParams,
   isSkillsUploadCommitParams,
   isSkillsUpdateParams,
+  isSkillsCategoriesParams,
   isSkillsSearchParams,
   isSkillsDetailParams,
   isSkillsWorkshopListParams,

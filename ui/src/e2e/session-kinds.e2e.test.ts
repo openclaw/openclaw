@@ -137,6 +137,25 @@ suite.define(() => {
         }
         await sheet.getByRole("button", { name: "Close" }).last().click();
         await sheet.waitFor({ state: "hidden" });
+
+        const row = page.locator(".session-data-row").first();
+        await row.getByRole("checkbox").check();
+        const bulkCount = page.locator(".data-table-bulk-bar > span");
+        const rowTitle = row.locator(".session-list-cell__title");
+        expect(await bulkCount.evaluate((el) => el.getBoundingClientRect().left)).toBe(
+          await rowTitle.evaluate((el) => el.getBoundingClientRect().left),
+        );
+        await row.locator(".session-details-toggle").click();
+        const details = page.locator(".session-details-panel");
+        const factLeft = await details
+          .locator(".session-detail-stat__label")
+          .first()
+          .evaluate((el) => el.getBoundingClientRect().left);
+        expect(
+          await details
+            .locator(".session-details-panel__eyebrow")
+            .evaluateAll((headings) => headings.map((el) => el.getBoundingClientRect().left)),
+        ).toEqual([factLeft, factLeft]);
       },
     );
   });

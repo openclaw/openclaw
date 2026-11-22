@@ -1,0 +1,453 @@
+// One update, as the running release does it: admit, resolve, preflight, prepare, check with
+// the new code, publish a pending trial. Everything after that belongs to the launcher (the
+// switch and its trial) and to the new build (migration at boot, `ready`).
+import fs from "node:fs/promises";
+import path from "node:path";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
+import { resolveStateDir } from "../config/paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
+import type { UpdateChannel } from "../infra/update-channels.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import {
+  finishUpdateRunAsync,
+  recordUpdateRunPhaseAsync,
+  recordUpdateRunStepAsync,
+} from "../infra/update-run-write.async.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { checkRelease } from "./check-release.js";
+import { writeLauncher } from "./launcher.js";
+import { preflight } from "./preflight.js";
+import { prepareGit, type PrepareResult } from "./prepare-git.js";
+import { preparePackage } from "./prepare-package.js";
+import {
+  acquireUpdateLock,
+  allocateStaging,
+  collectReleases,
+  createTrialPending,
+  publishStaging,
+  readTrial,
+  releaseUpdateLock,
+  resolvePrefix,
+  switchLink,
+  type ReleaseKind,
+} from "./store.js";
+import { resolveTarget } from "./target.js";
+
+/** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
+export const PREPARE_DEADLINE_MS = 45 * 60_000;
+const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
+
+export type InstallKind = { kind: ReleaseKind; checkout?: string };
+
+export type UpdateRunOutcome =
+  | { status: "pending"; target: { version: string }; releaseRoot: string }
+  | { status: "current"; version: string; pluginsChanged: boolean }
+  | { status: "failed"; reason: string; message: string };
+
+/** Where the checkout lives: a Git install runs from a checkout or from a release worktree of one. */
+async function detectInstall(runningRoot: string): Promise<InstallKind> {
+  const common = await runCommandWithTimeout(
+    ["git", "-C", runningRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { timeoutMs: 10_000 },
+  ).catch(() => null);
+  const dir = common?.code === 0 ? common.stdout.trim() : "";
+  if (!dir) {
+    return { kind: "package" };
+  }
+  return { kind: "git", checkout: path.basename(dir) === ".git" ? path.dirname(dir) : runningRoot };
+}
+
+/**
+ * Prepares and publishes the next release for `runId`. The caller restarts the Gateway when
+ * this returns "pending"; the launcher then switches on its next child start.
+ */
+export async function prepareUpdate(params: {
+  runId: string;
+  runningRoot: string;
+  runningVersion: string;
+  channel: UpdateChannel;
+  tag?: string;
+  sha?: string;
+  node?: string;
+  env?: NodeJS.ProcessEnv;
+  /** The operator's overall budget (`--timeout`); without it, the default preparation deadline. */
+  timeoutMs?: number;
+  /** `--accept-capabilities`: plugin maintenance may accept widened plugin capabilities. */
+  acceptCapabilities?: boolean;
+}): Promise<UpdateRunOutcome> {
+  const timeoutMs = params.timeoutMs ?? PREPARE_DEADLINE_MS;
+  const deadline = Date.now() + timeoutMs;
+  const env = params.env ?? process.env;
+  const prefix = resolvePrefix(env);
+  const node = params.node ?? process.execPath;
+  // Already current: plugins are still maintained, by the running core; the caller restarts
+  // a running Gateway only when they changed.
+  const current = async (version: string): Promise<UpdateRunOutcome> => {
+    const pluginsChanged = await maintainPlugins({
+      runId: params.runId,
+      root: params.runningRoot,
+      node,
+      env,
+      channel: params.channel,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      acceptCapabilities: params.acceptCapabilities,
+    });
+    await finishUpdateRunAsync(
+      params.runId,
+      { status: "skipped", reason: "already-current" },
+      { env },
+    );
+    return { status: "current", version, pluginsChanged };
+  };
+  const fail = async (
+    reason: string,
+    message: string,
+    output?: string,
+  ): Promise<UpdateRunOutcome> => {
+    // The ledger bounds detail from the head; preserve the command's final error first.
+    const detail = output
+      ? sliceUtf16Safe(stripAnsi(output).trim(), -UPDATE_RUN_TEXT_LIMIT)
+      : undefined;
+    await finishUpdateRunAsync(
+      params.runId,
+      {
+        status: "failed",
+        reason,
+        nextAction: message,
+        ...(detail ? { diagnostics: { failure: { step: "outcome", detail } } } : {}),
+      },
+      { env },
+    );
+    return { status: "failed", reason, message };
+  };
+  const trial = await readTrial(prefix);
+  if (trial && ["pending", "trial", "restoring"].includes(trial.phase)) {
+    return await fail(
+      "update-running",
+      "Another update is switching releases. Try again in a few minutes.",
+    );
+  }
+  const lock = await acquireUpdateLock(
+    { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
+    prefix,
+  );
+  if (!lock.acquired) {
+    return await fail("update-running", `Update ${lock.lock.runId} is already running.`);
+  }
+  let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
+  try {
+    if (lock.previous) {
+      await finishUpdateRunAsync(
+        lock.previous.runId,
+        { status: "failed", reason: "interrupted" },
+        { env },
+      );
+    }
+    // Releases left by an earlier update; never on the critical path.
+    void collectReleases(prefix).catch(() => undefined);
+    const install = await detectInstall(params.runningRoot);
+    let target;
+    try {
+      target = await resolveTarget({
+        kind: install.kind,
+        channel: params.channel,
+        checkout: install.checkout,
+        tag: params.tag,
+        sha: params.sha,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+      });
+    } catch (error) {
+      return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
+    }
+    await recordUpdateRunPhaseAsync(
+      params.runId,
+      "staging",
+      {
+        target: {
+          kind: install.kind,
+          version: target.version,
+          ...(target.kind === "git" ? { sha: target.sha } : {}),
+        },
+      },
+      { env },
+    );
+    if (target.kind === "package" && target.version === params.runningVersion) {
+      return await current(target.version);
+    }
+    // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
+    // old code. An unknown build commit prepares a release.
+    const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
+    if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
+      return await current(target.version);
+    }
+    const checked = await preflight({
+      kind: install.kind,
+      target,
+      prefix,
+      stateDir: resolveStateDir(env),
+      node,
+      env,
+    });
+    if (!checked.ok) {
+      return await fail(checked.reason, checked.message);
+    }
+    staging = await allocateStaging({ kind: install.kind }, prefix);
+    const onStep = async (name: string) => {
+      await recordUpdateRunStepAsync(
+        params.runId,
+        { step: `prepare:${name}`, status: "in_progress", startedAtMs: Date.now() },
+        { env },
+      );
+    };
+    const prepared: PrepareResult =
+      target.kind === "git"
+        ? await prepareGit({
+            checkout: target.checkout,
+            sha: target.sha,
+            staging: staging.path,
+            node,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            onStep,
+          })
+        : await preparePackage({
+            spec: target.spec,
+            staging: staging.path,
+            npm: npmBesideNode(node),
+            node,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            onStep,
+          });
+    if (!prepared.ok) {
+      return await fail(
+        prepared.reason,
+        "The new version could not be built. The current version is still running.",
+        prepared.stderrTail,
+      );
+    }
+    await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
+    const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+    if (!verdict.ok) {
+      return await fail(
+        "release-check-failed",
+        `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
+        verdict.detail,
+      );
+    }
+    const releaseRoot = await publishStaging(staging);
+    staging = undefined;
+    if (target.kind === "git") {
+      // The worktree was registered at its staging path; record where it now lives.
+      const repaired = await runCommandWithTimeout(
+        ["git", "-C", target.checkout, "worktree", "repair", releaseRoot],
+        { timeoutMs: 30_000 },
+      );
+      if (repaired.code !== 0) {
+        return await fail(
+          "release-registration-failed",
+          "The new version could not be registered with Git. The current version is still running.",
+          repaired.stderr,
+        );
+      }
+    }
+    const launcher = await writeLauncher(prefix);
+    // Forwarded commands run `prefix/openclaw` until the launcher switches it, so it must
+    // serve the running tree: created on the first conversion, repointed if it is stale.
+    const slot = path.join(prefix, "openclaw");
+    const served = await fs.realpath(slot).catch(() => null);
+    if (served !== (await fs.realpath(params.runningRoot))) {
+      await switchLink(path.relative(prefix, params.runningRoot), prefix);
+    }
+    const previous = await fs.readlink(slot);
+    await markForwarding(params.runningRoot, launcher, prefix);
+    // Last before the trial: the restart loads the new core and its plugins together.
+    await maintainPlugins({
+      runId: params.runId,
+      root: releaseRoot,
+      node,
+      env,
+      channel: params.channel,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      acceptCapabilities: params.acceptCapabilities,
+    });
+    await createTrialPending(
+      {
+        runId: params.runId,
+        target: path.relative(prefix, releaseRoot),
+        previous,
+        version: prepared.version,
+        buildId: prepared.buildId,
+      },
+      prefix,
+    );
+    await recordUpdateRunPhaseAsync(
+      params.runId,
+      "activating",
+      {
+        after: {
+          version: prepared.version,
+          ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
+        },
+      },
+      { env },
+    );
+    return { status: "pending", target: { version: prepared.version }, releaseRoot };
+  } catch (error) {
+    return await fail(
+      "update-failed",
+      "The update failed before anything changed. The current version is still running.",
+      error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),
+    );
+  } finally {
+    if (staging) {
+      await fs.rm(staging.path, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await releaseUpdateLock(prefix).catch(() => undefined);
+  }
+}
+
+/**
+ * Leaves the marker `release-launcher-forward.mjs` reads, so entry points written for the
+ * running tree (service definitions, PATH shims) start the launcher. Never inside a release.
+ */
+async function markForwarding(runningRoot: string, launcher: string, prefix: string) {
+  if (runningRoot.startsWith(path.join(prefix, "releases") + path.sep)) {
+    return;
+  }
+  // A main working tree keeps the marker inside `.git`; a linked worktree's `.git` is a file,
+  // so it and package trees use the root-level marker the forwarder also reads.
+  const gitDir = await fs.stat(path.join(runningRoot, ".git")).catch(() => null);
+  const marker = gitDir?.isDirectory()
+    ? path.join(runningRoot, ".git", "openclaw-launcher")
+    : path.join(runningRoot, ".openclaw-launcher");
+  await fs.writeFile(marker, `${launcher}\n`);
+}
+
+function npmBesideNode(node: string): string {
+  return path.join(path.dirname(node), process.platform === "win32" ? "npm.cmd" : "npm");
+}
+
+/** The new code judges itself, at the path it will serve from. */
+async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.ProcessEnv) {
+  const result = await runReleaseCommand(
+    releaseRoot,
+    node,
+    env,
+    ["check-release", "--json"],
+    CHECK_RELEASE_TIMEOUT_MS,
+  );
+  // SAFETY: the child is this release's own `update check-release --json`, which writes checkRelease's result.
+  const parsed = result.parsed as Awaited<ReturnType<typeof checkRelease>> | undefined;
+  if (!parsed) {
+    return {
+      ok: false,
+      reason: result.code === null ? "timed out" : `exited ${result.code}`,
+      detail: result.stderr,
+    };
+  }
+  const failed = parsed.surfaces.filter((surface) => surface.error);
+  return {
+    ok: parsed.ok && result.code === 0,
+    reason: parsed.reason,
+    detail: failed.map((s) => `${s.plugin}/${s.surface}: ${s.error}`).join("\n") || result.stderr,
+  };
+}
+
+/**
+ * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
+ * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
+ */
+async function maintainPlugins(params: {
+  runId: string;
+  root: string;
+  node: string;
+  env: NodeJS.ProcessEnv;
+  channel: UpdateChannel;
+  timeoutMs: number;
+  acceptCapabilities?: boolean;
+}): Promise<boolean> {
+  const startedAtMs = Date.now();
+  const args = [
+    "plugins",
+    "--json",
+    "--channel",
+    params.channel,
+    "--timeout",
+    String(Math.max(1, Math.ceil(params.timeoutMs / 1000))),
+    ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+  ];
+  const result = await runReleaseCommand(
+    params.root,
+    params.node,
+    params.env,
+    args,
+    params.timeoutMs,
+  );
+  // SAFETY: the child is this release's own `update plugins --json`, which writes updatePluginsAfterCoreUpdate's result.
+  const plugins = result.parsed as PostCorePluginUpdateResult | undefined;
+  // As the existing updater: only an error result fails the step; warnings are notes.
+  const failed = result.code !== 0 || !plugins || plugins.status === "error";
+  const messages = plugins
+    ? [
+        ...(plugins.warnings ?? []).map((warning) => warning.message),
+        ...plugins.sync.warnings,
+        ...plugins.sync.errors,
+        ...plugins.npm.outcomes
+          .filter((outcome) => outcome.status === "error")
+          .map((outcome) => outcome.message),
+        ...(plugins.reason ? [plugins.reason] : []),
+      ]
+    : [];
+  if (failed && messages.length === 0) {
+    messages.push(
+      result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`),
+    );
+  }
+  await recordUpdateRunStepAsync(
+    params.runId,
+    {
+      step: "plugins",
+      status: failed ? "failed" : "completed",
+      startedAtMs,
+      endedAtMs: Date.now(),
+      ...(failed
+        ? { detail: [...messages, "Run `openclaw plugins update` to retry."].join("\n") }
+        : messages.length > 0
+          ? { detail: messages.join("\n") }
+          : {}),
+    },
+    { env: params.env },
+  );
+  return plugins?.changed === true;
+}
+
+/** Runs one of the release's own `openclaw update` subcommands; its JSON is the last stdout line. */
+async function runReleaseCommand(
+  root: string,
+  node: string,
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  timeoutMs: number,
+) {
+  // The child is not a launcher child, whatever this process is.
+  const childEnv = { ...env };
+  delete childEnv.OPENCLAW_LAUNCHER_IPC;
+  // The process owner ends the whole tree (npm and its children too) and waits for it at timeout.
+  const result = await runCommandWithTimeout(
+    [node, path.join(root, "openclaw.mjs"), "update", ...args],
+    { cwd: root, baseEnv: childEnv, timeoutMs, killProcessTree: true },
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
+  } catch {
+    parsed = undefined;
+  }
+  return {
+    code: result.termination === "exit" ? result.code : null,
+    parsed,
+    stderr: result.stderr.slice(-8192),
+  };
+}

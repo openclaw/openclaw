@@ -44,6 +44,7 @@ import {
   retireUnmanifestedRecovery,
   selectUnmanifestedRecovery,
 } from "./update-cleanup-unmanifested.js";
+import { discardDatabaseSnapshotServerCaptures } from "./update-database-snapshot-cleanup.js";
 import { retireDisplacedDatabases } from "./update-displaced-database-cleanup.js";
 
 type RecoveryCleanupProgress = {
@@ -352,7 +353,9 @@ export async function retireOwnedSessionSqliteRecovery(
     (item) => item.kind === undefined && !unmanifested.has(item.path),
   );
   const captures = candidates.filter(
-    (item) => item.kind === "update-capture" && !unmanifested.has(item.path),
+    (item) =>
+      (item.kind === "update-capture" || item.kind === "database-snapshot") &&
+      !unmanifested.has(item.path),
   );
   const displaced = candidates.filter(
     (item) => item.kind === "displaced-database" && !unmanifested.has(item.path),
@@ -441,6 +444,12 @@ export async function retireOwnedSessionSqliteRecovery(
     selected: captures,
     identities: captureIdentities,
     assertCurrent: () => authority.assertCurrent(),
+    // Server-side captures go first; their manifests stay until the drop succeeds.
+    beforeRemove: async (item) => {
+      if (item.kind === "database-snapshot") {
+        await discardDatabaseSnapshotServerCaptures(item.path, currentConfig);
+      }
+    },
     onProgress: (item, index) =>
       params.onProgress?.({
         phase: "removing-capture",

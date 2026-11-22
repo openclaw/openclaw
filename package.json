@@ -73,6 +73,8 @@
     "node-compile-cache.mjs",
     "gateway-prewarm.mjs",
     "openclaw.mjs",
+    "release-launcher-forward.mjs",
+    "release-launcher-forward.d.mts",
     "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",

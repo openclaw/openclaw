@@ -748,7 +748,9 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["openclaw.setup.options", "system-agent", "operator.admin", "2026.11"],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["skills.categories", "skills", "operator.read", "2026.11"],
   [
     "models.authProfileRename",
     "models-auth-order",

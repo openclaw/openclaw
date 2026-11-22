@@ -2,18 +2,13 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import { captureAgentTurnPrincipal } from "../../../gateway/agent-turn/principal.js";
 import {
   captureGatewayDeviceRevocation,
-  readGatewayDeviceRevocationGuard,
+  closeGatewayDeviceRevocation,
 } from "../../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "../../../gateway/operator-run-recovery.js";
 import { withRecovery } from "../../../gateway/operator-run-recovery.test-support.js";
-import {
-  SharedGatewaySessionGenerationState,
-  enforceSharedGatewaySessionGenerationForConfigWrite,
-} from "../../../gateway/server-shared-auth-generation.js";
+import { removePairedDevice } from "../../../infra/device-pairing.js";
 import {
   announceTesting,
   setSubagentAnnounceDeliveryDepsForTest,
@@ -39,47 +34,27 @@ afterEach(() => {
   subagentRuns.clear();
 });
 
-it.each(["revoked continuation", "source owner changed"] as const)(
-  "preserves captured results after policy invalidation through %s",
+it.each(["removed paired device", "closed source owner"] as const)(
+  "preserves captured results and publishes a notice after %s prevents delivery",
   async (route) =>
     withRecovery(
-      async (fixture) => {
+      async (fixture, stateDir) => {
         await admitCompletionFixtureDatabase();
-        const generation = new SharedGatewaySessionGenerationState({
-          current: "before",
-          required: null,
-        });
         const caller = captureGatewayDeviceRevocation(
           fixture.context,
           { deviceId: "recovery-device", role: "operator" },
           () => true,
-          undefined,
-          {
-            isCurrent: () => true,
-            subscribe: (revoked) => generation.onInvalidated("before", revoked),
-          },
         );
-        const origin = expectDefined(
-          await captureGatewayOperatorRunAuthority({
-            client: captureAgentTurnPrincipal(fixture.client),
-            context: fixture.context,
-            sourceAuthority: null,
-            hasCurrentClientAuthority: caller.isCurrent,
-          }),
-          "origin",
-        );
-        fixture.client.internal!.operatorRunAuthority = origin.authority;
+        fixture.client.internal!.operatorRunAuthority = fixture.sourceAuthority;
         const continuation = expectDefined(
           await captureGatewayOperatorContinuation({
             client: fixture.client,
+            agentId: fixture.target.agentId,
             context: fixture.context,
           }),
           "continuation",
         );
-        const releaseContinuation = expectDefined(continuation.authority.retain, "retain")();
-        continuation.release();
-        origin.release();
-        caller.release();
+        fixture.client.internal!.operatorRunAuthority = continuation.authority;
         try {
           const { subagent } = records();
           Object.assign(subagent, {
@@ -90,24 +65,32 @@ it.each(["revoked continuation", "source owner changed"] as const)(
             cleanup: "keep",
             delivery: { status: "pending", generation: 1 },
           });
-          subagent.completion!.resultText = "CAPTURED ANSWER before policy edit";
-          if (route === "revoked continuation") {
+          subagent.completion!.resultText = "CAPTURED ANSWER before delivery became unavailable";
+          if (route === "removed paired device") {
             armRequesterWake({ subagent });
           }
           seedSubagentCompletionOwner({ subagent });
-          enforceSharedGatewaySessionGenerationForConfigWrite({
-            state: generation,
-            nextConfig: {},
-            resolveRuntimeSnapshotGeneration: () => "after",
-            clients: [],
-          });
-          const reauthorize = expectDefined(continuation.authority.reauthorize, "reauthorize");
-          expect(reauthorize).toThrow("Operator access was revoked; start a new user turn.");
+          if (route === "removed paired device") {
+            await removePairedDevice("recovery-device", stateDir);
+          } else {
+            closeGatewayDeviceRevocation(fixture.context);
+          }
           const model = vi.fn();
           const gateway = vi.fn(async (request: { method: string }) => {
             if (request.method === "agent") {
-              reauthorize();
-              model();
+              const started = expectDefined(
+                await captureGatewayOperatorContinuation({
+                  client: fixture.client,
+                  agentId: fixture.target.agentId,
+                  context: fixture.context,
+                }),
+                "next operator start",
+              );
+              try {
+                model();
+              } finally {
+                started.release();
+              }
             }
             return { messages: [] };
           });
@@ -118,24 +101,19 @@ it.each(["revoked continuation", "source owner changed"] as const)(
           });
           using driver = requesterWakeDriver([{ subagent }]);
           driver.wake.mockImplementation(
-            route === "revoked continuation"
+            route === "removed paired device"
               ? maybeWakeRequesterAfterAllChildrenSettled
               : async () => false,
           );
           driver.controller.options.runSubagentAnnounceFlow = (params) =>
             runSubagentAnnounceFlow({
               ...params,
-              ...(route === "source owner changed"
-                ? {
-                    isCompletionDeliveryAllowed: expectDefined(
-                      readGatewayDeviceRevocationGuard(continuation.authority.assertCurrent),
-                      "source guard",
-                    ),
-                  }
+              ...(route === "closed source owner"
+                ? { isCompletionDeliveryAllowed: caller.isCurrent }
                 : {}),
             });
           const flush = observeRootWork();
-          if (route === "revoked continuation") {
+          if (route === "removed paired device") {
             await driver.run();
           } else {
             expect(driver.controller.startSubagentAnnounceCleanupFlow(subagent)).toBe(true);
@@ -144,11 +122,11 @@ it.each(["revoked continuation", "source owner changed"] as const)(
           expect(model).not.toHaveBeenCalled();
           const stored = loadSubagentRegistryFromSqlite().get(subagent.runId);
           expect(stored?.delivery).toMatchObject({
-            status: route === "revoked continuation" ? "failed" : "suspended",
+            status: route === "removed paired device" ? "failed" : "suspended",
             disposition: "permanent_failure",
             lastError:
-              route === "revoked continuation"
-                ? "Operator access was revoked; start a new user turn."
+              route === "removed paired device"
+                ? expect.stringContaining("start a new user turn.")
                 : expect.stringContaining(
                     "subagent source lifecycle changed before completion delivery",
                   ),
@@ -160,12 +138,15 @@ it.each(["revoked continuation", "source owner changed"] as const)(
           expect(notices).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
-                content: expect.stringContaining("CAPTURED ANSWER before policy edit"),
+                content: expect.stringContaining(
+                  "CAPTURED ANSWER before delivery became unavailable",
+                ),
               }),
             ]),
           );
         } finally {
-          releaseContinuation();
+          continuation.release();
+          caller.release();
         }
       },
       { tokenlessDevice: true, parentSessionKey: null },

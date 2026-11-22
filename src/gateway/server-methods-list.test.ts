@@ -12,7 +12,9 @@ const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 const descriptor = (name: string) => descriptors.find((entry) => entry.name === name);
 
 it.each([
+  ["skills.categories", "operator.read", { since: "2026.11" }],
   ["toolUsage.status", "operator.admin", { since: "2026.11" }],
+  ["openclaw.setup.options", "operator.admin", { since: "2026.11" }],
   ["models.authProfileRename", "operator.admin", { since: "2026.11", controlPlaneWrite: true }],
   [
     "toolUsage.import toolUsage.reset",

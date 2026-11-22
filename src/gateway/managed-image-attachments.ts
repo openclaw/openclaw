@@ -1252,7 +1252,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
     if (!requestAuth) {
       return true;
     }
-    assertRequestCurrent = requestAuth.assertCurrent;
 
     const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
@@ -1288,11 +1287,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
       getRemoteControlUiIngressContext(req)?.resolvePrincipal(),
       sessionKey,
     );
-    const assertRequest = assertRequestCurrent;
-    assertRequestCurrent = () => {
-      assertRequest?.();
-      ingressRead.assertCurrent();
-    };
+    assertRequestCurrent = () => ingressRead.assertCurrent();
     const record = await readManagedImageRecord(attachmentId, stateDir);
     assertCallerCurrent();
     if (!record || record.sessionKey !== sessionKey) {

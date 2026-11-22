@@ -49,7 +49,11 @@ import {
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
-import { captureUpdateActivationSchemas } from "./update-command-schema.js";
+import {
+  assertPendingMigrationsAdmitted,
+  assertNodeServiceReleasesUpdateState,
+  captureUpdateActivationSchemas,
+} from "./update-command-schema.js";
 import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
@@ -425,7 +429,7 @@ export async function executeMutableUpdate(
       originalServiceVerdict?.kind === "owned" && originalServiceVerdict.requiresInstallRootRefresh
         ? originalServiceVerdict.root
         : params.root;
-    ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
+    const activationSchemas = await captureUpdateActivationSchemas({
       root: previousRoot,
       env,
       config,
@@ -433,7 +437,10 @@ export async function executeMutableUpdate(
       candidateSchemaVersions,
       gatewayRestartCompletion,
       timeoutMs: params.updateStepTimeoutMs,
-    }));
+    });
+    ({ previousSchemaVersions, schemaVersions } = activationSchemas);
+    // Refuse before the Gateway stops: Doctor cannot take the state from a running node service.
+    await assertNodeServiceReleasesUpdateState({ env, timeoutMs: params.updateStepTimeoutMs });
     if (
       preManagedServiceStop?.running &&
       !servicePrepared &&
@@ -461,12 +468,6 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
-    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
-    await prepareMutableUpdate(env, activationTimeoutMs);
-    assertExecutionCurrent();
-    await recordPhase("activating");
-    assertExecutionCurrent();
     const publication = {
       // Every consumer keeps the release it started from; a release replaces no root.
       roots: params.updateInstallKind === "git" ? [] : roots,
@@ -481,11 +482,36 @@ export async function executeMutableUpdate(
       selected: preManagedServiceStop,
       phase: "before-stop",
     });
+    // Activation is this run's first state change. Copy the originals after the last
+    // pre-stop refusal, while the Gateway still serves, and before the activation clock
+    // starts: a refused run copies nothing and the copy never spends activation time.
+    await originalRun?.captureOriginal?.();
+    assertExecutionCurrent();
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
+    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+    await prepareMutableUpdate(env, activationTimeoutMs);
+    assertExecutionCurrent();
+    await recordPhase("activating");
+    assertExecutionCurrent();
     if (!servicePrepared) {
       await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);
       // Preparation can hold Windows recovery custody without stopping a process.
       servicePrepared = true;
+    }
+    // A running owned service was stopped above, or its supervisor restarts it on the new package.
+    if (
+      params.updateInstallKind === "package" &&
+      !(
+        preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned" &&
+        preManagedServiceStop.running
+      )
+    ) {
+      await assertPendingMigrationsAdmitted({
+        pendingMigrations: activationSchemas.pendingMigrations,
+        env,
+        timeoutMs: activationTimeoutMs,
+      });
     }
     const postStopStartedAt = Date.now();
     await waitForCurrent();

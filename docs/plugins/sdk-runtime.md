@@ -523,6 +523,10 @@ callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
 retained consumers keep their selected generation until they settle.
+Queued channel replies retain their delivery and run-observer callbacks until
+source settlement, independently of the inbound turn's adoption lifecycle.
+An internal delivery-recovery turn takes its own callback hold; completing the
+original turn does not close the recovery's callbacks or reuse its cancellation identity.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 

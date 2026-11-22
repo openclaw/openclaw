@@ -8,7 +8,7 @@ import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as userProfileList from "../state/user-profile-list.native.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
@@ -626,7 +626,7 @@ describe("gateway client capability tool filtering", () => {
         {
           agentId: "main",
           sessionKey,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "reviewer",
             scopes: [scope],
             assertCurrent: () => {},
