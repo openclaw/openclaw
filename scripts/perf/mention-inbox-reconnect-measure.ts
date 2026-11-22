@@ -1,19 +1,24 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/mention-inbox-reconnect-measure.ts
 // Real mentions.list handler, SQLite worker, profiles, sharing and projection; no WebSocket.
-// Compare --owner <saved mention-inbox.ts>; --allocation samples separately from timing.
+// Compare --owner <saved mention-inbox.ts> and --targets <saved mention-inbox-targets.ts>.
+// --profile <absolute prefix> captures cold main/worker CPU; --allocation also samples heap.
+// Run five serial A/A/B cold processes; profiling/allocation runs are separate from timing.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { MentionStoreSource } from "../../src/gateway/mention-inbox-store.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import { GatewayBenchWorkerProfiler } from "../lib/gateway-bench-worker-profile.js";
 
 const { values } = parseArgs({
   options: {
     owner: { type: "string" },
+    targets: { type: "string" },
+    profile: { type: "string" },
     clients: { type: "string", default: "100" },
     waves: { type: "string", default: "5" },
     allocation: { type: "boolean" },
@@ -23,9 +28,16 @@ const clients = Number(values.clients);
 const waves = Number(values.waves);
 assert(Number.isSafeInteger(clients) && clients >= 30 && clients <= 100);
 assert(Number.isSafeInteger(waves) && waves >= 1);
+const inspector = new Session();
+inspector.connect();
+const workerProfiler = new GatewayBenchWorkerProfiler(inspector);
 const stages: Record<string, { calls: number; ms: number }> = {};
 const observer = Symbol.for("openclaw.bench.mention-stages");
 Object.defineProperty(globalThis, observer, { value: stages });
+const targetSource = readFileSync(
+  values.targets ?? new URL("../../src/gateway/mention-inbox-targets.ts", import.meta.url),
+  "utf8",
+);
 const source = readFileSync(
   values.owner ?? new URL("../../src/gateway/mention-inbox.ts", import.meta.url),
   "utf8",
@@ -36,17 +48,36 @@ registerHooks({
     const names = url.endsWith("/gateway/mention-inbox.ts")
       ? ["maintain", "synchronize", "refreshConnectedViews", "publishConnectedViews", "readView"]
       : url.endsWith("/gateway/mention-inbox-targets.ts")
-        ? ["prepareTargets"]
-        : [];
+        ? ["prepareTargets", "prepareMissingTarget"]
+        : url.endsWith("/gateway/session-sharing-policy.ts")
+          ? ["resolveSessionSharingTargetAsync"]
+          : url.endsWith("/gateway/session-sharing-target-read.ts")
+            ? ["prepareSessionSharingRead"]
+            : [];
     if (!names.length) {
       return loaded;
     }
     let text = url.endsWith("/gateway/mention-inbox.ts")
       ? stripTypeScriptTypes(source)
-      : stripTypeScriptTypes(readFileSync(new URL(url), "utf8"));
+      : stripTypeScriptTypes(
+          url.endsWith("/gateway/mention-inbox-targets.ts")
+            ? targetSource
+            : readFileSync(new URL(url), "utf8"),
+        );
+    if (url.endsWith("/gateway/session-sharing-target-read.ts")) {
+      text = text.replaceAll(
+        "return prepareSessionMutationFacts(",
+        "return await prepareSessionMutationFacts(",
+      );
+    }
     for (const name of names) {
-      // These owner functions close at two-space indentation; instrument only their bodies.
-      const pattern = new RegExp(`(function ${name}\\([^]*?\\)\\s*\\{)([^]*?)(\\n  \\})`);
+      const indent = ["resolveSessionSharingTargetAsync", "prepareSessionSharingRead"].includes(
+        name,
+      )
+        ? ""
+        : "  ";
+      // Strip types first, then instrument the named owner body at its closing indentation.
+      const pattern = new RegExp(`(function ${name}\\([^]*?\\)\\s*\\{)([^]*?)(\\n${indent}\\})`);
       assert(pattern.test(text), `missing stage ${name}`);
       text = text.replace(
         pattern,
@@ -74,6 +105,7 @@ const { gatewayConnect, gatewayProfile } =
   await import("../../src/gateway/server/client-fixtures.test-support.js");
 const { mentionHandlers } = await import("../../src/gateway/server-methods/mentions.js");
 
+const keepAlive = setInterval(() => {}, 1000);
 await withOpenClawTestState({ scenario: "minimal" }, async () => {
   const cfg = {};
   setRuntimeConfigSnapshot(cfg);
@@ -131,6 +163,33 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
     ).kind,
     "committed",
   );
+  const { onWorkerRequestMetrics } = await import("../../src/infra/worker-request-diagnostics.js");
+  const workerRequests: Record<string, { calls: number; ms: number }> = {};
+  const stopObserving = onWorkerRequestMetrics(
+    (kind, requestClass, phase, _depth, _wait, duration) => {
+      if (phase === "completed") {
+        const row = (workerRequests[`${kind}:${requestClass}`] ??= { calls: 0, ms: 0 });
+        row.calls++;
+        row.ms += duration ?? 0;
+      }
+    },
+  );
+  global.gc?.();
+  if (values.profile) {
+    await workerProfiler.start("cpu", `${values.profile}.cpu`);
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.start");
+  }
+  if (values.allocation) {
+    if (values.profile) {
+      await workerProfiler.start("heap", `${values.profile}.heap`);
+    }
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 32768,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
   const scheduler = createTestGatewayScheduler();
   let viewers: GatewayClient[] = [];
   let notifications = 0;
@@ -179,24 +238,43 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
     latencies.sort((a, b) => a - b);
     return { p50Ms: latencies[Math.floor(latencies.length / 2)], maxMs: latencies.at(-1) };
   }
-  const inspector = new Session();
   try {
     const coldStart = performance.now();
     const coldCpu = process.cpuUsage();
+    const coldThread = process.threadCpuUsage();
     const coldLatency = await wave();
     const coldUsage = process.cpuUsage(coldCpu);
+    const coldMain = process.threadCpuUsage(coldThread);
+    stopObserving();
     const cold = {
+      mainCpuMs: (coldMain.user + coldMain.system) / 1000,
+      workerRequests,
       ...coldLatency,
       elapsedMs: performance.now() - coldStart,
       cpuMs: (coldUsage.user + coldUsage.system) / 1000,
       stages: structuredClone(stages),
     };
+    if (values.profile) {
+      writeFileSync(
+        `${values.profile}.cpuprofile`,
+        JSON.stringify((await inspector.post("Profiler.stop")).profile),
+      );
+      await workerProfiler.stop("cpu");
+    }
+    let coldAllocatedBytes: number | undefined;
+    if (values.allocation) {
+      const { profile } = await inspector.post("HeapProfiler.stopSampling");
+      coldAllocatedBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
+      if (values.profile) {
+        writeFileSync(`${values.profile}.heapprofile`, JSON.stringify(profile));
+        await workerProfiler.stop("heap");
+      }
+    }
     for (let i = 0; i < 3; i++) {
       await wave();
     }
     global.gc?.();
     if (values.allocation) {
-      inspector.connect();
       await inspector.post("HeapProfiler.startSampling", {
         samplingInterval: 32768,
         includeObjectsCollectedByMajorGC: true,
@@ -234,6 +312,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
         node: process.version,
         load: loadavg(),
         sourceSha256: createHash("sha256").update(source).digest("hex"),
+        targetSha256: createHash("sha256").update(targetSource).digest("hex"),
         clients,
         profiles: 30,
         retainedMentions: sources.length,
@@ -241,6 +320,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
         waves,
         notifications,
         cold,
+        coldAllocatedBytes,
         allocatedBytesPerWave: allocatedBytes === undefined ? undefined : allocatedBytes / waves,
         results,
       }),
@@ -251,4 +331,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
     await scheduler.stop();
     catalog.release();
   }
+}).finally(() => {
+  clearInterval(keepAlive);
+  inspector.disconnect();
 });

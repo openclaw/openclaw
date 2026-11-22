@@ -52,6 +52,12 @@ it("creates automations paused, once, in the agent's own conversation", () => {
   expect(prompt).toContain('{"action":"list","includeDisabled":true}');
   expect(prompt).toContain("do not add or update that one");
   const add = JSON.parse(prompt.split("\n").find((line) => line.startsWith('{"action":"add"'))!);
+  const declare = JSON.parse(
+    prompt.split("\n").find((line) => line.startsWith('{"action":"plan"'))!,
+  );
+  expect(declare.slots).toEqual([{ slotId: "<entry id>", name: "<entry name, or its id>" }]);
+  expect(prompt.indexOf(JSON.stringify(declare))).toBeLessThan(prompt.indexOf(JSON.stringify(add)));
+  expect(add).toMatchObject({ planId: "<returned planId>", slotId: "<entry id>" });
   expect(add.job).toMatchObject({
     declarationKey: "template:scout:<entry id>",
     enabled: false,

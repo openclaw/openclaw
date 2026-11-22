@@ -475,9 +475,9 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   );
 
   it.each(["no replacement", "session id", "lifecycle revision"] as const)(
-    "cleans up the committed fork after source closure with %s",
+    "cleans up the committed fork after cancellation with %s",
     async (replacement) => {
-      let active = true;
+      const cancellation = new AbortController();
       let childKey: string | undefined;
       let successor: SessionEntry | undefined;
       let successorHistory: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> = [];
@@ -503,20 +503,20 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
             successor = read(childSessionKey);
             successorHistory = await sessions.loadTranscriptEvents(successorScope);
           }
-          active = false;
+          cancellation.abort(new Error("fork spawn cancelled"));
           return { rollback };
         },
       );
       const tool = createSessionsSpawnTool({ config, agentSessionKey: parentKey });
-      const result = await callerContext.withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: parentKey, receiptAuthority: () => active },
-        () =>
-          tool.execute("closed-fork-source", { task: "inspect parent history", context: "fork" }),
+      const result = await tool.execute(
+        "cancelled-fork-source",
+        { task: "inspect parent history", context: "fork" },
+        cancellation.signal,
       );
 
       expect(result.details).toMatchObject({
         status: "error",
-        error: "tool invocation authority is no longer active",
+        error: "fork spawn cancelled",
       });
       expectNotLaunched();
       expect(rollback).toHaveBeenCalledOnce();

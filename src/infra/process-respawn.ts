@@ -31,7 +31,7 @@ import { assertPersistedStateDatabaseAccessAllowed } from "./gateway-state-owner
 import { rewritePnpmVersionedOpenClawEntryPath } from "./openclaw-root.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { requestGatewayRestartWithSignalAdmission, triggerOpenClawRestart } from "./restart.js";
-import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
+import { detectGatewayRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 
 type GatewayRespawnResult = {
   mode: "supervised" | "disabled" | "failed";
@@ -42,6 +42,7 @@ type GatewayRespawnResult = {
 
 type GatewayUpdateRespawnResult =
   | { mode: "spawned"; pid?: number; child: ChildProcess }
+  | (GatewayRespawnResult & { mode: "supervised" })
   | { mode: "disabled" | "failed"; detail?: string };
 type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
@@ -66,12 +67,15 @@ export type GatewayRestartDecision =
   | { mode: "disabled"; reason: "unmanaged"; detail: string }
   | {
       mode: "supervised";
-      supervisor: NonNullable<ReturnType<typeof detectGatewayRespawnSupervisor>>;
+      supervisor: RespawnSupervisor | "external" | "launcher";
     };
 
 export function resolveGatewayRestartDecision(): GatewayRestartDecision {
   if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", reason: "no-respawn" };
+  }
+  if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
+    return { mode: "supervised", supervisor: "launcher" };
   }
   const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
@@ -259,6 +263,9 @@ export function restartGatewayProcessWithFreshPid(
     return { mode: "failed", detail: formatErrorMessage(error) };
   }
   const { supervisor } = decision;
+  if (supervisor === "launcher") {
+    return { mode: "supervised", exitCode: 0 };
+  }
   if (supervisor === "launchd") {
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       mode: "start-after-exit",
@@ -315,6 +322,10 @@ export function respawnGatewayProcessForUpdate(
       args: entryArgs,
     });
     assertGatewayRespawnOutsideMaintenance(env);
+    // A launcher child has no service marker; its launcher starts the successor after this exit.
+    if (decision.mode === "supervised" && decision.supervisor === "launcher") {
+      return { mode: "supervised", exitCode: 0 };
+    }
     const child = spawn(invocation.command, invocation.args, {
       env,
       detached: true,

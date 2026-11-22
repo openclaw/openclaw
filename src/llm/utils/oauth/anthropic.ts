@@ -8,6 +8,7 @@ import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
+import { providerAuthFailureFromOAuthError } from "../../../plugins/provider-auth-failure.js";
 import {
   buildOAuthRequestSignal,
   createOAuthLoginCancelledError,
@@ -131,7 +132,7 @@ async function startCallbackServer(expectedState: string) {
       try {
         const result = await callback.waitForCallback();
         if (result.type === "oauth_error") {
-          throw new Error(`Anthropic OAuth error: ${result.error}`);
+          throw providerAuthFailureFromOAuthError(result.error);
         }
         return { code: result.code, state: result.state };
       } catch (error) {
@@ -233,13 +234,11 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
   const expectedState = generateOAuthState();
   const server = await startCallbackServer(expectedState);
 
-  const parseAuthorizationInput = (input: string) => {
-    const parsed = parseOAuthAuthorizationInput(input);
-    if (parsed.state && parsed.state !== expectedState) {
-      throw new Error("OAuth state mismatch");
-    }
-    return { code: parsed.code, state: parsed.state ?? expectedState };
-  };
+  // A pasted state must match; a bare code is bound to this attempt by PKCE.
+  const parseAuthorizationInput = (input: string) => ({
+    code: parseOAuthAuthorizationInput(input, { state: expectedState }).code,
+    state: expectedState,
+  });
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -264,7 +263,8 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
     const manualPromise = options.onManualCodeInput?.().then(
       (input) => {
         server.cancelWait();
-        return parseAuthorizationInput(input);
+        // An empty manual entry falls back to the prompt below.
+        return input.trim() ? parseAuthorizationInput(input) : null;
       },
       (err: unknown) => {
         server.cancelWait();
@@ -283,7 +283,7 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
       server.cancelWait,
     );
 
-    if (!result?.code) {
+    if (!result) {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
@@ -293,14 +293,6 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
         server.cancelWait,
       );
       result = parseAuthorizationInput(input);
-    }
-
-    if (!result.code) {
-      throw new Error("Missing authorization code");
-    }
-
-    if (!result.state) {
-      throw new Error("Missing OAuth state");
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");

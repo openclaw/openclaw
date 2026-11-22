@@ -3,6 +3,10 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import {
+  isGitReleaseForwardingPackage,
+  resolveGitReleasePrefix,
+} from "../../infra/git-release-paths.js";
 import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
@@ -97,9 +101,14 @@ export async function inspectNpmGlobalDestination(
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;
+    // A Git release install leaves the package forwarding to its launcher (exact text only).
+    const forwardsToThisInstall =
+      packageRootReal !== null &&
+      isGitReleaseForwardingPackage(packageRootReal, resolveGitReleasePrefix());
     const ownsPackage =
       packageRootReal !== null &&
-      ((await realpathOrResolve(root)) === packageRootReal ||
+      (forwardsToThisInstall ||
+        (await realpathOrResolve(root)) === packageRootReal ||
         (await gatewayServiceCommandUsesRoot({ root: packageRootReal, command })) === true);
     const ownsLauncher =
       !launcherPresent ||
@@ -177,6 +186,67 @@ export async function inspectNpmGlobalDestination(
         : "unreadable-layout",
     );
   }
+}
+
+/**
+ * A pnpm or Bun global entry that links to this Git checkout is the checkout's own
+ * `openclaw` command. This updater cannot switch it to the package: replacing the entry
+ * changes what every later service ownership check names, so revalidation, rollback and
+ * recovery refuse and leave the Gateway stopped, and current pnpm launchers staged for the
+ * replacement still point into the removed stage. Refuse before anything changes.
+ */
+export async function inspectCheckoutLinkPackageSwitch(params: {
+  checkoutRoot: string;
+  installTarget: ResolvedGlobalInstallTarget;
+  serviceRunsCheckout: boolean;
+  targetSpec: string;
+  storedChannel: string | null;
+  requestedChannel: string;
+}) {
+  const { manager, packageRoot } = params.installTarget;
+  if (manager === "npm" || !packageRoot) {
+    return null;
+  }
+  if (!(await fs.lstat(packageRoot).catch(() => null))?.isSymbolicLink()) {
+    return null;
+  }
+  const [linked, checkout] = await Promise.all([
+    realpathOrResolve(packageRoot),
+    realpathOrResolve(params.checkoutRoot),
+  ]);
+  if (linked !== checkout) {
+    return null;
+  }
+  const running = params.serviceRunsCheckout
+    ? "the CLI and Gateway still run"
+    : "the CLI still runs";
+  // No manual install recipe: it would bypass the updater's schema, runtime and service
+  // definition checks. The agent route can inspect this instance before switching.
+  const followChannel =
+    params.storedChannel === params.requestedChannel
+      ? [formatCliCommand("openclaw update")]
+      : [
+          formatCliCommand(`openclaw config set update.channel ${params.requestedChannel}`),
+          formatCliCommand("openclaw update"),
+        ];
+  const message = [
+    `Switch to ${params.targetSpec} not started: \`openclaw\` is a ${manager} global link to this Git checkout (${packageRoot} -> ${checkout})${params.serviceRunsCheckout ? " and the managed Gateway runs from that checkout" : ""}.`,
+    `This updater cannot replace that link in a way it can verify and roll back, so nothing was stopped or changed; ${running} the checkout.`,
+    `To keep this checkout and follow the ${params.requestedChannel} channel through its release tags, run ${followChannel.map((command) => `\`${command}\``).join(", then ")}.`,
+    `To switch to the package anyway, run \`${formatCliCommand("openclaw triage")}\` or ask this instance's agent; it can check database, runtime and Gateway service compatibility before moving the install.`,
+  ].join(" ");
+  return {
+    reason: "unsupported-package-target",
+    message,
+    failureFacts: [
+      createUpdateFailureFact({
+        check: "installation-inspection",
+        code: "unsupported-package-target",
+        message,
+      }),
+    ],
+    recoverySteps: followChannel.map((command) => ({ kind: "continue-update" as const, command })),
+  };
 }
 
 function destinationRefusal(detail: string, destination: UpdateDestinationFailure) {

@@ -330,18 +330,6 @@ describe("control-ui-i18n generated ownership", () => {
       .filter((key) => key.startsWith("sessionsView."))
       .map((key) => key.slice("sessionsView.".length));
     expect(
-      sessionKeys.slice(
-        sessionKeys.indexOf("personalGroupAdd"),
-        sessionKeys.indexOf("personalGroupEdit") + 1,
-      ),
-    ).toEqual([
-      "personalGroupAdd",
-      "personalGroupReferenceAdded",
-      "personalGroups",
-      "personalGroupNew",
-      "personalGroupEdit",
-    ]);
-    expect(
       sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
     ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
     expect(

@@ -22,10 +22,7 @@ import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const MAX_WAIT_IDS = 1_000;
 
@@ -350,7 +347,6 @@ async function waitForCollector(params: CollectorWaitParams) {
 
 async function waitForCollectorState(params: CollectorWaitParams) {
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
-  const assertCurrent = captureGatewayToolCallerAssertion();
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
@@ -423,7 +419,6 @@ async function waitForCollectorState(params: CollectorWaitParams) {
               return false;
             }
             params.assertCurrent?.();
-            assertCurrent?.();
             return true;
           },
         });

@@ -10,6 +10,16 @@ const en = {
   },
   sandboxRequired: "Sandbox required",
   sandboxInherited: "Sandbox follows agent settings",
+  sandboxNotReady: "Sandbox required · not set up yet",
+  sandboxNeeded: "The {role} role needs a sandbox.",
+  sandboxEngineUnavailable: "{engine} isn't running on the computer that hosts this claw.",
+  sandboxImageMissing: "Its sandbox isn't installed on this claw yet.",
+  sandboxAskBody: "OpenClaw can set this up for you.",
+  sandboxAsk: "Ask OpenClaw to set it up",
+  sandboxAsked:
+    "OpenClaw is working on this in the chat beside this page. When it's done, check again to invite people with this role.",
+  sandboxAskFailed: "Couldn't start a chat with OpenClaw. Try again.",
+  sandboxCheckAgain: "Check again",
   noRoles:
     "No roles are defined on this claw. Add a role in gateway.roles.definitions before inviting someone.",
   invalidRoleName:

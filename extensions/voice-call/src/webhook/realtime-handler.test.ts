@@ -12,11 +12,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
-import {
-  connectWs as openWebSocket,
-  startUpgradeWsServer as openUpgradeServer,
-  waitForClose,
-} from "../websocket-test-support.js";
+import { connectWs as openWebSocket, waitForClose } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
@@ -26,6 +22,8 @@ import {
   makeRealtimeProvider,
   updateCallMetadata,
   sendCarrierStart,
+  startRealtimeServer,
+  startStreamSessionServer,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
@@ -71,12 +69,6 @@ async function connectWs(url: string) {
   return ws;
 }
 
-async function startUpgradeWsServer(params: Parameters<typeof openUpgradeServer>[0]) {
-  const server = await openUpgradeServer(params);
-  cleanup.push(server.close);
-  return server;
-}
-
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
   transports: ["gateway-relay"],
   inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
@@ -88,19 +80,6 @@ const PROVIDER_BARGE_IN_CAPABILITIES = {
   ...PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES,
   handlesInputAudioBargeIn: true,
 };
-
-async function startRealtimeServer(handler: RealtimeCallHandler, params?: URLSearchParams) {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params);
-  const streamUrl = expectDefined(payload.body.match(/wss:\/\/[^" ]+/)?.[0], "realtime stream URL");
-  return startStreamSessionServer(handler, streamUrl);
-}
-
-async function startStreamSessionServer(handler: RealtimeCallHandler, streamUrl: string) {
-  return startUpgradeWsServer({
-    urlPath: new URL(streamUrl).pathname,
-    onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
-  });
-}
 
 async function waitFor(
   callback: () => void | Promise<void>,
@@ -193,7 +172,7 @@ function makeCallHarness(
   });
   async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
     const count = callbacks.length;
-    const ws = await connectWs((await startRealtimeServer(handler)).url);
+    const ws = await connectWs((await startRealtimeServer(handler, providerCallId)).url);
     sendCarrierStart(ws, streamId, providerCallId);
     await waitFor(() => expect(callbacks).toHaveLength(count + 1));
     return { ws, callbacks: expectDefined(callbacks[count], "provider callbacks") };
@@ -401,7 +380,11 @@ describe("RealtimeCallHandler path routing", () => {
   it("preserves a public path prefix ahead of serve.path", () => {
     const { handler } = makeCallHarness({}, { config: { streamPath: "/custom/stream/realtime" } });
     handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
-    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook", "127.0.0.1:3334"),
+      new URLSearchParams(),
+      "CA-prefix",
+    );
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
@@ -419,6 +402,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const server = await startRealtimeServer(
       handler,
+      "CA-outbound",
       new URLSearchParams({
         Direction: "outbound-dial",
         From: "+15550001234",

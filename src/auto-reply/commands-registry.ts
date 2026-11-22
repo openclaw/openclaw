@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { buildThinkingCatalog } from "../agents/model-thinking-default-core.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
@@ -319,10 +319,9 @@ export function resolveCommandArgChoices(
     const defaults = resolveConfiguredModelRef({
       cfg: cfg ?? {},
       defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
     });
-    const provider = params.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
-    const model = params.model ?? defaults.model ?? DEFAULT_MODEL;
+    const provider = params.provider ?? defaults?.provider;
+    const model = params.model ?? defaults?.model;
     choices = choices({
       cfg,
       command: params.command,
@@ -330,7 +329,9 @@ export function resolveCommandArgChoices(
       provider,
       model,
       agentRuntime: params.agentRuntime,
-      catalog: params.catalog ?? (cfg ? buildThinkingCatalog({ cfg, provider, model }) : undefined),
+      catalog:
+        params.catalog ??
+        (cfg && provider && model ? buildThinkingCatalog({ cfg, provider, model }) : undefined),
     });
   }
   return choices.map((choice) =>

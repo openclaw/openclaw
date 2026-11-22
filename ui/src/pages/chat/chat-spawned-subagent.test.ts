@@ -9,6 +9,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { indexRecordedSubagentStopNames } from "./chat-subagent-history.ts";
+import { openAIModel } from "./chat-thread-fixtures.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
@@ -329,7 +330,7 @@ describe("a launched subagent", () => {
     const waiting = [{ ...c, activeRunIds: ["run"] }];
     const waited = { details: { completed, pending: [] } };
     expect(headline("agents_wait", { ids: ["run"] }, "Wait for Agents", waiting, waited)).toBe(
-      "Wait for subagents",
+      "Waiting for subagents",
     );
     // An unlabeled launch is named by the session its result names.
     const spawn = { outputText: accepted(c.key) };
@@ -533,10 +534,11 @@ it("opens a grouped child chat through the full view navigation action", async (
           ...pair("child", "sessions_spawn", { label: "Notes", visible: true }, accepted(childKey)),
           ...pair("write", "write", { path: "/repo/result.ts", content: "Ready." }, "Written."),
         ],
-        { runId: "parent", timestamp: 2 },
+        { ...openAIModel, runId: "parent", timestamp: 2 },
       ),
       {
         role: "assistant",
+        ...openAIModel,
         runId: "parent",
         content: "Notes are ready.",
         phase: "final_answer",

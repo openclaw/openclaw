@@ -1,6 +1,7 @@
 import path from "node:path";
+import { setTimeout as delay, setImmediate as yieldImmediate } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
@@ -15,7 +16,14 @@ import {
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
-import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
+import {
+  createUsageCostTranscriptReader,
+  scanUsageCostRollupInWorker,
+} from "./session-cost-usage-worker-refresh.js";
+import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+
+vi.mock("node:timers/promises", { spy: true });
+vi.mock("./thread-disk-io.js", { spy: true });
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
 const fixtureCreatedAt = new Date(timestamp).toISOString();
@@ -107,6 +115,184 @@ function expectMeasured(entry: UsageCostRollupEntry, total: number) {
   expect(totals).toMatchObject({ totalTokens: total, totalCost: total, missingCostEntries: 0 });
   expect(totals).not.toHaveProperty("usageReport");
 }
+
+function createPacingReader(signal: AbortSignal, cooperativePacing = true) {
+  return createUsageCostTranscriptReader({
+    cooperativePacing,
+    target: () => {
+      throw new Error("Pacing must not acquire a database");
+    },
+    readStore: async (_agent, _store, read) => read(),
+    readFacts: () => undefined,
+    control: {
+      signal,
+      throwIfCancelled: () => signal.throwIfAborted(),
+      runNativeSection: async (run) => run(),
+    },
+    env: {},
+  });
+}
+
+it("yields resident stats without changing physical and fallback timer requests", async () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const sleep = vi.mocked(delay);
+  const immediate = vi.mocked(yieldImmediate);
+  const accounting = vi.mocked(readThreadDiskReadBytes);
+  const signal = new AbortController().signal;
+  const mib = 1024 * 1024;
+  try {
+    await sleep.withImplementation(
+      async (ms = 0) => {
+        now += ms;
+      },
+      async () => {
+        accounting
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(8 * mib)
+          .mockReturnValueOnce(8 * mib + 1)
+          .mockReturnValueOnce(0) // accounting regressed
+          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce(0) // a single valid sample does not establish a delta
+          .mockReturnValueOnce(0);
+        const reader = createPacingReader(signal);
+        sleep.mockClear();
+        immediate.mockClear();
+        for (let page = 0; page < 6; page++) {
+          const startedAt = now;
+          now += 0.25;
+          await reader.yieldRead(mib, startedAt, "stats");
+        }
+        await reader.yieldRead(mib, now);
+        expect(immediate.mock.calls).toEqual([[undefined, { signal }]]);
+        expect(sleep.mock.calls).toEqual(
+          [499.75, 62.25, 62.25, 62.25, 62.25, 62.5].map((ms) => [ms, undefined, { signal }]),
+        );
+      },
+    );
+  } finally {
+    accounting.mockReset();
+    clock.mockRestore();
+  }
+});
+
+it("accumulates resident payload debt below one millisecond and settles it without idle credit", async () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const sleep = vi.mocked(delay);
+  const immediate = vi.mocked(yieldImmediate);
+  const accounting = vi.mocked(readThreadDiskReadBytes);
+  const signal = new AbortController().signal;
+  try {
+    await sleep.withImplementation(
+      async (ms = 1) => {
+        // Node truncates a fractional timeout; the fractional budget must survive.
+        now += Math.floor(ms);
+      },
+      async () => {
+        accounting.mockReturnValue(0);
+        const reader = createPacingReader(signal);
+        sleep.mockClear();
+        immediate.mockClear();
+        for (let page = 0; page < 4; page++) {
+          await reader.yieldRead(8 * 1024, now);
+        }
+        expect(immediate).toHaveBeenCalledTimes(3);
+        expect(sleep.mock.calls).toEqual([[1.46484375, undefined, { signal }]]);
+        await reader.settleReadPacing();
+        expect(now).toBe(2);
+        expect(sleep).toHaveBeenLastCalledWith(1, undefined, { signal });
+        await reader.settleReadPacing();
+        expect(sleep).toHaveBeenCalledTimes(2);
+        now += 100;
+        await reader.yieldRead(32 * 1024, now);
+        expect(sleep).toHaveBeenLastCalledWith(1.953125, undefined, { signal });
+      },
+    );
+  } finally {
+    accounting.mockReset();
+    clock.mockRestore();
+  }
+});
+
+it.each(["physical", "unknown"])(
+  "does not credit time owed to a resident page against %s I/O",
+  async (accountingKind) => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const sleep = vi.mocked(delay);
+    const accounting = vi.mocked(readThreadDiskReadBytes);
+    const signal = new AbortController().signal;
+    const mib = 1024 * 1024;
+    try {
+      await sleep.withImplementation(
+        async (ms = 0) => {
+          now += ms;
+        },
+        async () => {
+          accounting.mockReturnValueOnce(0).mockReturnValueOnce(0);
+          accounting.mockReturnValueOnce(accountingKind === "physical" ? mib : undefined);
+          const reader = createPacingReader(signal);
+          sleep.mockClear();
+          await reader.yieldRead(8 * 1024, now); // 0.48828125 ms of resident budget
+          const startedAt = now;
+          now += 0.25;
+          await reader.yieldRead(mib, startedAt);
+          await reader.settleReadPacing();
+          expect(sleep.mock.calls).toEqual([[62.73828125, undefined, { signal }]]);
+        },
+      );
+    } finally {
+      accounting.mockReset();
+      clock.mockRestore();
+    }
+  },
+);
+
+it("keeps the per-page timer for report readers", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const accounting = vi.mocked(readThreadDiskReadBytes).mockReturnValue(0);
+  const signal = new AbortController().signal;
+  const sleep = vi.mocked(delay);
+  const immediate = vi.mocked(yieldImmediate);
+  try {
+    await sleep.withImplementation(
+      async () => undefined,
+      async () => {
+        const reader = createPacingReader(signal, false);
+        sleep.mockClear();
+        immediate.mockClear();
+        await reader.yieldRead(1024 * 1024, 0, "stats");
+        await reader.yieldRead(8 * 1024, 0);
+        await reader.settleReadPacing();
+        expect(sleep.mock.calls).toEqual([
+          [1, undefined, { signal }],
+          [1, undefined, { signal }],
+        ]);
+        expect(immediate).not.toHaveBeenCalled();
+      },
+    );
+  } finally {
+    accounting.mockReset();
+    clock.mockRestore();
+  }
+});
+
+it("lets foreground work cancel a resident page before the worker can take another read", async () => {
+  const accounting = vi.mocked(readThreadDiskReadBytes).mockReturnValue(0);
+  const controller = new AbortController();
+  const reader = createPacingReader(controller.signal);
+  const callback = setImmediate(() => controller.abort());
+  try {
+    await expect(reader.yieldRead(64 * 1024, performance.now(), "stats")).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  } finally {
+    clearImmediate(callback);
+    accounting.mockReset();
+  }
+});
 
 it("stops reading subsequent transcript pages when its owner cancels", async () => {
   const reason = new Error("usage client disconnected");

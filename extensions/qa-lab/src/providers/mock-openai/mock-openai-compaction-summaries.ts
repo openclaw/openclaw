@@ -1,5 +1,41 @@
 /** Mock compaction-summary bodies keyed by markers in the summarizer input. */
 
+export const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
+export const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
+const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
+- Continue the compaction retry from durable context without replaying a completed mutation.
+
+## Open TODOs
+- Write compaction-retry-summary.txt exactly once.
+- Return the final replay-safety marker.
+
+## Constraints/Rules
+- Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
+- Write exactly: Replay safety: unsafe after write.
+
+## Pending user asks
+- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
+
+## Exact identifiers
+- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
+- compaction-retry-summary.txt`;
+const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
+- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
+
+## Open TODOs
+- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
+
+## Constraints/Rules
+- Keep historical content distinct from live task state.
+- Do not invent durable context absent from the summarized history.
+
+## Pending user asks
+- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
+
+## Exact identifiers
+- None captured.`;
+
 export const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 export const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
@@ -40,6 +76,15 @@ const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
 ## Exact identifiers`;
 
 export function resolveCompactionRecoverySummary(allInputText: string) {
+  if (allInputText.includes(QA_COMPACTION_RETRY_DURABLE_MARKER)) {
+    return QA_COMPACTION_RETRY_SUMMARY;
+  }
+  if (
+    allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
+    allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
+  ) {
+    return QA_COMPACTION_RETRY_HISTORICAL_SUMMARY;
+  }
   if (allInputText.includes("QA-COMPACTION-SUMMARY-WINDOW")) {
     return QA_GENERIC_COMPACTION_SUMMARY.replace(
       "## Decisions",

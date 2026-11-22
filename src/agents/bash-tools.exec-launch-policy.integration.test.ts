@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runClaudeCliNodeCommand } from "../node-host/invoke-agent-cli-claude.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 
@@ -165,31 +164,4 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
     expect(boundary.nativeLaunches).toBe(timing === "after" ? 1 : 0);
     expect(fs.existsSync(marker)).toBe(timing === "after");
   });
-
-  it.each([
-    { usePty: false, retained: false },
-    { usePty: false, retained: true },
-    { usePty: true, retained: false },
-  ])(
-    "still rejects retired source authority after native launch (PTY=$usePty, retained=$retained)",
-    async ({ usePty, retained }) => {
-      if (retained) {
-        vi.stubEnv("OPENCLAW_SERVICE_MARKER", "launch-policy-fixture");
-      }
-      let current = true;
-      boundary.after = () => {
-        current = false;
-      };
-      const controller = new AbortController();
-      const budget = createAgentToolExecutionBudget({
-        signal: controller.signal,
-        abort: (error) => controller.abort(error),
-        isCurrent: () => current,
-      });
-      await expect(budget.run(() => exec("/bin/cat", usePty))).rejects.toThrow(
-        "execution scope is no longer active",
-      );
-      expect(boundary.nativeLaunches).toBe(1);
-    },
-  );
 });

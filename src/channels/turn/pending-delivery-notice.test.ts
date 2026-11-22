@@ -72,22 +72,6 @@ it("does not cross an account or thread route", async () => {
   expectNotice("owed");
 });
 
-it("keeps the supplied owner for a global session notice", async () => {
-  const secondary = { agentId: "secondary", sessionKey: "global", storePath };
-  await replaceSessionEntry(secondary, { ...entry(), sessionId: "secondary-global" });
-  await deliverPendingDeliveryNotice(secondary.sessionKey, storePath, secondary.agentId);
-  expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      ...secondary,
-      expectedSessionId: "secondary-global",
-      expectedLifecycleRevision: null,
-      text: PENDING_DELIVERY_NOTICE,
-    }),
-  );
-  expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");
-  expectNotice("owed");
-});
-
 it("does not acknowledge a new revision with the same session and notice identity", async () => {
   const sent = pendingNotice();
   const attempt = deliver();

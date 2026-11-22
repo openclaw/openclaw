@@ -140,6 +140,7 @@ const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/state/openclaw-database-preflight.lifecycle.test.ts",
   "src/worker/native-worker.integration.test.ts",
   "test/cron-message-read.integration.test.ts",
+  "test/gateway-compaction-residency.e2e.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/scripts/bench-sqlite-reliability.test.ts",
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",

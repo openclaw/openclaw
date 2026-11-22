@@ -1,7 +1,7 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHookPromptContinuity } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";

@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  claimConversationProviderState,
+  type ProviderStateScope,
+} from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { assertRequiredWorkerSelection } from "../../../config/required-worker-profile.js";
@@ -649,4 +653,16 @@ export async function claimAgentSessionWriter(
 ): Promise<AgentSessionWriterFence | undefined> {
   const snapshot = await assertAgentHarnessRunAdmission(params);
   return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
+}
+
+/**
+ * The run that writes the conversation owns its provider state (continuation, pooled sockets).
+ * Detached runs (forks, memory flush) share its affinity but never write, so they own none.
+ */
+export function claimRunProviderState(
+  params: Pick<RunEmbeddedAgentParams, "sessionId" | "sessionPersistence">,
+): ProviderStateScope | undefined {
+  return params.sessionPersistence === "detached"
+    ? undefined
+    : claimConversationProviderState(params.sessionId);
 }
