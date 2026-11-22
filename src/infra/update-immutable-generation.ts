@@ -90,7 +90,7 @@ export async function copyImmutableGeneration(source: string, destination: strin
   }
 }
 
-async function assertImmutableGitConfig(root: string): Promise<void> {
+export async function assertImmutableGitConfig(root: string): Promise<void> {
   // A build can edit Git configuration. Privileged verification must never run
   // its clean filters, fsmonitor, includes, credential helpers or transport hooks.
   const metadata = path.join(root, ".git");

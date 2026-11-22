@@ -122,6 +122,8 @@ function gitConfigEntry(key: string, value: string): string {
 export async function withGitTargetInspectionRoot<T>(
   params: {
     root: string;
+    /** Keep a caller-owned preparation's private Git directory in its recovery area. */
+    temporaryParent?: string;
     runCommand: CommandRunner;
     timeoutMs: number;
     work?: { timeoutMs?: number };
@@ -130,7 +132,9 @@ export async function withGitTargetInspectionRoot<T>(
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
+  const temporaryRoot = await fs.mkdtemp(
+    path.join(params.temporaryParent ?? os.tmpdir(), "openclaw-git-admission-"),
+  );
   const inspectionRoot = path.join(temporaryRoot, "repository.git");
   const command = async (
     root: string,

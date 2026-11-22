@@ -21,6 +21,8 @@ it("keeps update help available without loading execution dependencies", async (
     "wizard",
     "adopt-immutable",
     "recover",
+    "backup-cli",
+    "backup-cli verify",
   ]) {
     let output = "";
     const program = new Command()
@@ -28,7 +30,7 @@ it("keeps update help available without loading execution dependencies", async (
       .exitOverride()
       .configureOutput({ writeOut: (text) => (output += text) });
     registerUpdateCli(program);
-    const args = ["update", ...(leaf ? [leaf] : []), "--help"];
+    const args = ["update", ...(leaf ? leaf.split(" ") : []), "--help"];
     await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
       code: "commander.helpDisplayed",
       exitCode: 0,
