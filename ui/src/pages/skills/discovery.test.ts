@@ -240,10 +240,18 @@ describe("unified skill discovery", () => {
     const onCategoryChange = vi.fn();
     const props = { clawhubResults: [...tagged, ...uncategorized], onCategoryChange };
     const container = renderDiscovery({ ...props, readCategories: () => null });
-    expect(shelfText(container)).not.toBe("");
+    expect(shelfText(container)).toBe("");
     expect(container.querySelector("[data-skill-id]")).toBeNull();
+    showInstalled(container);
+    expect(
+      container.querySelector('[data-catalog-section="installed"] [data-skill-id]'),
+    ).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".plugin-catalog-chip")!.click();
+    flush();
+    onCategoryChange.mockClear();
     const categories = [beta, alpha, { slug: "empty", label: "Empty" }];
     renderDiscovery({ ...props, readCategories: () => ({ categories }) }, container);
+    expect(shelfText(container)).not.toBe("");
     const sections = [...container.querySelectorAll("[data-catalog-section]")];
     expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
       "On call",
