@@ -4,6 +4,19 @@ import { decodeNativeWorkerFailure, encodeNativeWorkerFailure } from "./worker-n
 const roundTrip = (error: Error) =>
   decodeNativeWorkerFailure(structuredClone(encodeNativeWorkerFailure(error)));
 
+it("preserves inherited native error codes without invoking shadowing accessors", () => {
+  class NativeError extends Error {}
+  Object.defineProperty(NativeError.prototype, "code", { value: "ERR_WORKER_OUT_OF_MEMORY" });
+  const error = new NativeError("heap exhausted");
+  expect(roundTrip(error)).toMatchObject({ code: "ERR_WORKER_OUT_OF_MEMORY" });
+  Object.defineProperty(error, "code", {
+    get() {
+      throw new Error("diagnostics must not invoke this getter");
+    },
+  });
+  expect(roundTrip(error)).not.toHaveProperty("code");
+});
+
 it("preserves native types, shared failure references and suppressed cycles", () => {
   const shared = new TypeError("resource failed");
   const failure = new SuppressedError(shared, undefined, "disposal failed");

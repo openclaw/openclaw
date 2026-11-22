@@ -6,6 +6,7 @@ import {
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
@@ -72,9 +73,11 @@ export type ApplySessionModelSelectionParams = {
   sessionStore: Record<string, SessionEntry>;
   allowCreate?: boolean;
   defaultProvider: string;
-  defaultModel: string;
-  currentProvider: string;
-  currentModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
+  /** Undefined when the session has no model yet. */
+  currentProvider?: string;
+  currentModel?: string;
   modelPolicy?: Omit<ModelVisibilityPolicy, "catalog">;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
@@ -158,7 +161,9 @@ export async function applySessionModelSelectionInternal(
       cfg: params.cfg,
       catalog: [...params.modelCatalog],
       defaultProvider: params.defaultProvider,
-      defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
+      defaultModel: params.defaultModel
+        ? { provider: params.defaultProvider, model: params.defaultModel }
+        : undefined,
       agentId: params.agentId,
     });
   const selectedRef = resetToDefault
@@ -184,7 +189,11 @@ export async function applySessionModelSelectionInternal(
     return {
       status: "rejected",
       reason: "not-allowed",
-      message: operatorError ?? "No model is available for this operator role and agent.",
+      message:
+        operatorError ??
+        (resetToDefault && !operatorAuthority?.modelPolicy
+          ? NO_MODEL_CONFIGURED_MESSAGE
+          : "No model is available for this operator role and agent."),
     };
   }
   const normalizedModelKey = modelKey(selectedRef.provider, selectedRef.model);
@@ -194,7 +203,8 @@ export async function applySessionModelSelectionInternal(
     model: selectedRef.model,
     isDefault:
       resetToDefault ||
-      normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
+      (params.defaultModel !== undefined &&
+        normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel)),
   };
   if (!resetToDefault && !policy.allows(request)) {
     return rejectNotAllowed(request.provider, request.model);
@@ -426,7 +436,11 @@ export async function applySessionModelSelectionInternal(
     });
   }
 
-  if (`${params.currentProvider}/${params.currentModel}` !== effectiveModelRef) {
+  const currentModelRef =
+    params.currentProvider && params.currentModel
+      ? `${params.currentProvider}/${params.currentModel}`
+      : undefined;
+  if (currentModelRef !== effectiveModelRef) {
     enqueueSystemEvent(formatModelSwitchEvent(provider, model, request.alias), {
       sessionKey: resolveSystemEventQueueKey(params.sessionKey, params.agentId),
       contextKey: `model:${effectiveModelRef}`,

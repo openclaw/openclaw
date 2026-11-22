@@ -24,7 +24,6 @@ import { logDebug, logWarn } from "../logger.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -37,6 +36,10 @@ import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
+import {
+  resolveInMcpGrantRequestScope,
+  runInMcpGrantRequestScope,
+} from "./mcp-http.grant-generation.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
@@ -296,7 +299,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   admittedRunContext: boundClientGrant.admittedRunContext,
                   receiptAuthority: isGrantAndLineageCurrent,
                   receiptAdmission: lineage.admission,
-                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
+                  approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
                   // Management binding needs the admitted identity, not execution's issuer.
                   mintCronRequesterGrant:
                     phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,
@@ -362,9 +365,10 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   withManagementScope(resolveTools),
                 );
               scopedTools = await (boundClientGrant.requestScope
-                ? withPluginRuntimeGatewayRequestScope(
+                ? resolveInMcpGrantRequestScope(
                     boundClientGrant.requestScope,
                     constructAsCaller,
+                    requestAbort.signal,
                   )
                 : constructAsCaller());
             } else {
@@ -498,7 +502,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   ),
                 );
               response = await (runRequestScope
-                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                ? runInMcpGrantRequestScope(runRequestScope, handleAsCaller)
                 : handleAsCaller());
             } finally {
               markMcpLoopbackToolCallFinished(cliCaptureHandle);

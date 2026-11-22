@@ -102,8 +102,9 @@ it.each([
   ["required", { ackDelivered: true }, "delivered"],
   ["result-required", { ackDelivered: true }, "delivered"],
   ["required", { ackQueued: true }, "pending"],
+  ["required", { noticeInApp: true }, "pending"],
 ] as const)(
-  "records a %s turn as answered when the Gateway owns the acknowledgement %j",
+  "records a %s turn without duplicating Gateway-owned delivery %j",
   async (expectation, ack, outcome) => {
     const runState = { replyCompletion: { expectation, outcome: "missing" as const } };
     params.opts = { [REPLY_OPERATION_RUN_STATE]: runState } as HandleCommandsParams["opts"];

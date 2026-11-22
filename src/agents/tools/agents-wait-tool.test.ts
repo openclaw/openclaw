@@ -995,7 +995,7 @@ describe("agents_wait", () => {
     },
   );
 
-  it.each(["execution deadline", "revoked authority", "stalled reread"] as const)(
+  it.each(["execution deadline", "stalled reread"] as const)(
     "does not protect a collector after %s",
     async (cause) => {
       const parent = await startParentWait({ records, read: registryEvents.read });
@@ -1009,8 +1009,6 @@ describe("agents_wait", () => {
       try {
         if (cause === "execution deadline") {
           parent.attempt.setExecutionDeadline(Date.now());
-        } else if (cause === "revoked authority") {
-          parent.admission.close();
         } else {
           registryEvents.read.mockImplementation(() => reread.promise);
           publishChanges();

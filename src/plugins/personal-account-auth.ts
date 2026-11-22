@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
+import { matchesProviderLoginMethod } from "./provider-login-options.js";
 import { resolveDiscoverableProviderOwnerPluginIds } from "./providers.js";
 
 /** Personal auth is opt-in; discovery never enables, installs, or imports host credentials. */
@@ -29,7 +30,7 @@ export async function resolvePersonalAccountAuthMethod(
   methodId: string,
 ) {
   const choice = listPersonalAccountAuthChoices(config).find(
-    (entry) => entry.providerId === providerId && entry.methodId === methodId,
+    (entry) => entry.providerId === providerId && matchesProviderLoginMethod(entry, methodId),
   );
   if (!choice) {
     return undefined;
@@ -43,5 +44,5 @@ export async function resolvePersonalAccountAuthMethod(
     activate: false,
     includeUntrustedWorkspacePlugins: false,
   }).find((entry) => entry.pluginId === choice.pluginId && entry.id === providerId);
-  return provider?.auth.find((method) => method.id === methodId);
+  return provider?.auth.find((method) => method.id === choice.methodId);
 }

@@ -20,6 +20,7 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "database-dialect", args: ["check:database-dialect-ratchet", ...argv] },
     { name: "session-identity", args: ["check:session-identity-ratchet", ...argv] },
     { name: "lifetime-check", args: ["check:lifetime-check-ratchet", ...argv] },
+    { name: "runtime-process-lifecycle", args: ["check:runtime-process-lifecycle", ...argv] },
     { name: "timeout-race", args: ["check:test-timeout-race-ratchet", ...argv] },
     { name: "mock-exports", args: ["check:test-mock-exports", ...argv] },
     { name: "test-lines", args: ["check:test-lines-ratchet", ...argv] },

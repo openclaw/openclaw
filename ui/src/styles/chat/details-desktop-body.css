@@ -82,7 +82,7 @@
   /* Keep the compact row's floor when first facts replace it with a growing section. */
   min-height: 46px;
   min-width: 0;
-  overflow: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
 

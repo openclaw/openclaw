@@ -43,6 +43,7 @@ export function CommandPaletteLoading(props: {
             onDrop={(event) => props.state.handleDrop(event)}
           >
             <CommandPaletteInput
+              mode={props.state.mode()}
               onAutofocusRef={(element) => {
                 initialInput = element;
               }}
@@ -54,7 +55,6 @@ export function CommandPaletteLoading(props: {
                     : "palette.composePlaceholder"
                   : "palette.searchPlaceholder",
               )}
-              maxLines={props.state.mode() === "compose" ? 8 : 3}
               onInputRef={(element, previous) => props.state.inputRef(element, previous)}
               onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
               onPaste={(event) => props.state.handlePaste(event)}

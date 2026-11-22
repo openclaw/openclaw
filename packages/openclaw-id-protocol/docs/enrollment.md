@@ -77,6 +77,50 @@ valid RootReset is still `root_mismatch`, the substitution warning.
 Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machine) can reset
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
+### Unlinking a claw (OCF-281)
+
+Unlinking ends a claw's link to OpenClaw ID for good. Like owner reset, the person at the
+machine wins: part 1 is offered only on the machine, `openclaw id unlink` and an Unlink item
+on a direct `local_operator` Control UI connection. Over the tunnel the Gateway refuses it with
+`not_local_operator` and the UI does not show it. Before anything happens the owner is shown how
+many people and devices lose access, that the address stops working at once and that the claw's
+name can never be used again, by any account.
+
+Unlinking needs Discovery to hold the current binding, because Discovery accepts a ClawUnlink
+only for the binding it stores. While a move to new keys or an owner reset is not yet published
+(the binding is newer than the one Discovery confirmed), the Gateway refuses with
+`binding_unpublished` and keeps everything; the owner publishes first (`openclaw id status`,
+`openclaw id publish`). A claw that was never registered at Discovery unlinks locally only.
+
+Unlinking:
+
+- signs `ClawUnlink { claw_id, binding_seq }` with the K_gw of the current binding;
+  `binding_seq` names that binding, so the statement cannot be replayed against a later one and
+  no older K_gw can sign one Discovery accepts;
+- removes every owner device, member, member device, node and invite, stops the tunnel child,
+  closes every tunnel session and invalidates every tunnel-bound token, and clears the link and
+  binding. Local access, conversations and other claw data stay;
+- sends the statement to Discovery (`unlinkClaw`, discovery.md "Unlinking"). If Discovery
+  cannot be reached, the Gateway has still unlinked locally; it keeps the signed statement as a
+  pending unlink and sends it when Discovery is next reachable. Discovery's `unlinked` answer to
+  a repeat means the earlier send arrived.
+
+Re-linking the machine later is a new claw: a new claw id and a new name, with no members.
+
+A pinned client that reads the claw gets `unlinked` from Discovery with the ClawUnlink. It runs
+`verifyClawUnlinkForPin`: signed by the K_gw the pin stored, for the pinned claw, not for an
+older binding than the pin has seen. A verified unlink is final: the client clears the pin,
+opens no socket, does not retry and shows "This claw was unlinked by its owner." An unlink that
+does not verify is not final; the client keeps its pin and treats the claw as unavailable.
+
+Part 2 (OCF-597) unlinks from OpenClaw ID home when the machine is lost. It reuses the same
+statement body and endpoint with another signer (the recovery kit's R, or an owner device). The
+body names no signer kind, so neither needs a new statement type. Accepting R needs only the
+pin's `root_fp`. Accepting an owner device is more than a new signer: part 2 must also define
+the evidence that the device was a current owner (for example the K_gw-signed snapshot
+Discovery stored), which Discovery keeps in its tombstone and serves with `unlinked`, and how a
+pinned client judges its freshness and a device's removal.
+
 Owner device certificates have **no expiry unless the person approving the device enters
 one** (`expires_at: null`). A device stops being an owner when its certificate expires or
 it is removed from the claw's allowlist.

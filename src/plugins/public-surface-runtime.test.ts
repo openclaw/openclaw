@@ -41,6 +41,32 @@ function resolveSource(sourceRoot: string, artifactBasename: string, dirName = "
 }
 
 describe("bundled plugin public surface runtime", () => {
+  it("resolves bundled source fallbacks to built artifacts behind a node_modules release link", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-public-surface-node-modules-"));
+    const packageRoot = path.join(root, "lib", "node_modules", "openclaw");
+    const pluginRoot = path.join(packageRoot, "extensions", "demo");
+    writeArtifact(path.join(pluginRoot, "api.ts"), 'export const marker = "source";');
+    const builtRoot = path.join(packageRoot, "dist", "extensions", "demo");
+    const built = writeArtifact(path.join(builtRoot, "api.js"), 'export const marker = "built";');
+    const alias = path.join(root, "openclaw");
+    fs.symlinkSync(packageRoot, alias, process.platform === "win32" ? "junction" : "dir");
+
+    expect(resolveSource(path.join(alias, "extensions"), "api.js")).toBe(built);
+    const params = {
+      pluginRoot: path.join(alias, "extensions", "demo"),
+      entrySource: path.join(alias, "extensions", "demo", "api.ts"),
+      artifactBasename: "api.js",
+    };
+    expect(resolvePluginRootPublicSurfaceLocation({ ...params, origin: "bundled" })).toEqual({
+      modulePath: built,
+      boundaryRoot: builtRoot,
+    });
+    expect(resolvePluginRootPublicSurfaceLocation({ ...params, origin: "global" })).toEqual({
+      modulePath: params.entrySource,
+      boundaryRoot: params.pluginRoot,
+    });
+  });
+
   it.each([false, true])(
     "loads sidecars from the selected artifact (runtime registered: %s)",
     async (runtimeRegistrationComplete) => {

@@ -442,10 +442,9 @@ describe("client credential public update custody", () => {
       "pending",
     );
     expect(
-      readMatchingUpdateDatabaseGeneration(
-        f.pathname,
+      readMatchingUpdateDatabaseGeneration(f.pathname, [
         captured.backup.sourceGenerations[f.pathname]!,
-      ),
+      ]),
     ).toEqual(expect.any(String));
     expect(await f.readShared()).toEqual(before);
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);

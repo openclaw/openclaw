@@ -117,7 +117,7 @@ activates/tunes the policy even when no route existed. The retired
 - `to`: explicit announce target or webhook URL. Required for webhook mode.
 - `accountId`: optional account or channel id to scope alert delivery.
 - Route precedence is per-job `failureAlert` route fields, then per-job `delivery.failureDestination` layered over these global destination fields (or the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when set), then the primary announce target, including a configured default destination.
-- Per-job `failureAlert: false` disables execution and required-delivery failure alerts for that job; the auto-disable safety notification remains active. Any per-job `failureAlert` object explicitly enables and tunes that job.
+- Per-job `failureAlert: false` disables execution and required-delivery failure alerts for that job. Any per-job `failureAlert` object explicitly enables and tunes that job.
 - `delivery.bestEffort: true` suppresses inherited/default execution alerts; an explicit per-job `failureAlert` remains authoritative.
 - Required completion-delivery failure (`status: "ok"`, `completionStatus: "failed"`) does not increment execution backoff and may notify immediately only through a resolved alternate failure destination, not the failed primary route.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.

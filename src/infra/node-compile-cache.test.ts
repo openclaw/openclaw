@@ -203,13 +203,21 @@ it("leaves failed pruning eligible for the next invocation", async () => {
 });
 
 it("makes bounded progress through tiny entries without claiming an incomplete pass", async () => {
-  const { cache, directory } = await cacheFixture();
+  const { root, cache, directory } = await cacheFixture();
+  const inventory = path.join(root, "inventory.json");
+  await fs.writeFile(
+    inventory,
+    JSON.stringify(Array.from({ length: 20_000 }, (_, i) => "bytecode-" + i)),
+  );
   await fs.utimes(cache, new Date(0), new Date(0));
-  const { stdout } = await evalModule(`
+  const results = [];
+  for (let pass = 0; pass < 2; pass++) {
+    const { stdout } = await evalModule(`
     import fs from "node:fs/promises";
     import path from "node:path";
     const cache = ${JSON.stringify(cache)};
-    const files = new Set(Array.from({ length: 20_000 }, (_, i) => "bytecode-" + i));
+    const inventory = ${JSON.stringify(inventory)};
+    const files = new Set(JSON.parse(await fs.readFile(inventory, "utf8")));
     const lstat = fs.lstat;
     fs.lstat = async target => files.has(path.basename(target))
       ? { size: 1, mtimeMs: Date.now() } : lstat(target);
@@ -223,19 +231,17 @@ it("makes bounded progress through tiny entries without claiming an incomplete p
     fs.unlink = async target => { files.delete(path.basename(target)); };
     const rmdir = fs.rmdir;
     let finished;
+    const completion = new Promise(resolve => { finished = resolve; });
     fs.rmdir = async target => { await rmdir(target); finished(); };
     process.argv = [process.execPath, ${JSON.stringify(modulePath)}, "--maintain", ${JSON.stringify(directory)}];
-    const results = [];
-    for (let pass = 0; pass < 2; pass++) {
-      visited = 0;
-      const completion = new Promise(resolve => { finished = resolve; });
-      await import(${JSON.stringify(helperUrl.href)} + "?pass=" + pass);
-      await completion;
-      results.push({ visited, remaining: files.size, mtimeMs: (await fs.stat(cache)).mtimeMs });
-    }
-    process.stdout.write(JSON.stringify(results));
+    await import(${JSON.stringify(helperUrl.href)});
+    await completion;
+    await fs.writeFile(inventory, JSON.stringify([...files]));
+    process.stdout.write(JSON.stringify({ visited, remaining: files.size, mtimeMs: (await fs.stat(cache)).mtimeMs }));
   `);
-  const [partial, completed] = JSON.parse(stdout);
+    results.push(JSON.parse(stdout));
+  }
+  const [partial, completed] = results;
   expect(partial.visited).toBeLessThanOrEqual(16_385);
   expect(partial.remaining).toBeLessThan(20_000);
   expect(partial.remaining).toBeGreaterThan(4096);

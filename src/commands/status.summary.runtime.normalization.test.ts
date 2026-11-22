@@ -37,7 +37,6 @@ describe("statusSummaryRuntime configured model normalization", () => {
       statusSummaryRuntime.resolveConfiguredStatusModelRef({
         cfg,
         defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
       });
     expect(
       resolveConfigured({ agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } } }),
@@ -83,7 +82,6 @@ describe("statusSummaryRuntime configured model normalization", () => {
       statusSummaryRuntime.resolveConfiguredStatusModelRef({
         cfg,
         defaultProvider: "openai",
-        defaultModel: "fixture-fallback",
       }),
     );
     expect(resolved).toEqual({ provider: "anthropic", model: "fixture-local" });
@@ -110,7 +108,6 @@ describe("statusSummaryRuntime configured model normalization", () => {
           },
         },
         defaultProvider: "openai",
-        defaultModel: "fixture-fallback",
       });
       expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
     } finally {
@@ -174,7 +171,6 @@ describe("statusSummaryRuntime configured model normalization", () => {
           cfg,
           agentId: "work",
           defaultProvider: "openai",
-          defaultModel: "fixture-fallback",
         }),
         name,
       ).toEqual(expected);

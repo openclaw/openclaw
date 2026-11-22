@@ -4,6 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { groupSubagentCompletions, subagentCompletionNames } from "../chat-spawned-subagent.ts";
+import { SubagentName } from "./chat-subagent-badge.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -47,14 +48,16 @@ function CompletionSentence(props: {
     return t(`chat.toolCards.${props.sentenceKey}`, { names: marker }).split(marker);
   });
   return (
-    <div class="chat-tool-msg-collapse">
+    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--completion">
       <div
         class="chat-tool-msg-summary chat-tool-row chat-tool-row--subagent"
         aria-label={t(`chat.toolCards.${props.sentenceKey}`, { names: names() })}
       >
-        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-          <Icon name="bot" />
-        </span>
+        <Show when={props.completions.some((entry) => !entry.label)}>
+          <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+            <Icon name="bot" />
+          </span>
+        </Show>
         <span class="chat-tool-disclosure__content" style={{ gap: "0" }}>
           <span class="chat-tool-row__verb" style={{ "white-space": "pre" }}>
             {sentence()[0]}
@@ -71,7 +74,12 @@ function CompletionSentence(props: {
                   >
                     <Show
                       when={props.onOpenSession}
-                      fallback={props.completions[Number(part().value)]?.label}
+                      fallback={
+                        <SubagentName
+                          name={props.completions[Number(part().value)]?.label ?? ""}
+                          sessionKey={props.completions[Number(part().value)]?.sessionKey}
+                        />
+                      }
                     >
                       <button
                         type="button"
@@ -83,7 +91,10 @@ function CompletionSentence(props: {
                           }
                         }}
                       >
-                        {props.completions[Number(part().value)]?.label}
+                        <SubagentName
+                          name={props.completions[Number(part().value)]?.label ?? ""}
+                          sessionKey={props.completions[Number(part().value)]?.sessionKey}
+                        />
                       </button>
                     </Show>
                   </Show>

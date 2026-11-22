@@ -53,7 +53,6 @@ import { scheduleNodeConnectionNotification } from "../../node-connection-notifi
 import { resolveOpenClawIdClawOrigin } from "../../openclaw-id/claw-origin.js";
 import {
   resolveGatewayOperatorRoleActor,
-  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../../operator-role-policy.js";
@@ -206,12 +205,9 @@ export async function sendGatewayHello(
           activityClient,
           resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
             ? undefined
-            : (
-                resolveAdministratorMemberRolePolicy(activityClient, context.configSnapshot) ??
-                resolveOperatorRolePolicyForProfile(
-                  activityClient.authenticatedUserProfile?.profileId,
-                  buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
-                )
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
               )?.scopes,
           activityClient.authenticatedUserProfile?.profileId,
         )
@@ -409,6 +405,12 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    if (
+      (deviceToken || bootstrapDeviceTokens.length > 0) &&
+      state.isDeviceTokenSubjectCurrent?.() === false
+    ) {
+      throw new Error("Credential delivery requires current profile membership");
+    }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

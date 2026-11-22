@@ -74,8 +74,10 @@ export const mcpAppOnboardingHandlers: GatewayRequestHandlers = {
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,
           // The nested router binds chat's own session authority before this final
           // admission check. Detached chat work must not retain our invocation hold.
-          prepareDispatchCurrent: async () => access.assertCurrent(),
-          sessionMutationCommitGuard: requestAuthority.assertCurrent,
+          prepareDispatchCurrent: async () => {
+            requestAuthority.assertCurrent();
+            access.assertCurrent();
+          },
         },
       );
       options.respond(result.ok, result.payload, result.error);

@@ -30,6 +30,7 @@ suite.define(() => {
       const original = ["other_*", "DISCORD_MODERATE"];
       let deny = [...original];
       let hash = "tool-policy-1";
+      let rejectNextPatch = true;
       const snapshot = () => {
         const value = { tools: { deny } };
         return {
@@ -69,6 +70,15 @@ suite.define(() => {
               if (patch.tools.deny.length < deny.length) {
                 expect(request.replacePaths).toEqual(["tools.deny"]);
               }
+              if (rejectNextPatch) {
+                rejectNextPatch = false;
+                return {
+                  __mockError: {
+                    code: "UNAVAILABLE",
+                    message: "The tool policy could not be saved.",
+                  },
+                };
+              }
               deny = patch.tools.deny;
               hash += "-saved";
               return { ok: true, config: snapshot().config, hash };
@@ -97,7 +107,12 @@ suite.define(() => {
       expect(await moderate.count()).toBe(1);
       await expect.poll(() => moderate.isChecked()).toBe(false);
       expect(await actions.isChecked()).toBe(true);
+      expect(await gateway.getRequests("config.schema")).toHaveLength(0);
       await actions.click();
+      await section.getByText("The tool policy could not be saved.", { exact: true }).waitFor();
+      expect(await actions.isChecked()).toBe(true);
+      expect(deny).toEqual(original);
+      await section.getByRole("button", { name: "Try again", exact: true }).click();
       await expect.poll(() => deny).toEqual([...original, "discord_actions"]);
       await moderate.click();
       await expect.poll(() => deny).toEqual(["other_*", "discord_actions"]);
@@ -109,7 +124,7 @@ suite.define(() => {
       hash += "-admin";
       await page.reload();
       await page.getByText("Blocked by a global rule").first().waitFor();
-      expect(await page.getByRole("switch").count()).toBe(0);
+      expect(await page.getByRole("switch", { name: /^Allow /u }).count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
     });
   });

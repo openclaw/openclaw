@@ -1,15 +1,26 @@
 import crypto from "node:crypto";
 import { ARCHIVE_LIMIT_ERROR_CODE, ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asPositiveFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { bindFileTransferAudit } from "./audit-context.js";
 import type { FileTransferAuditOp } from "./audit.js";
+import {
+  BOUNDED_DIRECTORY_PAGE_SIZE,
+  BOUNDED_LINUX_PATH_BYTES,
+  BOUNDED_UNARY_FILE_BYTES,
+  usesBoundedReplies,
+} from "./bounded-replies.js";
 import { inspectDirFetchArchive } from "./dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
@@ -131,6 +142,90 @@ async function verifyDirFetchArchive(
   }
 }
 
+function validateBoundedReplyRequest(
+  command: FileTransferNodeInvokeCommand,
+  platform: string | undefined,
+  path: string,
+  params: Record<string, unknown>,
+): { code: string; message: string } | undefined {
+  if (platform !== "linux") {
+    return { code: "UNSUPPORTED_NODE", message: "bounded replies require a paired Linux node" };
+  }
+  if (command === "dir.fetch") {
+    return { code: "UNSUPPORTED_COMMAND", message: "use dir.list pages on a bounded-reply node" };
+  }
+  const { rootPath, pageToken, expectedSha256, transport } = params;
+  if (
+    Buffer.byteLength(path) > BOUNDED_LINUX_PATH_BYTES ||
+    (command === "file.fetch" &&
+      rootPath !== undefined &&
+      (typeof rootPath !== "string" || Buffer.byteLength(rootPath) > BOUNDED_LINUX_PATH_BYTES))
+  ) {
+    return {
+      code: "INVALID_PARAMS",
+      message: "path and rootPath must fit the bounded Linux path limit",
+    };
+  }
+  if (
+    command === "dir.list" &&
+    pageToken !== undefined &&
+    (typeof pageToken !== "string" ||
+      pageToken.length > 16 ||
+      parseStrictNonNegativeInteger(pageToken) === undefined)
+  ) {
+    return { code: "INVALID_PARAMS", message: "invalid directory continuation token" };
+  }
+  if (
+    command === "file.write" &&
+    expectedSha256 !== undefined &&
+    (typeof expectedSha256 !== "string" ||
+      expectedSha256.length !== 64 ||
+      !/^[a-fA-F0-9]{64}$/u.test(expectedSha256))
+  ) {
+    return {
+      code: "INVALID_PARAMS",
+      message: "expectedSha256 must be a 64-character hexadecimal SHA-256 digest",
+    };
+  }
+  if (command === "file.fetch" && transport === "binary") {
+    // Only Gateway-admitted in-process callers can own the start/ACK stream.
+    const owner = getPluginRuntimeGatewayRequestScope()?.client?.internal;
+    if (
+      owner?.syntheticClient !== true ||
+      owner.pluginRuntimeOwnerId !== "file-transfer" ||
+      !owner.nodeInvokeStream
+    ) {
+      return {
+        code: "INVALID_PARAMS",
+        message: "binary file.fetch requires a File Transfer duplex service",
+      };
+    }
+  }
+  return undefined;
+}
+
+// A refusal before the node announces readiness must bypass the normal
+// successful payload wrapper so the duplex opener can return its typed error.
+function preserveFileStreamRefusal(
+  result: OpenClawPluginNodeInvokePolicyResult,
+  boundedFileStream: boolean,
+): OpenClawPluginNodeInvokePolicyResult {
+  const payload = boundedFileStream && result.ok ? asNullableRecord(result.payload) : null;
+  if (
+    payload?.ok === false &&
+    typeof payload.code === "string" &&
+    typeof payload.message === "string"
+  ) {
+    return {
+      ok: false,
+      code: payload.code,
+      message: payload.message,
+      details: { fileTransferError: payload },
+    };
+  }
+  return result;
+}
+
 async function handleFileTransferInvoke(
   ctx: OpenClawPluginNodeInvokePolicyContext,
 ): Promise<OpenClawPluginNodeInvokePolicyResult> {
@@ -141,6 +236,11 @@ async function handleFileTransferInvoke(
   const op: FileTransferAuditOp = command;
   const params = asOptionalRecord(ctx.params) ?? {};
   const requestedPath = typeof params.path === "string" ? params.path : "";
+  const bounded = usesBoundedReplies(
+    ctx.config.plugins?.entries?.["file-transfer"]?.config ?? ctx.pluginConfig,
+    ctx.nodeId,
+  );
+  const boundedFileStream = bounded && command === "file.fetch" && params.transport === "binary";
   const nodeDisplayName = ctx.node?.displayName;
   const startedAt = Date.now();
   const audit = bindFileTransferAudit(
@@ -150,6 +250,12 @@ async function handleFileTransferInvoke(
 
   if (!requestedPath) {
     return { ok: false, code: "INVALID_PARAMS", message: `${op} path required` };
+  }
+  if (bounded) {
+    const refusal = validateBoundedReplyRequest(command, ctx.node?.platform, requestedPath, params);
+    if (refusal) {
+      return policyDeniedResult({ op, ...refusal });
+    }
   }
   try {
     validateFetchMaxBytesParam(command, params);
@@ -174,11 +280,12 @@ async function handleFileTransferInvoke(
 
   let forwardedParams: Record<string, unknown>;
   try {
-    const { followSymlinks, maxBytes } = gate;
+    const { maxBytes } = gate;
+    // A caller may narrow the configured permission, never expand it.
+    const followSymlinks = gate.followSymlinks && params.followSymlinks !== false;
     forwardedParams = {
       ...params,
-      // A caller may narrow the configured permission, never expand it.
-      followSymlinks: followSymlinks && params.followSymlinks !== false,
+      followSymlinks,
     };
     delete forwardedParams.preflightOnly;
     delete forwardedParams.expectedCanonicalPath;
@@ -187,12 +294,36 @@ async function handleFileTransferInvoke(
       Object.assign(forwardedParams, readFileCreateMetadata(params, maxBytes));
     } else if (command === "file.fetch") {
       const binaryMax = readFileFetchBinaryMaxBytes(params);
+      if (bounded) {
+        // Forward only the read fields consumed by the node. An ignored caller
+        // field must not inflate the serialized invoke on the paired connection.
+        forwardedParams = {
+          path: requestedPath,
+          followSymlinks,
+          ...(typeof params.rootPath === "string" ? { rootPath: params.rootPath } : {}),
+          ...(binaryMax !== undefined ? { transport: "binary" } : {}),
+        };
+      }
       forwardedParams.maxBytes = readMaxBytes({
         value: params.maxBytes,
         defaultValue: FILE_FETCH_DEFAULT_MAX_BYTES,
-        hardMax: binaryMax ?? FILE_FETCH_HARD_MAX_BYTES,
+        hardMax: binaryMax ?? (bounded ? BOUNDED_UNARY_FILE_BYTES : FILE_FETCH_HARD_MAX_BYTES),
         policyMax: maxBytes,
       });
+    } else if (bounded && command === "dir.list") {
+      forwardedParams = {
+        path: requestedPath,
+        followSymlinks,
+        ...(typeof params.pageToken === "string" ? { pageToken: params.pageToken } : {}),
+        maxEntries: Math.max(
+          1,
+          Math.min(
+            Math.floor(asPositiveFiniteNumber(params.maxEntries) ?? BOUNDED_DIRECTORY_PAGE_SIZE),
+            BOUNDED_DIRECTORY_PAGE_SIZE,
+            BOUNDED_LINUX_PATH_BYTES,
+          ),
+        ),
+      };
     } else if (command === "dir.fetch") {
       forwardedParams.maxBytes = readMaxBytes({
         value: params.maxBytes,
@@ -218,7 +349,7 @@ async function handleFileTransferInvoke(
     startedAt,
   });
   if (!preflight.ok) {
-    return preflight.result;
+    return preserveFileStreamRefusal(preflight.result, boundedFileStream);
   }
   // The node must reject target drift before the final filesystem effect.
   forwardedParams.expectedCanonicalPath = preflight.canonicalPath;
@@ -248,7 +379,7 @@ async function handleFileTransferInvoke(
       errorCode: typeof payload.code === "string" ? payload.code : undefined,
       errorMessage: typeof payload.message === "string" ? payload.message : undefined,
     });
-    return result;
+    return preserveFileStreamRefusal(result, boundedFileStream);
   }
 
   const canonicalPath = payload && typeof payload.path === "string" ? payload.path : "";
