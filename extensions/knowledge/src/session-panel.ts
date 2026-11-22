@@ -79,7 +79,7 @@ export function registerSessionPanel(host: ControlUiHost) {
           next = null;
           upper = undefined;
           detail.hidden = true;
-          selected = "";
+          selected = undefined;
           render();
           void load();
         });
@@ -114,6 +114,18 @@ export function registerSessionPanel(host: ControlUiHost) {
       older.hidden = true;
       const detail = el("section", undefined, "knowledge-session-preview");
       detail.hidden = true;
+      const previewContent = el("div");
+      const activityCard = (sequence: number) =>
+        list.querySelector<HTMLButtonElement>(`[data-sequence="${sequence}"]`);
+      const back = button("Back to activity", () => {
+        ++previewGeneration;
+        const origin = selected === undefined ? null : activityCard(selected);
+        selected = undefined;
+        detail.hidden = true;
+        root.scrollTop = activityScroll;
+        (origin ?? filterButtons.get(activityFilter))?.focus();
+      });
+      detail.append(back, previewContent);
       header.append(heading, controls);
       root.append(header, status, detail, list, older);
       container.append(root);
@@ -128,8 +140,9 @@ export function registerSessionPanel(host: ControlUiHost) {
       let rows: ActivityOutput["items"] = [],
         upper: number | undefined,
         next: number | null = null,
-        busy = false,
-        selected = "";
+        busy = false;
+      let selected: number | undefined,
+        activityScroll = 0;
       const client = viewingClient(
         createFeatureClient<FullOutputContract>(browserContract, host),
         () => ({
@@ -163,15 +176,20 @@ export function registerSessionPanel(host: ControlUiHost) {
         upper = undefined;
         next = null;
         vault = "";
-        selected = "";
+        selected = undefined;
         detail.hidden = true;
-        detail.replaceChildren();
+        previewContent.replaceChildren();
         list.replaceChildren();
         older.hidden = true;
         return true;
       }
       const pageTarget = (id: string) => ({ id: "overview", params: { agent, vault, record: id } });
       function render() {
+        const focused = document.activeElement;
+        const focusedEvent =
+          focused instanceof HTMLButtonElement && list.contains(focused)
+            ? focused.dataset.sequence
+            : undefined;
         const display = oldestFirst ? rows.toReversed() : rows;
         list.replaceChildren();
         for (const row of display) {
@@ -180,7 +198,11 @@ export function registerSessionPanel(host: ControlUiHost) {
             undefined,
             `knowledge-session-item knowledge-session-${row.action}`,
           );
-          const card = button("", () => void preview(row.id));
+          const card = button("", () => {
+            activityScroll = root.scrollTop;
+            void preview(row.id, row.sequence);
+          });
+          card.dataset.sequence = String(row.sequence);
           card.className = "knowledge-session-card";
           card.setAttribute("aria-label", row.title);
           const glyph = el("span", undefined, "knowledge-session-glyph knowledge-tile");
@@ -222,13 +244,18 @@ export function registerSessionPanel(host: ControlUiHost) {
         }
         older.hidden = next === null;
         older.disabled = busy;
+        if (focusedEvent !== undefined) {
+          (activityCard(Number(focusedEvent)) ?? filterButtons.get(activityFilter))?.focus();
+        }
       }
-      async function preview(id: string) {
+      async function preview(id: string, sequence: number) {
         const p = ++previewGeneration,
           g = generation;
-        selected = id;
+        selected = sequence;
         detail.hidden = false;
-        detail.replaceChildren(el("p", "Loading record…"));
+        previewContent.replaceChildren(el("p", "Loading record…"));
+        root.scrollTop = 0;
+        back.focus({ preventScroll: true });
         try {
           const result = await client.invoke("record_detail", {
             id,
@@ -239,18 +266,12 @@ export function registerSessionPanel(host: ControlUiHost) {
           if (!valid(g) || p !== previewGeneration) {
             return;
           }
-          detail.replaceChildren(
-            button("Back to activity", () => {
-              ++previewGeneration;
-              selected = "";
-              detail.hidden = true;
-            }),
-          );
+          previewContent.replaceChildren();
           if (!result.record) {
-            detail.append(el("p", "This record is no longer available."));
+            previewContent.append(el("p", "This record is no longer available."));
             return;
           }
-          detail.append(el("h3", result.record.title));
+          previewContent.append(el("h3", result.record.title));
           const full = el("a", "Open full page", "knowledge-session-full");
           full.href = host.navigation.pageHref(pageTarget(id));
           full.addEventListener("click", (e) => {
@@ -260,12 +281,16 @@ export function registerSessionPanel(host: ControlUiHost) {
             e.preventDefault();
             host.navigation.openPage(pageTarget(id));
           });
-          detail.append(
+          previewContent.append(
             full,
-            markdownView(result.record.body ?? "", (nextId) => void preview(nextId), result.links),
+            markdownView(
+              result.record.body ?? "",
+              (nextId) => void preview(nextId, sequence),
+              result.links,
+            ),
           );
           if (result.content.nextOffset !== null) {
-            detail.append(
+            previewContent.append(
               el(
                 "p",
                 "Preview shortened. Open the full page for all notes and evidence.",
@@ -275,13 +300,7 @@ export function registerSessionPanel(host: ControlUiHost) {
           }
         } catch (error) {
           if (valid(g) && p === previewGeneration) {
-            detail.replaceChildren(
-              el("p", host.redact(String(error)), "knowledge-error"),
-              button("Back to activity", () => {
-                selected = "";
-                detail.hidden = true;
-              }),
-            );
+            previewContent.replaceChildren(el("p", host.redact(String(error)), "knowledge-error"));
           }
         }
       }
@@ -319,7 +338,7 @@ export function registerSessionPanel(host: ControlUiHost) {
             next = null;
             ++previewGeneration;
             detail.hidden = true;
-            selected = "";
+            selected = undefined;
             more = false;
           }
           vault = scope.vault;
