@@ -36,6 +36,8 @@ describe("balanced JSON extraction", () => {
         strictJson: { source, opaqueSpans: [{ startIndex: 1, endIndex: 1 }] },
       }),
     ).toEqual([{ json: source, startIndex: 0, endIndex: source.length - 1 }]);
+    // This span starts at the original closing quote, so string ownership
+    // ignores the whole span even though it extends across the endpoint.
     expect(
       extractBalancedJsonFragments('["]"]', {
         ...strictRecovery,
@@ -47,7 +49,67 @@ describe("balanced JSON extraction", () => {
           ],
         },
       }),
-    ).toEqual([]);
+    ).toEqual([{ json: '["]"]', startIndex: 0, endIndex: 4 }]);
+  });
+
+  it("keeps crossing indexed candidates independent of filtered discovery ancestors", () => {
+    const parent = '["[",{"]":1}]';
+    const child = '{"]":1}';
+    const suffix = '{"after":true}';
+    for (const separator of ["", "\n", "\r\n", "\r"]) {
+      const source = parent + separator + suffix;
+      const opaqueSpans = [
+        { startIndex: 1, endIndex: 1 },
+        { startIndex: 3, endIndex: 3 },
+      ];
+      for (const raw of [source, source.replaceAll('"', " ")]) {
+        for (const recoverAtLineStart of [false, true]) {
+          const options = { recoverAtLineStart, strictJson: { source, opaqueSpans } };
+          const fragment = (json: string) => ({
+            json,
+            startIndex: source.indexOf(json),
+            endIndex: source.indexOf(json) + json.length - 1,
+          });
+          expect(extractBalancedJsonFragments(raw, { ...options, openers: ["{"] })).toEqual([
+            fragment(child),
+            fragment(suffix),
+          ]);
+          expect(extractBalancedJsonFragments(raw, options)).toEqual([
+            fragment(parent),
+            fragment(suffix),
+          ]);
+        }
+      }
+    }
+  });
+
+  it("uses original string ownership for opaque entry after hidden opening quotes", () => {
+    for (const text of ["text", "]", 'escaped \" quote']) {
+      const parent = `[${JSON.stringify(text)}]`;
+      const suffix = '{"after":true}';
+      const source = parent + "] " + suffix;
+      const endpoint = parent.length - 1;
+      const opaqueSpans = [
+        { startIndex: 1, endIndex: 1 },
+        { startIndex: endpoint, endIndex: endpoint },
+      ];
+      for (const raw of [source, source.replaceAll('"', " ")]) {
+        for (const recoverAtLineStart of [false, true]) {
+          expect(
+            extractBalancedJsonFragments(raw, {
+              recoverAtLineStart,
+              strictJson: { source, opaqueSpans },
+            }),
+          ).toEqual([
+            {
+              json: suffix,
+              startIndex: parent.length + 2,
+              endIndex: source.length - 1,
+            },
+          ]);
+        }
+      }
+    }
   });
 
   it("releases expired indexed protection after a hidden endpoint without admitting its owner", () => {
@@ -80,12 +142,18 @@ describe("balanced JSON extraction", () => {
 
   it("bounds indexed retirement work when artificial descendants cross the original endpoint", () => {
     for (const depth of [256, 1024, 4096]) {
-      const source = `[${JSON.stringify("[".repeat(depth) + "]".repeat(depth))},{}]`;
-      const stringEnd = source.lastIndexOf('"');
+      const parent = `[${JSON.stringify("[".repeat(depth))},{}]`;
+      const suffix = '{"after":true}';
+      const source = parent + " " + suffix;
+      const stringEnd = parent.lastIndexOf('"');
       const push = Array.prototype.push;
       const pop = Array.prototype.pop;
+      const parse = JSON.parse;
+      const slice = String.prototype.slice;
       let pushes = 0;
       let pops = 0;
+      let parsedUnits = 0;
+      let copiedUnits = 0;
       Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
         pushes += items.length;
         return Reflect.apply(push, this, items);
@@ -93,6 +161,15 @@ describe("balanced JSON extraction", () => {
       Array.prototype.pop = function (this: unknown[]) {
         pops++;
         return Reflect.apply(pop, this, []);
+      };
+      JSON.parse = (text, reviver) => {
+        parsedUnits += String(text).length;
+        return parse(text, reviver);
+      };
+      String.prototype.slice = function (this: string, start, end) {
+        const result = Reflect.apply(slice, this, [start, end]);
+        copiedUnits += result.length;
+        return result;
       };
       let result: ReturnType<typeof extractBalancedJsonFragments>;
       try {
@@ -109,8 +186,15 @@ describe("balanced JSON extraction", () => {
       } finally {
         Array.prototype.push = push;
         Array.prototype.pop = pop;
+        JSON.parse = parse;
+        String.prototype.slice = slice;
       }
-      expect(result).toEqual([{ json: source, startIndex: 0, endIndex: source.length - 1 }]);
+      expect(result).toEqual([
+        { json: parent, startIndex: 0, endIndex: parent.length - 1 },
+        { json: suffix, startIndex: parent.length + 1, endIndex: source.length - 1 },
+      ]);
+      expect(parsedUnits).toBeLessThanOrEqual(2 * source.length + 2 * (depth + 3));
+      expect(copiedUnits).toBeLessThanOrEqual(3 * source.length);
       expect(pushes).toBeLessThanOrEqual(10 * source.length);
       expect(pops).toBeLessThanOrEqual(4 * source.length);
     }
