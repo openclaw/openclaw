@@ -1,5 +1,6 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
@@ -53,6 +54,47 @@ async function installFixture(page: Page, defaultWorkspace = false) {
 }
 
 suite.define(() => {
+  it("keeps the Details and Panels sheet readable with enlarged text", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        await page.addInitScript(
+          ({ key }) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+        );
+        await installFixture(page);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await openChatDetails(page);
+        const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host:not([hidden])");
+        const textSize = (el: Locator) => el.evaluate((node) => getComputedStyle(node).fontSize);
+        const people = host.locator('[data-details-destination="people"]');
+        await people.waitFor();
+        const rootSize = await textSize(people);
+        const panels = host
+          .locator(".chat-mobile-host__segments")
+          .getByRole("button", { name: "Panels", exact: true });
+        await panels.tap();
+        const files = host
+          .locator(".chat-panel-launcher-mobile")
+          .getByRole("button", { name: "Files", exact: true });
+        await files.waitFor();
+        expect([rootSize, await textSize(panels), await textSize(files)]).toEqual([
+          "19.6px",
+          "18.2px",
+          "19.6px",
+        ]);
+        await files.tap();
+        await host.locator('[data-panel-slot="workspace"]:visible').waitFor();
+        await host
+          .locator(".chat-mobile-host__segments")
+          .getByRole("button", { name: "Details", exact: true })
+          .tap();
+        await people.waitFor();
+        await closeChatDetails(page);
+      },
+    );
+  });
+
   it("opens native Details while disconnected and after reconnecting", async () => {
     await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
       const gateway = await installFixture(page);

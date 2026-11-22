@@ -187,13 +187,13 @@
   .chat-mobile-host__segments button {
     flex: 1;
     min-width: 0;
-    height: 30px;
+    height: max(30px, calc(30px * var(--control-ui-text-scale)));
     padding: 5px 12px;
     border: 0;
     border-radius: 16px;
     background: transparent;
     color: var(--muted);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .chat-mobile-host__segments button[aria-pressed="true"] {
@@ -205,8 +205,8 @@
     min-width: 0;
     min-height: 0;
     font-family: var(--font-body);
-    font-size: 16px;
-    line-height: 24px;
+    font-size: var(--control-ui-text-lg);
+    line-height: calc(24px * var(--control-ui-text-scale));
     font-weight: 500;
     color: var(--text-strong);
     overflow: hidden;
