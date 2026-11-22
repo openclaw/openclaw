@@ -75,7 +75,7 @@
 .lr-tab-header .tabstrip {
   flex: 1;
 }
-.tabstrip-tab__label {
+.lr-tab-header .tabstrip-tab__label {
   max-width: 150px;
 }
 .lr-address {
