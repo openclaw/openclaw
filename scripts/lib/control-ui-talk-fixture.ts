@@ -20,6 +20,9 @@ export async function launchTalkObservationBrowser(artifactDir: string, headed: 
       "--remote-debugging-port=0",
       "--no-first-run",
       "--no-default-browser-check",
+      // Match Playwright: testing field trials can force redundant main frames
+      // for animations that already run on the compositor.
+      "--disable-field-trial-config",
       "--disable-background-networking",
       "--disable-extensions",
       "--disable-component-update",

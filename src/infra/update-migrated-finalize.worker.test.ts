@@ -1,9 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { format } from "node:util";
-import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
-import type { MigratedUpdateFinalizationInput } from "../cli/update-cli/update-command-migrated-types.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -167,7 +166,7 @@ vi.mock("./update-run-ledger.js", () => ({
 vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
-const originalExitCode = process.exitCode;
+const originalExitCode = process.exitCode ?? 0;
 const originalRouting = loggingState.forceConsoleToStderr;
 const originalConsole = loggingState.rawConsole;
 const stdout: string[] = [];
@@ -216,6 +215,7 @@ function expectResultFile(
 }
 
 beforeEach(() => {
+  process.exitCode = originalExitCode;
   vi.resetModules();
   vi.clearAllMocks();
   fixture.stopService.mockReset().mockResolvedValue({ stopped: false });
@@ -335,12 +335,6 @@ it.each(["database", "native"] as const)(
     expect(stderr.join("")).toContain(failure.message);
   },
 );
-
-it("keeps live callbacks and deadline owners out of the migrated wire contract", () => {
-  type Options = MigratedUpdateFinalizationInput["params"]["opts"];
-  expectTypeOf<Options>().not.toHaveProperty("onResult");
-  expectTypeOf<NonNullable<Options["run"]>>().not.toHaveProperty("deadline");
-});
 
 it("refuses a malformed post-core timeout before invoking the updater", async () => {
   const update = vi.fn();

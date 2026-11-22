@@ -141,22 +141,7 @@ export function createSkillFileHovercard(props: {
         },
         true,
       );
-      const stopEscape = listen(
-        document,
-        "keydown",
-        (event) => {
-          if (event instanceof KeyboardEvent && event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            if (card.contains(document.activeElement)) {
-              dismiss();
-            } else {
-              close();
-            }
-          }
-        },
-        true,
-      );
+      const stopEscape = listen(document, "keydown", hovercard.handleEscape, true);
       // Mount can retire an ineligible trigger before its Solid root exists.
       let dispose: (() => void) | undefined = undefined;
       hovercard.mount(next, card, "vertical", true, () => {

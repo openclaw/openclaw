@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
@@ -6,7 +5,10 @@ import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadReads,
+  observeMainThreadSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
 import type { SqliteSchemaCatalog } from "./sqlite-schema-catalog-types.js";
 import {
@@ -19,9 +21,6 @@ import {
   collectSqliteSchemaIssues,
 } from "./sqlite-schema-contract.test-support.js";
 
-const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
-// Node added the public SQLite query diagnostic event in 26.8.0.
-const supportsQueryDiagnostics = nodeMajor > 26 || (nodeMajor === 26 && nodeMinor >= 8);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const CANONICAL_SCHEMA = `
@@ -590,43 +589,32 @@ describe("assertSqliteSchemaContains", () => {
     },
   );
 
-  it.skipIf(!supportsQueryDiagnostics)(
-    "keeps table reads independent during same-query diagnostic reentry",
-    () => {
-      const database = createDatabase(CANONICAL_SCHEMA);
-      const queryChannel = channel("sqlite.db.query");
-      const readTable = createSqliteTableContractReader(database);
-      let reentered = false;
-      const nestedResults: Array<ReturnType<typeof readTable>> = [];
-      let nestedError: unknown;
-      const onQuery = (message: unknown) => {
-        const event = message as { database?: DatabaseSync };
-        if (reentered || event.database !== database) {
-          return;
-        }
-        reentered = true;
-        // Subscriber errors become process errors; inspect the nested outcome after delivery.
-        try {
-          nestedResults.push(readTable("missing_table"));
-        } catch (error) {
-          nestedError = error;
-        }
-      };
-      try {
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
-        }
-        queryChannel.subscribe(onQuery);
-        expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, {}, readTable)).toEqual([]);
-        expect(reentered).toBe(true);
-        expect(nestedError).toBeUndefined();
-        expect(nestedResults).toEqual([undefined]);
-      } finally {
-        queryChannel.unsubscribe(onQuery);
-        database.close();
+  it("keeps table reads independent during same-query observation reentry", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    const readTable = createSqliteTableContractReader(database);
+    let reentered = false;
+    const nestedResults: Array<ReturnType<typeof readTable>> = [];
+    const onQuery = () => {
+      if (reentered) {
+        return;
       }
-    },
-  );
+      reentered = true;
+      nestedResults.push(readTable("missing_table"));
+    };
+    let observations: ReturnType<typeof observeMainThreadSql> | undefined;
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([]);
+      }
+      observations = observeMainThreadSql({ onStatement: onQuery });
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, {}, readTable)).toEqual([]);
+      expect(reentered).toBe(true);
+      expect(nestedResults).toEqual([undefined]);
+    } finally {
+      observations?.restore();
+      database.close();
+    }
+  });
 });
 
 function schemaWithFutureColumn(declaration: string): string {

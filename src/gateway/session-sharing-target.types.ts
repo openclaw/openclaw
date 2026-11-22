@@ -1,3 +1,4 @@
+import type { SessionEntryDatabasePreparationReceipt } from "../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
@@ -41,7 +42,7 @@ export type SessionFactsRequest = {
   followTranscript?: boolean;
   sessionAccessOnly?: boolean;
   preserveQualifiedAddress?: boolean;
-  storageReady?: Promise<void>;
+  storageReady?: Promise<void | { assertCurrent(): void }> | SessionEntryDatabasePreparationReceipt;
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;

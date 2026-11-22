@@ -66,11 +66,6 @@ class SmsManager(
     ) : QueryParseResult
   }
 
-  internal data class SendPlan(
-    val parts: List<String>,
-    val useMultipart: Boolean,
-  )
-
   internal class MixedByPhoneCandidates(
     private val maxCandidates: Int,
     private val reviewMode: Boolean,
@@ -338,14 +333,6 @@ class SmsManager(
       transportType: String?,
     ): String = "${transportType?.ifBlank { "unknown" } ?: "unknown"}:$rowId"
 
-    internal fun buildSendPlan(
-      message: String,
-      divider: (String) -> List<String>,
-    ): SendPlan {
-      val parts = divider(message).ifEmpty { listOf(message) }
-      return SendPlan(parts = parts, useMultipart = parts.size > 1)
-    }
-
     internal fun buildPayloadJson(
       ok: Boolean,
       to: String,
@@ -427,7 +414,7 @@ class SmsManager(
         context.getSystemService(AndroidSmsManager::class.java)
           ?: throw IllegalStateException("SMS_UNAVAILABLE: SmsManager not available")
 
-      val plan = buildSendPlan(params.message) { smsManager.divideMessage(it) }
+      val plan = buildSmsSendPlan(params.message) { smsManager.divideMessage(it) }
       if (plan.useMultipart) {
         smsManager.sendMultipartTextMessage(
           params.to,

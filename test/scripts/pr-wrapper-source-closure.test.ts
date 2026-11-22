@@ -66,7 +66,9 @@ it("retains wrapper runtime dependencies and Darwin inputs inside excluded names
     "test/vitest/vitest.node-policy.global-setup.ts",
     "test/vitest/vitest.jsdom-preload.mts",
     ...workflow.jobs.darwin.steps.flatMap((step: { run?: string }) =>
-      step.run?.startsWith("node scripts/run-vitest.mjs ") ? [step.run.split(" ")[2]!] : [],
+      step.run?.startsWith("node scripts/run-vitest.mjs ")
+        ? step.run.split(/\s+/u).filter((arg) => arg.endsWith(".test.ts"))
+        : [],
     ),
     ...workerInputs,
   ];
@@ -87,6 +89,7 @@ it("retains wrapper runtime dependencies and Darwin inputs inside excluded names
       /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||
       file.startsWith("test/scripts/pr-ci-sweeper") ||
       file.startsWith("test/helpers/") ||
+      file.startsWith("src/test-utils/") ||
       /^test\/scripts\/pr-.*\.test\.ts$/u.test(file),
   );
   expect(excludedInputs.length).toBeGreaterThan(0);

@@ -28,8 +28,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./bot.cleanup.test-support.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
-import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import {
   createBoundConversation,
   createConfiguredBindingReadiness,
@@ -46,7 +45,8 @@ import {
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { feishuPlugin } from "./channel.js";
-import { parseMergeForwardContent } from "./message-content.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import { parseFeishuMessageEvent, parseMergeForwardContent } from "./message-content.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const failedFinalReceipt = {

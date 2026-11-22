@@ -47,7 +47,12 @@ it.each([
       expect((await readJob())?.state.runningAtMs).toBeUndefined();
       held.release.resolve({ status: "ok" });
       if ("enabled" in patch) {
+        const previousRuns = held.runner.mock.calls.length;
+        await update(state, job.id, { enabled: true });
+        expect(signal?.aborted).toBe(true);
+        expect(held.runner).toHaveBeenCalledTimes(previousRuns);
         await expect(run(state, job.id, "force")).resolves.toMatchObject({ ran: true });
+        expect(held.runner).toHaveBeenCalledTimes(previousRuns + 1);
       }
     } finally {
       held.release.resolve({ status: "ok" });

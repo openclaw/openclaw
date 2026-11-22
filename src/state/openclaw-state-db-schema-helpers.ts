@@ -46,8 +46,21 @@ export function tableHasColumn(
 
 export function readTableColumns(db: EngineConnection, tableName: string): Set<string> {
   if (isPostgresSqlConnection(db)) {
+    const facts = getPostgresPhysicalFacts(db);
+    if (!facts) {
+      // A migration or an in-flight peer publication may not have reusable facts.
+      // sqlite-allow-raw: Schema inspection uses this transaction's actual catalog.
+      const rows = db
+        .prepare(`SELECT a.attname AS name FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+        WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = ?
+          AND a.attnum > 0 AND NOT a.attisdropped
+        ORDER BY a.attnum`)
+        .all(tableName);
+      return new Set(rows.map((row) => String(row.name)));
+    }
     return new Set(
-      getPostgresPhysicalFacts(db)?.catalog.flatMap((fact) =>
+      facts.catalog.flatMap((fact) =>
         fact.table === tableName &&
         fact.kind === "column" &&
         fact.value &&
@@ -56,7 +69,7 @@ export function readTableColumns(db: EngineConnection, tableName: string): Set<s
         typeof fact.value.name === "string"
           ? [fact.value.name]
           : [],
-      ) ?? [],
+      ),
     );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
@@ -121,7 +134,20 @@ export function classifySqliteTableReadError(
 
 export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string): string[] {
   if (isPostgresSqlConnection(db)) {
-    const value = getPostgresPhysicalFacts(db)?.catalog.find(
+    const facts = getPostgresPhysicalFacts(db);
+    if (!facts) {
+      // sqlite-allow-raw: Unknown admission is not proof of a missing primary key.
+      return db
+        .prepare(`SELECT a.attname AS name FROM pg_catalog.pg_index i
+        JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+        CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+        WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = ? AND i.indisprimary
+        ORDER BY k.position`)
+        .all(tableName)
+        .map((row) => String(row.name));
+    }
+    const value = facts.catalog.find(
       (fact) => fact.table === tableName && fact.kind === "primaryKey",
     )?.value;
     return Array.isArray(value)
@@ -157,10 +183,16 @@ export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string):
 
 export function tableExists(db: EngineConnection, tableName: string): boolean {
   if (isPostgresSqlConnection(db)) {
+    const facts = getPostgresPhysicalFacts(db);
+    if (facts) {
+      return facts.catalog.some((fact) => fact.table === tableName && fact.kind === "table");
+    }
+    // sqlite-allow-raw: Missing facts during a write or migration require actual schema inspection.
     return (
-      getPostgresPhysicalFacts(db)?.catalog.some(
-        (fact) => fact.table === tableName && fact.kind === "table",
-      ) ?? false
+      db
+        .prepare(`SELECT 1 AS present FROM pg_catalog.pg_class
+      WHERE relnamespace = current_schema()::regnamespace AND relname = ? AND relkind IN ('r', 'p')`)
+        .get(tableName)?.present === 1
     );
   }
   const schema = getAdmittedSqliteSchemaFacts(db);

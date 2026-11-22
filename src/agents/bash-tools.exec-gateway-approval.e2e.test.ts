@@ -29,10 +29,8 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-} from "./bash-tools.exec-types.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { createExecTool } from "./bash-tools.js";
 
 const TEST_ENV_KEYS = [
@@ -264,20 +262,22 @@ describe("gateway-hosted exec approvals", () => {
       expect((await approved).details).toMatchObject({
         status: "completed",
         exitCode: 0,
-        aggregated: "approved",
+        aggregated: "approved\n",
       });
 
       const revoked = tool.execute("dynamic-predicate-revoked", {
         command,
         workdir: workspaceDir,
       });
+      // Policy updates can reject execution before their driver RPC returns.
+      const rejected = expect(revoked).rejects.toThrow("Exec approval changed before execution");
       const revokedId = await pendingApprovalId();
       await setPolicy("deny", "off");
       await operator.request("exec.approval.resolve", {
         id: revokedId,
         decision: "allow-once",
       });
-      await expect(revoked).rejects.toThrow("Exec approval changed before execution");
+      await rejected;
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

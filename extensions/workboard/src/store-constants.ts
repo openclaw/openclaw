@@ -1,4 +1,5 @@
 import type {
+  WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardClaim,
   WorkboardExecution,
@@ -55,6 +56,12 @@ export function workboardCardConsumesOwnerSlot(card: WorkboardOwnerSlotCard, now
     !isWorkboardClaimReclaimable(claim, now) &&
     (card.status === "running" || activeClaim || card.execution?.status === "running")
   );
+}
+
+export function workboardBoardOwnerSlotLimit(
+  board: Pick<WorkboardBoardMetadata, "orchestration"> | undefined,
+): number {
+  return board?.orchestration?.maxActivePerOwner ?? 1;
 }
 
 export function workboardCardSlotOwner(card: WorkboardOwnerSlotCard, now?: number): string {

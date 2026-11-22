@@ -42,6 +42,9 @@ async function fixture(command: CommandFixture) {
     mkdirSync(dir);
   }
   copyPrRoutingWrapperSources(repo);
+  writeFileSync(join(bin, "rg"), "#!/bin/sh\necho 'Unexpected rg call' >&2\nexit 99\n", {
+    mode: 0o755,
+  });
   const stateFile = join(root, "external-state.json");
   const calls = join(root, "native-calls.jsonl");
   const env: NodeJS.ProcessEnv = {

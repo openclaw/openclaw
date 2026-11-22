@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { OperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.types.js";
 
@@ -46,6 +46,15 @@ export function hasOperatorToolGatewayAuthority(): boolean {
   return Boolean(admitted || hasOperatorToolSource(direct) || scopedOperator);
 }
 
+/** Read the host-issued operator grant; the Gateway dispatcher validates it at admission. */
+export function readOperatorToolRunAuthority(): AdmittedRunOperatorAuthority | undefined {
+  return (
+    getGatewayToolCallerIdentity()?.operatorAuthority ??
+    readOperatorToolGatewayAuthority()?.operatorRunAuthority ??
+    getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+  );
+}
+
 /** Retain the already-issued source and its invocation fence for SDK-owned selection writes. */
 export function captureOperatorToolGatewayAuthority():
   | { authority: AdmittedRunOperatorAuthority | undefined; assertCurrent: SessionSourceAssertion }
@@ -55,8 +64,7 @@ export function captureOperatorToolGatewayAuthority():
   const direct = readOperatorToolGatewayAuthority();
   const ambientScope = getPluginRuntimeGatewayRequestScope();
   const scope = ambientScope ? { ...ambientScope } : undefined;
-  const authority =
-    admitted ?? direct?.operatorRunAuthority ?? scope?.client?.internal?.operatorRunAuthority;
+  const authority = readOperatorToolRunAuthority();
   const requiresOperatorAuthority = Boolean(
     admitted ||
     hasOperatorToolSource(direct) ||
@@ -124,7 +132,7 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
   }
   const capturedOperator =
     scope?.client && context
-      ? await captureGatewayOperatorRunAuthority({
+      ? await prepareGatewayOperatorRunAuthority({
           client: scope.client,
           context,
           hasCurrentClientAuthority: scope.hasCurrentClientAuthority,

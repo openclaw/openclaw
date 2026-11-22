@@ -61,7 +61,8 @@ export default defineToolPlugin({
   Mode and Tool Search. Catalog calls reject an invalid schema before execution
   and validate the final value before returning it.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
-  `textResult` and `jsonResult`.
+  `textResult` and `jsonResult`. `jsonResult` sends the payload to the model
+  as compact JSON text and keeps it unchanged as `details`.
 - Tool names are static, so `openclaw plugins build` derives
   `contracts.tools` from the declared tools without hand-duplicated names.
 - Runtime loading stays strict: installed plugins still need

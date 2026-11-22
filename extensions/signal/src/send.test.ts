@@ -104,19 +104,19 @@ describe("sendMessageSignal receipts", () => {
 
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
-    const maxBytes = 12 * 1024 * 1024;
+    const cap = 12 * 1024 * 1024;
     const result = await sendMessageSignal("group:group-1", "", {
       cfg: SIGNAL_TEST_CFG,
       mediaUrl: "/tmp/image.png",
       mediaLocalRoots: ["/tmp"],
-      maxBytes,
+      maxBytes: cap,
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
       "/tmp/image.png",
-      maxBytes,
+      cap,
       expect.objectContaining({ localRoots: ["/tmp"] }),
     );
-    expectSend({ attachments: ["/tmp/image.png"], message: "" }, { maxAttachmentBytes: maxBytes });
+    expectSend({ attachments: ["/tmp/image.png"] }, { maxAttachmentBytes: cap, timeoutMs: 78_000 });
     expect(result).toMatchObject(receiptAt(1234567891));
     expect(result.receipt).toMatchObject({
       platformMessageIds: ["1234567891"],

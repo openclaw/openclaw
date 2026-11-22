@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import {
   createSqliteLifecycleAggregateError,
+  classifyRetiredSqliteSnapshotRemovalError,
   throwSqliteLifecycleErrors,
   SqliteSnapshotCleanupError,
 } from "./sqlite-lifecycle-errors.js";
@@ -34,7 +35,11 @@ async function closeDirectory(directory: string): Promise<void> {
   }
   if (!owned.removed) {
     await owned.retire();
-    await fs.rm(directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 20 });
+    try {
+      await fs.rm(directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 20 });
+    } catch (error) {
+      throw classifyRetiredSqliteSnapshotRemovalError(directory, error);
+    }
     owned.removed = true;
   }
   await native.removed(directory);

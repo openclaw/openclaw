@@ -14,6 +14,7 @@ const MAX_PLUGIN_SEARCH_LIMIT = 100;
 export async function searchInstallablePluginPackages(params: {
   query: string;
   limit?: number;
+  signal?: AbortSignal;
 }): Promise<ClawHubPackageSearchResult[]> {
   const limit =
     !Number.isFinite(params.limit) || !params.limit || params.limit <= 0
@@ -25,6 +26,7 @@ export async function searchInstallablePluginPackages(params: {
         query: params.query,
         family,
         limit,
+        signal: params.signal,
       }),
     ),
   );

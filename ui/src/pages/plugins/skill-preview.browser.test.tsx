@@ -1,4 +1,3 @@
-import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,38 +9,30 @@ import { createPluginPreview, PluginSkillPreview } from "./skill-preview.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 
-it("keeps a pending preview modal dismissible and localizes unavailable files when its code arrives", async () => {
-  const moduleGate = Promise.withResolvers<void>();
-  vi.doMock("../../components/file-preview-modal.tsx", async (importOriginal) => {
-    await moduleGate.promise;
-    return importOriginal<typeof import("../../components/file-preview-modal.tsx")>();
-  });
-  onTestFinished(() => vi.doUnmock("../../components/file-preview-modal.tsx"));
+it("closes from the loading shell and restores focus to the invoking skill", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
-  vi.spyOn(client, "request").mockResolvedValue({
-    name: "guide",
-    rootPath: "skills/guide",
-    entryPath: "SKILL.md",
-    directories: [],
-    inventoryComplete: true,
-    files: [{ path: "SKILL.md", sizeBytes: 0, status: "unavailable" }],
-  });
+  const pendingRead = Promise.withResolvers<never>();
+  vi.spyOn(client, "request")
+    .mockReturnValueOnce(pendingRead.promise)
+    .mockResolvedValueOnce({
+      name: "guide",
+      rootPath: "skills/guide",
+      entryPath: "SKILL.md",
+      directories: [],
+      inventoryComplete: true,
+      files: [{ path: "SKILL.md", sizeBytes: 0, status: "unavailable" }],
+    });
   const { gateway, publish } = createApplicationGateway();
   publish({ ...gateway.snapshot, client, phase: "connected" });
   const binding = new GatewayPageBinding(vi.fn(), { getGateway: () => gateway });
   binding.connect();
   onTestFinished(() => binding.dispose());
-  onTestFinished(() => moduleGate.resolve());
+  onTestFinished(() => pendingRead.reject(new Error("Retired read")));
   onTestFinished(() => {
     vi.restoreAllMocks();
   });
   const view = mountSolid(() => {
-    const [revision, setRevision] = createSignal(0);
-    const preview = createPluginPreview(binding, () => setRevision((value) => value + 1));
-    const state = () => {
-      revision();
-      return preview.state;
-    };
+    const preview = createPluginPreview(binding);
     return (
       <>
         <button
@@ -51,35 +42,25 @@ it("keeps a pending preview modal dismissible and localizes unavailable files wh
         >
           Open skill
         </button>
-        <PluginSkillPreview preview={preview} state={state()} />
+        <PluginSkillPreview preview={preview} state={preview.read()} />
       </>
     );
   });
   const trigger = page.getByRole("button", { name: "Open skill", exact: true });
   const dialog = page.getByRole("dialog", { name: "guide", exact: true });
-  await trigger.click();
-  await expect.element(dialog).toHaveFocus();
+  (trigger.element() as HTMLElement).focus();
+  await userEvent.keyboard("{Enter}");
   await expect.element(page.getByRole("status", { name: "Loading…" })).toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(trigger).toHaveFocus();
   expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull();
 
-  await trigger.click();
-  await expect.element(dialog).toHaveFocus();
-  moduleGate.resolve();
-  await expect
-    .element(
-      page.getByText("Couldn’t read this file. Close and reopen the skill to try again.", {
-        exact: true,
-      }),
-    )
-    .toBeVisible();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(page.getByRole("alert")).toHaveTextContent("Couldn’t read SKILL.md.");
   await waitForSolid(() => {
-    const preview = view.container.querySelector("openclaw-file-preview-modal");
-    expect(preview?.contains(document.activeElement)).toBe(true);
     expect(view.container.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
   });
-  await userEvent.keyboard("{Escape}");
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect.element(trigger).toHaveFocus();
   expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull();
 });

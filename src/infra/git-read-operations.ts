@@ -29,6 +29,11 @@ export type GitCheckoutContext = {
    * do not establish fork membership. `owner`/`repo` stay the base identity.
    */
   forkHeadCandidates?: Array<{ owner: string; repo: string }>;
+  /**
+   * When Git created `branch` from the default branch, in epoch milliseconds.
+   * Pull requests opened earlier belong to a previous branch with the same name.
+   */
+  branchStartedAt?: number;
 };
 
 /** Lowercased merged-PR head, its target branch, and its merge commit. */

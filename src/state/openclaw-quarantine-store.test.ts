@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   getSqliteDatabaseAdmissionIdentityForPath,
-  retainSqliteDatabaseAdmissionLocation,
+  prepareSqliteDatabaseAdmissionAsync,
 } from "../infra/sqlite-database-admission.js";
 import {
   currentSqliteOperationTiming,
@@ -218,12 +218,12 @@ it("retains quarantine admission with its reader while observing changes and fin
   }
 });
 
-it("validates a replaced quarantine store once while an admitted sibling remains open", () => {
+it("validates a replaced quarantine store once while an admitted sibling remains open", async () => {
   const fixture = createFixture();
   fs.renameSync(fixture.storePath, `${fixture.storePath}.original`);
   fs.copyFileSync(`${fixture.storePath}.original`, fixture.storePath);
   // Keep quarantine facts alive without adding generic catalog admission and its DDL refresh.
-  retainSqliteDatabaseAdmissionLocation(fixture.storePath);
+  await prepareSqliteDatabaseAdmissionAsync({ location: fixture.storePath, assertCurrent() {} });
   using sibling = nodeSqlite.openNodeSqliteDatabase(fixture.storePath);
   const statements = observeStore(fixture.storePath);
   fixture.clear();

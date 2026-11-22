@@ -76,6 +76,11 @@ thinking, omits unfinished calls and partial text, and uses a replayable stop re
 The stored failure and billing facts remain unchanged. This uses existing
 assistant-row shapes and requires no database migration.
 
+Responses item-conflict recovery receipts survive discarded failed or silent
+assistant content as empty replay rows. The transport consumes their metadata
+without sending an empty assistant message, preserving the repaired identity
+boundary after a failed retry or session reopen.
+
 Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
@@ -308,7 +313,8 @@ inter-session user turns that only have provenance metadata.
 - Historical calls to tools absent from the outgoing catalog, including tools whose
   schemas were rejected, replay as assistant text together with their results.
   The model still sees errors such as `Tool session_status not found`. Declared
-  calls retain native tool protocol, with their results kept together in mixed
+  calls, and calls to Tool Search directory tools that a direct call hydrates,
+  retain native tool protocol, with their results kept together in mixed
   batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive
@@ -332,7 +338,7 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+- Prefix-binding Claude models persist runtime-context carriers
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
@@ -341,8 +347,12 @@ inter-session user turns that only have provenance metadata.
   authority their protocol supports; Anthropic-family and external plugin adapters
   retain the labeled user representation, while OpenAI-compatible adapters use
   system or developer authority.
-  Carriers are excluded from chat history and compaction summarization. Other
-  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  Every Claude model binds the prefix except a closed list of older generations
+  (Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5, Mythos Preview), so
+  newly released Claude models, such as Fable 5.2, are prefix-binding without an
+  OpenClaw update.
+  Carriers are excluded from chat history and compaction summarization. Those
+  older Claude models and Anthropic-compatible models keep transient carriers, avoiding
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.

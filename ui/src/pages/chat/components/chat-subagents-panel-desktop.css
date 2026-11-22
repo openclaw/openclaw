@@ -124,8 +124,8 @@
   width: 25px;
   height: 25px;
   border-radius: var(--radius-sm);
-  background: hsl(var(--subagent-hue) 22% 30% / 0.35);
-  color: hsl(var(--subagent-hue) 32% 65%);
+  background: hsl(var(--subagent-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
+  color: hsl(var(--subagent-hue) var(--subagent-avatar-ink, 32% 65%));
 }
 
 .subagents-desktop__open > .subagents-desktop__avatar {

@@ -6,6 +6,7 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import { loadChatDetailsEnvironmentBody } from "./chat-details-desktop-loader.ts";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
@@ -20,10 +21,11 @@ import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
-const ChatDetailsEnvironmentBody = lazy(() => import("./chat-details-environment-body.tsx"), {
+const ChatDetailsEnvironmentBody = lazy(loadChatDetailsEnvironmentBody, {
   export: "ChatDetailsEnvironmentBody",
 });
-export const preloadChatDetailsEnvironment = ChatDetailsEnvironmentBody.preload;
+// Prepare the lazy binding before Desktop measures its expanded sections.
+void ChatDetailsEnvironmentBody.preload().catch(() => undefined);
 
 export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps) {
   const workspace = () => props.details.detailsWorkspace;

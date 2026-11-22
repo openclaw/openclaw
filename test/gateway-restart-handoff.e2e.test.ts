@@ -39,7 +39,7 @@ function journal(logs: string) {
       if (!isRecord(row) || typeof row.time !== "string" || typeof row.message !== "string") {
         return [];
       }
-      return [{ message: row.message, path: row.path, check: row.check, at: Date.parse(row.time) }];
+      return [{ message: row.message, path: row.path, at: Date.parse(row.time) }];
     } catch {
       return [];
     }
@@ -271,7 +271,16 @@ it.skipIf(process.platform !== "linux")(
               throw new Error(`Restart lost persisted session ${sessionKey}`);
             }
             const entry: unknown = JSON.parse(row.entry_json);
-            expect(entry).toMatchObject({ resumeAfterRestart: { queuedInputIds: [] } });
+            // Queued input owns its pending row; the marker keeps the interrupted requester,
+            // which restart resume revalidates before admitting the replacement turn.
+            expect(entry).toMatchObject({
+              resumeAfterRestart: {
+                operatorSource: {
+                  kind: "gateway",
+                  snapshot: { profileId: "gateway-owner", localOperator: true },
+                },
+              },
+            });
           }
         } finally {
           shared.close();

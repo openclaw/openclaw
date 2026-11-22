@@ -99,6 +99,7 @@ function mapRun(
         }
       : undefined,
     deliveryStatus: run.delivery?.status,
+    requesterDelivery: run.delivery?.requesterDelivery,
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
     ...(pausedForMs === undefined ? {} : { pausedForMs }),
@@ -296,6 +297,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     label: "Subagents",
     name: "subagents",
     parameters: SubagentsToolSchema,
+    repeatable: { actions: ["list", "wait"] },
     description:
       "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
     execute: async (_toolCallId, args, signal) => {

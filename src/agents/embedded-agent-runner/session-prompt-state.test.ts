@@ -1,9 +1,13 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import * as normalization from "@openclaw/normalization-core";
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readGitHubPublicationToolSelection } from "../github-tool-identity-config.js";
+import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import * as promptPool from "../sessions/system-prompt-pool.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createComputerTool } from "../tools/computer-tool.js";
 import {
@@ -14,13 +18,61 @@ import {
   prepareSessionToolSurface,
   persistSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
+  readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "./session-prompt-update.js";
+import {
+  readToolSurfaceCheckpoint,
+  resolveSessionToolPolicyDigest,
+} from "./session-tool-checkpoint.js";
 
 const sessionIds = new Set<string>();
 const entryMetadata = { parentId: null, timestamp: "2026-10-01T00:00:00Z" };
 const updateHeading =
   "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n";
+
+it.each(["absent", "restored", "empty", "missing-tools", "malformed", "model-change"] as const)(
+  "keeps pure checkpoint definitions aligned with host restoration (%s)",
+  (shape) => {
+    const definition = { name: "read", description: "Read a file", parameters: { type: "object" } };
+    const marker = (id: string, data: unknown): SessionEntry => ({
+      ...entryMetadata,
+      type: "custom",
+      id,
+      customType: "openclaw.system-prompt",
+      data,
+    });
+    const entries: SessionEntry[] =
+      shape === "absent" ? [] : [marker("old-pin", { tools: [definition] })];
+    if (shape === "empty") {
+      entries.push(marker("empty-pin", { tools: [] }));
+    }
+    if (shape === "missing-tools") {
+      entries.push(marker("retired-pin", { restart: true }));
+    }
+    if (shape === "malformed") {
+      entries.push(marker("bad-pin", { tools: "not an array" }));
+    }
+    if (shape === "model-change") {
+      entries.push({
+        ...entryMetadata,
+        type: "model_change",
+        id: "changed",
+        provider: "fixture",
+        modelId: "replacement",
+      });
+    }
+    const expected = shape === "restored" ? [definition] : shape === "empty" ? [] : undefined;
+    const definitions = readToolSurfaceCheckpoint(entries)?.tools;
+    expect(definitions).toEqual(expected);
+    const host = readSessionSentTools(entries)?.map(projectAgentToolDefinition);
+    const worker = definitions?.map((tool) =>
+      projectAgentToolDefinition({ ...tool, label: tool.name }),
+    );
+    expect(worker).toEqual(host);
+  },
+);
 
 function historyEntry(type: "compaction" | "reset", id: string = type): SessionEntry {
   return type === "reset"
@@ -191,6 +243,10 @@ describe("system prompt series", () => {
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
+    const pool = vi.spyOn(promptPool, "shareSystemPromptPrefix");
+    expect(project(second).update).toBeUndefined();
+    expect(pool).not.toHaveBeenCalled();
+    pool.mockRestore();
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
 
@@ -215,7 +271,7 @@ describe("system prompt series", () => {
       expect(compacted.restart).toBe(true);
       expect(compacted.systemPrompt).toBe(changed);
       expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
+      beginSessionSystemPrompt(state);
       expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
     },
   );
@@ -262,7 +318,7 @@ describe("system prompt series", () => {
     await persist(entries);
     const state = fixture.state;
     const first = project(changed, entries);
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const retry = project(changed, entries);
     expect(retry.update?.content).toBe(first.update?.content);
     await expect(
@@ -297,7 +353,7 @@ describe("system prompt series", () => {
     ).rejects.toThrow("checkpoint acknowledgment rejected");
     expect(entries.at(-1)).toMatchObject({ data: { renderedPrefix: changed.trimEnd() } });
 
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const restored = project(base, entries);
     expect(restored.restart).toBe(false);
     expect(restored.systemPrompt).toBe(base.trimEnd());
@@ -322,7 +378,7 @@ describe("system prompt series", () => {
         fixture.reload();
       }
       const state = fixture.state;
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+      beginSessionSystemPrompt(state);
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
       expect(recovered.update).toBeUndefined();
@@ -372,25 +428,6 @@ describe("system prompt series", () => {
     },
   );
 
-  it("retires earlier overrides when switching to a route that rebuilds the prompt", async () => {
-    const entries: SessionEntry[] = [];
-    project(base);
-    await persist(entries);
-    project(changed, entries);
-    await persist(entries);
-    const state = fixture.state;
-    expect(
-      beginSessionSystemPrompt({
-        state,
-        routeKey: "other",
-        enabled: false,
-        getEntries: () => entries,
-      }),
-    ).toBe(true);
-    expect(state.systemPrompt).toBeUndefined();
-    expect(project(changed, entries).restart).toBe(true);
-  });
-
   it("restores the pinned series and delivers intervening changes", async () => {
     const entries: SessionEntry[] = [];
     const first = project(base);
@@ -408,6 +445,55 @@ describe("system prompt series", () => {
     expect(entries).toHaveLength(2);
     expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
   });
+});
+
+describe("prompt history identity across bounded windows", () => {
+  const routeKey = "openai/gpt-6-sol/openai-responses";
+  const fixture = promptFixture("history-identity", routeKey);
+  const prepareCounted = (
+    systemPrompt: string,
+    entries: SessionEntry[],
+    historyBoundaryCount?: number,
+  ) => {
+    const result = prepareSessionSystemPrompt({
+      state: fixture.state,
+      routeKey,
+      systemPrompt,
+      entries,
+      historyBoundaryCount,
+    });
+    result.commit();
+    return result;
+  };
+  const refreshed = "Base.\n## AGENTS.md\nNew rule.";
+
+  it("restarts when the window's checkpoint predates a compaction outside it", async () => {
+    const entries: SessionEntry[] = [];
+    prepareCounted("Base.", entries, 0);
+    await fixture.persist(entries);
+    // A compaction committed after this checkpoint, and its summary did not fit the next window.
+    fixture.reload();
+    const next = prepareCounted(refreshed, entries, 1);
+    expect(next).toMatchObject({
+      restart: true,
+      seriesStatus: "restarted:history",
+      systemPrompt: refreshed,
+    });
+    expect(next.update).toBeUndefined();
+  });
+
+  it.each([0, undefined])(
+    "keeps a never-compacted session pinned (checkpoint boundary count %s)",
+    async (writtenCount) => {
+      const entries: SessionEntry[] = [];
+      prepareCounted("Base.", entries, writtenCount);
+      await fixture.persist(entries);
+      fixture.reload();
+      const next = prepareCounted(refreshed, entries, 0);
+      expect(next).toMatchObject({ restart: false, seriesStatus: "pinned", systemPrompt: "Base." });
+      expect(next.update?.content).toContain("New rule.");
+    },
+  );
 });
 
 describe("session tool surface", () => {
@@ -485,6 +571,33 @@ describe("session tool surface", () => {
     },
   );
 
+  it("shares published descriptors across sessions without sharing changed or mutable definitions", () => {
+    const parameters = publishRuntimeToolInputSchema({ type: "object", properties: {} }).schema;
+    const pin = (name: string, description: string, schema = parameters) => {
+      fixture.reload();
+      surface([tool(name, description, schema)]);
+      return fixture.state.pendingToolSurface!.tools![0]!;
+    };
+    const first = pin("read", "Read a file 🦞\ud800");
+    expect(pin("read", "Read a file 🦞\ud800")).toBe(first);
+    const renamed = pin("other", first.description);
+    expect(renamed).not.toBe(first);
+    expect(renamed.name).toBe("other");
+    const changed = pin("read", "New description");
+    expect(changed).not.toBe(first);
+    expect(first.description).toBe("Read a file 🦞\ud800");
+    expect(pin("read", "New description")).toBe(changed);
+    const replacement = publishRuntimeToolInputSchema({
+      type: "object",
+      required: ["path"],
+    }).schema;
+    expect(pin("read", "New description", replacement).parameters).toBe(replacement);
+    const mutable = { type: "object", properties: {} };
+    expect(pin("read", "New description", mutable)).not.toBe(
+      pin("read", "New description", mutable),
+    );
+  });
+
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
     const parameters = publishRuntimeToolInputSchema({
@@ -540,11 +653,11 @@ describe("session tool surface", () => {
     expect(JSON.stringify(refused.content)).toContain("gateway is not available in this turn");
   });
 
-  it("preserves pins across prompt admission and checkpoints, and extends restored pins", async () => {
+  it("preserves pins across prompt admission and checkpoints, and holds restored pins", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
     await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+    expect(fixture.state.pendingToolSurface?.tools?.map((entry) => entry.name)).toEqual([
       "gateway",
       "read",
     ]);
@@ -556,13 +669,91 @@ describe("session tool surface", () => {
     await persist(entries, "Base.\n\n## Skills\nrefreshed");
     fixture.reload();
     expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
-    const extended = surface([tool("read"), tool("heartbeat_respond")], entries);
-    expect(names(extended)).toEqual(["gateway", "heartbeat_respond", "read"]);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+    expect(names(surface([tool("read"), tool("heartbeat_respond")], entries))).toEqual([
       "gateway",
-      "heartbeat_respond",
       "read",
     ]);
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+  });
+
+  it("holds the series tool set and definitions when a cron turn builds more tools", async () => {
+    const entries: SessionEntry[] = [];
+    const userTurn = surface([tool("read"), tool("message")]);
+    await persist(entries);
+    const nodeComputer = createComputerTool({
+      pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+    });
+    const changedRead = tool("read", "read v2", { type: "object", properties: {} });
+    const cronTurn = surface([changedRead, tool("message"), nodeComputer], entries);
+    expect(definitions(cronTurn)).toEqual(definitions(userTurn));
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+    const read = cronTurn.find((entry) => entry.name === "read")!;
+    expect(JSON.stringify((await read.execute("x", {})).content)).toContain("read ran");
+  });
+
+  it("admits new tools and changed schemas on a surface that still filters per turn", async () => {
+    const entries: SessionEntry[] = [];
+    surface([tool("read")]);
+    await persist(entries);
+    const admit = (tools: AnyAgentTool[]) =>
+      prepareSessionToolSurface({
+        state: fixture.state,
+        routeKey,
+        toolPolicy: "policy-a",
+        entries,
+        tools,
+        admitNewTools: true,
+      });
+    const changedRead = tool("read", "read v2", { type: "object", properties: {} });
+    const replyTurn = admit([changedRead, tool("message")]);
+    expect(names(replyTurn)).toEqual(["message", "read"]);
+    expect(replyTurn.find((entry) => entry.name === "read")?.description).toBe("read v2");
+    const pinnedComputer = definitions(admit([changedRead, tool("message"), createComputerTool()]));
+    const nodeComputer = createComputerTool({
+      pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+    });
+    // Computer capabilities stay out of the definition on filtering surfaces too.
+    expect(definitions(admit([changedRead, tool("message"), nodeComputer]))).toEqual(
+      pinnedComputer,
+    );
+    await persist(entries);
+    // A later turn that builds fewer tools keeps the admitted ones listed.
+    expect(names(admit([changedRead]))).toEqual(["computer", "message", "read"]);
+  });
+
+  it("starts a pin when neither the session state nor the checkpoint has one", async () => {
+    const entries: SessionEntry[] = [];
+    await persist(entries);
+    expect(entries[0]).not.toHaveProperty("data.tools");
+    fixture.reload();
+    expect(names(surface([tool("read"), tool("message")], entries))).toEqual(["message", "read"]);
+    await persist(entries);
+    fixture.reload();
+    expect(names(surface([tool("read"), tool("message"), tool("computer")], entries))).toEqual([
+      "message",
+      "read",
+    ]);
+  });
+
+  it("keeps the series when a bounded window starts after the compaction", async () => {
+    const entries: SessionEntry[] = [historyEntry("compaction", "compaction-1")];
+    // Production passes the transcript's boundary count beside every window.
+    const prepareWindow = (systemPrompt: string, window: SessionEntry[]) =>
+      prepareSessionSystemPrompt({
+        state: fixture.state,
+        routeKey,
+        systemPrompt,
+        entries: window,
+        historyBoundaryCount: 1,
+      });
+    prepareWindow("Base.", entries).commit();
+    await fixture.persist(entries);
+    fixture.reload();
+    // The reload sees only entries after the compaction, then a workspace file changed.
+    const prepared = prepareWindow("Base.\n## AGENTS.md\nNew rule.", entries.slice(1));
+    expect(prepared.restart).toBe(false);
+    expect(prepared.systemPrompt).toBe("Base.");
+    expect(prepared.update?.content).toContain("New rule.");
   });
 
   it("retires the pin at compaction instead of carrying it into the new history", async () => {
@@ -584,7 +775,37 @@ describe("session tool surface", () => {
     fixture.reload();
     expect(fixture.prepare("Base.", entries).restart).toBe(false);
     expect(surface([tool("read")], entries).map((entry) => entry.name)).toEqual(["read"]);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual(["read"]);
+    expect(fixture.state.pendingToolSurface?.tools?.map((entry) => entry.name)).toEqual(["read"]);
+  });
+
+  it("starts one new pin after an upgrade changes the tool policy digest", async () => {
+    const config = { tools: { toolSearch: { mode: "tools" as const } } };
+    // The digest main wrote for the same configuration (before the MCP and fixed-listing keys).
+    const preUpgrade = sha256Hex(
+      stableStringify([
+        config.tools,
+        undefined,
+        undefined,
+        undefined,
+        readGitHubPublicationToolSelection(config),
+      ]),
+    );
+    const postUpgrade = resolveSessionToolPolicyDigest(config, "main");
+    expect(postUpgrade).not.toBe(preUpgrade);
+    expect(resolveSessionToolPolicyDigest(config, "main")).toBe(postUpgrade);
+    const entries: SessionEntry[] = [];
+    // A pin written before the upgrade, without `message`.
+    surface([tool("read")], entries, routeKey, preUpgrade);
+    await persist(entries);
+    fixture.reload();
+    const after = surface([tool("read"), tool("message")], entries, routeKey, postUpgrade);
+    expect(after.map((entry) => entry.name)).toEqual(["message", "read"]);
+    await persist(entries);
+    fixture.reload();
+    // The new pin holds from then on.
+    expect(
+      surface([tool("read")], entries, routeKey, postUpgrade).map((entry) => entry.name),
+    ).toEqual(["message", "read"]);
   });
 
   it("drops pinned tools when the tool policy changes", () => {
@@ -604,56 +825,10 @@ describe("session tool surface", () => {
   it("keeps the pinned description when only sibling guidance changes", async () => {
     surface([tool("exec", "Run commands. No sleep loops; use automations."), tool("automations")]);
     const eventTurn = surface([tool("exec", "Run commands.")]);
-    expect(eventTurn.find((entry) => entry.name === "exec")?.description).toBe(
-      "Run commands. No sleep loops; use automations.",
-    );
-    expect(JSON.stringify((await eventTurn[0]!.execute("x", {})).content)).toContain("exec ran");
+    const exec = eventTurn.find((entry) => entry.name === "exec")!;
+    expect(exec.description).toBe("Run commands. No sleep loops; use automations.");
+    expect(JSON.stringify((await exec.execute("x", {})).content)).toContain("exec ran");
   });
-
-  it("sends changed parameters and descriptions as built", () => {
-    const description = "read v2";
-    surface([tool("read")]);
-    const changed = surface([
-      { ...tool("read", description), parameters: { type: "object", properties: {} } },
-    ] as AnyAgentTool[]);
-    expect(changed.map((entry) => entry.description)).toEqual([description]);
-    expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
-  });
-
-  it.each([false, true])(
-    "reuses published schema facts while preserving pin equality (restored=%s)",
-    async (restored) => {
-      const entries: SessionEntry[] = [];
-      const original = publishRuntimeToolInputSchema({
-        type: "object",
-        properties: { read: { type: "string" } },
-      }).schema;
-      const reordered = publishRuntimeToolInputSchema({
-        properties: { read: { type: "string" } },
-        type: "object",
-      }).schema;
-      const changed = publishRuntimeToolInputSchema({
-        type: "object",
-        properties: { read: { type: "number" } },
-      }).schema;
-      surface([tool("read", "Pinned description", original)]);
-      await persist(entries);
-      if (restored) {
-        fixture.reload();
-      }
-      using stringify = vi.spyOn(normalization, "stableStringify");
-      const unchanged = surface([tool("read", "New guidance", reordered)], entries);
-      expect(unchanged[0]?.description).toBe("Pinned description");
-      expect(fixture.state.pendingToolSurface).toBeUndefined();
-      surface([tool("read", "New guidance", reordered)], entries);
-      expect(stringify).toHaveBeenCalledTimes(restored ? 3 : 2);
-      stringify.mockClear();
-      const replacement = surface([tool("read", "Changed schema", changed)], entries);
-      expect(replacement[0]?.description).toBe("Changed schema");
-      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-      expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
-    },
-  );
 });
 
 describe("embedded session active project keys", () => {
@@ -675,4 +850,52 @@ describe("embedded session active project keys", () => {
     expect(prepare("session-one", null)).toEqual(["repo-a"]);
     expect(prepare("session-two", null)).toEqual([]);
   });
+});
+
+it("retires user-row prompt deltas sent before the newest rebuild", () => {
+  const row = (text: string, timestamp: string, projection?: string) => ({
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp: Date.parse(timestamp),
+    ...(projection
+      ? { __openclaw: { modelPromptProjection: { version: 1, text: projection } } }
+      : {}),
+  });
+  const plain = row("before", "2026-10-01T00:00:01Z", `before\n\n${updateHeading}rule A`);
+  const hooked = row(
+    "hooked",
+    "2026-10-01T00:00:02Z",
+    `recalled memory\n\nhooked\n\n${updateHeading}rule B`,
+  );
+  const recent = row("after", "2026-10-01T00:00:04Z", `after\n\n${updateHeading}rule C`);
+  const update = {
+    role: "custom" as const,
+    customType: "openclaw.system-update",
+    content: `${updateHeading}rule D`,
+    display: false,
+    details: { kind: "prompt-update", turnScoped: false },
+    timestamp: Date.parse("2026-10-01T00:00:05Z"),
+  };
+  const rebuild: SessionEntry = {
+    ...entryMetadata,
+    timestamp: "2026-10-01T00:00:03Z",
+    id: "rebuild",
+    type: "custom",
+    customType: "openclaw.system-prompt",
+    data: { restart: true },
+  };
+  const messages = [plain, hooked, recent, update];
+  expect(retireUserRowPromptUpdates(messages, [], false)).toBe(messages);
+  const retained = retireUserRowPromptUpdates(messages, [rebuild], false);
+  expect(retained.slice(2)).toEqual([recent, update]);
+  expect(retained[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
+  // Other model-only text on the row survives the retirement.
+  expect(retained[1]).toHaveProperty(
+    "__openclaw.modelPromptProjection.text",
+    "recalled memory\n\nhooked",
+  );
+  // The rebuilding request drops prompt-update rows and every older delta.
+  const rebuilding = retireUserRowPromptUpdates(messages, [], true);
+  expect(rebuilding).toHaveLength(3);
+  expect(rebuilding[2]).not.toHaveProperty("__openclaw.modelPromptProjection");
 });

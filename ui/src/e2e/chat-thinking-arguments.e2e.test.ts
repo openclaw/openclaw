@@ -142,6 +142,8 @@ suite.define(() => {
         expect(browserErrors).toEqual([]);
 
         await composer.press("ArrowUp");
+        await composer.press("Shift+ArrowLeft");
+        await page.evaluate(() => new Promise(requestAnimationFrame));
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe("/think ultra");
         await composer.press("Enter");

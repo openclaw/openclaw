@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canOfferGatewayServiceForOnboarding } from "./setup.gateway-service-offer.js";
@@ -42,13 +41,10 @@ describe("canOfferGatewayServiceForOnboarding", () => {
     await expect(canOfferGatewayServiceForOnboarding()).resolves.toBe(true);
   });
 
-  it.each([
-    ["npx", path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "bin", "openclaw")],
-    ["pnpm dlx", path.join(path.sep, "home", "test", ".cache", "pnpm", "dlx", "abc", "openclaw")],
-    ["a temporary directory", path.join(os.tmpdir(), "bunx-501-openclaw", "bin", "openclaw")],
-  ])("does not offer a service that would point into %s", async (_name, entrypoint) => {
-    process.argv = ["node", entrypoint];
-    await expect(canOfferGatewayServiceForOnboarding()).resolves.toBe(false);
+  it("offers the service when running from npx", async () => {
+    // Accepting installs a durable copy first, so the npx, dlx, or temp copy can be evicted.
+    process.argv = ["node", path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "openclaw")];
+    await expect(canOfferGatewayServiceForOnboarding()).resolves.toBe(true);
   });
 
   it("does not offer a service the installer would refuse", async () => {

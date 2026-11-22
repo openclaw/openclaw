@@ -1,4 +1,5 @@
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { PluginHookExecRequestOwner } from "./hook-agent-context.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type PluginHookToolKind = "code_mode_exec";
@@ -16,6 +17,11 @@ export type PluginHookToolRequesterContext = {
   readonly senderIsOwner?: boolean;
   /** Provider-native role ids when the channel supplies them. */
   readonly roleIds?: readonly string[];
+  /**
+   * Paired device id of the Gateway connection that sent this turn, after the Gateway
+   * verified the device signature. Never taken from request params or client info.
+   */
+  readonly deviceId?: string;
 };
 
 export type PluginHookToolContext = {
@@ -42,4 +48,6 @@ export type PluginHookToolContext = {
   requester?: PluginHookToolRequesterContext;
   /** Run origin (for example "user", "cron", or "memory"); metadata, not authorization. */
   trigger?: string;
+  /** Same as the agent hook context's `execRequestOwners`, for the run making this call. */
+  execRequestOwners?: readonly PluginHookExecRequestOwner[];
 };

@@ -72,7 +72,7 @@ export async function runSkillExperienceReview(
       }),
       tools: REVIEW_TOOLS,
       runId,
-      // The fork's 120 s is a default; a review gets the agent's own run timeout.
+      // A review runs as long as the agent's own run timeout allows.
       timeoutMs: runtime.agent.resolveAgentTimeoutMs({ cfg: config }),
       signal,
       onSettled: async (outcome) => {

@@ -31,7 +31,6 @@ import type {
   AgentToolUpdateCallback,
   StreamFn,
   ThinkingLevel,
-  ToolExecutionMode,
 } from "../../runtime/index.js";
 import type { BashResult } from "../bash-executor.js";
 import type { CompactionPreparation, CompactionResult } from "../compaction/compaction.js";
@@ -76,7 +75,7 @@ export type {
   OAuthPrompt,
   OAuthSelectOption,
   OAuthSelectPrompt,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../../llm/utils/oauth/types.js";
 
 interface ExtensionUIDialogOptions {
   /** AbortSignal to programmatically dismiss the dialog. */
@@ -412,6 +411,8 @@ export interface ToolDefinition<
   | "outputSchema"
   | "prepareArguments"
   | "async"
+  | "interruptible"
+  | "executionMode"
 > {
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
@@ -419,7 +420,6 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
-  executionMode?: ToolExecutionMode;
 
   execute(
     toolCallId: string,
