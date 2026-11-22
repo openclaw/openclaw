@@ -38,6 +38,19 @@ describe("native overlay occlusion", () => {
     expect(near.mock.calls).toEqual([["live"], ["hidden"], ["live"]]);
   });
 
+  it("lets an ordinary modal hide the command palette backdrop", () => {
+    bridge.available = true;
+    const changes = vi.fn();
+    const stop = subscribeNativeOverlayOcclusion(changes, () => null);
+    const releasePalette = acquireNativeOverlayOcclusion(true);
+    const releaseModal = acquireNativeOverlayOcclusion();
+    cleanups.push(stop, releasePalette, releaseModal);
+    expect(changes.mock.calls).toEqual([["live"], ["backdrop"], ["hidden"]]);
+    releasePalette();
+    releaseModal();
+    expect(changes.mock.calls).toEqual([["live"], ["backdrop"], ["hidden"], ["live"]]);
+  });
+
   it("stays occluded until every overlay releases and tolerates repeated releases", () => {
     const changes = vi.fn();
     cleanups.push(subscribeNativeOverlayOcclusion(changes, () => null));

@@ -112,6 +112,14 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
   }
 
   async function captureBackdrop(stage: HTMLElement, tab: NativeBrowserTab): Promise<void> {
+    if (
+      backdrop?.image?.parentElement === stage &&
+      backdrop.tab.id === tab.id &&
+      backdrop.tab.url === tab.url
+    ) {
+      return;
+    }
+    clearBackdrop();
     const capture: NonNullable<typeof backdrop> = { tab };
     backdrop = capture;
     // Request the final frame before hiding the native surface. It stays in this
@@ -138,9 +146,6 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     if (!presentationStage || !hasLiveStage()) {
       presentation.hide();
       return;
-    }
-    if (occlusion === "hidden") {
-      clearBackdrop();
     }
     if (occlusion !== "live") {
       return;
@@ -230,6 +235,9 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       const stopOcclusion = subscribeNativeOverlayOcclusion(
         (value) => {
           occlusion = value;
+          if (value === "hidden") {
+            clearBackdrop();
+          }
           if (
             value === "backdrop" &&
             isNativeMacWebChromeHost() &&

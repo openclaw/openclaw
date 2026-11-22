@@ -225,6 +225,8 @@ suite.define(() => {
     const context = await newBrowserContext();
     await context.addInitScript(() => {
       const browserMessages: NativeBrowserMessage[] = [];
+      let resumeShow: (() => void) | undefined;
+      window.addEventListener("test:release-native-show", () => resumeShow?.());
       Object.assign(window, {
         openclawNativeBrowserMessages: browserMessages,
         webkit: {
@@ -266,6 +268,16 @@ suite.define(() => {
                     cssHeight: canvas.height,
                   };
                 }
+                if (
+                  message.type === "present" &&
+                  message.visible &&
+                  browserMessages.filter((entry) => entry.type === "present" && entry.visible)
+                    .length === 2
+                ) {
+                  await new Promise<void>((resolve) => {
+                    resumeShow = resolve;
+                  });
+                }
                 return { ok: true };
               },
             },
@@ -291,6 +303,13 @@ suite.define(() => {
     await expect.poll(() => backdrop.isVisible(), { timeout: 2_000 }).toBe(true);
     expect(await backdrop.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe("none");
 
+    await page.keyboard.press("Escape");
+    await expect.poll(lastPresentation).toMatchObject({ visible: true });
+    await page.keyboard.press("ControlOrMeta+K");
+    await expect.poll(() => input.evaluate((node) => node === document.activeElement)).toBe(true);
+    await expect.poll(lastPresentation).toMatchObject({ visible: false });
+    await expect.poll(() => backdrop.count()).toBe(1);
+    await page.evaluate(() => window.dispatchEvent(new Event("test:release-native-show")));
     await page.keyboard.press("Escape");
     await expect.poll(lastPresentation).toMatchObject({ visible: true });
     await expect.poll(() => backdrop.count()).toBe(0);

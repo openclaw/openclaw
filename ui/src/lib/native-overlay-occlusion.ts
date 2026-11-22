@@ -86,12 +86,13 @@ export function subscribeNativeOverlayOcclusion(
   const update = () => {
     const bounds = activeOverlays === 0 ? getBounds() : null;
     const occlusion =
-      activeBackdrops > 0
-        ? "backdrop"
-        : activeOverlays > 0 ||
-            (bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds))
-          ? "hidden"
-          : "live";
+      activeOverlays > activeBackdrops
+        ? "hidden"
+        : activeBackdrops > 0
+          ? "backdrop"
+          : bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds)
+            ? "hidden"
+            : "live";
     if (occlusion !== previous) {
       previous = occlusion;
       listener(occlusion);
