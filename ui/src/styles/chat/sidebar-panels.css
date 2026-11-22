@@ -1084,6 +1084,12 @@ openclaw-chat-files-panel,
 .chat-files-panel__reader {
   display: contents;
 }
+
+.chat-files-panel__reader > .callout[role="alert"] {
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+  overflow-wrap: anywhere;
+}
+
 .chat-files-panel__fallback-rail {
   display: none;
 }
