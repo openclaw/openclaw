@@ -1,9 +1,13 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
+  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -20,6 +24,93 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps Details open when sibling panels close without suppressing outside dismissal", async () => {
+    const sessionKey = "agent:main:independent-details";
+    await suite.withPage(
+      { colorScheme: "light", reducedMotion: "reduce", viewport: { width: 1728, height: 1000 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          agentModel: "example/demo-model",
+          historyMessages: [
+            { role: "assistant", content: "Keep session context beside your work." },
+          ],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Independent session panels",
+                createdActor: { type: "human", id: "ada", label: "Ada" },
+                updatedAt: 1,
+              },
+            ]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const transcript = page.getByText("Keep session context beside your work.", {
+          exact: true,
+        });
+        await transcript.waitFor();
+        const trigger = page.getByRole("button", { name: "Details", exact: true });
+        const details = page.locator(".chat-details:not(.chat-mobile-host .chat-details)");
+        const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        await composer.fill("Keep this unsent draft.");
+        await openChatSidePanelType(page, "Subagents");
+        const closeSubagents = page.getByRole("button", { name: "Close Subagents", exact: true });
+        await closeSubagents.waitFor();
+        await trigger.click();
+        await polledVisible(details).toBe(true);
+        await polledAttribute(details, "role").toBe("dialog");
+        const people = details.locator('[data-details-group="people"]');
+        await people.locator(":scope > summary").click();
+        const peopleExpanded = await people.getAttribute("open");
+        const capture = async (name: string, content: Locator[]) => {
+          if (captureUiProofEnabled) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator("openclaw-chat-pane").filter({ visible: true }),
+              content,
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(suite.artifactDir, name), frame.png);
+          }
+        };
+        await capture("independent-details-open.png", [transcript, closeSubagents, people]);
+        await page.getByRole("tab", { name: "Subagents", exact: true }).click();
+        await polledAttribute(trigger, "aria-expanded").toBe("true");
+        await page.getByText("No subagents yet.", { exact: true }).click();
+        await polledAttribute(trigger, "aria-expanded").toBe("true");
+        // Real pointerdown reaches the outside-dismiss owner before the tab's close click.
+        await closeSubagents.click();
+        await polledVisible(closeSubagents).toBe(false);
+        await capture("independent-details-after-close.png", [transcript]);
+        await polledAttribute(trigger, "aria-expanded").toBe("true");
+        await polledVisible(details).toBe(true);
+        expect(await people.getAttribute("open")).toBe(peopleExpanded);
+        expect(await composer.inputValue()).toBe("Keep this unsent draft.");
+        await polledAttribute(details, "role").toBe("complementary");
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await polledAttribute(details, "role").toBe("dialog");
+        await transcript.click();
+        await polledAttribute(trigger, "aria-expanded").toBe("false");
+        await trigger.click();
+        await page.setViewportSize({ width: 2200, height: 1000 });
+        await openChatSidePanelType(page, "Subagents");
+        await polledAttribute(details, "role").toBe("complementary");
+        await trigger.click();
+        await polledVisible(details).toBe(false);
+        expect(await closeSubagents.isVisible()).toBe(true);
+        await trigger.click();
+        await closeSubagents.focus();
+        await closeSubagents.press("Enter");
+        await polledVisible(closeSubagents).toBe(false);
+        await polledVisible(details).toBe(true);
+        expect(await composer.inputValue()).toBe("Keep this unsent draft.");
+      },
+    );
+  });
+
   it("opens inactive split-pane Details on the first click", async () => {
     const sessionKey = "agent:main:details-first-click";
     await suite.withPage(
@@ -56,6 +147,14 @@ suite.define(() => {
         await expect
           .poll(async () => Math.round((await details.boundingBox())?.width ?? 0))
           .toBe(300);
+        const right = panes.last();
+        await openChatSidePanelType(right, "Subagents");
+        await polledVisible(details).toBe(false);
+        await left.getByRole("button", { name: "Details", exact: true }).click();
+        await polledVisible(details).toBe(true);
+        await right.getByRole("button", { name: "Close Subagents", exact: true }).click();
+        // Another pane's tool region is still outside this inspector.
+        await polledVisible(details).toBe(false);
       },
     );
   });
