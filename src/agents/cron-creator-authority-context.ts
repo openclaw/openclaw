@@ -5,7 +5,7 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
-  hasCronChannelRequester,
+  hasCronAuthenticatedRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
@@ -68,14 +68,6 @@ const activeCronCreatorAuthority = new AsyncContext<CronCreatorAuthorityRunScope
 const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthorityResolverScope>(
   Symbol("cronCreatorAuthorityResolver"),
 );
-
-/** Retain the Cron-only fence when tools materialize outside their creator scope. */
-export function bindActiveCronAuthorityCurrentness(
-  runId: string | undefined,
-): (() => boolean) | undefined {
-  const scope = activeCronCreatorAuthority.getStore();
-  return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
-}
 
 /** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
 export function bindCronManagementToolConstruction(
@@ -301,13 +293,7 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
     getGatewayToolCallerIdentity()?.requesterOrigin,
   );
   const scope = activeCronCreatorAuthority.getStore();
-  if (
-    !scope ||
-    (scope.callerOrigin.kind !== "local" &&
-      !hasCronChannelRequester(scope) &&
-      !scope.callerScopedCreation) ||
-    scope.runId !== runId
-  ) {
+  if (!scope || !hasCronAuthenticatedRequester(scope) || scope.runId !== runId) {
     return undefined;
   }
   return (

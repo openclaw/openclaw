@@ -78,6 +78,9 @@ export function createMetricsHarness(
   let wsListener:
     | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onGatewayWsMetrics"]>>[0]
     | undefined;
+  let pluginListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onPluginMetrics"]>>[0]
+    | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
@@ -92,6 +95,12 @@ export function createMetricsHarness(
       workerListener = nextListener;
       return () => {
         workerListener = undefined;
+      };
+    },
+    onPluginMetrics(nextListener) {
+      pluginListener = nextListener;
+      return () => {
+        pluginListener = undefined;
       };
     },
     onEvent(nextListener) {
@@ -119,6 +128,16 @@ export function createMetricsHarness(
   return {
     handler: exporter.handler,
     logger: context.logger,
+    recordPlugin(
+      ...args: Parameters<
+        Parameters<NonNullable<TrustedExporterInternalDiagnostics["onPluginMetrics"]>>[0]["record"]
+      >
+    ) {
+      expectDefined(pluginListener, "Plugin metrics listener").record(...args);
+    },
+    retirePlugin(names: readonly string[]) {
+      expectDefined(pluginListener, "Plugin metrics listener").retire(names);
+    },
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
       if (event.type === "gateway.ws.event" && metadata.trusted) {
         const entries = Object.entries(event.frameBytes ?? {});

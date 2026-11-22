@@ -144,6 +144,10 @@ syncBuiltinESMExports();
 if (provisioner) {
   assert.equal(fs.realpathSync(process.argv[2]), repository);
   await importSource('scripts/tsx.mjs');
+  // Exercise process-global startup diagnostics before explicit storage bindings.
+  const { getLogger, flushLogger } = await importSource('src/logging/logger.ts');
+  getLogger().info('Provisioner isolation fixture');
+  await flushLogger();
   const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } =
     await importSource('src/infra/update-managed-service-handoff-lease.ts');
   assert.equal(resolveManagedUpdateLeaseDatabasePath(), binding.databasePath, 'Missing private provisioner handoff binding');

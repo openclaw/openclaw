@@ -45,6 +45,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
         options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
       loadPlugins: "never",
       ensureCliPath: false,
+      networkProxy: ({ argv }) => (hasCliOption(argv, "--terminal-path") ? "bypass" : "default"),
     },
   },
   {

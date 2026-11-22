@@ -590,8 +590,8 @@ async function recordMatchesTranscriptMessage(
       return matches === null ? "unavailable" : matches.has(refKey) ? "match" : "missing";
     },
   );
-  if (result === null) {
-    index.matches = new Set();
+  if (index.matches === undefined) {
+    index.matches = result === null ? new Set() : null;
   }
   return result ?? "missing";
 }
@@ -1252,7 +1252,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
     if (!requestAuth) {
       return true;
     }
-    assertRequestCurrent = requestAuth.assertCurrent;
 
     const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
@@ -1288,11 +1287,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
       getRemoteControlUiIngressContext(req)?.resolvePrincipal(),
       sessionKey,
     );
-    const assertRequest = assertRequestCurrent;
-    assertRequestCurrent = () => {
-      assertRequest?.();
-      ingressRead.assertCurrent();
-    };
+    assertRequestCurrent = () => ingressRead.assertCurrent();
     const record = await readManagedImageRecord(attachmentId, stateDir);
     assertCallerCurrent();
     if (!record || record.sessionKey !== sessionKey) {

@@ -46,7 +46,10 @@ import {
   retainSessionListForegroundWork,
   yieldSessionListBackgroundWork,
 } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "./session-row-backfill.test-support.js";
 import { withReadySessionRows, SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { listRows, writeRow } from "./session-row-projection-read-fixtures.test-support.js";
@@ -54,7 +57,10 @@ import * as records from "./session-row-projection-record.js";
 import * as rowRefresh from "./session-row-projection-refresh.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { waitForRead, watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
-import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
+import {
+  appendProjectionMessages,
+  withSessionRowProjectionState,
+} from "./session-row-projection.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -516,11 +522,15 @@ it.each(["catalog", "archive"] as const)(
         ...entry,
         ...(change === "catalog" ? { archivedAt: 1 } : {}),
       });
+      // Empty rows need no backfill. Seed saved history without cached display facts
+      // so demotion still races pending transcript enrichment.
+      for (const sessionId of change === "catalog" ? ["live", "archived"] : ["archived"]) {
+        const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId };
+        await appendProjectionMessages(scope, { role: "assistant", content: "Saved history" });
+        clearStoredSessionRowTranscriptForTest(scope);
+      }
       const projection = await create({ cfg, modelCatalog: [] });
-      cleanup.defer(() => {
-        completion.resolve();
-        projection.dispose();
-      });
+      cleanup.defer(completion.resolve);
       await listRows(projection);
       await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1));
       if (change === "catalog") {

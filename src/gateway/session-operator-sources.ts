@@ -110,9 +110,8 @@ export async function recordSessionOperatorSource(
 }
 
 /**
- * Restore a person's recorded source for this session through the shared operator-source owner,
- * which rechecks device pairing, auth method, shared-secret generation, profile identity and role
- * policy on every use. Returns undefined when the session retains no source for the person.
+ * Admit a person's recorded requester reference for a new session turn.
+ * Returns undefined when the session retains no source for the person.
  */
 export async function restoreSessionOperatorSource(
   params: SessionTarget & {
@@ -137,6 +136,7 @@ export async function restoreSessionOperatorSource(
     return undefined;
   }
   return restoreGatewayQueuedOperatorRecovery({
+    agentId: params.agentId,
     source: { kind: "gateway", snapshot },
     context: params.context,
     assertCurrent: params.assertCurrent,

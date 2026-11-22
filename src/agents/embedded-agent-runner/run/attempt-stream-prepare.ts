@@ -29,7 +29,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import { log } from "../logger.js";
-import { readPreparedProviderRequest } from "../provider-prompt-state.js";
+import { readSessionForkContext } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -628,23 +628,8 @@ function prepareStream(
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
-    readSessionForkContext: () => {
-      if (!isCurrentRegistration()) {
-        return undefined;
-      }
-      return {
-        model: attempt.model,
-        promptCacheKey: attempt.promptCacheKey,
-        systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools,
-        messages: activeSession.messages,
-        projectMessages: input.projectSessionForkMessages,
-        sessionVersion: activeSession.sessionManager.getHeader()?.version,
-        boundary: input.readSessionForkBoundary?.(),
-        blockImages: activeSession.settingsManager.getBlockImages(),
-        preparedRequest: readPreparedProviderRequest(attempt.runId),
-      };
-    },
+    readSessionForkContext: () =>
+      isCurrentRegistration() ? readSessionForkContext(attempt) : undefined,
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),

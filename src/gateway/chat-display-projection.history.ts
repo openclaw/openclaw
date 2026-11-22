@@ -16,6 +16,7 @@ import {
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isLegacySessionStateNoticeText } from "../sessions/session-state-notice-text.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -409,6 +410,14 @@ function shouldHideProjectedHistoryMessage(
     return false;
   }
   const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "session" &&
+    isLegacySessionStateNoticeText(extractProjectedText(message.content ?? message.text))
+  ) {
+    return true;
+  }
   if (
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&

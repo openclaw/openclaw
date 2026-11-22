@@ -63,6 +63,13 @@ function packageSchedule(
     },
   };
 }
+/** A same-version campaign publishes no target: it restarts to finish an earlier update. */
+function finishingSchedule(
+  campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>>,
+): UpdateScheduleState {
+  const { target: _target, ...schedule } = packageSchedule(campaign);
+  return schedule;
+}
 function succeededRun(patch: Parameters<typeof createUpdateRunFixture>[0] = {}) {
   return createUpdateRunFixture({ status: "succeeded", phase: "finished", ...patch });
 }
@@ -707,6 +714,139 @@ describe("SidebarUpdateCard", () => {
 
     element.dispose();
     expect(clearInterval).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a new release",
+      update: stableUpdate,
+      schedule: packageSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Update available",
+      status: "Updating in 0:45 · v2.0.0",
+      absent: "plugin",
+    },
+    {
+      name: "an owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      title: "Finishing update",
+      status: "Restarting in 0:45 to finish plugin updates",
+      absent: "Update available",
+    },
+    {
+      // Applying is busy, which otherwise titles the row "Updating Gateway…".
+      name: "an applying owed plugin retry",
+      update: null,
+      schedule: finishingSchedule({ state: "applying" }),
+      title: "Finishing update",
+      status: "Finishing plugin updates…",
+      absent: "Update",
+    },
+  ])(
+    "names the campaign for $name in the compact row and its card",
+    async ({ update, schedule, title, status, absent }) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const element = await mount(update, { compact: true, updateSchedule: schedule });
+
+      expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(title);
+      expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+      await element.update({ compact: false });
+      expect(element.action()?.textContent).toBe(status);
+      expect(element.text()).not.toContain(absent);
+    },
+  );
+
+  it.each([
+    {
+      name: "countdown",
+      campaign: { state: "countdown", applyAtMs: 46_000 },
+      status: "Restarting in 0:45 to finish plugin updates",
+      hold: true,
+    },
+    {
+      name: "waiting-for-idle",
+      campaign: { state: "waiting-for-idle", forceAtMs: 61_000 },
+      status: "Waiting for active work · restarting in 1:00 to finish plugin updates",
+      hold: true,
+    },
+    {
+      name: "held",
+      campaign: { state: "countdown", applyAtMs: 46_000, holdUntilMs: 61_000 },
+      status: "Restart held · resumes in 1:00",
+      hold: false,
+    },
+    {
+      name: "applying",
+      campaign: { state: "applying" },
+      status: "Finishing plugin updates…",
+      hold: false,
+    },
+  ] as const)(
+    "keeps the $name finishing restart visible beside the update that owes it",
+    async ({ campaign, status, hold }) => {
+      // Only the clock is fixed; the details toggle event still needs real timers.
+      vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+      // The Gateway reports the update that left plugins owed as its last, successful run.
+      const element = await mount(null, {
+        compact: true,
+        updateSchedule: finishingSchedule({ id: "campaign-owed", ...campaign }),
+        updateRun: succeededRun({ finishedAtMs: -60_000, after: { version: "2026.9.2" } }),
+      });
+
+      expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe("Finishing update");
+      expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+      await element.expand();
+      expect(element.action()?.textContent).toBe(status);
+      expect(Boolean(element.find(".sidebar-update-card__hold"))).toBe(hold);
+      const outcome = element.element.querySelectorAll(".sidebar-update-card__title");
+      expect([...outcome].map((title) => title.textContent)).toEqual([
+        "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+      ]);
+    },
+  );
+
+  it("keeps a recorded run ahead of a release campaign", async () => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    const element = await mount(stableUpdate, {
+      compact: true,
+      updateSchedule: packageSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      updateRun: succeededRun({ finishedAtMs: -60_000, after: { version: "2026.9.2" } }),
+    });
+
+    expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+    );
+    await element.expand();
+    expect(element.find("[role='timer']")).toBeNull();
+    expect(element.find(".sidebar-update-card__title")?.textContent).toBe(
+      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+    );
+  });
+
+  it("keeps a finishing countdown in view when opened beside a failed run", async () => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    const status = "Restarting in 0:45 to finish plugin updates";
+    const element = await mount(null, {
+      compact: true,
+      onCheckStatus: vi.fn(() => createDeferred<boolean>().promise),
+      updateSchedule: finishingSchedule({ state: "countdown", applyAtMs: 46_000 }),
+      updateRun: createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: -60_000,
+      }),
+    });
+
+    expect(element.find("details")?.classList).toContain("sidebar-issues-panel__details--error");
+    await element.expand();
+    // No target to refresh: opening must not swap the countdown for "Checking…".
+    expect(element.props().onCheckStatus).not.toHaveBeenCalled();
+    expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
+    expect(element.action()?.textContent).toBe(status);
+    expect(element.find(".sidebar-update-card__hold")).not.toBeNull();
+    expect(element.find(".sidebar-update-card__title")?.textContent).toContain("failed");
   });
 
   it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {

@@ -17,7 +17,7 @@ function isSlackTurnScopedTaskId(id: string): boolean {
   return isSlackPlanStepTaskId(id) || id.startsWith("openclaw");
 }
 
-export function isSlackPlanStepTaskId(id: string): boolean {
+function isSlackPlanStepTaskId(id: string): boolean {
   return id.startsWith("plan_step_");
 }
 

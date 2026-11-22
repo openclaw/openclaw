@@ -304,6 +304,7 @@ describe("session activity semantics", () => {
               error: null,
               basePath: "",
               fallbackAgentId: "main",
+              agents: [],
               mainKey: "main",
               globalScope,
             },

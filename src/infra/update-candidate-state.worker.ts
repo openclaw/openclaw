@@ -133,8 +133,13 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
-        await import("./update-physical-database-generations.js");
+      const {
+        readUpdatePhysicalDatabaseGenerationPair,
+        readUnmarkedUpdatePhysicalDatabaseGenerations,
+      } = await import("./update-physical-database-generations.js");
+      if (input.generationFormat === undefined) {
+        return readUnmarkedUpdatePhysicalDatabaseGenerations(input);
+      }
       if (input.generationFormat === "paired") {
         const { parseSqliteFileDigests, serializeSqliteFileDigests } =
           await import("./sqlite-file-generation.js");
@@ -142,18 +147,13 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
         const pair = await readUpdatePhysicalDatabaseGenerationPair(
           input.paths,
           input.pluginOwners,
+          undefined,
           digests,
         );
         return { ...pair, digests: serializeSqliteFileDigests(digests) };
       }
       const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
-      return input.generationFormat === undefined &&
-        (await isLegacyUpdateGenerationRequest({
-          ...process.env,
-          OPENCLAW_STATE_DIR: input.stateDir,
-        }))
-        ? pair.physical
-        : pair.committed;
+      return pair.committed;
     }
     case "inventory": {
       const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");

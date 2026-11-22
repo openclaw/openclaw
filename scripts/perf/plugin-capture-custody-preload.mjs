@@ -4,9 +4,13 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 
-export function installCaptureCreateProbe(target, delayMs) {
-  if (!["source", "native"].includes(target) || !Number.isFinite(delayMs) || delayMs <= 0) {
-    throw new Error("Capture preload requires source/native kind and positive delayMs");
+export function installCaptureCreateProbe(target, delayMs, armPath) {
+  if (
+    !["source", "native", "recovery"].includes(target) ||
+    !Number.isFinite(delayMs) ||
+    delayMs <= 0
+  ) {
+    throw new Error("Capture preload requires source/native/recovery kind and positive delayMs");
   }
   const probes = [];
   const create = fs.mkdtempSync;
@@ -20,10 +24,12 @@ export function installCaptureCreateProbe(target, delayMs) {
         ? "source"
         : prefix === "admission-" && path.basename(path.dirname(args[0])) === "native"
           ? "native"
-          : undefined;
+          : prefix === "openclaw-plugin-build-"
+            ? "recovery"
+            : undefined;
     if (kind) {
       const startedAtMs = Date.now();
-      const held = kind === target && !delayed;
+      const held = kind === target && !delayed && (!armPath || fs.existsSync(armPath));
       if (held) {
         delayed = true;
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
@@ -50,5 +56,9 @@ export function installCaptureCreateProbe(target, delayMs) {
 
 const parameters = new URL(import.meta.url).searchParams;
 if (parameters.size > 0) {
-  installCaptureCreateProbe(parameters.get("kind"), Number(parameters.get("delayMs")));
+  installCaptureCreateProbe(
+    parameters.get("kind"),
+    Number(parameters.get("delayMs")),
+    parameters.get("armPath"),
+  );
 }

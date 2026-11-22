@@ -344,12 +344,14 @@ async function inspectUpdateDatabaseGenerations(
             committed: inventorySchema,
             physical: inventorySchema,
             emptyReaderAlternates: z.record(z.string(), z.string()),
+            rebuiltIndexAlternates: z.record(z.string(), z.string()),
             digests: z.unknown().optional(),
           })
         : inventorySchema.transform((committed) => ({
             committed,
             physical: committed,
             emptyReaderAlternates: {},
+            rebuiltIndexAlternates: {},
             digests: undefined,
           })),
     );

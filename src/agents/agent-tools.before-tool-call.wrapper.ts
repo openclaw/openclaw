@@ -1,4 +1,7 @@
-import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolResultContentSource,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -8,6 +11,7 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
 } from "../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
+import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -79,6 +83,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "./timeout.js";
 import {
   markToolExecutionNotStarted as registerTrustedToolNoStartError,
   markToolExecutionRefused,
@@ -466,9 +471,20 @@ export function wrapToolWithBeforeToolCallHook(
                 recordSkillUsed({ ctx, match, toolName: normalizedToolName, toolCallId }),
               );
               skillUse = skillUseScope;
-              return liveness.run(() =>
-                skillUseScope.run(() => (execute as ForwardedToolExecution)(...args)),
-              );
+              return liveness.run(() => {
+                const executionStartedAt = Date.now();
+                const parentDeadlineAtMs = ctx?.getRunAbortDeadlineAtMs?.();
+                const timeoutMs = tool.getExecutionTimeoutMs?.(executeParams, {
+                  parentTimeoutMs:
+                    parentDeadlineAtMs === undefined
+                      ? DEFAULT_AGENT_TIMEOUT_MS
+                      : Math.max(0, parentDeadlineAtMs - executionStartedAt),
+                });
+                if (timeoutMs !== undefined) {
+                  recordDiagnosticToolExecutionDeadline(executionStartedAt + timeoutMs);
+                }
+                return skillUseScope.run(() => (execute as ForwardedToolExecution)(...args));
+              });
             });
           result = outcome.ownerDecision
             ? await invoke()
@@ -491,7 +507,8 @@ export function wrapToolWithBeforeToolCallHook(
         observeToolOutcome({
           ctx,
           toolName: normalizedToolName,
-          resultContentSource: tool.resultContentSource,
+          resultContentSource:
+            getInternalToolResultContentSource(result) ?? tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });

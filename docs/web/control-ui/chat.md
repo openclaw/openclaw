@@ -114,8 +114,8 @@ icon. Unknown publisher metadata does not enable branding.
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.
 Command output advances in place; expand a row for captured output and details.
-Grouped tool activity remains the default, and completed dashboard turns keep their
-**Worked for…** folding. This preference stays in this browser for this Gateway.
+Grouped tool activity remains the default. This preference does not change which
+completed dashboard turns show **Worked for…**. This preference stays in this browser for this Gateway.
 If the trail cannot load, grouped commands remain available. Turn the option off
 and on to retry; the error’s details retain the technical failure.
 
@@ -296,8 +296,8 @@ keep their existing capture limits. If an interrupted command has no saved tool
 result, its partial output may be unavailable after terminal reconciliation or
 reload.
 
-Completed dashboard turns still fold their intermediate work into **Worked for…**.
-Open that disclosure to inspect the chronological trail again. Channel sessions
+Completed OpenAI turns can fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the trail again. Other models keep it inline. Channel sessions
 and speech bubbles keep their existing completion behavior. The preference
 persists in this browser for this Gateway; grouped activity remains the default.
 Live Codex stdout is delivered to panes that enable the inline trail. Switching
@@ -456,7 +456,9 @@ Confirming text with an input method does not send the Side chat question. Finis
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
-Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+After a minute, Side chat shows **Still waiting for an answer** instead of cutting off a running answer. The runner detects stalled model requests, and each question has a five-minute upper limit. **Stop side chat answer** stops just that question, without clearing earlier answers, your next draft, or the main session. A stopped or timed-out question offers **Retry** after cleanup; a late answer is not added to the thread.
+
+Side chat returns complete answers, including lists of links, within the thread’s 48 KiB text budget. If a single exchange exceeds that budget, the answer ends at a word boundary with an explicit notice instead of a broken link.
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
@@ -554,11 +556,13 @@ filename tabs stay in the current chat pane. Files outside the session root
 follow that session's file-tool read boundary and also require permission to
 start a turn in that session. These out-of-root previews are read-only.
 
-In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
+In Chat and New session, the model picker reopens on **Favorites** if that was the last tab you chose and it is still available, even if your current model is not starred. Otherwise, the picker opens on the current model’s provider. Closing the picker clears the search text without resetting which provider lists you expanded.
 
 Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
 
-On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model.
+Model search in Chat, New session, and the command palette composer puts available recommended models first when the search text matches equally well. Searching for a specific model still finds it even if it is not recommended.
+
+On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model. To reorder models in **Favorites**, drag a model row, or focus the row and press **Alt+Up Arrow** or **Alt+Down Arrow**. The new order is saved with your favorites for that agent.
 
 Drag provider icons to reorder the rail, or focus an icon and press **Alt+Arrow**. The order is saved in this browser and survives reloading. While the picker is open and search is not focused, **/** focuses search and **1–9** selects the corresponding available option. The number labels stay hidden; context-window values remain visible.
 
@@ -1081,7 +1085,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - On the New session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility uses ordinary submission, which opens the conversation instead of starting it in the background. Your opening message is still sent to the agent.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows the selected primary, fallback, utility and tool models plus providers with usable auth; aliases and settings under `agents.defaults.models` neither restrict nor add picker entries. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New session**, even when **Automatic** has no eligible models. A New session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+    - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New session**, even when **Automatic** has no eligible models. Opening the model picker starts loading saved accounts without holding up the model list. While the first page loads, the **Account** control keeps the current selection visible and temporarily disables the dropdown. Scroll to the end of the saved accounts to load more automatically. If loading fails, choose **Retry** in **Account**. A New session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
     - In an existing chat, account choices stay available while its accepted session history refreshes in the background. Initial history loading, active runs, pending model changes, and access restrictions still block account changes.
     - Chat and New session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Models → Connect provider**; authentication failures ask you to review the credential or sign-in. An explicit account choice in New session also waits for a successful preview confirming that account and an eligible model; pending or failed previews show why Start is blocked. Otherwise, temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.
     - After a config change or a published credential update, connected Chat and New session views re-read model readiness automatically; no page reload or picker action is needed. Chat also re-reads its session projection after a model or auth-profile selection changes. An existing missing-credential or authentication-failure block stays in place while that read is pending or fails, until replacement metadata changes it. Existing chats keep their session's selected auth profile; New session readiness reflects its draft account choice when one is set. This refresh is event-driven, not a timed polling guarantee.
@@ -1143,10 +1147,14 @@ If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
 deny rules still apply. See [Tool access configuration](/gateway/config-tools).
 
 Select a card to open its listing inside the Control UI: plugins open in
-**Plugins**, and skills open in **Skills**. A card's **Install** button opens
-the capability details. Select **Install** on a plugin overview to start installation
-immediately. Configured install-policy warnings still require an explicit
-acknowledgment; see [Manage plugins](/web/control-ui/settings#manage-plugins).
+**Plugins**, and skills open in **Skills**. On an official plugin card,
+**Install** starts the installation in the conversation: the card shows
+**Installing**, then the result, and you stay in the chat. On community plugin
+and skill cards, **Install** opens the capability details; select **Install**
+on the plugin overview to start installation. Configured install-policy
+warnings still require an explicit acknowledgment. When an official plugin has
+one, the card opens the plugin overview, where you review and acknowledge it;
+see [Manage plugins](/web/control-ui/settings#manage-plugins).
 **Dismiss** dismisses the card from the current view.
 
 An installed capability shows a green checkmark and **Installed**. This means the
@@ -1197,13 +1205,14 @@ to read it in **Review**. The card shows up to 400 lines and rereads the file
 each time it opens; the full-file view includes all lines. Press Escape to
 dismiss it.
 
-Clipboard text stays in the message input, including long pastes into an existing
-draft, and reaches the model as your message. Uploaded files retain their
-external-content boundary.
+A paste longer than 1,000 characters into a draft that already has text appears
+as a file-sized card in the composer. The card is only a composer view: when you
+send, its exact text is appended to your message, as **Show in text field**
+would, so the model receives it as your own words with no file upload.
 
-Saved pasted-text attachments from earlier clients still appear as a file-sized
-card in the composer and a compact chip in the transcript. Their labels show the
-first 30 characters of a plain-text excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
+The card label shows the first 30 characters of a plain-text excerpt, with HTML
+and Markdown formatting removed. Pasted-text attachments sent by earlier clients
+appear as a compact chip in the transcript with the same label. Empty or unavailable excerpts
 show **Pasted text**. In the transcript, chips sit above the text bubble alongside
 other attachments; multiple chips share a row and wrap when needed. Click the
 composer excerpt or icon, or a transcript chip, to open the existing attachment
@@ -1452,6 +1461,11 @@ Absolute external `http(s)` embed URLs stay blocked by default, except for the d
 
 Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled. Authenticated conversation readers, including guests, receive the configured sandbox policy without needing general operator read access. Bootstrap does not grant access to plugin modules or configuration settings that their scopes do not allow.
 
+Widgets that are no longer available keep their error visible instead of reloading on later chat
+activity or when their chat row remounts. Reload the page or ask the agent to
+recreate the widget. Temporary loading failures retry up to five times with exponential
+backoff; after that, the error offers a manual **Retry**.
+
 When a live widget moves into the assistant's final reply, Chrome and Edge 133+
 and Firefox 144+ preserve its playback and local interaction state. Browsers
 without atomic DOM moves, including Safari, reload the widget during that move.
@@ -1525,7 +1539,7 @@ lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
 
-Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Subagent rows in the panel show elapsed time once the child starts.
 Queued rows have no elapsed label; finished work stops at its recorded end time.
 
 The progress header shows the current step, not a completed-step total. On desktop,
@@ -1606,9 +1620,13 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and delivered visual
+In completed dashboard turns answered by OpenAI models, commentary, reasoning-only
+messages, and tool activity can share one **Worked for…** disclosure above the answers.
+For other models, mixed-model work, or history that does not identify the model,
+there is no turn-wide disclosure: text and tools stay inline. Switching the selected
+model does not change earlier turns. Tool names and tool grouping are unchanged.
+
+Expanding **Worked for…** shows the activity in its original order; explicit answer segments and delivered visual
 results stay visible below it. Images returned for tool inspection remain inside
 that tool's activity instead of splitting the completed response. Browser tab
 previews keep their execution order relative to those visible results, so a page

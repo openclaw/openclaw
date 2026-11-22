@@ -200,10 +200,7 @@ export function resolveCompleteTelegramPromptContextProjectionIds(
   return complete;
 }
 
-/** Final-text replay policy for Telegram's durable message adapter. */
+/** Classifies Telegram's inert rich-text metadata so its finals count as ordinary text. */
 export const telegramDurableFinalPolicy = {
   isTextOnlyChannelData: isTelegramTextOnlyChannelData,
-  // The Bot API has no idempotency key, so a lost response cannot be reconciled;
-  // one resend after an ambiguous failure is preferred over a lost reply.
-  replayAmbiguousFinalText: true,
 };

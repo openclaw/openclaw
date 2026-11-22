@@ -58,7 +58,7 @@ const EMOJI_RE = /\p{Extended_Pictographic}/u;
  * appends and the stop then fail with message_not_in_streaming_state. Eight
  * minutes leaves room for a paced update to land first.
  */
-export const SLACK_STREAM_MESSAGE_MAX_AGE_MS = 8 * 60_000;
+const SLACK_STREAM_MESSAGE_MAX_AGE_MS = 8 * 60_000;
 
 export type SlackStreamMessageUpdate = {
   text?: string;

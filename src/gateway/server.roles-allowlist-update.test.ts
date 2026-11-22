@@ -324,6 +324,40 @@ test("gateway enforces operator and node permissions", async () => {
 
 registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 
+test("a write-scoped client cannot start an installation update", async () => {
+  const install = await import("../infra/update-install-status.js");
+  const root = updateDirs.make("denied-installation-update-");
+  const entry = path.join(root, "index.js");
+  const initial = "// installed runtime fixture\n";
+  await fs.writeFile(entry, initial);
+  const discovery = vi.spyOn(install, "resolveStartupInstallStatus").mockResolvedValue({
+    root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
+  });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.read", "operator.write"],
+    });
+    try {
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+      await expect(client.request("update.run", {})).rejects.toThrow(/operator\.admin/);
+      expect(discovery).not.toHaveBeenCalled();
+      expect(await fs.readdir(root)).toEqual(["index.js"]);
+      expect(await fs.readFile(entry, "utf8")).toBe(initial);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+    } finally {
+      await client.stopAndWait();
+    }
+  } finally {
+    discovery.mockRestore();
+  }
+});
+
 test("update.run persists the accepted handoff before parking and restarting its foreground owner", async () => {
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
@@ -341,11 +375,12 @@ test("update.run persists the accepted handoff before parking and restarting its
       const root = updateDirs.make("openclaw-update-role-");
       const entrypoint = path.join(root, "dist", "index.js");
       const foregroundOrigin = { owner: "role-update-owner", pid: process.pid, startedAt, port };
+      // Git installs update through prepared releases; package installs keep this handoff.
       const installation = vi
         .spyOn(installStatus, "resolveStartupInstallStatus")
         .mockResolvedValue({
           root,
-          status: { root, installKind: "git", packageManager: "pnpm" },
+          status: { root, installKind: "package", packageManager: "pnpm" },
           installReceipt: null,
         });
       // The shared server starts below the CLI run loop that publishes its owner.
@@ -384,7 +419,7 @@ test("update.run persists the accepted handoff before parking and restarting its
             kind: "update",
             status: "skipped",
             stats: {
-              mode: "git",
+              mode: "pnpm",
               root,
               runId: accepted?.runId,
               handoffId: identity.handoffId,

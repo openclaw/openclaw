@@ -524,7 +524,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
     const command = input as GenerationWorkerInput;
     if (command.operation === "capture") {
       try {
-        const source = await captureResource.request({
+        const { root: source } = await captureResource.request({
           type: "source",
           captureId: command.captureId,
           storage: command.storage,

@@ -1,3 +1,4 @@
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
   resolveManifestDeclaredProviderAuthChoices,
@@ -6,6 +7,7 @@ import {
 
 export type ProviderLoginOption = {
   id: string;
+  pluginId?: string;
   brandId: string;
   label: string;
   hint?: string;
@@ -54,8 +56,35 @@ function loginKind(choice: ProviderAuthChoiceMetadata): ProviderLoginOption["kin
   return choice.appGuidedAuth ?? (choice.appGuidedSecret ? "secret" : undefined);
 }
 
+/** CLI `--device-code` (method `device-code`) also selects a declared device-code sign-in with another method id. */
+export function matchesProviderLoginMethod(
+  choice: Pick<ProviderAuthChoiceMetadata, "methodId" | "appGuidedAuth">,
+  method: string,
+): boolean {
+  return (
+    choice.methodId.toLowerCase() === method ||
+    (method === "device-code" && choice.appGuidedAuth === "device-code")
+  );
+}
+
 export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
   return loginKind(choice) !== undefined;
+}
+
+export function hasProviderModelSignIn(
+  params: NonNullable<Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]> & {
+    pluginId: string;
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+): boolean {
+  const { pluginId, ...lookup } = params;
+  const { providers, modelCatalogProviders } = lookup.metadataSnapshot.owners;
+  return resolveManifestDeclaredProviderAuthChoices(lookup).some(
+    (choice) =>
+      choice.pluginId === pluginId &&
+      (providers.has(choice.providerId) || modelCatalogProviders.has(choice.providerId)) &&
+      isProviderLoginChoiceStartable(choice),
+  );
 }
 
 /** CLI API-key logins use the same credential-only runner without changing UI discovery. */
@@ -92,6 +121,7 @@ export function listProviderLoginOptions(
         return [
           {
             id: formatProviderLoginChoiceRef(choice),
+            pluginId: choice.pluginId,
             brandId: choice.providerId,
             label: choice.choiceLabel,
             hint: choice.choiceHint,

@@ -94,7 +94,7 @@ it("restores the verified scoped predecessor without reverting unrelated later w
   );
 });
 
-it("admits the empty-table upgrade without scanning existing payload or active rows", async () => {
+it("admits the empty-table upgrade to v42 without scanning existing payload or active rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.statePath("active-facts-no-scan.sqlite");
     using database = new DatabaseSync(pathname);
@@ -119,11 +119,7 @@ it("admits the empty-table upgrade without scanning existing payload or active r
     });
     try {
       await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          path: pathname,
-          env: state.env,
-        });
+        ensureOpenClawAgentSchema(database, "main", pathname, 42);
       });
     } finally {
       database.setAuthorizer(null);
@@ -146,13 +142,9 @@ it("refuses a foreign-key violation in the new companion at migration finalizati
     database.exec(`PRAGMA foreign_keys=OFF; ${AGENT_ACTIVE_EVENT_FACTS_SQL}
       INSERT INTO ${table} VALUES ('missing',1,1,'{}');`);
     await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-      expect(() =>
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          path: pathname,
-          env: state.env,
-        }),
-      ).toThrow(/foreign key validation/u);
+      expect(() => ensureOpenClawAgentSchema(database, "main", pathname, 41)).toThrow(
+        /foreign key validation/u,
+      );
     });
     expectVersion(database, 40);
   });

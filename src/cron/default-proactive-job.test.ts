@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -65,27 +65,36 @@ it("provisions only the ambient owner once in the selected partition without hos
       ).toBeUndefined();
       expect(await provision("helper")).toBeUndefined();
       const job = await provision();
+      assert.isDefined(job);
       expect(job).toMatchObject({
         agentId: "main",
-        enabled: true,
+        enabled: false,
         sessionTarget: "session:agent:main:main",
         schedule: { kind: "every", everyMs: 60_000 },
         payload: { kind: "agentTurn", skipIfScratchEmpty: true },
         delivery: { mode: "announce", target: "owner" },
       });
+      expect(job.state.nextRunAtMs).toBeUndefined();
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
       expect(await provision("main", config, 120_000)).toEqual(job);
       expect(await readJobs(storePath)).toEqual([job]);
       expect(await readDefaultProactiveJobReceiptsAsync(undefined, ["main", "helper"])).toEqual({
-        main: { jobId: job?.id, provisionedAtMs: job?.createdAtMs, phase: "complete" },
+        main: { jobId: job.id, provisionedAtMs: job.createdAtMs, phase: "complete" },
       });
       expect(await readDefaultProactiveJobsAsync(undefined, ["main"])).toEqual([job]);
 
-      await saveCronJobsStore(storePath, { version: 1, jobs: [] });
+      // A user can enable the check and create a separate job with the same name.
+      const enabled = { ...job, enabled: true };
+      const manual = { ...enabled, id: "manual-check" };
+      await saveCronJobsStore(storePath, { version: 1, jobs: [manual, enabled] });
+      expect(await provision()).toEqual(enabled);
+      expect(await readJobs(storePath)).toEqual([manual, enabled]);
+
+      await saveCronJobsStore(storePath, { version: 1, jobs: [manual] });
       expect(await provision()).toBeUndefined();
-      expect(await readJobs(storePath)).toEqual([]);
+      expect(await readJobs(storePath)).toEqual([manual]);
       expect((await readDefaultProactiveJobReceiptsAsync(undefined, ["main"])).main?.jobId).toBe(
-        job?.id,
+        job.id,
       );
     });
   });

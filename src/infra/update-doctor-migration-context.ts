@@ -15,6 +15,8 @@ export type UpdateDoctorMigrationCapture = {
   /** Digests this Doctor run's generation reads verified; never outlives the capture. */
   digests?: import("./sqlite-file-generation.js").SqliteFileDigests;
   expected(pathname: string): string | null | undefined;
+  /** The generation an index rebuilt over the expected WAL frames binds without a commit. */
+  rebuiltIndex(pathname: string): string | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
@@ -80,6 +82,8 @@ export function getDoctorMigrationBackup(
 }
 
 export type UpdateSqliteMigrationOptions = {
+  /** Prepare the admitted connection after verifying its preimage, before native exclusion. */
+  beforeExclusive?: () => void;
   /** Close a one-shot native owner before publishing its final generation. */
   close?: () => void;
   retainExclusive?: boolean;

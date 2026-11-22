@@ -11,6 +11,7 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,20 +41,22 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { withArtifactPreservingStateSnapshot } from "../../state/openclaw-state-inspection-snapshot.js";
 import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
 
 async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
   try {
@@ -122,7 +125,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
       () =>
         scope.run(() =>
-          withArtifactPreservingStateReads(() =>
+          withArtifactPreservingStateSnapshot(scope.signal, () =>
             inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
           ),
         ),
@@ -140,6 +143,15 @@ async function inspectUpdateStatus(
   checkTimeoutMs: number | undefined,
 ): Promise<void> {
   const inspectionErrors: { section: string; message: string }[] = [];
+  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>;
+  let retainedRunStatus: RunStatus | undefined;
+  const readRunStatus = async (): Promise<RunStatus> => {
+    // Keep completed history if optional enrichment outlives either enclosing deadline race.
+    retainedRunStatus = await readUpdateRunStatusWithOwedSteps((status) => {
+      retainedRunStatus = status;
+    });
+    return retainedRunStatus;
+  };
   const deadline = performance.now() + timeoutMs;
   const remainingMs = () => Math.max(1, deadline - performance.now());
   const inspect = async <T>(
@@ -175,11 +187,9 @@ async function inspectUpdateStatus(
     () =>
       withUpdateDatabaseEngine(process.env, () =>
         Promise.all([
-          inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
-            "update history",
-            readUpdateRunStatus,
-            { runStatusError: "Update history inspection unavailable" },
-          ),
+          inspect<RunStatus>("update history", readRunStatus, {
+            runStatusError: "Update history inspection unavailable",
+          }),
           inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
             "recovery sets",
             () => readUpdateRecoverySetStatus(),
@@ -312,7 +322,8 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [runStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const runStatus = retainedRunStatus ?? inspectedRunStatus;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
@@ -320,7 +331,7 @@ async function inspectUpdateStatus(
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
   const printWarning = (message: string) => defaultRuntime.log(theme.warn(message));
-  const configValidation = validateConfigObjectRaw(config);
+  const configValidation = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(config));
   const configWarnings = configValidation.ok
     ? []
     : [
@@ -624,7 +635,7 @@ async function inspectUpdateStatus(
     printWarning(`Update run status unavailable: ${runStatus.runStatusError}`);
     defaultRuntime.log("");
   } else {
-    const { lastRun, staleRun, abandonedRun, advisories } = runStatus;
+    const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
       if (advisory.runId !== run?.runId) {
@@ -640,12 +651,26 @@ async function inspectUpdateStatus(
       }
       if (abandonedRun) {
         defaultRuntime.log(
-          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
+      // A refused restart on a Gateway that is not responding has a recovery verified against
+      // the live service just now; name it as the next step, not as saved triage advice.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "unavailable"
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
+            )
+          : undefined;
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
+        refusedRestartRecovery
+          ? { nextAction: refusedRestartRecovery }
+          : run.status === "failed"
+            ? { currentHealth: currentRunHealth }
+            : {},
       );
       const historical =
         currentRunHealth?.kind === "responding"
@@ -658,6 +683,13 @@ async function inspectUpdateStatus(
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");
+    }
+    // The displayed run's report already lists what that run owes.
+    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
+    for (const step of owedSteps ?? []) {
+      if (!reported.has(step.id)) {
+        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
+      }
     }
   }
 

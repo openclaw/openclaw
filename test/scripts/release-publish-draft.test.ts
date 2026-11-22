@@ -116,10 +116,12 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   ]) {
     fs.copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
-  fs.symlinkSync(
-    join(repository, "scripts/full-release-validation-policy.mjs"),
-    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
-  );
+  for (const source of [
+    "scripts/full-release-validation-policy.mjs",
+    "scripts/lib/release-manifest-waivers.mts",
+  ]) {
+    fs.symlinkSync(join(repository, source), join(root, ".release-harness", source));
+  }
   // Publication installs tooling in the harness, then links the frozen target cwd to it.
   fs.symlinkSync(
     join(repository, "node_modules"),
@@ -133,6 +135,7 @@ function publicationFixture(releaseVersion = "2026.9.4") {
     join(bin, "gh"),
     `#!${process.execPath}
 const fs = require("node:fs");
+if (process.argv[3]?.endsWith("/releases/latest")) { console.log("v2026.9.6"); process.exit(0); }
 require("node:assert/strict").deepEqual(process.argv.slice(2), ["api", "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main", "--jq", ".content"]);
 process.stdout.write(fs.readFileSync(process.env.GITHUB_WORKSPACE + "/.release-harness/package.json").toString("base64"));
 `,
@@ -221,7 +224,7 @@ canonical_release_body_matches "$NOTES_FILE"
             "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
             "reliability and performance fixes, and features like new model support. " +
             "The latest version of OpenClaw at the time of this release is " +
-            "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
+            "[2026.9.6](https://github.com/openclaw/openclaw/releases#release-v2026.9.6)\n\n",
         ),
       ).toBe(true);
     } else {
@@ -371,7 +374,7 @@ attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
 });
 
 it.each([
-  { releaseVersion: "2026.8.35", regularStableVersion: "2026.9.5", reason: "" },
+  { releaseVersion: "2026.9.36", regularStableVersion: "2026.10.8", reason: "" },
   {
     releaseVersion: "2026.9.37",
     regularStableVersion: "2026.11.2",
@@ -382,19 +385,30 @@ it.each([
   ({ releaseVersion, regularStableVersion, reason }) => {
     const { root, json, read, run } = publicationFixture(releaseVersion);
     json(".release-harness/package.json", { version: regularStableVersion });
+    const publishedStable = "2026.10.9";
+    if (!reason) {
+      json("release.json", { isDraft: true, body: "Draft awaiting canonical notes." });
+    }
     const result = run(
       `
 source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
 verify_release_tag_target() { :; }
 gh() {
   if [[ "$1 $2" == "release view" ]]; then cat "$RUNNER_TEMP/release.json"; return; fi
+  if [[ "$1" == api && "$2" == */releases/latest ]]; then echo "v$PUBLISHED_STABLE"; return; fi
   echo "Unexpected mutation: $*" >&2; return 1
 }
-prepared_release_notes_file="$RUNNER_TEMP/prepared.md"
+prepared_release_notes_file="$RUNNER_TEMP/release-notes.md"
 render_github_release_notes "$prepared_release_notes_file"
-node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.RUNNER_TEMP + "/release.json", JSON.stringify({isDraft: false, body: fs.readFileSync(process.env.RUNNER_TEMP + "/prepared.md", "utf8")}));'
+node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.RUNNER_TEMP + "/release.json", JSON.stringify({isDraft: false, body: fs.readFileSync(process.env.RUNNER_TEMP + "/release-notes.md", "utf8")}));'
+PUBLISHED_STABLE=2026.12.1
 guard_existing_public_release
 create_or_update_github_release
+bash -c 'source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; render_github_release_notes "$RUNNER_TEMP/rerendered.md"; canonical_release_body_matches "$RUNNER_TEMP/rerendered.md"'
+# A fresh recovery run has no prepared notes, but the public notice is immutable.
+rm "$prepared_release_notes_file"
+render_github_release_notes "$prepared_release_notes_file"
+guard_existing_public_release
 `,
       {
         GITHUB_STEP_SUMMARY: join(root, "summary"),
@@ -402,12 +416,32 @@ create_or_update_github_release
         RELEASE_NPM_DIST_TAG: "extended-stable",
         RELEASE_EVIDENCE_MODE: "full-release-validation",
         RETIRED_LINE_PUBLICATION_REASON: reason,
+        PUBLISHED_STABLE: publishedStable,
       },
     );
     expect(result.status, result.stderr).toBe(0);
     expect(read("summary")).toContain("existing public page left untouched");
-    expect(JSON.parse(read("release.json")).body).toBe(read("prepared.md"));
-    expect(read("prepared.md")).toContain(
+    expect(read("release-notes.md")).toContain(
+      `[${publishedStable}](https://github.com/fixture/repository/releases#release-v${publishedStable})`,
+    );
+    expect(read("rerendered.md")).toBe(read("release-notes.md"));
+    json("release.json", {
+      isDraft: false,
+      body: read("release-notes.md").replace(publishedStable, "2026.12.1"),
+    });
+    const altered = run(
+      `source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
+jq -r .body "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/altered.md"
+canonical_release_body_matches "$RUNNER_TEMP/altered.md"`,
+      {
+        RELEASE_NPM_DIST_TAG: "extended-stable",
+        RELEASE_EVIDENCE_MODE: "full-release-validation",
+        RETIRED_LINE_PUBLICATION_REASON: reason,
+      },
+    );
+    expect(altered.status).not.toBe(0);
+    expect(altered.stderr).toContain("Release body does not match canonical release notes.");
+    expect(read("release-notes.md")).toContain(
       reason ? "retired maintenance line" : "current equivalent to LTS",
     );
   },

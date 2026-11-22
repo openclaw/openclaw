@@ -1,10 +1,6 @@
 import type { AnyChunk } from "@slack/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  planSlackStreamUpdateFit,
-  SLACK_STREAM_MESSAGE_MAX_AGE_MS,
-  SlackStreamMessageLedger,
-} from "./stream-size.js";
+import { planSlackStreamUpdateFit, SlackStreamMessageLedger } from "./stream-size.js";
 
 function task(
   id: string,
@@ -200,7 +196,8 @@ describe("slack stream message age", () => {
   it("marks a message expiring once it reaches the roll age", () => {
     vi.useFakeTimers();
     const ledger = new SlackStreamMessageLedger();
-    vi.advanceTimersByTime(SLACK_STREAM_MESSAGE_MAX_AGE_MS - 1);
+    // Roll at eight minutes, before Slack closes the native stream at about ten.
+    vi.advanceTimersByTime(8 * 60_000 - 1);
     expect(ledger.expiring).toBe(false);
     vi.advanceTimersByTime(1);
     expect(ledger.expiring).toBe(true);

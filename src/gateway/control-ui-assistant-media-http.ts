@@ -298,7 +298,6 @@ export async function handleControlUiAssistantMediaRequest(
   ) {
     if (
       !(await prepareHttpUserProfileCatalog(res)) ||
-      requestAuth?.hasCurrentClientAuthority?.() === false ||
       (!isMetaRequest &&
         ticketCandidate &&
         !verifyAssistantMediaTicket(
@@ -353,12 +352,7 @@ export async function handleControlUiAssistantMediaRequest(
       : undefined;
   const assertCurrentPolicy = () => {
     assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
-    return assertAssistantMediaPolicyCurrent(
-      policyParams,
-      mediaPolicy,
-      Boolean(allowance),
-      requestAuth ?? undefined,
-    );
+    return assertAssistantMediaPolicyCurrent(policyParams, mediaPolicy, Boolean(allowance));
   };
   const requestAbort = createHttpRequestAbortSignal(res.req, res);
   using _ = { [Symbol.dispose]: requestAbort.cleanup };
