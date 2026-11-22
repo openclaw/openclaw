@@ -503,6 +503,34 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Idle imports register English catalogs and legitimately redraw the pane.
+      // Observe their evaluation before attributing commits to streamed text.
+      const idleModules = [
+        "chat-header-panel-menu-content",
+        "chat-interaction-runtime",
+        "chat-composer-plus-menu-content",
+      ];
+      const evaluatedModules = new Set<string>();
+      page.on("console", (message) => {
+        if (message.type() === "debug" && idleModules.includes(message.text())) {
+          evaluatedModules.add(message.text());
+        }
+      });
+      await page.route(
+        /\/(chat-header-panel-menu-content|chat-interaction-runtime|chat-composer-plus-menu-content)-[^/]+\.js$/,
+        async (route) => {
+          const response = await route.fetch();
+          const name = idleModules.find((module) => route.request().url().includes(`/${module}-`));
+          const headers = response.headers();
+          delete headers["content-length"];
+          delete headers["content-encoding"];
+          await route.fulfill({
+            response,
+            headers,
+            body: `${await response.text()}\nconsole.debug(${JSON.stringify(name)});`,
+          });
+        },
+      );
       const gateway = await installMockGateway(page, {
         deferredMethods: ["models.list"],
         heldMethods: ["sessions.describe"],
@@ -549,6 +577,19 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      await expect.poll(() => evaluatedModules.size).toBe(idleModules.length);
+      // Catalog registration can occur in the import continuation. Drain that
+      // task before the existing render/scroll settlement and probe reset.
+      await page.evaluate(async () => {
+        const channel = new MessageChannel();
+        await new Promise<void>((resolve) => {
+          channel.port1.addEventListener("message", () => resolve(), { once: true });
+          channel.port1.start();
+          channel.port2.postMessage(null);
+        });
+        channel.port1.close();
+        channel.port2.close();
+      });
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);
