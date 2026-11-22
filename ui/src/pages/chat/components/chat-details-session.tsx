@@ -19,6 +19,7 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
@@ -34,8 +35,6 @@ import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
-
-export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
 
 registerEnglishCatalog(registerSessionProgressEnglish);
 
@@ -646,16 +645,17 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
-  onReady?: () => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => {
-    props.onReady?.();
-  });
   return (
     <>
+      <Show
+        when={props.props?.sessionFactsReady === false && !props.props.cachedDetails?.environment}
+      >
+        <ChatDetailsDesktopLoading />
+      </Show>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}

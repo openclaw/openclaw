@@ -28,10 +28,15 @@ import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 registerBuiltInApiProviders(defaultApiRegistry);
 
 // The process host outlives requests; only provider invocation carries caller authority.
-const ensureTransportRuntimeHost = createLazyPromise(
+const loadTransportRuntimeHost = createLazyPromise(
   () => runInDetachedAsyncContext(() => import("../agents/ai-transport-runtime-host.js")),
   { cacheRejections: true },
 );
+
+async function ensureTransportRuntimeHost(): Promise<void> {
+  const runtime = await loadTransportRuntimeHost();
+  runInDetachedAsyncContext(runtime.configureAiTransportRuntimeHost);
+}
 
 function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {
   // A message cannot retain the error graph, so preserve its strongest continuation fence.

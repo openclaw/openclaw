@@ -9,13 +9,13 @@ import { createContext } from "../../gateway/server-plugin-in-process-dispatch.t
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -26,7 +26,7 @@ import { createPresenceTool } from "./presence-tool.js";
 const adaPresence = { people: [{ name: "Ada" }] };
 
 function readerAuthority(scopes: string[], assertCurrent = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: ensureProfileForEmail("presence-reader@example.test").id,
     scopes,
     assertCurrent,

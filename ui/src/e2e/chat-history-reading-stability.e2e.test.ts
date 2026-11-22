@@ -87,9 +87,58 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.getByText(/^Answer 190\./).waitFor();
-        // Read up to the boundary until the older page lands, then read on through it.
-        // Programmatic scrollTop steps stand in for touch and momentum movement.
-        const frames = await thread.evaluate(async (element, loaded) => {
+        // A mounted last row does not prove that the initial end placement has landed.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const inner = element.querySelector(".chat-thread-inner");
+              return (
+                element.clientHeight > 0 &&
+                element.scrollHeight > element.clientHeight &&
+                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 2 &&
+                inner !== null &&
+                getComputedStyle(inner).visibility === "visible"
+              );
+            }),
+          )
+          .toBe(true);
+        // Native input retires end-follow ownership. WebKit uses the explicit
+        // edge action rather than relying on a wheel animation through measured rows.
+        if (engine === "webkit") {
+          await thread.press("Home");
+        } else {
+          await thread.hover();
+          await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+        }
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
+                state: { chatMessages: unknown[] };
+              };
+              // State can contain the prefix while active scrolling still holds the old
+              // rendered window. Wait for retained rows to acquire their prepended indexes.
+              const prefixCommitted = [
+                ...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
+              ].some((bubble) => {
+                const match = /(?:Question|Answer) (\d+)[?.]/.exec(bubble.textContent ?? "");
+                const sequence = match ? Number(match[1]) : 0;
+                return (
+                  sequence >= 161 &&
+                  Number(bubble.closest<HTMLElement>(".chat-virtual-row")?.dataset.index) ===
+                    sequence - 1
+                );
+              });
+              return {
+                messageCount: pane.state.chatMessages.length,
+                prefixCommitted,
+                readingRunwayReady: element.scrollTop > 240 * 24,
+              };
+            }),
+          )
+          .toEqual({ messageCount: LOADED, prefixCommitted: true, readingRunwayReady: true });
+        // Programmatic steps now sample reading through the loaded history.
+        const frames = await thread.evaluate(async (element) => {
           const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
             state: { chatMessages: unknown[] };
           };
@@ -98,18 +147,53 @@ suite.define(() => {
             new Promise<void>((resolve) => {
               setTimeout(resolve, ms);
             });
-          for (let round = 0; round < 20 && pane.state.chatMessages.length < loaded; round++) {
-            for (
-              let step = 0;
-              step < 400 && element.scrollTop > 0 && pane.state.chatMessages.length < loaded;
-              step++
-            ) {
-              element.scrollTop -= 400;
-              await nextFrame();
+          const numeric = (raw: string | null | undefined) => {
+            const parsed = Number.parseFloat(raw ?? "");
+            return Number.isFinite(parsed) ? parsed : null;
+          };
+          const layout = (node: HTMLElement | null) => {
+            if (!node) {
+              return null;
             }
-            await wait(400);
-          }
-          await wait(600);
+            const style = getComputedStyle(node);
+            let translation: { x: number; y: number } | null = null;
+            try {
+              const matrix = new DOMMatrixReadOnly(
+                style.transform === "none" ? "" : style.transform,
+              );
+              translation = { x: matrix.m41, y: matrix.m42 };
+            } catch {
+              // A missing transform remains unobserved.
+            }
+            return {
+              height: node.getBoundingClientRect().height,
+              inlineMarginTop: numeric(node.style.marginTop),
+              marginTop: numeric(style.marginTop),
+              top: numeric(style.top),
+              translation,
+            };
+          };
+          const snapshot = () => {
+            const inner = element.querySelector<HTMLElement>(".chat-thread-inner");
+            return {
+              time: performance.now(),
+              count: pane.state.chatMessages.length,
+              scrollTop: element.scrollTop,
+              clientHeight: element.clientHeight,
+              scrollHeight: element.scrollHeight,
+              maximumOffset: Math.max(0, element.scrollHeight - element.clientHeight),
+              measuringAttributePresent: inner?.hasAttribute("data-measuring-rows") ?? null,
+              measuringRowCount: numeric(inner?.getAttribute("data-measuring-rows")),
+              innerVisible: inner ? getComputedStyle(inner).visibility === "visible" : null,
+              inner: layout(inner),
+              sizer: layout(element.querySelector<HTMLElement>(".chat-virtual-sizer")),
+              block: layout(element.querySelector<HTMLElement>(".chat-virtual-block")),
+              mountedRows: element.querySelectorAll(".chat-virtual-row").length,
+              mountedBubbles: element.querySelectorAll(".chat-bubble[data-message-id]").length,
+              fonts: document.fonts.status,
+            };
+          };
+          const boundaries = [{ stage: "measurement-entry", geometry: snapshot() }];
           const tops = () =>
             new Map(
               [...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].map(
@@ -118,10 +202,13 @@ suite.define(() => {
             );
           const readerTop = element.getBoundingClientRect().top;
           const residuals: number[] = [];
+          const samples = [];
           let previous = tops();
           for (let frame = 0; frame < 240 && element.scrollTop > 0; frame++) {
             const before = element.scrollTop;
+            const requested = before - 24;
             element.scrollTop -= 24;
+            const immediate = element.scrollTop;
             const readerDelta = before - element.scrollTop;
             // Resize delivery corrects layout after animation callbacks; read the painted frame.
             await nextFrame();
@@ -134,10 +221,42 @@ suite.define(() => {
             residuals.push(
               watched ? Math.abs(current.get(watched[0])! - watched[1] - readerDelta) : 0,
             );
+            const watchedBubble = watched
+              ? [...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].find(
+                  (bubble) => bubble.dataset.messageId === watched[0],
+                )
+              : undefined;
+            const fixtureIndex = /(?:Question|Answer) (\d+)[?.]/.exec(
+              watchedBubble?.textContent ?? "",
+            );
+            samples.push({
+              frame,
+              before,
+              requested,
+              immediate,
+              painted: element.scrollTop,
+              readerDelta,
+              watchedPreviousTop: watched?.[1] ?? null,
+              watchedPaintedTop: watched ? current.get(watched[0])! : null,
+              residual: residuals.at(-1)!,
+              watchedFixtureIndex: fixtureIndex ? Number(fixtureIndex[1]) : null,
+              watchedVirtualRowIndex: numeric(
+                watchedBubble?.closest<HTMLElement>(".chat-virtual-row")?.dataset.index,
+              ),
+              geometry: snapshot(),
+            });
             previous = current;
           }
-          return { count: pane.state.chatMessages.length, residuals };
-        }, LOADED);
+          return {
+            count: pane.state.chatMessages.length,
+            residuals,
+            diagnostic: { boundaries, samples },
+          };
+        });
+        console.info(
+          "history-reading-geometry",
+          JSON.stringify({ engine, width, ...frames.diagnostic }),
+        );
         expect(frames.count).toBe(LOADED);
         expect(frames.residuals.length).toBeGreaterThan(200);
         expect(

@@ -41,9 +41,20 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
-test("session-only roles cannot read another person's timeline through profile filters", async () => {
+test("session-only roles filter people within readable sessions without exposing hidden owners", async () => {
   const viewer = ensureProfileForEmail("timeline-viewer@example.test").id;
   const foreign = ensureProfileForEmail("timeline-foreign@example.test").id;
+  const hidden = ensureProfileForEmail("timeline-hidden@example.test").id;
+  const sessionless = ensureProfileForEmail("timeline-sessionless@example.test").id;
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: "agent:main:timeline-hidden" },
+    {
+      sessionId: hidden,
+      updatedAt: Date.now(),
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: hidden },
+    },
+  );
   for (const id of [viewer, foreign]) {
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: `agent:main:timeline-${id}` },
@@ -92,14 +103,26 @@ test("session-only roles cannot read another person's timeline through profile f
       { involvingProfileId: foreign },
       { involvingProfileId: foreign.replaceAll("-", "").slice(0, 12) },
       { profileRelation: { profileId: foreign, relationship: "involving" as const } },
+      { profileRelation: { profileId: foreign, relationship: "owned" as const } },
+      { profileRelation: { profileId: foreign, relationship: "created" as const } },
       { creatorId: foreign },
       { ownerId: foreign },
     ]) {
-      await expect(read(selector)).rejects.toMatchObject({ error: { code: "FORBIDDEN" } });
+      const selected = await read(selector);
+      expect(selected.sessions.map((row) => row.sessionId)).toEqual(
+        cap === "none" ? [] : [foreign],
+      );
+    }
+    for (const id of [hidden, sessionless]) {
+      for (const selector of [{ ownerId: id }, { creatorId: id }, { involvingProfileId: id }]) {
+        expect((await read(selector)).sessions).toEqual([]);
+      }
     }
     const own = await read({ involvingProfileId: viewer });
     expect(own.sessions.map((row) => row.sessionId)).toEqual([viewer]);
-    expect(own.people?.map((person) => person.identity.id)).toEqual([viewer]);
+    expect(own.people?.map((person) => person.identity.id).toSorted()).toEqual(
+      (cap === "none" ? [viewer] : [viewer, foreign]).toSorted(),
+    );
     for (const key of ["creatorId", "ownerId"] as const) {
       const ownPadded = await read({ [key]: ` ${viewer} ` });
       expect(ownPadded.sessions.map((row) => row.sessionId)).toEqual([viewer]);
@@ -110,12 +133,19 @@ test("session-only roles cannot read another person's timeline through profile f
       expect(ordinary.sessions.map((row) => row.sessionId)).toEqual(
         expect.arrayContaining([viewer, foreign]),
       );
-      expect(ordinary.people?.map((person) => person.identity.id)).toEqual([viewer]);
-      expect(ordinary.ownerSessionCounts?.map((owner) => owner.profileId)).toEqual([viewer]);
+      for (const ids of [
+        ordinary.owners?.map((owner) => owner.id),
+        ordinary.people?.map((person) => person.identity.id),
+        ordinary.ownerSessionCounts?.map((owner) => owner.profileId),
+      ]) {
+        expect(ids?.toSorted()).toEqual([viewer, foreign].toSorted());
+      }
+      expect(JSON.stringify(ordinary.owners)).not.toContain("@example.test");
+      expect(JSON.stringify(ordinary.people)).not.toContain("@example.test");
       expect(ordinary).toMatchObject({
         totalCount: 2,
-        peopleSessionCount: 1,
-        activityPulse: { people: 1 },
+        peopleSessionCount: 2,
+        activityPulse: { people: 2 },
       });
     }
     // A member can request reduced socket scopes without becoming a guest.

@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveTestTempRoot, withEnv } from "../../src/test-utils/env.js";
 import { resolveNativeFixtureShortPath } from "../scripts/native-boundary-fixture.js";
 import { cleanupTempDirs, makeTempDir } from "./temp-dir.js";
 
@@ -12,6 +12,19 @@ afterEach(() => {
 });
 
 describe("temp-dir test helpers", () => {
+  it.each([
+    ["linux", { TMPDIR: "/dir", TMP: "/tmp", TEMP: "/temp" }, "/dir"],
+    ["linux", { TMPDIR: "", TMP: "/tmp", TEMP: "/temp" }, "/tmp"],
+    ["linux", { TEMP: "/temp" }, "/temp"],
+    ["linux", {}, "/tmp"],
+    ["win32", { TMPDIR: "C:\\ignored", TEMP: "C:\\temp", TMP: "C:\\tmp" }, "C:\\temp"],
+    ["win32", { TEMP: "", TMP: "C:\\tmp" }, "C:\\tmp"],
+    ["win32", { SystemRoot: "C:\\Windows", windir: "D:\\Windows" }, "C:\\Windows\\temp"],
+    ["win32", { windir: "D:\\Windows" }, "D:\\Windows\\temp"],
+  ] as const)("resolves %s temp roots from %j", (platform, env, expected) => {
+    expect(resolveTestTempRoot(env, platform)).toBe(expected);
+  });
+
   it.each(["array", "set"] as const)(
     "continues after a failed removal and retains the failed directory in its %s",
     (collection) => {
@@ -85,13 +98,10 @@ describe("temp-dir test helpers", () => {
         skip();
         return;
       }
-      const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(shortRoot);
-      try {
+      withEnv({ TEMP: shortRoot, TMP: shortRoot }, () => {
         const dir = makeTempDir(tempDirs, "child-");
         expect(path.dirname(dir)).toBe(fs.realpathSync.native(root));
-      } finally {
-        tmpdir.mockRestore();
-      }
+      });
     },
   );
 });

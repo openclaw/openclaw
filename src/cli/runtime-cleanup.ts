@@ -119,8 +119,8 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       }
     },
     "ai-session-resources": async () => {
-      // Keep the provider runtime outside the CLI bootstrap import graph.
-      const { cleanupSessionResources } = await import("@openclaw/ai/internal/runtime");
+      // Cleanup must not initialize an otherwise unused provider runtime.
+      const { cleanupSessionResources } = await import("@openclaw/ai/internal/session-resources");
       cleanupSessionResources();
     },
     "skills-watchers": async () => {

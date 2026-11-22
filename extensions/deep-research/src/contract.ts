@@ -8,7 +8,7 @@ type CalculationInput = {
   quote: string;
 };
 
-export type Calculation = {
+type Calculation = {
   operation: "sum" | "difference" | "ratio" | "percent-change";
   inputs: [CalculationInput, CalculationInput];
   value: number;
@@ -21,6 +21,7 @@ const limit = (maximum: number) => Type.Optional(Type.Integer({ minimum: 1, maxi
 export const researchRequestSchema = Type.Object(
   {
     question: text(8_000),
+    engine: Type.Optional(Type.Union([Type.Literal("portable"), Type.Literal("google")])),
     model: Type.Optional(text(256)),
     requiredAuthMode: Type.Optional(Type.Literal("oauth")),
     output: Type.Optional(text(2_000)),
@@ -70,7 +71,7 @@ export type ResearchSource = {
   requestedUrl?: string;
   title: string;
   text: string;
-  retrievedAt: string;
+  retrievedAt?: string;
   fingerprint: string;
   extraction: "web-fetch-text-v1" | "supplied-text-v1";
 };
@@ -96,13 +97,40 @@ export type ResearchResult = {
     reportedTokens: number;
     tokensComplete: boolean;
   };
-  route: { model: string; runtime: "direct-provider" | "managed-service" };
+  /** Half-open UTF-8 byte ranges emitted with the portable report. */
+  reportCitations?: Array<{ sourceId: string; startByte: number; endByte: number }>;
+  providerCitations?: Array<{ url: string; title?: string; startByte?: number; endByte?: number }>;
+  route: {
+    model: string;
+    runtime: "direct-provider" | "isolated-agent-runtime" | "managed-service" | "unobserved";
+    owner?: { kind: "provider" | "cli" | "harness"; id: string };
+  };
 };
+
+export const researchToolSchema = Type.Union([
+  Type.Object(
+    { action: Type.Literal("start"), idempotencyKey: text(128), request: researchRequestSchema },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      action: Type.Union([
+        Type.Literal("status"),
+        Type.Literal("result"),
+        Type.Literal("resume"),
+        Type.Literal("cancel"),
+      ]),
+      jobId: text(64),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object({ action: Type.Literal("capabilities") }, { additionalProperties: false }),
+]);
 
 export const researchToolDefinition = {
   name: "deep_research",
   label: "Deep Research",
   description:
-    "Research a question with a direct API model and configured search/fetch. Returns source-backed findings, usage, and unresolved gaps. The host default model is used unless an authorized override is supplied.",
-  parameters: researchRequestSchema,
+    "Start, inspect, resume or cancel evidence-backed research. Portable uses the configured isolated model runtime (explicit OAuth-only uses direct completion) and configured web tools; Google uses an explicitly activated managed research service. Reuse the same idempotency key for a retried start. Results include honest gaps and route-specific evidence.",
+  parameters: researchToolSchema,
 };

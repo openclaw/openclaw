@@ -13,8 +13,9 @@ When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier for future
 agent runs. It engages Code Mode only for models marked preferred in the
 provider catalog. No configuration is required for this default.
 
-Use **Settings → Agents & Tools → Labs → Code Mode** to change the global
-setting. Changes apply to future agent runs without restarting the Gateway.
+Use **Settings → Agents → Agent defaults → Tools → Code Mode** to change the global
+setting. On selects Auto for evaluated models, not force-on for every model.
+Changes apply to future agent runs without restarting the Gateway.
 
 To enable the same tier without the Control UI, set it in config:
 
@@ -223,6 +224,12 @@ explaining that the full result was not retained. Existing references remain
 unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
+
+Hidden catalog tools are not top-level model tools. Calling one directly returns
+a failed tool result with guidance to use JavaScript inside `exec`; the rejected
+call does not execute the tool or add it to the visible surface. Inside `exec`,
+use the callable from the quick index or `catalog.search(...)`, since normalized
+names, collisions, and MCP namespaces can differ from the original tool name.
 
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.

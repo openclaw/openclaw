@@ -1,6 +1,6 @@
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { resolveGlobalSet } from "../../shared/global-singleton.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import { createTestSession } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { createBackgroundResultPlacement } from "./background-result-placement.js";
@@ -31,14 +31,15 @@ it("does not register a transcript listener when session construction fails", as
   }
 });
 
-it("does not retain a transcript manager through an abandoned placement listener", () => {
-  const baseline = queryObjects(SessionManager);
-  const disposers = Array.from(
-    { length: 8 },
-    () => createBackgroundResultPlacement(SessionManager.inMemory()).dispose,
-  );
+it("does not retain a transcript manager through an abandoned placement listener", async () => {
+  const managers: WeakRef<SessionManager>[] = [];
+  const disposers = Array.from({ length: 8 }, () => {
+    const manager = SessionManager.inMemory();
+    managers.push(new WeakRef(manager));
+    return createBackgroundResultPlacement(manager).dispose;
+  });
   try {
-    expect(queryObjects(SessionManager)).toBe(baseline);
+    await expectCollected(...managers);
   } finally {
     disposers.forEach((dispose) => dispose());
   }

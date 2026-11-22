@@ -28,7 +28,6 @@ export async function startSubagentTyping(
     !origin.to ||
     entry.expectsCompletionMessage !== true ||
     entry.collect ||
-    !entry.completionRequesterSessionId ||
     !entry.requesterAgentId ||
     !entry.requesterStorePath ||
     !runtime?.startTyping
@@ -89,8 +88,7 @@ export async function startSubagentTyping(
     const requester = await readSessionEntryReadOnlyInWorker(scope, assertHostCurrent);
     const route = deliveryContextFromSession(requester);
     if (
-      requester?.sessionId !== entry.completionRequesterSessionId ||
-      requester?.lifecycleRevision !== entry.completionRequesterLifecycleRevision ||
+      !requester ||
       !sourceDeliveryTargetsMatch(
         { ...origin, provider: origin.channel, threadId: stringifyRouteThreadId(origin.threadId) },
         route ?? {},

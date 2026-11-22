@@ -408,6 +408,18 @@ export function collectGatewayConfigFindings(
       }
     }
 
+    if (trustedProxyConfig?.narrowToDeviceGrant === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_narrow_to_device_grant",
+        severity: "warn",
+        title: "Trusted-proxy TUI devices hold durable device tokens",
+        detail:
+          "gateway.auth.trustedProxy.narrowToDeviceGrant=true issues the TUI a device token, as the CLI already receives. Until the device or token is revoked, that token authenticates a direct Gateway connection without the proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, and remove a device with `openclaw devices remove <deviceId>` when its user's access ends.",
+      });
+    }
+
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];
     if (allowUsers.length === 0) {
       findings.push({

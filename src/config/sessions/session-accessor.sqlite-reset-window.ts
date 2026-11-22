@@ -25,6 +25,7 @@ import {
   getActiveTranscriptKysely,
   selectActiveTranscriptEventRows,
   selectActiveTranscriptIdentityRows,
+  selectActiveTranscriptMetadataRows,
   getMessageRangeReaders,
   selectMessageRows,
   selectMessagePayload,
@@ -266,7 +267,7 @@ export function readLatestActiveResetBoundary(
   return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
 }
 
-function readLatestActiveBoundaryMetadata(
+export function readLatestActiveBoundaryMetadata(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope,
   beforeRawSeq?: number,
@@ -665,18 +666,38 @@ export function readVisibleTranscriptStats(
   }
   // Metadata-only rewrites retain generation and positions but can change retained-prefix bytes.
   const window = findLatestResetMessageWindow(projection, "context");
-  const base = selectActiveTranscriptEventRows(projection.database)
-    .select((eb) => [
-      eb.fn.countAll<number>().as("event_count"),
-      /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-      sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
-        + COUNT(*) AS BIGINT)`.as("size_bytes"),
-    ])
+  const metadata = selectActiveTranscriptMetadataRows(projection.database)
     .where("active.session_id", "=", projection.resolved.sessionId)
-    .where("active.context_eligible", "=", 1);
+    .where("active.context_eligible", "=", 1)
+    // Same charge as transcriptEventChargesContextBytes: custom state entries are not charged.
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("transcript_events as event")
+            .select("event.seq")
+            .whereRef("event.session_id", "=", "active.session_id")
+            .whereRef("event.seq", "=", "active.event_seq")
+            .where(
+              transcriptPredicateSql(projection.database.db, "navigation_type", "event"),
+              "=",
+              "custom",
+            ),
+        ),
+      ),
+    )
+    .$if(window !== null, (query) =>
+      query.where("active.active_position", ">", window!.boundaryActivePosition),
+    );
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
-    window ? base.where("active.active_position", ">", window.boundaryActivePosition) : base,
+    getActiveTranscriptKysely(projection.database)
+      .selectFrom(metadata.as("metadata"))
+      .select((eb) => [
+        eb.fn.countAll<number>().as("event_count"),
+        /* kysely-allow-raw: exact serialized facts already include each JSONL separator. */
+        sql<number>`CAST(COALESCE(SUM(metadata.serialized_bytes), 0) AS BIGINT)`.as("size_bytes"),
+      ]),
   );
   const result = Object.freeze({
     eventCount: (row?.event_count ?? 0) + (window?.contextPrefixEventCount ?? 0),

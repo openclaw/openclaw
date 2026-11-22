@@ -3,7 +3,7 @@ import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided
 
 export type GuidedOrchestrationFixture = GuidedOnboardingDeps & {
   createPrompter?: typeof import("../wizard/clack-prompter.js").createClackPrompter;
-  listManualOptions?: typeof import("../system-agent/setup-inference.js").listManualSetupInferenceOptions;
+  listManualOptions?: typeof import("../system-agent/setup-inference.js").listManualSetupInferenceDetection;
   applySetup?: typeof import("../system-agent/setup-apply.js").applySystemAgentSetup;
   runMemorySetupFlow?: typeof import("../flows/memory-setup.js").runMemorySetupFlow;
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
@@ -53,7 +53,7 @@ export async function runGuidedOnboardingWithFixtures(
     if (listManualOptions) {
       const owner = await import("../system-agent/setup-inference.js");
       const spy = vi
-        .spyOn(owner, "listManualSetupInferenceOptions")
+        .spyOn(owner, "listManualSetupInferenceDetection")
         .mockImplementation(listManualOptions);
       restore.push(() => spy.mockRestore());
     }

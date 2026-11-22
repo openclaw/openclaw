@@ -856,11 +856,6 @@ describe("palette-only remembered settings", () => {
       setting(host, "trigger")!.click();
       expectDefined(setting(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
-      expectDefined(
-        host.querySelector<HTMLButtonElement>(".header-search__toggle"),
-        "workspace search toggle",
-      ).click();
-      await host.updateComplete;
       const search = expectDefined(
         host.querySelector<HTMLInputElement>(".palette-session-settings__search"),
         "workspace search",

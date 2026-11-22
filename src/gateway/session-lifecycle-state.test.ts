@@ -170,7 +170,7 @@ describe("session lifecycle state", () => {
       });
       expect(stopped.goal?.status).toBe(own ? "paused" : "active");
       expect(stopped.goal?.lastStatusNote).toBe(
-        own ? "Paused after Stop. Resume to continue." : undefined,
+        own ? "Paused after an interruption. Resume to continue." : undefined,
       );
       if (!own) {
         expect(stopped).toEqual(goalEntry);
@@ -387,7 +387,20 @@ describe("session lifecycle state", () => {
       { ...goalFailure.data, phase: "end", stopReason: "timeout" },
       "timeout",
     ),
-    terminalCase("RPC Stop", goalStop.data, "killed", true),
+    // operator-run-cancellation also uses rpc: chat-abort publishes this shape
+    // without the private authority-revoked diagnostic, so it cannot prove Stop.
+    terminalCase(
+      "RPC authority revocation or Stop",
+      {
+        phase: "end",
+        status: "cancelled",
+        aborted: true,
+        stopReason: "rpc",
+        startedAt: 1_050,
+      },
+      "killed",
+      true,
+    ),
     terminalCase(
       "end_turn without yield metadata",
       { phase: "end", livenessState: "paused", stopReason: "end_turn" },
@@ -400,6 +413,12 @@ describe("session lifecycle state", () => {
     ),
     terminalCase("aborted", { phase: "end", stopReason: "aborted" }, "killed", true),
     terminalCase("signal-only cancellation", { phase: "end", aborted: true }, "killed", true),
+    terminalCase(
+      "unattributed cancellation",
+      { phase: "end", status: "cancelled" },
+      "killed",
+      true,
+    ),
     terminalCase(
       "provider timeout",
       {
@@ -448,7 +467,7 @@ describe("session lifecycle state", () => {
             updatedAt: 1_800,
             lastStatusNote:
               status === "killed"
-                ? "Paused after Stop. Resume to continue."
+                ? "Paused after an interruption. Resume to continue."
                 : expect.stringContaining("Paused after an error."),
           },
     );

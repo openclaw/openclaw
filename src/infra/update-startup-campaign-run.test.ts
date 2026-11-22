@@ -191,73 +191,136 @@ describe("automatic campaign handoff failure", () => {
     "different check",
     "different detail",
     "transient metadata",
-  ] as const)(
-    "backs off only identical candidate Doctor failures across restart: %s",
-    async (resume) => {
-      const log = { info: vi.fn() };
-      const step: UpdateStepResult = {
-        name: "candidate-doctor",
-        command: "doctor",
-        cwd: "/private/candidate",
-        durationMs: 10,
-        exitCode: 1,
-        stderrTail: "Plugin dependency is outside the temporary update copy: chromium-bidi",
-      };
-      const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
-        status: "failed",
-        message: "Candidate Doctor failed.",
-        result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
-      };
-      const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
-      const attempt = async (version = "2.0.0-beta.1") => {
-        const campaign = createApplyingCampaign(version);
-        try {
-          return await runBetaCampaign({ version, log, campaign, runAuto });
-        } finally {
-          campaign.clear();
+    "rolled back",
+  ] as const)("backs off only identical activation failures across restart: %s", async (resume) => {
+    const log = { info: vi.fn() };
+    const step: UpdateStepResult = {
+      name: "openclaw doctor",
+      command: "doctor",
+      cwd: "/private/candidate",
+      durationMs: 10,
+      exitCode: 1,
+      stderrTail: "Plugin dependency is unavailable: chromium-bidi",
+    };
+    const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
+      status: "failed",
+      message: "Doctor failed after activation.",
+      result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
+    };
+    const runAuto = vi.fn<AutoUpdateRunner>(async ({ runId }) => {
+      if (resume === "rolled back") {
+        // The updater's terminal owner records a restored previous release as rolled-back.
+        finishUpdateRun(runId, {
+          status: "rolled-back",
+          reason: outcome.result.reason,
+          diagnostics: outcome.result,
+        });
+      }
+      return structuredClone(outcome);
+    });
+    const attempt = async (version = "2.0.0-beta.1") => {
+      const campaign = createApplyingCampaign(version);
+      try {
+        return await runBetaCampaign({ version, log, campaign, runAuto });
+      } finally {
+        campaign.clear();
+      }
+    };
+    if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (5ms)");
+    }
+    await attempt();
+    if (resume === "different reason") {
+      outcome.result.reason = "candidate-checks-timeout";
+    } else if (resume === "different check") {
+      step.name = "activated-gateway-startup";
+    } else if (resume === "different detail") {
+      step.stderrTail = "A different dependency is unavailable: kerberos";
+    } else if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (19ms)");
+    }
+    await attempt();
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    const failures = listUpdateRuns();
+    expect(failures).toHaveLength(2);
+    await closeStateDatabaseForTest();
+    await attempt();
+    if (resume.startsWith("different")) {
+      expect(runAuto).toHaveBeenCalledTimes(3);
+      return;
+    }
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    expect(listUpdateRuns()).toHaveLength(2);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Automatic updates paused after repeated activation failure"),
+      expect.objectContaining({
+        version: "2.0.0-beta.1",
+        runIds: failures.map((run) => run.runId),
+        nextAction: expect.stringContaining("openclaw update"),
+      }),
+    );
+    if (resume === "manual update") {
+      const manual = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
+    }
+    await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
+    expect(runAuto).toHaveBeenCalledTimes(
+      resume === "new candidate" || resume === "manual update" ? 3 : 2,
+    );
+  });
+
+  it.each([
+    { failures: 1, wait: 0 },
+    { failures: 2, wait: 2 },
+    { failures: 5, wait: 16 },
+    { failures: 6, wait: 24 },
+  ])(
+    "waits $wait h after $failures identical pre-mutation refusals",
+    async ({ failures, wait }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const hour = 60 * 60 * 1000;
+        const failedAt = Date.UTC(2026, 10, 21);
+        vi.setSystemTime(failedAt - failures * hour);
+        // A manual run older than the streak does not reset it.
+        finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+        for (let index = 0; index < failures; index += 1) {
+          vi.setSystemTime(failedAt - (failures - 1 - index) * hour);
+          const { runId } = createUpdateRun({
+            trigger: "campaign",
+            target: { channel: "beta", kind: "package", version: "2.0.0-beta.1" },
+          });
+          finishUpdateRun(runId, { status: "failed", reason: "managed-service-stop-failed" });
         }
-      };
-      if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Abc123 (5ms)");
+        const log = { info: vi.fn() };
+        const runAuto = vi.fn<AutoUpdateRunner>(async () => ({
+          status: "failed",
+          message: "Gateway process changed during maintenance drain.",
+          result: updateResult({ reason: "managed-service-stop-failed" }),
+        }));
+        const attempt = async (atMs: number, version = "2.0.0-beta.1") => {
+          vi.setSystemTime(atMs);
+          const campaign = createApplyingCampaign(version);
+          try {
+            await runBetaCampaign({ version, log, campaign, runAuto });
+          } finally {
+            campaign.clear();
+          }
+          return runAuto.mock.calls.length;
+        };
+        if (wait > 0) {
+          await expect(attempt(failedAt + wait * hour - 60_000)).resolves.toBe(0);
+          expect(log.info).toHaveBeenCalledWith(
+            expect.stringContaining(`deferred after ${failures} identical failures`),
+            expect.objectContaining({ reason: "managed-service-stop-failed" }),
+          );
+        }
+        await expect(attempt(failedAt + wait * hour + 60_000)).resolves.toBe(1);
+        // A new candidate is not held by the previous target's streak.
+        await expect(attempt(failedAt + wait * hour + 60_000, "2.0.0-beta.2")).resolves.toBe(2);
+      } finally {
+        vi.useRealTimers();
       }
-      await attempt();
-      if (resume === "different reason") {
-        outcome.result.reason = "candidate-checks-timeout";
-      } else if (resume === "different check") {
-        step.name = "candidate-doctor-lint";
-      } else if (resume === "different detail") {
-        step.stderrTail = "A different dependency is unavailable: kerberos";
-      } else if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Def456 (19ms)");
-      }
-      await attempt();
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      const failures = listUpdateRuns();
-      expect(failures).toHaveLength(2);
-      await closeStateDatabaseForTest();
-      await attempt();
-      if (resume.startsWith("different")) {
-        expect(runAuto).toHaveBeenCalledTimes(3);
-        return;
-      }
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      expect(listUpdateRuns()).toHaveLength(2);
-      expect(log.info).toHaveBeenCalledWith(
-        expect.stringContaining("Automatic updates paused after repeated candidate-doctor failure"),
-        expect.objectContaining({
-          version: "2.0.0-beta.1",
-          runIds: failures.map((run) => run.runId),
-          nextAction: expect.stringContaining("openclaw update"),
-        }),
-      );
-      if (resume === "manual update") {
-        const manual = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
-      }
-      await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
-      expect(runAuto).toHaveBeenCalledTimes(
-        resume === "new candidate" || resume === "manual update" ? 3 : 2,
-      );
     },
   );
 

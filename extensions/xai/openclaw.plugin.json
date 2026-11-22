@@ -212,23 +212,12 @@
       "credentialOnly": true,
       "channelLogin": {},
       "choiceLabel": "xAI OAuth",
-      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "choiceHint": "Device-code sign-in; works over SSH and on remote hosts",
+      "deprecatedChoiceIds": ["xai-device-code"],
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
       "groupHint": "API key or OAuth",
       "onboardingFeatured": true
-    },
-    {
-      "provider": "xai",
-      "method": "device-code",
-      "choiceId": "xai-device-code",
-      "appGuidedAuth": "device-code",
-      "choiceLabel": "xAI device code",
-      "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
-      "assistantVisibility": "manual-only",
-      "groupId": "xai",
-      "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or OAuth"
     }
   ],
   "uiHints": {
@@ -255,7 +244,7 @@
     },
     "xSearch.enabled": {
       "label": "Enable X Search",
-      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and a missing active provider keeps the tool disabled. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
+      "help": "Expose x_search on active xAI models, and with Grok OAuth on any known provider using only the subscription credential; true opts in to API-key billing when the active provider is known non-xAI, false disables, and a missing active provider keeps the tool disabled. Requires xAI auth; xAI bills API keys $5/1,000 calls plus model tokens."
     },
     "xSearch.model": {
       "label": "X Search Model",

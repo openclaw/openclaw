@@ -343,7 +343,7 @@ describe("Control UI service-worker production update E2E", () => {
       serverBuildId: buildA,
       terminalEnabled: true,
     });
-    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    const prebuilt = inject("controlUiE2eDeploymentAssets");
     server = prebuilt
       ? await startCopiedProductionControlUiE2eServer(prebuilt.root, outDir, buildA, bootstrap)
       : await startProductionControlUiE2eServer(outDir, buildA, bootstrap);

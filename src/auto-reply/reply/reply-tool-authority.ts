@@ -4,10 +4,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityPolicy,
@@ -66,6 +63,7 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import {
+  assertCurrentOperatorAuthority,
   captureReplyToolAuthorityContinuation,
   projectReplyToolAuthorityInput,
 } from "./reply-tool-authority-inbound.js";
@@ -182,13 +180,6 @@ export function resolveReplyOperatorAuthorityKey(
     [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
     ...identities,
   ]);
-}
-
-function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority | undefined): void {
-  if (authority) {
-    assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
-  }
 }
 
 /** Fingerprints the complete model-facing tool authority owned by one queued turn. */
@@ -455,10 +446,19 @@ export function prepareReplyToolAuthority(
       assertEntry?.release();
       throw error;
     });
+    try {
+      await capturedReadPlan?.revalidate();
+    } catch (error) {
+      prepared.release();
+      assertEntry?.release();
+      throw error;
+    }
     releases.add(prepared.release);
     return {
       read: prepared.read,
       evaluate(nextInput: ReplyToolAuthorityInput, nextRoute: ReplyToolAuthorityRoute | undefined) {
+        assertOpen();
+        capturedReadPlan?.assertLegacyCurrent();
         selectedInput = nextInput;
         selectedRoute = nextRoute;
         return prepared.read();
@@ -602,6 +602,7 @@ export function prepareReplyToolAuthority(
             assertCurrentOperatorAuthority(participant.operatorAuthority);
           }
         };
+        assertCallerCurrent();
         if (readMemoryEntry) {
           const policy = await prepareSessionCapabilityRead(() => {
             assertCallerCurrent();
@@ -689,9 +690,15 @@ export function prepareReplyToolAuthority(
           installCurrent(currentReads);
           policy.read();
         };
+        const assertLegacyCurrent = () => {
+          assertCallerCurrent();
+          plan?.assertLegacyCurrent();
+          policy.read();
+        };
         const prepared: PreparedQuestionCallerRead = {
           reads,
           assertPrepared,
+          assertLegacyCurrent,
           prepareCurrent: () => withSessionEntriesFromStoresInWorker(reads, assertPrepared),
           retainCurrent() {
             policy.read();
@@ -700,7 +707,7 @@ export function prepareReplyToolAuthority(
         };
         recordPreparedToolAuthorityRead({
           ...prepared,
-          assertLegacyCurrent: policy.read,
+          assertLegacyCurrent,
         });
         return prepared;
       },

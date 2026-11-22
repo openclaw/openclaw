@@ -35,7 +35,7 @@ suite.define(() => {
           .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         const create = actions.getByRole("link", { name: "New session" });
@@ -70,13 +70,13 @@ suite.define(() => {
           width,
         );
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
         const popover = page.locator(".sessions-filter-popover:popover-open");
         await popover.waitFor();
-        await popover.getByRole("button", { name: "Filter by key, agent, label, kind…" }).waitFor();
+        await popover.getByRole("searchbox", { name: "Search sessions…" }).waitFor();
         await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
         await page.keyboard.press("Escape");
@@ -105,7 +105,7 @@ suite.define(() => {
         );
 
         const actions = page.locator(".settings-section__actions");
-        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const search = actions.getByRole("button", { name: "Search chats" });
         const refresh = actions.getByRole("button", { name: "Refresh" });
         const filter = actions.getByRole("button", { name: "Filters", exact: true });
         await actions.getByRole("searchbox", { name: "Search sessions" }).waitFor();
@@ -120,7 +120,7 @@ suite.define(() => {
         );
 
         await search.click();
-        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        const transcriptInput = page.getByRole("searchbox", { name: "Search chats" });
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
@@ -137,6 +137,25 @@ suite.define(() => {
         }
         await sheet.getByRole("button", { name: "Close" }).last().click();
         await sheet.waitFor({ state: "hidden" });
+
+        const row = page.locator(".session-data-row").first();
+        await row.getByRole("checkbox").check();
+        const bulkCount = page.locator(".data-table-bulk-bar > span");
+        const rowTitle = row.locator(".session-list-cell__title");
+        expect(await bulkCount.evaluate((el) => el.getBoundingClientRect().left)).toBe(
+          await rowTitle.evaluate((el) => el.getBoundingClientRect().left),
+        );
+        await row.locator(".session-details-toggle").click();
+        const details = page.locator(".session-details-panel");
+        const factLeft = await details
+          .locator(".session-detail-stat__label")
+          .first()
+          .evaluate((el) => el.getBoundingClientRect().left);
+        expect(
+          await details
+            .locator(".session-details-panel__eyebrow")
+            .evaluateAll((headings) => headings.map((el) => el.getBoundingClientRect().left)),
+        ).toEqual([factLeft, factLeft]);
       },
     );
   });
@@ -212,7 +231,6 @@ suite.define(() => {
 
       await openFilters();
       const search = popover.locator(".sessions-filter-popover__search input");
-      await popover.locator(".header-search__toggle").click();
       await search.fill("Pinned");
       expect(await search.inputValue()).toBe("Pinned");
       await expect

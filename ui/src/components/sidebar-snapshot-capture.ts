@@ -34,10 +34,6 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   if (!host.connected || !context) {
     return false;
   }
-  if (host.navigationView === "pages") {
-    const pages = host.navigationCatalog.dashboards;
-    return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
-  }
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
@@ -91,6 +87,10 @@ export function captureSidebarSnapshotModel(
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
 ): SidebarSnapshotModel | null {
+  const windowKeys = host.scroll?.windowKeys();
+  if (!windowKeys) {
+    return null;
+  }
   const bootRoster = context.sessions.captureBootRoster();
   const agents = context.agents.state.agentsList;
   if (!bootRoster || !agents) {
@@ -100,8 +100,6 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
-    (host.navigationView === "pages" &&
-      host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
@@ -138,13 +136,6 @@ export function captureSidebarSnapshotModel(
     mode: host.sidebarAgentsMode,
     grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
-    pages: snapshotSessions(
-      (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
-        host.getSessionNavigationState().toSidebarSession(row),
-      ),
-      presentation,
-    ),
-    pageScopeId: context.agentSelection.state.scopeId,
     pinnedSessions: snapshotSessions(
       zone.sidebarEntries.flatMap((value) => {
         const entry = parseSidebarEntry(value);
@@ -183,6 +174,8 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    windowKeys: windowKeys.filter((key) => !isIncognitoSessionKey(key)),
+    rowFloor: host.scroll?.rowFloor() ?? 32,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

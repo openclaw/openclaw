@@ -1,7 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
-  ProviderAuthMethod,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -17,6 +15,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   readStringValue,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,6 +26,8 @@ import {
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
   OPENAI_CHATGPT_MODERN_MODEL_IDS,
   OPENAI_DUAL_ROUTE_MODEL_IDS,
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
@@ -41,10 +42,6 @@ import {
   OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import {
-  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
-  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-} from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -382,12 +379,13 @@ type OpenAICodexOAuthContext = ProviderAuthContext & {
 function buildOpenAICodexAuthResult(
   buildResult: typeof import("openclaw/plugin-sdk/provider-auth-result").buildOauthProviderAuthResult,
   creds: { access: string; refresh: string; expires: number; email?: unknown },
+  existingProfiles: ProviderAuthContext["existingProfiles"],
 ) {
   const identity = resolveOpenAICodexAuthIdentity({
     access: creds.access,
     email: readStringValue(creds.email),
   });
-  return buildResult({
+  const result = buildResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     configPatch: { agents: { defaults: { models: { [OPENAI_CODEX_DEFAULT_MODEL]: {} } } } },
@@ -398,6 +396,28 @@ function buildOpenAICodexAuthResult(
     profileName: identity.profileName,
     credentialExtra: buildCodexCredentialExtra(identity),
   });
+  // One ChatGPT login can own several workspaces (personal and Business share
+  // an email). A second workspace gets its own slot instead of replacing the
+  // profile that already holds the email-named one.
+  const profile = result.profiles[0];
+  const occupant = existingProfiles?.find(
+    (existing) => existing.profileId === profile?.profileId,
+  )?.credential;
+  const occupantAccountId =
+    occupant?.type === "oauth"
+      ? (resolveOpenAICodexAuthIdentity({ access: occupant.access }).accountId ??
+        normalizeOptionalString(occupant.accountId))
+      : undefined;
+  // Without both workspace IDs, keep the existing profile naming behavior.
+  if (
+    profile &&
+    identity.accountId &&
+    occupantAccountId &&
+    occupantAccountId !== identity.accountId
+  ) {
+    profile.profileId = `${profile.profileId}:${identity.accountId}`;
+  }
+  return result;
 }
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
@@ -414,23 +434,25 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
     signal: ctx.signal,
     assertCurrent: ctx.assertCurrent,
     onManualCodeInput: ctx.onManualCodeInput,
-    localBrowserMessage: "Complete sign-in in browser…",
+    localBrowserMessage: "Sign in to ChatGPT in your browser…",
   });
   if (!creds) {
     return { profiles: [] };
   }
 
-  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
-async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
+/** Codex login: device code first, browser sign-in only when the server has device code disabled. */
+export async function runOpenAICodexLogin(ctx: OpenAICodexOAuthContext) {
+  const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
+    import("./openai-chatgpt-device-code.js"),
+    import("openclaw/plugin-sdk/provider-auth-result"),
+  ]);
   const spin = ctx.prompter.progress("Starting device code flow…");
+  let creds: Awaited<ReturnType<typeof loginOpenAICodexDeviceCode>>;
   try {
-    const [{ loginOpenAICodexDeviceCode }, { buildOauthProviderAuthResult }] = await Promise.all([
-      import("./openai-chatgpt-device-code.js"),
-      import("openclaw/plugin-sdk/provider-auth-result"),
-    ]);
-    const creds = await loginOpenAICodexDeviceCode({
+    creds = await loginOpenAICodexDeviceCode({
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       assertCurrent: ctx.assertCurrent,
       onProgress: (message) => spin.update(message),
@@ -478,27 +500,18 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
         }
       },
     });
-    spin.stop("OpenAI device code complete");
-
-    return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
   } catch (error) {
-    spin.stop("OpenAI device code failed");
-    ctx.runtime.error(formatErrorMessage(error));
-    await ctx.prompter.note(
-      "Trouble with device code login? See https://docs.openclaw.ai/start/faq",
-      "OAuth help",
-    );
+    spin.stop();
     throw error;
   }
-}
-
-export function buildOpenAIChatGPTAuthMethodRuns(): Readonly<
-  Record<"oauth" | "device-code", ProviderAuthMethod["run"]>
-> {
-  return {
-    oauth: runOpenAICodexOAuth,
-    "device-code": runOpenAICodexDeviceCode,
-  };
+  if (!creds) {
+    // Mirrors Codex `run_login_with_device_code_fallback_to_browser`: only a disabled
+    // device-code endpoint falls back; every other device-code failure ends this sign-in.
+    spin.stop("Device code login is not enabled; falling back to browser login.");
+    return await runOpenAICodexOAuth(ctx);
+  }
+  spin.stop("OpenAI device code complete");
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
 export function buildOpenAICodexProviderHooks(): Required<

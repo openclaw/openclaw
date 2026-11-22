@@ -10,6 +10,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -147,6 +148,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                 const temporarySpy = vi
                   .spyOn(temporary, "resolvePreferredOpenClawTmpDir")
                   .mockReturnValue(control);
+                const leaseWorker = installPrivateUpdateHandoffWorker(control);
                 const handoff = await vi.importActual<
                   typeof import("../../infra/update-managed-service-handoff.js")
                 >("../../infra/update-managed-service-handoff.js");
@@ -268,7 +270,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       configPath: resolvePathViaExistingAncestorSync(configPath),
                     },
                     beforePark: async () => {
-                      expect(handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
+                      expect(await handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
                       expect(ledger.getUpdateRun(run.runId)?.status).toBe("running");
                       if (!admission.isGatewayRestartDraining()) {
                         fixtures.consumeGatewayRestartIntent.mockReturnValueOnce({
@@ -361,7 +363,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   expect(await fs.readFile(pendingPath, "utf8")).toBe(
                     "pending candidate lifecycle\n",
                   );
-                  expect(handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
+                  expect(await handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
                   // Observe the real Stop owner's wait or the regression's premature exit.
                   await requestStop();
                   expect(
@@ -401,7 +403,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     await setImmediate();
                     expectUncalled(close, runtime.exit);
                     expect(server.listening).toBe(true);
-                    expect(handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
+                    expect(await handoff.claimManagedServiceUpdateHandoff(identity)).toBe(true);
                     expect(
                       fixtures.completeForegroundUpdateHandoffAfterClose,
                     ).not.toHaveBeenCalled();
@@ -435,7 +437,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     await withinTest(helper.waitForClose(), context.signal);
                   } else {
                     await withTimeout(exited, handoffParams.timeoutMs!);
-                    expect(controlExists("outcome.json")).toBe(true);
+                    expect(
+                      controlExists("outcome.json"),
+                      await fs.readFile(prepared.logPath, "utf8"),
+                    ).toBe(true);
                   }
                   await expect.poll(() => store.read(root).kind, { timeout: 15000 }).toBe("absent");
                   const { isPidAlive } = await import("../../shared/pid-alive.js");
@@ -509,6 +514,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     drain.mockRestore();
                     admission.resetGatewayWorkAdmission();
                     temporarySpy.mockRestore();
+                    leaseWorker.mockRestore();
                     fixtures.gatewayLog.info.mockReset();
                     if (cleanupErrors.length) {
                       throw new AggregateError(

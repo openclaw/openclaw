@@ -456,7 +456,10 @@ describe("state lease heartbeat lifetime", () => {
           "lastRenewedAt=never",
         );
       }
-      worker.emit("error", new Error("later error delivery"));
+      // A native Worker's exit is its final event.
+      if (observation !== "exit") {
+        worker.emit("error", new Error("later error delivery"));
+      }
       expect(params.onLost).toHaveBeenCalledOnce();
     },
   );
@@ -527,7 +530,8 @@ describe("state lease heartbeat lifetime", () => {
       if (delivery === "lost-before-request") {
         const result = await outcome;
         expect(result).toMatchObject({
-          message: "command lease core:test/command was lost: state lease heartbeat is not running",
+          message:
+            "command lease core:test/command was lost; retry the operation: state lease heartbeat is not running",
           code: "OPENCLAW_STATE_LEASE_LOST",
         });
         expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
@@ -553,7 +557,8 @@ describe("state lease heartbeat lifetime", () => {
       if (delivery === "lost") {
         assert(result instanceof Error);
         expect(result).toMatchObject({
-          message: "command lease core:test/command was lost: state lease heartbeat is not running",
+          message:
+            "command lease core:test/command was lost; retry the operation: state lease heartbeat is not running",
           code: "OPENCLAW_STATE_LEASE_LOST",
         });
         expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);

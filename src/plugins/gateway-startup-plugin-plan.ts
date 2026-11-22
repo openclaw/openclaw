@@ -34,6 +34,7 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
@@ -106,6 +107,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const explicitlyDisabledChannelIds = new Set(
     listExplicitlyDisabledChannelIdsForConfig(params.config),
   );
+  const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const startupParams = {
     config: params.config,
     pluginsConfig,
@@ -114,7 +116,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     requiredAgentHarnessRuntimes: new Set(
       collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
     ),
-    configuredSpeechProviderIds: collectConfiguredSpeechProviderIds(activationSourceConfig),
+    configuredSpeechProviderIds,
+    autoSelectSpeechProvider: configuredSpeechProviderIds.size === 0,
     configuredWebSearchProviderIds: collectConfiguredWebSearchProviderIds(activationSourceConfig),
     autoSelectWebSearchProvider: isWebSearchProviderAutoSelected(activationSourceConfig),
     configuredModelProviderIds: collectConfiguredAgentModelProviderIds(
@@ -142,6 +145,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const memoryBackendStartupPolicyIds = new Set(
+    memorySlotStartupPluginId
+      ? resolveMemoryBackendPolicyIds({
+          ownerId: memorySlotStartupPluginId,
+          entries: activationSourcePlugins.entries,
+          allow: activationSourcePlugins.allow,
+          deny: activationSourcePlugins.deny,
+          manifests: params.manifestRegistry.plugins,
+          normalizeId: normalizePluginPolicyId,
+        })
+      : [],
+  );
   const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
     config: params.config,
     pluginsConfig,
@@ -209,6 +224,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         manifest,
         startupDreamingPluginIds,
         memorySlotStartupPluginId,
+        memoryBackendStartupPolicyIds,
         contextEngineSlotStartupPluginId,
       })
     ) {

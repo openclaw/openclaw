@@ -2,22 +2,13 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
-import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
-
-type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
-
-export type TranscriptsSummary = SchemaContract<
-  Omit<TranscriptSummaryWire, "markdown" | "source">
-> & {
-  sessionId: string;
-  title: string;
-  source: NonNullable<TranscriptSummaryWire["source"]>;
-  transcript: string[];
-};
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 const ACTION_PATTERNS =
   /\b(todo|action|follow up|follow-up|assign|owner|next step|ship|fix|send|schedule)\b/i;

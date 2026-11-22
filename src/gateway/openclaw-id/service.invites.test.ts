@@ -21,6 +21,7 @@ async function redeem(claw: LinkedClaw, invite: Awaited<ReturnType<typeof ownerI
   const [result] = await applyMailboxMessage(mail.message, {
     submit: (statement) => claw.authority.submit(statement, "mailbox"),
     redeem: (redemption, sender) => claw.authority.redeem(redemption, sender),
+    redeemNode: (redemption) => claw.authority.redeemNode(redemption),
   });
   return { result, peerKey: mail.peerKey };
 }

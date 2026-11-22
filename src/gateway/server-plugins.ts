@@ -16,6 +16,7 @@ import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
+import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
@@ -37,7 +38,9 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
@@ -137,13 +140,11 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
         ) {
           throw new Error("Requester session changed during delivery");
         }
-        return {
+        return chatRef({
           agentId: record.agentId,
           storePath: record.storeTarget.storePath,
           sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-          lifecycleRevision: record.entry.lifecycleRevision ?? null,
-        };
+        });
       },
     );
     requestParams = bindInProcessSessionDeliveryGeneration(params, generation);
@@ -293,6 +294,24 @@ export function createGatewayNodesRuntime(
   };
 }
 
+/**
+ * Node access for provider sign-in inside the Gateway: list and invoke dispatch through
+ * node.list/node.invoke with the current request scope's caller authority. Returns undefined
+ * outside an in-process Gateway context.
+ */
+export function createProviderAuthNodes(): ProviderAuthContext["nodes"] {
+  if (!hasInProcessGatewayContext()) {
+    return undefined;
+  }
+  const nodes = createGatewayNodesRuntime();
+  return {
+    list: nodes.list,
+    // Plugin-requested scopes and session approval keys stay with plugin runtime callers.
+    invoke: ({ nodeId, command, params, timeoutMs, idempotencyKey, signal }) =>
+      nodes.invoke({ nodeId, command, params, timeoutMs, idempotencyKey, signal }),
+  };
+}
+
 function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver | undefined,
   overridePolicies: PluginSubagentOverridePolicies,
@@ -439,6 +458,7 @@ export async function loadGatewayPlugins(params: {
     autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,
+    environmentKey: captureEnvironmentKey(params.env),
     logger,
     preferBuiltPluginArtifacts: true,
     expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,

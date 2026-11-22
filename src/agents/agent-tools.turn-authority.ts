@@ -34,6 +34,8 @@ export function resolveTurnToolSurface(params: {
   turnTools: AnyAgentTool[];
   /** The session surface, when per-turn policy narrows it; defaults to `turnTools`. */
   sessionTools?: AnyAgentTool[];
+  /** Refusal for a listed tool the turn's policy omits; defaults to the completion-handoff text. */
+  outsideTurnReason?: (toolName: string) => string;
   ownerOnlyDenied: ReadonlySet<string>;
   ownerToolCurrentAssertion?: (toolName: string) => (() => void) | undefined;
   /**
@@ -71,7 +73,8 @@ export function resolveTurnToolSurface(params: {
     const gated = gateAgentToolExecution(
       tool,
       !turnTool
-        ? `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`
+        ? (params.outsideTurnReason?.(tool.name) ??
+            `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`)
         : scopedReads
           ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
           : `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${
@@ -83,14 +86,17 @@ export function resolveTurnToolSurface(params: {
     // Copying hook metadata also copies the availability binding; re-mark the denial
     // so dependent affordances (for example collector spawns) never treat it as callable.
     // A split executor stays marked: only this turn's own reads pass, never descendants.
-    return markAgentToolExecutionUnavailable(
-      copyAgentToolMetadata(
-        tool,
-        scopedReads && turnTool
-          ? { ...gated, execute: splitScopedReadExecutor(turnTool, gated) }
-          : gated,
-      ),
-    );
+    // The split target is marked before the copy, so it never inherits the source's preparer.
+    const target =
+      scopedReads && turnTool
+        ? markAgentToolExecutionUnavailable({
+            ...gated,
+            execute: splitScopedReadExecutor(turnTool, gated),
+          })
+        : gated;
+    // A run allowlist or sender/group policy refusal: main removed these from the list.
+    const runPolicy = !turnTool && params.outsideTurnReason !== undefined;
+    return markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, target), runPolicy);
   });
   return {
     tools,

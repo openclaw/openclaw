@@ -36,6 +36,7 @@ import {
   captureSessionMutationRouting,
   prepareSessionMutationFacts,
 } from "./session-sharing-preparation.js";
+import type { SessionFactsRequest } from "./session-sharing-target.types.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
@@ -58,7 +59,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   targets: readonly {
     target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-    storageReady?: Promise<{ assertCurrent(): void }>;
+    storageReady?: SessionFactsRequest["storageReady"];
   }[];
 }) {
   const cfg = params.cfg;
@@ -92,7 +93,13 @@ export function prepareGatewaySessionLifecycleTargets(params: {
       : undefined;
   const databasePreparation = databaseCustody?.preparations[0]!.then((prepared) => {
     preparedDatabase = prepared;
+    return prepared;
   });
+  const databaseSource = databaseCustody?.sources[0];
+  const databaseReadiness =
+    databaseSource && databasePreparation
+      ? { ...databaseSource, ready: databasePreparation }
+      : databasePreparation;
   const preparations = params.targets.map(
     async ({ target, entry, storageReady }, index): Promise<PreparedLifecycleTarget> => {
       const memory = isIncognitoSessionKey(target.canonicalKey)
@@ -120,9 +127,22 @@ export function prepareGatewaySessionLifecycleTargets(params: {
         };
       }
       let preparedStorage: { assertCurrent(): void } | undefined;
-      const targetStorageReady = storageReady?.then((prepared) => {
-        preparedStorage = prepared;
-      });
+      const observeStorage = <Prepared extends void | { assertCurrent(): void }>(
+        prepared: Prepared,
+      ) => {
+        preparedStorage = prepared || undefined;
+        return prepared;
+      };
+      const targetStorageReady =
+        storageReady && "ready" in storageReady
+          ? { ...storageReady, ready: storageReady.ready.then(observeStorage) }
+          : storageReady?.then(observeStorage);
+      const readiness =
+        targetStorageReady && "ready" in targetStorageReady
+          ? targetStorageReady.ready
+          : targetStorageReady;
+      // Observe this derivative before selection or inventory work can yield.
+      void readiness?.catch(() => {});
       const selected = { ...target };
       const originalIdentity = {
         sessionId: entry?.sessionId,
@@ -138,7 +158,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
         sessionKey: selected.canonicalKey,
         agentId: selected.agentId,
         allowMissing: true,
-        storageReady: targetStorageReady ?? databasePreparation,
+        storageReady: targetStorageReady ?? databaseReadiness,
       });
       let sessionId = originalIdentity.sessionId;
       let lifecycleRevision = originalIdentity.lifecycleRevision;

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload-normalize.js";
 
 it("preserves own __proto__ payload data in serialized output after stripping scaffolding", () => {
   const payload = {
