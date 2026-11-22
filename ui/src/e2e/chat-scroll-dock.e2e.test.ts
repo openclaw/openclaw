@@ -390,6 +390,8 @@ suite.define(() => {
           content: [{ type: "text", text: "Check complete." }],
         }),
       );
+      // The commentary is already visible; wait for this tool result before measuring its growth.
+      await runRow.getByText(`Ran echo check-${step}`, { exact: true }).waitFor();
       const after = await expectGrowth(`commentary${step}`, before, `Commentary stage ${step}.`);
       expect(after.latestVisible).toBe("false");
     }
