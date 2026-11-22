@@ -280,19 +280,27 @@ export function withGoalContinuationSettlement<T>(
   return owner ? goalSettlements.run({ owner, runId, isCurrent }, run) : run();
 }
 
+function resolveGoalSettlement(
+  runId: string,
+  sessionKey: string | undefined,
+): GoalSettlement | undefined {
+  const settlement = goalSettlements.getStore();
+  return settlement?.runId === runId &&
+    settlement.owner.params.sessionKey === sessionKey &&
+    !settlement.owner.closed &&
+    settlement.isCurrent()
+    ? settlement
+    : undefined;
+}
+
 /** Command preparation captures current Goal facts without injecting them into a native runtime. */
 export function prepareGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;
 }): void {
-  const settlement = goalSettlements.getStore();
-  if (
-    settlement?.runId === params.runId &&
-    settlement.owner.params.sessionKey === params.sessionKey &&
-    !settlement.owner.closed &&
-    settlement.isCurrent()
-  ) {
+  const settlement = resolveGoalSettlement(params.runId, params.sessionKey);
+  if (settlement) {
     settlement.entry = params.sessionEntry;
   }
 }
@@ -303,14 +311,8 @@ export function readGoalContinuationContext(params: {
   sessionKey?: string;
   currentInboundContext?: CurrentInboundPromptContext;
 }) {
-  const settlement = goalSettlements.getStore();
-  if (
-    !settlement ||
-    settlement.runId !== params.runId ||
-    settlement.owner.params.sessionKey !== params.sessionKey ||
-    settlement.owner.closed ||
-    !settlement.isCurrent()
-  ) {
+  const settlement = resolveGoalSettlement(params.runId, params.sessionKey);
+  if (!settlement) {
     return undefined;
   }
   const continuation = settlement.owner.continuation;
@@ -332,14 +334,8 @@ export function recordGoalContinuationSettlement(params: {
   result: EmbeddedAgentRunResult;
   succeeded: boolean;
 }): void {
-  const settlement = goalSettlements.getStore();
-  if (
-    settlement &&
-    settlement.runId === params.runId &&
-    settlement.owner.params.sessionKey === params.sessionKey &&
-    settlement.isCurrent() &&
-    !settlement.owner.closed
-  ) {
+  const settlement = resolveGoalSettlement(params.runId, params.sessionKey);
+  if (settlement) {
     settlement.owner.terminal = params.succeeded
       ? { runId: params.runId, result: params.result }
       : undefined;
@@ -348,14 +344,8 @@ export function recordGoalContinuationSettlement(params: {
 
 /** The requester's admitted Goal return can spend; an independent command cannot. */
 export function readAdmittedGoalContinuationBudget(runId: string, sessionKey: string) {
-  const settlement = goalSettlements.getStore();
-  return settlement?.admitted &&
-    settlement.runId === runId &&
-    settlement.owner.params.sessionKey === sessionKey &&
-    !settlement.owner.closed &&
-    settlement.isCurrent()
-    ? captureSessionGoalBudget(settlement.entry?.goal)
-    : undefined;
+  const settlement = resolveGoalSettlement(runId, sessionKey);
+  return settlement?.admitted ? captureSessionGoalBudget(settlement.entry?.goal) : undefined;
 }
 
 /** Run only after the persisted batch commit; waiting inside the command would deadlock. */
