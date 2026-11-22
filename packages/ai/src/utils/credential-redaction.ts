@@ -197,6 +197,11 @@ type DiagnosticMediaField =
 export type DiagnosticProjectionPolicy = {
   maxNodes?: number;
   maxKeys?: number;
+  /**
+   * Keep every node, key and string whole: only credentials and inline media are
+   * redacted. Trajectory exports use this so model-visible content survives.
+   */
+  unbounded?: boolean;
   redactCredentials?: boolean;
   omitField?: (key: string) => boolean;
   propertyScope?: "enumerable" | "error";
@@ -259,14 +264,19 @@ function projectValue(
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
   mediaPayload = false,
-  state = { changed: false, nodesRemaining: policy.maxNodes ?? 64 },
+  state = {
+    changed: false,
+    nodesRemaining: policy.unbounded ? Number.POSITIVE_INFINITY : (policy.maxNodes ?? 64),
+  },
 ): unknown {
   try {
     if (typeof value === "string") {
       const projected =
         policy.redactCredentials === false
           ? value.replace(MEDIA_DATA_URL_RE, "<redacted>")
-          : redactDiagnosticText(value);
+          : policy.unbounded
+            ? projectDiagnosticText(value, false)
+            : redactDiagnosticText(value);
       state.changed ||= projected !== value;
       return projected;
     }
@@ -303,7 +313,7 @@ function projectValue(
       }
     }
     const keys = Reflect.ownKeys(value);
-    const maxKeys = policy.maxKeys ?? 64;
+    const maxKeys = policy.unbounded ? Number.POSITIVE_INFINITY : (policy.maxKeys ?? 64);
     // Prepared producer output holds only own enumerable data properties in native key order,
     // so reading it directly matches the descriptor snapshot without allocating one per key.
     const trusted =
@@ -409,13 +419,15 @@ export function redactDiagnosticText(value: string): string {
   return projected;
 }
 
-function projectDiagnosticText(value: string): string {
+// Bounded diagnostics drop oversized or unparseable JSON-like text; unbounded callers keep it
+// after the same credential-text redaction.
+function projectDiagnosticText(value: string, bounded = true): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
   if (!looksLikeDiagnosticJson(text)) {
     return text;
   }
   const allowProse = !hasSensitiveProseContent(text);
-  if (text.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
+  if (bounded && text.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
     // Prove the whole bracket surface is prose before bypassing the structured-data bound.
     const remaining =
       allowProse && !MALFORMED_JSON_RE.test(text)
@@ -440,18 +452,22 @@ function projectDiagnosticText(value: string): string {
       continue;
     }
     try {
-      const state = { changed: false, nodesRemaining: 64 };
+      const policy = { unbounded: !bounded };
+      const state = { changed: false, nodesRemaining: bounded ? 64 : Number.POSITIVE_INFINITY };
       const parsed = JSON.parse(fragment.json);
       // JSON.parse owns this fresh data-only graph; no provider getters or native brands remain.
-      const projected = projectValue(true, parsed, {}, new WeakSet(), false, state);
+      const projected = projectValue(true, parsed, policy, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
-      return "[Malformed diagnostic JSON redacted]";
+      if (bounded) {
+        return "[Malformed diagnostic JSON redacted]";
+      }
+      redacted += fragment.json;
     }
     cursor = fragment.endIndex + 1;
   }
   const remainder = text.slice(cursor);
-  return looksLikeDiagnosticJson(unstructured + remainder)
+  return bounded && looksLikeDiagnosticJson(unstructured + remainder)
     ? "[Malformed diagnostic JSON redacted]"
     : redacted + remainder;
 }
