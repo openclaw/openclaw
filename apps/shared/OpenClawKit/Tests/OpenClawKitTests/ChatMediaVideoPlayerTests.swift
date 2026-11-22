@@ -16,6 +16,7 @@ struct ChatMediaVideoPlayerTests {
             playbackAllowed: { true },
             playbackCoordinator: coordinator)
         defer { video.cleanup() }
+        try await self.prepareForPlayback(video)
         video.play()
         try await self.waitUntil { video.player.timeControlStatus == .playing }
         let audioIntent = coordinator.claimPlaybackIntent()
@@ -76,6 +77,7 @@ struct ChatMediaVideoPlayerTests {
             playbackAllowed: { true },
             playbackCoordinator: coordinator)
         defer { video.cleanup() }
+        try await self.prepareForPlayback(video)
         video.play()
         try await self.waitUntil { video.player.timeControlStatus == .playing }
         let audioIntent = coordinator.claimPlaybackIntent()
@@ -83,6 +85,12 @@ struct ChatMediaVideoPlayerTests {
         try await self.waitUntil { video.player.rate == 0 }
 
         #expect(coordinator.isCurrentIntent(audioIntent))
+    }
+
+    private func prepareForPlayback(_ video: ChatMediaVideoPlayer) async throws {
+        // Observe playback intent, not whether a short clip survives a busy MainActor's first poll.
+        try await self.waitUntil { video.player.status == .readyToPlay }
+        #expect(await video.player.preroll(atRate: 1))
     }
 
     private func silentClip(duration: Double) throws -> URL {

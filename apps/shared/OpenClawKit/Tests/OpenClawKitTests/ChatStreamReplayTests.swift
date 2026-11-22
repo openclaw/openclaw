@@ -532,7 +532,9 @@ struct ChatStreamReplayTests {
         recordedFirst: Bool) async throws
     {
         _ = NSApplication.shared
-        let harness = try await StreamReplayHarness.bootstrapped()
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let harness = StreamReplayHarness(transport: transport, vm: vm)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
             styleMask: [.titled, .closable, .resizable],
@@ -551,6 +553,10 @@ struct ChatStreamReplayTests {
             window.contentView = nil
             window.close()
         }
+        // The mounted view owns bootstrap; loading before mounting lets onAppear reset an accepted send.
+        host.layoutSubtreeIfNeeded()
+        await waitForObservedState { vm.lastIssuedHistoryRequestID > 0 }
+        try await #require(vm.bootstrapTask).value
         let runId = try await harness.send("Show the equation")
         let now = Int(Date().timeIntervalSince1970 * 1000)
         let text = "$$x = 1$$"
