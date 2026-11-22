@@ -109,7 +109,8 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
   }
   const sourceArtifacts = PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) => `${sourceBaseName}${ext}`);
   // Node refuses type stripping under node_modules, so a managed release layout must
-  // load the compiled artifact even when its entry happens to be a source file.
+  // prefer the compiled artifact over its entry's source family. Captured build trees
+  // that only ship sources keep them as the last-resort fallback below.
   const allowsTypeScriptSources = !isUnderNodeModules(pluginRoot);
   // Sidecars share the registered entry's source/build family and captured membership;
   // otherwise a stale build can split API state from the active source instance.
@@ -123,12 +124,11 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
     ...sourceArtifacts.filter((artifact) => !isTypeScriptPackageEntry(artifact)),
   ];
   const checkedPaths = new Set<string>();
-  const sourceCandidates = allowsTypeScriptSources ? sourceArtifacts : [];
   for (const [directory, artifacts] of [
     [entryDir, entryArtifacts],
     [pluginRoot, [...preferredArtifacts, artifactBasename, path.join("dist", artifactBasename)]],
-    [entryDir, sourceCandidates],
-    [pluginRoot, sourceCandidates],
+    [entryDir, sourceArtifacts],
+    [pluginRoot, sourceArtifacts],
   ] as const) {
     if (!directory) {
       continue;
