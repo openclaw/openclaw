@@ -66,7 +66,10 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
@@ -490,13 +493,14 @@ function* resolveOpenClawPluginToolSteps(
     : requestRegistry;
   const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
   const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
-  const abortSignal = params.options?.abortSignal;
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
     ...pluginToolInputs,
     bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
       sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
       skillsSnapshot: params.options?.pluginExecutionSkillsSnapshot,
-      signal: abortSignal,
+      signal: params.options?.abortSignal,
       authority: params.options?.pluginExecutionAuthority,
       modelContextWindowTokens: params.options?.modelContextWindowTokens,
       preparedModelRuntime,
@@ -512,11 +516,12 @@ function* resolveOpenClawPluginToolSteps(
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
-    assertInvocationCurrent:
-      params.options?.assertInvocationCurrent ??
-      (getGatewayToolCallerIdentity()?.operationalRunInstance
-        ? () => abortSignal?.throwIfAborted()
-        : undefined),
+    assertInvocationCurrent: assertRequestCurrent
+      ? () => {
+          assertCallerCurrent?.();
+          assertRequestCurrent();
+        }
+      : assertCallerCurrent,
     ownerContinuation: requesterOwner,
     clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,

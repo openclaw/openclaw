@@ -14,7 +14,6 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -39,6 +38,7 @@ import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-to
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
+import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
   createMessageToolDecisionRecorder,
   resolveTrustedDecisionChannel,
@@ -231,9 +231,7 @@ function* createMessageToolSteps(
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
-      if (signal?.aborted) {
-        throw createAbortError("Message send aborted");
-      }
+      const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", {
@@ -284,15 +282,13 @@ function* createMessageToolSteps(
       const scheduled = messageActionAuthorization.scheduled;
       const assertActionCurrent = composeSessionSourceAssertion(
         [
+          assertCaller,
           (scheduledRead ?? scheduledWrite)
             ? (scheduled?.assertSourceCurrent ?? scheduled?.assertCurrent)
             : scheduled?.assertCurrent,
         ],
         (assertSources) => {
           turnAuthority.assertCurrent();
-          if (signal?.aborted) {
-            throw createAbortError("Message action aborted");
-          }
           assertSources();
           assertDashboardReadCurrent?.();
         },
