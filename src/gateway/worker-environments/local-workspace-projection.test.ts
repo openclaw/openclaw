@@ -335,13 +335,14 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
-it("keeps admitted guest writes after role change but fences source cancellation across a late receipt", async ({
-  signal,
-}) => {
-  const { proveStoppedSandboxAuthority } =
-    await import("./local-workspace-cancellation.test-support.js");
-  await proveStoppedSandboxAuthority(owner, "guest-involvement", signal);
-});
+it.for(["guest-involvement", "guest-role-involvement"] as const)(
+  "keeps committed guest receipts without overriding role admission or source abort (%s)",
+  async (revoke, { signal }) => {
+    const { proveStoppedSandboxAuthority } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedSandboxAuthority(owner, revoke, signal);
+  },
+);
 
 it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));

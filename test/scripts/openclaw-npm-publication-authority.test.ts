@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -104,9 +104,7 @@ async function fixture() {
     api[path] = admissionResponse(path);
   }
   api[`contents/scripts/e2e/lib/upgrade-survivor?ref=${f.admission.receipt.request.candidateSha}`] =
-    f.client
-      .getCandidateFileNames()
-      .map((name) => ({ name, path: "scripts/e2e/lib/upgrade-survivor/" + name }));
+    f.client.getCandidateFileNames();
   for (const [path, source] of f.qualificationSources) {
     const bytes = Buffer.from(source);
     api[`contents/${path}?ref=${f.q}`] ??= {
@@ -289,22 +287,10 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      const publications: { package_name: string; source_commit: string }[] = readFileSync(
-        f.env.GITHUB_OUTPUT,
-        "utf8",
-      )
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line.slice(line.indexOf("=") + 1)));
-      expect(publications.map((publication) => publication.package_name)).toEqual([
-        "@openclaw/gateway-protocol",
-        "openclaw",
-      ]);
-      expect(
-        publications.every(
-          (publication) => publication.source_commit === f.env.EXPECTED_RELEASE_SHA,
-        ),
-      ).toBe(true);
+      const outputs = existsSync(f.env.GITHUB_OUTPUT)
+        ? readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+        : "";
+      expect(outputs).not.toMatch(/^(?:openclaw|gateway_protocol)_publication=/m);
     },
   );
 

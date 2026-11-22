@@ -81,6 +81,7 @@ import {
   startAgentOnboardingConversation,
   type PreparedAgentOnboarding,
 } from "./agents-onboarding.js";
+import { dispatchableWorkerProfileIds, listWorkerProfiles } from "./environments.profiles.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -220,29 +221,37 @@ export const agentsHandlers: GatewayRequestHandlers = {
         params.includeSessionPlacement === true
           ? {
               ...result,
-              sessionPlacement: required
-                ? {
-                    requiredProfile: {
-                      id: required,
-                      ...(profile
-                        ? {
-                            providerId: profile.provider,
-                            executionModes:
-                              context.workerEnvironmentService?.supportsExecutionMode(
-                                required,
-                                "worker-turn",
-                              ) === true
-                                ? ["worker-turn" as const]
-                                : [],
-                            ...workerInferenceMetadata({
+              sessionPlacement: {
+                ...(dispatchableWorkerProfileIds(listWorkerProfiles(context), {
+                  context,
+                  client,
+                }).some((id) => !required || id === required)
+                  ? { hasDispatchableCloudProfile: true as const }
+                  : {}),
+                ...(required
+                  ? {
+                      requiredProfile: {
+                        id: required,
+                        ...(profile
+                          ? {
                               providerId: profile.provider,
-                              profileSnapshot: profile,
-                            }),
-                          }
-                        : {}),
-                    },
-                  }
-                : {},
+                              executionModes:
+                                context.workerEnvironmentService?.supportsExecutionMode(
+                                  required,
+                                  "worker-turn",
+                                ) === true
+                                  ? ["worker-turn" as const]
+                                  : [],
+                              ...workerInferenceMetadata({
+                                providerId: profile.provider,
+                                profileSnapshot: profile,
+                              }),
+                            }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              },
             }
           : result;
       respond(

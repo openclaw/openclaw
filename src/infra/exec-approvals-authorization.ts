@@ -1,40 +1,13 @@
 // Revalidates and commits exec authority against the current policy.
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   buildAllowlistEntryMatchKey,
   createExecApprovalPolicySnapshot,
 } from "./exec-approvals-allow-always.js";
 import { assertCurrentUsageAuthorization } from "./exec-approvals-authorization.kernel.js";
-import type {
-  ExecApprovalUsageAuthorization,
-  ExecAuthorizationCommitInput,
-} from "./exec-approvals-contracts.js";
+import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import { commitExecAuthorizations } from "./exec-approvals-store.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type { ExecApprovalUsageAuthorization } from "./exec-approvals-contracts.js";
-
-export async function recordAllowlistMatchesUse(
-  params: {
-    agentId: string | undefined;
-    matches: readonly ExecAllowlistEntry[];
-    command: string;
-    resolvedPath?: string;
-    authorization: ExecApprovalUsageAuthorization;
-    assertCurrent?: () => void;
-  },
-  context?: OpenClawStateWorkerContext,
-): Promise<() => void> {
-  const input: ExecAuthorizationCommitInput = structuredClone({
-    agentId: params.agentId,
-    matches: [...params.matches],
-    command: params.command,
-    resolvedPath: params.resolvedPath,
-    authorization: params.authorization,
-  });
-  const committed = await commitExecAuthorizations(input, params.assertCurrent, context);
-  return retainedAuthorization(input, committed);
-}
 
 export async function commitExecAuthorizationLocked(
   input: ExecAuthorizationCommitInput,

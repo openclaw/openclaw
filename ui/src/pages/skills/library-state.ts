@@ -9,18 +9,20 @@ import {
   onSettled,
   refresh,
 } from "solid-js";
+import type {
+  SkillLibraryEntry,
+  SkillLibraryFile,
+  SkillsLibraryListResult,
+  SkillsLibraryReadResult,
+  SkillsLibraryReceipt,
+  SkillsLibraryMutateParams,
+  SkillsLibraryUploadResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import {
-  type SkillLibraryEntry,
-  type SkillLibraryFile,
-  type SkillsLibraryListResult,
-  type SkillsLibraryReadResult,
-  type SkillsLibraryReceipt,
-  type SkillsLibraryMutateParams,
-  type SkillsLibraryUploadResult,
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+} from "../../../../packages/gateway-protocol/src/skill-library-limits.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";

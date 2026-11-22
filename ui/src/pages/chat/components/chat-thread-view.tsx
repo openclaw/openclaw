@@ -29,6 +29,11 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { TemplateCreatorReview } from "../../templates/creator-review.tsx";
+import {
+  hasAutomationActivity,
+  loadAutomationProjection,
+  type AutomationProjection,
+} from "../chat-automation-projection-loader.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
@@ -109,6 +114,16 @@ export function ChatThread(input: ChatThreadInput) {
   const initialReady =
     (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
   const [ready, setReady] = createSignal(initialReady);
+  const needsAutomation = createMemo(
+    () =>
+      input.props.messages.some(hasAutomationActivity) ||
+      input.props.toolMessages.some(hasAutomationActivity),
+  );
+  // History owns the transcript. Optional card enrichment must not suspend its first mount.
+  const projectAutomations = createMemo(
+    () => (needsAutomation() ? loadAutomationProjection().catch(() => undefined) : undefined),
+    { loadingValue: undefined },
+  );
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const reveal = createTimeout(() => {
     if (isPresented()) {
@@ -140,7 +155,11 @@ export function ChatThread(input: ChatThreadInput) {
           return (
             <>
               {ready() ? (
-                <ChatThreadContent {...input} presented={isPresented()} />
+                <ChatThreadContent
+                  {...input}
+                  presented={isPresented()}
+                  projectAutomations={projectAutomations()}
+                />
               ) : (
                 <div
                   class={[
@@ -171,7 +190,9 @@ export function ChatThread(input: ChatThreadInput) {
   );
 }
 
-function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
+function ChatThreadContent(
+  input: ChatThreadInput & { presented: boolean; projectAutomations?: AutomationProjection },
+) {
   const mobile = useContext(ChatConversationMobile);
   // Admission stays with the transcript; all overlay lifetime work loads on intent.
   const [templateIntent, setTemplateIntent] = createSignal<TemplateReference | null>(null);
@@ -257,7 +278,12 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
-    const projection = projectChatTranscript(input.props, session, searchState);
+    const projection = projectChatTranscript(
+      input.props,
+      session,
+      searchState,
+      input.projectAutomations,
+    );
     expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
     if (projection.isEmpty || projection.isLoading) {
@@ -292,7 +318,11 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     current().projection.showLoadingSkeleton ? false : (input.props.transcriptVisible ?? true),
     Boolean(input.props.gatewayClient?.connected),
   ]);
-  const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  const markdownRef = createMarkdownBlocksRef(
+    () => input.props.transcriptVisible ?? true,
+    (links) => input.props.onWorkspaceFileLinks?.(links),
+    () => input.props.workspaceFileLinkScope,
+  );
   // The supplement takes the header only once the transcript has no earlier page,
   // so its controls never stack under the history boundary.
   const headerContent = (

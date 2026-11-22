@@ -17,6 +17,7 @@ import {
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
   probeLaunchAgentState,
+  launchAgentNeedsReloadSync,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
@@ -409,16 +410,17 @@ export async function restartLaunchAgent(
     }
     throw error;
   }
-  // Preservation permits native activation only, including detached handoffs.
   const plistReloadNeeded =
-    !preserveDefinition &&
-    (await rewriteLaunchAgentPlistForRestart({
-      env: serviceEnv,
-      label,
-      plistPath,
-      stdout,
-      warn,
-    }));
+    (!preserveDefinition &&
+      (await rewriteLaunchAgentPlistForRestart({
+        env: serviceEnv,
+        label,
+        plistPath,
+        stdout,
+        warn,
+      }))) ||
+    launchAgentNeedsReloadSync(serviceEnv, params.deadline?.remainingMs());
+  assertCurrent?.();
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.

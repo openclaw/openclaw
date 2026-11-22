@@ -46,6 +46,15 @@ export function hasOperatorToolGatewayAuthority(): boolean {
   return Boolean(admitted || hasOperatorToolSource(direct) || scopedOperator);
 }
 
+/** Read the host-issued operator grant; the Gateway dispatcher validates it at admission. */
+export function readOperatorToolRunAuthority(): AdmittedRunOperatorAuthority | undefined {
+  return (
+    getGatewayToolCallerIdentity()?.operatorAuthority ??
+    readOperatorToolGatewayAuthority()?.operatorRunAuthority ??
+    getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+  );
+}
+
 /** Retain the already-issued source and its invocation fence for SDK-owned selection writes. */
 export function captureOperatorToolGatewayAuthority():
   | { authority: AdmittedRunOperatorAuthority | undefined; assertCurrent: SessionSourceAssertion }
@@ -55,8 +64,7 @@ export function captureOperatorToolGatewayAuthority():
   const direct = readOperatorToolGatewayAuthority();
   const ambientScope = getPluginRuntimeGatewayRequestScope();
   const scope = ambientScope ? { ...ambientScope } : undefined;
-  const authority =
-    admitted ?? direct?.operatorRunAuthority ?? scope?.client?.internal?.operatorRunAuthority;
+  const authority = readOperatorToolRunAuthority();
   const requiresOperatorAuthority = Boolean(
     admitted ||
     hasOperatorToolSource(direct) ||

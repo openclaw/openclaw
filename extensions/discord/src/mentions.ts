@@ -1,9 +1,9 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 import {
+  formatMention,
   normalizeDiscordHandleKey,
   normalizeDiscordSnowflake,
-  resolveDiscordDirectoryUserId,
-} from "./directory-cache.js";
+} from "./target-parsing.js";
 import { findDiscordUrlRanges } from "./url-ranges.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
@@ -12,21 +12,6 @@ const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
-
-export function formatMention(params: {
-  userId?: string | number | bigint | null;
-  channelId?: string | number | bigint | null;
-}): string {
-  const userId = params.userId == null ? null : normalizeDiscordSnowflake(params.userId);
-  const channelId = params.channelId == null ? null : normalizeDiscordSnowflake(params.channelId);
-  const mentions = [userId ? `<@${userId}>` : null, channelId ? `<#${channelId}>` : null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  if (mentions.length !== 1) {
-    throw new Error("formatMention requires exactly one of userId or channelId");
-  }
-  return expectDefined(mentions.at(0), "single Discord mention target");
-}
 
 function resolveConfiguredMentionAlias(
   handle: string,

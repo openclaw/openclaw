@@ -98,6 +98,10 @@ completion retain their error outcome for delivery after startup, including when
 their requester has already finished its turn. A shutdown interruption does not count as
 an intentional cancellation by the requester. Root requesters with interrupted work
 receive the standard resume input; children are not independently resumed.
+Recorded spawn ancestry includes visible spawned coordinators and workers: their
+running descendants contribute to the original root even after its own turn ends.
+An ordinary conversation contacted through `sessions_send` keeps its own restart
+recovery; receiving a message does not make it a spawned child.
 
 Startup also repairs pending `Gateway stopped` completions written by older
 Gateways as quiet kills. These interrupted runs retain an error notice for the

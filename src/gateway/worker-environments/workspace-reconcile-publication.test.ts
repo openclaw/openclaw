@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
@@ -187,10 +188,10 @@ it.each([
       }
     },
   });
-  const remove = fs.rm;
+  const remove = nativeWorktreeFilesystem.remove;
   const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
   vi.spyOn(manifestWorker, "prepareWorkspaceTemporaryDirectory").mockResolvedValueOnce(scratch);
-  vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+  vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(async (target, options) => {
     if (target === scratch && cleanupFails) {
       throw new Error("scratch removal failed");
     }

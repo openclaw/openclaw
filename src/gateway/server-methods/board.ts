@@ -233,7 +233,9 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               );
               return;
             }
-            const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
+            const document =
+              canvasRead?.document ??
+              (await readCanvasDocumentHtmlSource(requestParams.content.docId));
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(

@@ -878,7 +878,7 @@ it.each(["unknown", "unreadable"] as const)(
     const refusal: unknown = await begin().catch((error: unknown) => error);
     if (schema === "unreadable") {
       expect(refusal).toBeInstanceOf(DoctorUnreadableStateDatabaseError);
-      expect(String(refusal)).toContain("restore this file from a verified backup");
+      expect(String(refusal)).toContain("state database inspection was interrupted");
     } else {
       expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
       expect(refusal).toMatchObject({

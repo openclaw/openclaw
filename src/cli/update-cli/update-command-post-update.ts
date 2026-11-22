@@ -557,6 +557,7 @@ async function finishSettledUpdate(
               params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
+            gitReleaseRestartMode: restartContext.gitReleaseRestartMode,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
             definitionRecovery,
             serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
@@ -638,7 +639,11 @@ async function finishSettledUpdate(
           });
           pendingRestartAtMs ??= stopped.stoppedAtMs;
         }));
+        // Only an already-current core reaches here with its root unbound: a replaced core's
+        // first restart rebound it, or owed the rebind. A second pass would restart again, or
+        // restart the previous definition.
         const requiresInstallRootRefresh =
+          params.coreAlreadyCurrent === true &&
           restartContext.serviceUpdateVerdict?.kind === "owned" &&
           restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
         if (
