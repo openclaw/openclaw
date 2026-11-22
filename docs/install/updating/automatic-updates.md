@@ -59,6 +59,13 @@ state without running shared Doctor or startup repairs. The normal update
 workflow owns those repairs, migration, and rollback, including coordination
 with a Gateway sharing the state directory.
 
+If shared state or client credentials later need repair, for example after a
+restored state database, the managed node refuses to start and names the
+installation that owns the state. Run `openclaw doctor --fix` with that
+installation; the managed node retries automatically. An optional credential
+metadata upgrade does not block the managed node; the owning installation
+applies it the next time it starts or runs Doctor.
+
 Native app nodes and private worker processes continue to use their existing
 update owners. Source checkouts and `dev` installs also remain owner-managed.
 Nodes follow `update.channel` for `stable` and `beta` releases; an
