@@ -2926,6 +2926,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 /* Conversation-owned Knowledge activity: shared host dock, plugin-owned content. */
 .knowledge-session-panel {
   padding: 18px;
+  font-size: calc(14px * var(--control-ui-text-scale, 1));
   height: 100%;
   overflow: auto;
   min-width: 0;
@@ -2939,13 +2940,13 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-session-header h2 {
   min-width: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--control-ui-text-scale, 1));
   font-weight: 600;
   margin: 0;
 }
 .knowledge-session-muted {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--control-ui-text-scale, 1));
   line-height: 1.5;
 }
 .knowledge-session-controls {
@@ -3018,7 +3019,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   flex-wrap: wrap;
   gap: 4px 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--control-ui-text-scale, 1));
   font-weight: 400;
 }
 .knowledge-session-meta time {
@@ -3033,7 +3034,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-session-title {
   color: var(--text-strong, var(--text));
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
   line-height: 1.45;
   font-weight: 550;
   overflow-wrap: anywhere;
@@ -3057,7 +3058,14 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-session-full {
   color: var(--accent);
-  font-size: 12px;
+  font-size: calc(12px * var(--control-ui-text-scale, 1));
+}
+
+.knowledge-session-panel .knowledge-button {
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+}
+.knowledge-session-preview .knowledge-markdown {
+  font-size: calc(15px * var(--control-ui-text-scale, 1));
 }
 
 /* Browse pages: day headings, compact times, and a stacked list layout on narrow screens. */
