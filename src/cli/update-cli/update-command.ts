@@ -3,6 +3,7 @@ import { prepareGitReleaseLayout } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { resolveGlobalInstallSpec } from "../../infra/update-global.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
@@ -104,6 +105,14 @@ async function updateCommandWithRuntime(
       import("../../update/cli.js"),
       import("./update-command-config.js"),
     ]);
+    let tag =
+      prepared.installKind === "git" ? undefined : (normalizeTag(inputOpts.tag) ?? undefined);
+    if (prepared.installKind !== "git") {
+      const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
+      if (spec !== `openclaw@${tag ?? ""}`) {
+        tag = spec;
+      }
+    }
     return await runReleaseUpdateCli({
       json: Boolean(inputOpts.json),
       restart: prepared.shouldRestart,
@@ -111,7 +120,8 @@ async function updateCommandWithRuntime(
       channel: prepared.requestedChannel ?? undefined,
       storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
       sha: inputOpts.sha,
-      tag: prepared.installKind === "git" ? undefined : (normalizeTag(inputOpts.tag) ?? undefined),
+      tag,
+      yes: Boolean(inputOpts.yes),
       timeoutMs: prepared.timeoutMs,
       acceptCapabilities: Boolean(inputOpts.acceptCapabilities),
     });

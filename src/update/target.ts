@@ -30,8 +30,9 @@ export async function resolveTarget(params: {
     if (params.sha) {
       throw new Error("A Git SHA requires a Git install.");
     }
-    if (params.tag && !canResolveRegistryVersionForPackageTarget(params.tag)) {
-      let spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: params.tag });
+    const requestedTag = params.tag ?? "latest";
+    let spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: requestedTag });
+    if (!canResolveRegistryVersionForPackageTarget(spec) || spec !== `openclaw@${requestedTag}`) {
       // Packing uses a private workspace; local artifact paths belong to the invoking cwd.
       if (spec.startsWith("file:")) {
         spec = `file:${path.resolve(spec.slice(5))}`;

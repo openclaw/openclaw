@@ -43,17 +43,19 @@ vi.mock("./restart.js", async (importOriginal) => ({
 
 const campaigns = new Set<UpdateCampaignController>();
 
-function runAdmittedUpdate(runId: string, log = { info: vi.fn() }) {
+function runAdmittedUpdate(runId: string, params: Partial<Parameters<AutoUpdateRunner>[0]> = {}) {
   return runAutoUpdateCommand(
     {
       runId,
       channel: "beta",
       mode: "npm",
       root: "/opt/openclaw",
+      packageTargetVersion: "2.0.0-beta.1",
       timeoutMs: 1_000,
       restartDrainTimeoutMs: undefined,
+      ...params,
     },
-    log,
+    { info: vi.fn() },
   );
 }
 
@@ -98,7 +100,7 @@ describe("automatic release campaigns", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({
       layout: "state-only",
-      prefix: "openclaw-campaign-handoff-",
+      prefix: "openclaw-release-campaign-",
       env: { OPENCLAW_PROFILE: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
     });
     prepare.mockReset();
@@ -115,23 +117,57 @@ describe("automatic release campaigns", () => {
     await state.cleanup();
   });
 
-  it("prepares a package release and restarts into its trial", async () => {
+  it.each([
+    { mode: "npm", channel: "beta", packageTargetVersion: "2.0.0-beta.1" },
+    { mode: "git", channel: "dev", packageTargetVersion: undefined },
+  ] as const)("prepares the pinned $mode release and restarts into its trial", async (target) => {
+    const devTarget =
+      target.mode === "git"
+        ? { mode: "tracked" as const, upstreamRef: "origin/main", upstreamSha: "pinned-sha" }
+        : undefined;
     prepare.mockResolvedValueOnce({
       status: "pending",
       target: { version: "2.0.0-beta.1" },
       releaseRoot: "/tmp/release",
     });
-    const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
-    await expect(runAdmittedUpdate(runId)).resolves.toEqual({ status: "handoff" });
-    expect(prepare).toHaveBeenCalledWith(
+    const { runId } = createUpdateRun({ trigger: "campaign" });
+
+    await expect(runAdmittedUpdate(runId, { ...target, devTarget })).resolves.toEqual({
+      status: "handoff",
+    });
+
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
+        runId,
         runningRoot: "/opt/openclaw",
-        channel: "beta",
+        channel: target.channel,
+        tag: target.packageTargetVersion,
+        ...(devTarget ? { sha: "pinned-sha" } : {}),
         timeoutMs: 1_000,
       }),
     );
+    expect(listUpdateRuns()[0]).toMatchObject({ runId, phase: "restarting", status: "running" });
     expect(restart).toHaveBeenCalledExactlyOnceWith({ reason: "update.auto" });
   });
+
+  it.each([false, true])(
+    "restarts an already-current release only when plugin maintenance changed it (%s)",
+    async (pluginsChanged) => {
+      prepare.mockResolvedValueOnce({ status: "current", version: "1.0.0", pluginsChanged });
+      const { runId } = createUpdateRun({ trigger: "campaign" });
+
+      await expect(runAdmittedUpdate(runId)).resolves.toMatchObject({
+        status: "failed",
+        result: { status: "skipped", reason: "already-current" },
+      });
+
+      if (pluginsChanged) {
+        expect(restart).toHaveBeenCalledExactlyOnceWith({ reason: "update.auto" });
+      } else {
+        expect(restart).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     "unchanged",
@@ -240,13 +276,13 @@ describe("automatic release campaigns", () => {
             trigger: "campaign",
             target: { channel: "beta", kind: "package", version: "2.0.0-beta.1" },
           });
-          finishUpdateRun(runId, { status: "failed", reason: "managed-service-stop-failed" });
+          finishUpdateRun(runId, { status: "failed", reason: "no-target" });
         }
         const log = { info: vi.fn() };
         const runAuto = vi.fn<AutoUpdateRunner>(async () => ({
           status: "failed",
-          message: "Gateway process changed during maintenance drain.",
-          result: updateResult({ reason: "managed-service-stop-failed" }),
+          message: "The pinned package target is unavailable.",
+          result: updateResult({ reason: "no-target" }),
         }));
         const attempt = async (atMs: number, version = "2.0.0-beta.1") => {
           vi.setSystemTime(atMs);
@@ -262,7 +298,7 @@ describe("automatic release campaigns", () => {
           await expect(attempt(failedAt + wait * hour - 60_000)).resolves.toBe(0);
           expect(log.info).toHaveBeenCalledWith(
             expect.stringContaining(`deferred after ${failures} identical failures`),
-            expect.objectContaining({ reason: "managed-service-stop-failed" }),
+            expect.objectContaining({ reason: "no-target" }),
           );
         }
         await expect(attempt(failedAt + wait * hour + 60_000)).resolves.toBe(1);

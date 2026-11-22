@@ -1,9 +1,29 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
+import type * as UpdateCliShared from "../cli/update-cli/shared.js";
+import { defaultRuntime } from "../runtime.js";
 
 const sent = vi.hoisted(() => [] as unknown[]);
 const install = vi.hoisted(() => ({ kind: "git" }));
 const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const packageTarget = vi.hoisted(() => ({ version: "2026.11.6" }));
+const confirmDowngrade = vi.hoisted(() =>
+  vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
+);
+const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: "run-cli" })));
+const mutateConfig = vi.hoisted(() => vi.fn());
+vi.mock("../config/mutate.js", () => ({ mutateConfigFileWithRetry: mutateConfig }));
+vi.mock("../cli/update-cli/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof UpdateCliShared>()),
+  requestUpdateDowngradeConfirmation: confirmDowngrade,
+}));
+vi.mock("./target.js", () => ({
+  resolveTarget: async () => ({
+    kind: "package",
+    spec: `openclaw@${packageTarget.version}`,
+    version: packageTarget.version,
+  }),
+}));
 vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
@@ -28,7 +48,7 @@ vi.mock("./run.js", async (importOriginal) => ({
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-write.async.js")>()),
-  createUpdateRunAsync: async () => ({ runId: "run-cli" }),
+  createUpdateRunAsync: createRun,
 }));
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
@@ -66,6 +86,10 @@ afterEach(() => {
   install.kind = "git";
   localRun.status = "skipped";
   localRun.phase = "finished";
+  packageTarget.version = "2026.11.6";
+  confirmDowngrade.mockReset();
+  createRun.mockClear();
+  mutateConfig.mockClear();
   sent.length = 0;
   prepared.length = 0;
   runsGet.length = 0;
@@ -154,26 +178,30 @@ it("says the update is still running when the --timeout budget ends first", asyn
   expect(process.exitCode).toBe(1);
 });
 
-it("uses the package channel default and preserves an explicit tag without delegating", async () => {
-  install.kind = "package";
-  const { runReleaseUpdateCli } = await import("./cli.js");
-  await runReleaseUpdateCli({
-    json: true,
-    restart: true,
-    runningRoot: "/tmp/openclaw-package",
-    tag: "2026.11.6",
-    acceptCapabilities: true,
-  });
-  expect(sent).toEqual([]);
-  expect(prepared).toEqual([
-    expect.objectContaining({
+it.each([undefined, "beta"] as const)(
+  "preserves a one-off package tag with saved channel %s",
+  async (storedChannel) => {
+    install.kind = "package";
+    const { runReleaseUpdateCli } = await import("./cli.js");
+    await runReleaseUpdateCli({
+      json: true,
+      restart: true,
       runningRoot: "/tmp/openclaw-package",
-      channel: "stable",
       tag: "2026.11.6",
+      storedChannel,
       acceptCapabilities: true,
-    }),
-  ]);
-});
+    });
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([
+      expect.objectContaining({
+        runningRoot: "/tmp/openclaw-package",
+        channel: storedChannel ?? "stable",
+        tag: "2026.11.6",
+        acceptCapabilities: true,
+      }),
+    ]);
+  },
+);
 
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
   install.kind = "package";
@@ -197,3 +225,38 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
   ]);
   expect(process.exitCode).toBe(0);
 });
+
+it.each([
+  { yes: false, decision: "confirmation-required", code: 1 },
+  { yes: false, decision: "cancelled", code: 0 },
+  { yes: true, decision: "confirmed", code: 0 },
+] as const)(
+  "requires downgrade consent before admission (yes=$yes, decision=$decision)",
+  async ({ yes, decision, code }) => {
+    install.kind = "package";
+    packageTarget.version = "2026.11.5";
+    confirmDowngrade.mockResolvedValueOnce(decision);
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const { runReleaseUpdateCli } = await import("./cli.js");
+    await runReleaseUpdateCli({
+      json: true,
+      restart: false,
+      runningRoot: "/tmp/openclaw-package",
+      channel: "beta",
+      yes,
+    });
+    expect(process.exitCode).toBe(code);
+    if (yes) {
+      expect(confirmDowngrade).not.toHaveBeenCalled();
+      expect(prepared).toHaveLength(1);
+    } else {
+      expect(createRun).not.toHaveBeenCalled();
+      expect(mutateConfig).not.toHaveBeenCalled();
+      expect(prepared).toEqual([]);
+      expect(json).toHaveBeenCalledWith({
+        status: "skipped",
+        reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
+      });
+    }
+  },
+);

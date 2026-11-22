@@ -149,9 +149,12 @@ describe("release preparation", () => {
     );
   });
 
-  it.each([">=1", ">=999"])(
-    "checks package Node %s before installing production dependencies",
-    async (engine) => {
+  it.each([
+    { engine: ">=1", source: "tag" },
+    { engine: ">=999", source: "override" },
+  ])(
+    "checks package Node $engine from the $source before installing production dependencies",
+    async ({ engine, source }) => {
       const packedRoot = path.join(root, "packed", "package");
       await fs.mkdir(packedRoot, { recursive: true });
       await fs.writeFile(
@@ -177,8 +180,15 @@ if (args[0] === 'pack') {
 }
 `,
       );
+      if (source === "override") {
+        vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", `file:${archive}`);
+      }
       expect(
-        await resolveTarget({ kind: "package", channel: "stable", tag: `file:${archive}` }),
+        await resolveTarget({
+          kind: "package",
+          channel: "stable",
+          ...(source === "tag" ? { tag: `file:${archive}` } : {}),
+        }),
       ).toEqual({
         kind: "package",
         spec: `file:${archive}`,

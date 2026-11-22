@@ -1,6 +1,7 @@
 // `openclaw update`, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
+import { requestUpdateDowngradeConfirmation } from "../cli/update-cli/shared.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import {
   callGateway,
@@ -8,6 +9,7 @@ import {
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
@@ -16,6 +18,7 @@ import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
+import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
 /** Prepare, plus a trial that includes the boot migration. */
@@ -37,11 +40,53 @@ export type ReleaseUpdateOptions = {
   timeoutMs?: number;
   /** `--accept-capabilities`, for plugin maintenance in this process. */
   acceptCapabilities?: boolean;
+  yes?: boolean;
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
   const startedAt = Date.now();
   const { channel } = opts;
+  let timeoutMs = opts.timeoutMs;
+  if (!opts.yes) {
+    const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
+    if (status.installKind === "package") {
+      const selected = await resolveTarget({
+        kind: "package",
+        channel: resolveEffectiveUpdateChannel({
+          configChannel: channel ?? opts.storedChannel,
+          currentVersion: VERSION,
+          installKind: "package",
+        }).channel,
+        tag: opts.tag,
+        timeoutMs: opts.timeoutMs,
+      });
+      if ((compareSemverStrings(VERSION, selected.version) ?? 0) > 0) {
+        const decision = await requestUpdateDowngradeConfirmation({
+          json: opts.json,
+          currentVersion: VERSION,
+          targetVersion: selected.version,
+          tag: opts.tag ?? selected.version,
+        });
+        if (decision !== "confirmed") {
+          const reason = decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required";
+          if (opts.json) {
+            defaultRuntime.writeJson({ status: "skipped", reason });
+          } else if (decision === "cancelled") {
+            defaultRuntime.log("Update cancelled.");
+          } else {
+            defaultRuntime.error(
+              "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+            );
+          }
+          process.exitCode = decision === "cancelled" ? 0 : 1;
+          return;
+        }
+      }
+      if (timeoutMs !== undefined) {
+        timeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+      }
+    }
+  }
   if (channel) {
     await mutateConfigFileWithRetry({
       base: "source",
@@ -66,11 +111,14 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const runId =
-    opts.restart && !opts.tag ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
+  const runId = opts.restart && !opts.tag ? await requestGatewayUpdate(target, timeoutMs) : null;
   let record = runId
-    ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
-    : await updateWithoutGateway(opts);
+    ? await followRun(
+        runId,
+        opts.json,
+        Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+      )
+    : await updateWithoutGateway({ ...opts, timeoutMs });
   if (
     opts.tag &&
     opts.restart &&

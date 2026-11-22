@@ -6,9 +6,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
@@ -185,8 +187,11 @@ export async function prepareUpdate(params: {
     );
     if (
       target.kind === "package" &&
-      target.engines === undefined &&
-      target.version === params.runningVersion
+      isPackageTargetAlreadyCurrent({
+        currentVersion: params.runningVersion,
+        targetVersion: target.version,
+        target: target.spec,
+      })
     ) {
       return await current(target.version);
     }
@@ -204,8 +209,8 @@ export async function prepareUpdate(params: {
     ) {
       const marker = path.join(params.runningRoot, ".openclaw-launcher");
       try {
-        const exists = await fs.stat(marker).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") {
+        const exists = await fs.stat(marker).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
             throw error;
           }
           return null;
