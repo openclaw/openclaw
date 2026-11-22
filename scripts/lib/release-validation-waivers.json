@@ -1,4 +1,731 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-9 (bun)",
+      "reason": "Concurrent auth-removal refresh-warning assertion did not reproduce in the unchanged real-Gateway Bun replay; credential removal itself was recorded.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server-methods/models-auth-removal.integration.test.ts",
+            "test": "models.authLogout with a concurrent registered config set > publishes removal before returning when… :: AssertionError: {\"result\":{\"provider\":\"fixture\",\"removedProfiles\":[],\"abortedRunIds\":[],\"warning\":\"Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it. Model auth changes were saved, but the Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.\"}}: expected { result: { …(4) }, error: undefined } to not match object { result: { warning: Any<String> } }\n\nCompared values have no visual difference.\n\n❯ src/gateway/server-methods/models-auth-removal.integration.test.ts:183:58\n181|             });\n182|           } else {\n183|             expect(outcome, JSON.stringify(outcome)).not.toMatchObject…\n|                                                          ^\n184|               result: { warning: expect.any(String) },\n185|             });"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run QA Live Matrix catalog / Run Matrix live QA lane",
+      "reason": "Optional Matrix live action proof is blocked by the fixture account lacking room pin authority; no product permission change is warranted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "qa_live_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media audio plugins)",
+      "reason": "Optional live media proof is blocked by provider credit exhaustion and remote reference-image acceptance.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins A)",
+      "reason": "Optional Byteplus live media proof lacks usable test-account credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins B)",
+      "reason": "Optional video-provider qualification is blocked by unavailable Veo model and missing Pixverse test credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins C)",
+      "reason": "Optional Novita video-provider route is unavailable in the test account. Z.AI video also returned HTTP 429 insufficient balance; both prerequisite gaps are accepted, not passing video coverage.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins D)",
+      "reason": "Optional video-provider proof lacks Together credentials and Vydra credits.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Moonshot plugin)",
+      "reason": "Optional Moonshot web-search proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins L-N)",
+      "reason": "Optional Mistral live transcription and realtime proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Accepted Kova performance threshold failures, including memory, for this beta. This grant does not authorize skipping required evidence or accepting correctness, isolation, integrity, or install/update failures.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "android-build-wear",
+      "reason": "Accepted intermittent Android Wear dependency-resolution failure; preceding unchanged build passed. Artifact integrity is not waived.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "android finished with failure (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-20 (node)",
+      "reason": "Accepted runtime-publication timeout after all four local terminal-outcome cases passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+            "test": "worker turn launcher terminal results > retains the ACKed finishing outcome after assistant stop (reconciliation fails: false; cleanup: undefined; provider fallback: undefined) :: AssertionError: expected Error: prepared model runtime publication… to match object { message: StringContaining{…} }\n\n- Expected\n+ Received\n\n- {\n-   \"message\": StringContaining \"turn failed | provider failed | computer cleanup failed | native close failed\",\n+ Error {\n+   \"message\": \"prepared model runtime publication (workspace plugins; agent main) timed out\",\n}\n\n❯ src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts:421:26\n419|           return;\n420|         }\n421|         expect(observed).toMatchObject({ message: expect.stringContain…\n|                          ^\n422|         if (reconciliationFails) {\n423|           expect(observed).toMatchObject({ cause: { cause: reconciliat…"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-22 (node)",
+      "reason": "Accepted admission timeout after all nine local policy-admission variants passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-admission.test.ts",
+            "test": "worker-side before_agent_run admission > gates the final worker prompt before inference and persistence ({\"modern\":true,\"block\":false,\"recorderOwned\":false,\"forged\":false}) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-admission.test.ts:96:5\n94|     { modern: false, block: false, recorderOwned: true, forged: false …\n95|     { modern: true, block: false, recorderOwned: false, forged: true },\n96|   ])(\n|     ^\n97|     \"gates the final worker prompt before inference and persistence (%…\n98|     async ({ modern, block, recorderOwned, forged }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-27 (bun)",
+      "reason": "Accepted intermittent broker IPC failure; exact recovery case and full 16-case local lifecycle fixture passed.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-12 (node)",
+      "reason": "Accepted launch-identity timeout after all three local identity variants passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-computer.test.ts",
+            "test": "worker launch capabilities > carries only a current GitHub identity in the launch envelope (available) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-computer.test.ts:92:5\n90|     { label: \"unavailable\", available: false, revoked: false },\n91|     { label: \"revoked before launch\", available: true, revoked: true },\n92|   ])(\n|     ^\n93|     \"carries only a current GitHub identity in the launch envelope ($l…\n94|     async ({ available, revoked }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-ui",
+      "reason": "Accepted UI failure for this release; cancelled or incomplete required execution remains blocking. Current workload uses maintained UI sharding.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-ui finished with cancelled (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (Moonshot)",
+      "reason": "Accepted intermittent Moonshot completion assertion failure; same probe passed previously with unchanged provider path.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (xAI)",
+      "reason": "Accepted xAI exact-phrase refusal for this release; no passing provider behavior is asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 4/4)",
+      "reason": "Accepted historical restart fixture failure after repaired real-Gateway file passed all five cases.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media music Google)",
+      "reason": "Accepted intermittent Google music RECITATION/no-audio outcome; preceding unchanged suite passed all three cases.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live plugins A-K)",
+      "reason": "Accepted A-K prerequisite coverage gaps including unavailable service credentials and Apple FM platform. Forwarding and opt-in repairs remain included.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+      "reason": "Accepted historical trajectory fixture failure after repaired real live test passed with compiled process owner.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins O-Z other)",
+      "reason": "Accepted O-Z prerequisite gaps include Qwen Standard entitlement, SenseAudio platform, and two Z.AI general-endpoint completions returning HTTP 429 insufficient balance; no passing completion is asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Accepted decision-index coverage gaps for four unavailable provider credentials; no passing provider proof asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Accepted exact successor-chat timeout after both same local private child-completion tests passed unchanged. Raw failure retained; requires trusted evaluator support for the native two-part project label. Also accepted the complete two-config.apply-timeout signature set after unchanged config-write-reread tests passed 2/2 and the exact numeric-record-key case passed 1/1 with Node workers. Non-reproduction is not a proven flake or fix; both current failures are required together and the historical signature remains unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server.private-completion.test.ts",
+            "test": "private subagent completion processing receipts > settles a sessions_send child reply through real private admission (processed) :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     function cleanup() {\n❯ Object.verifyChatSuccessor src/gateway/server.private-completion.test.ts:252:24\n❯ src/gateway/server.private-completion.sessions-send.test-support.ts:<redacted len=6>"
+          }
+        ],
+        "alternativeSignatures": [
+          [
+            {
+              "kind": "vitest",
+              "file": "src/gateway/server.config-record-keys.test.ts",
+              "test": "accepts exact numeric record keys in replacePaths :: GatewayClientRequestTimeoutError: gateway request timeout for config.apply\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+            },
+            {
+              "kind": "vitest",
+              "file": "src/gateway/server.config-write-reread.test.ts",
+              "test": "gateway config canonical rereads > config.set settles when an external edit invalidates the canonical reread :: GatewayClientRequestTimeoutError: gateway request timeout for config.apply\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-29 (node)",
+      "reason": "Accepted recovery-budget deferral after the same unmodified 45-test recovery file passed locally; no lost-delivery or duplicate-send defect demonstrated.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/infra/outbound/delivery-queue.recovery.test.ts",
+            "test": "delivery-queue recovery > finalizes a persisted conversation operation during queue recovery :: AssertionError: [[\"Recovery time budget exceeded — remaining entries deferred to next startup\"]]: expected +0 to be 1 // Object.is equality\n\n- Expected\n+ Received\n\n- 1\n+ 0\n\n❯ src/infra/outbound/delivery-queue.recovery.test.ts:403:67\n401|     });\n402|     const { result, log } = await recover({ deliver });\n403|     expect(result.recovered, JSON.stringify(log.warn.mock.calls)).toBe…\n|                                                                   ^\n404|     expect(await getConversationDeliveryOperation(scope, \"operation-re…\n405|       status: \"sent\","
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-14 (node)",
+      "reason": "Exact session-scoped chat delivery test passed on unchanged candidate code. Accept the recorded websocket timeout as a local non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/session-message-events.test.ts",
+            "test": "session.message websocket events > enforces session-scoped chat delivery on real gateway connections :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     function cleanup() {\n❯ src/gateway/session-message-events.test.ts:<redacted len=5>\n❯ src/gateway/session-message-events.test.ts:<redacted len=6>"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-9 (node)",
+      "reason": "All 34 unchanged worker-execution tests passed locally, including the exact blocked-input redaction case. Accept only the recorded timeout; no input leak was demonstrated. This is non-reproduction, not proof of a flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-execution.test.ts",
+            "test": "worker turn execution > redacts blocked input before launch ({\"throws\":false,\"revokeAtCommit\":false}) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-execution.test.ts:196:5\n194|     { throws: true, revokeAtCommit: false },\n195|     { throws: false, revokeAtCommit: true },\n196|   ])(\"redacts blocked input before launch (%j)\", async ({ throws, revo…\n|     ^\n197|     await seedActivePlacement();\n198|     const input = turn(\"blocked-input\");"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-2 (node)",
+      "reason": "Exact native user-home models.list catalog test passed locally on unchanged candidate code. Accept only the recorded request timeout as non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "test/plugins/codex-model-catalog.gateway.test.ts",
+            "test": "models.list selects a native user-home API-key catalog through the prepared Gateway owner :: GatewayClientRequestTimeoutError: gateway request timeout for models.list\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-5 (node)",
+      "reason": "Exact bounded remote-tool lifetime and user-cancellation case passed locally on unchanged candidate code. Accept the recorded timeout as non-reproduction, not a proven flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-run-owner.test.ts",
+            "test": "cloud worker run ownership > keeps a bounded remote tool alive until user cancellation with a shared session ID at cancellation :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-run-owner.test.ts:121:14\n119|     { cancellation: \"user\", firstToolDelayMs: 0, collisionAt: \"cancell…\n120|     { cancellation: \"deadline\", firstToolDelayMs: 10 * 60_000, collisi…\n121|   ] as const)(\n|              ^\n122|     \"keeps a bounded remote tool alive until $cancellation cancellatio…\n123|     async ({ cancellation, firstToolDelayMs, collisionAt }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-5 (node)",
+      "reason": "Both unchanged transcript-footprint tests passed locally. Accept only the recorded already-persisted timeout and consequent unjoined-fixture rejection; non-reproduction does not prove a flake.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
+            "test": "Gateway worker-turn selected transcript preparation > does not hydrate inactive branches for already-persisted input :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts:55:60\n53|   });\n54|\n55|   it.each([\"already-persisted\", \"recorder-owned\"] as const)(\n|                                                            ^\n56|     \"does not hydrate inactive branches for %s input\",\n57|     async (persistence) => {"
+          },
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
+            "test": "Gateway worker-turn selected transcript preparation > does not hydrate inactive branches for recorder-owned input :: Error: Prior worker fixture remains unjoined; retained state must not be replaced\n❯ src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts:45:13\n43|   beforeEach(async () => {\n44|     if (hasUnjoinedOwner) {\n45|       throw new Error(\"Prior worker fixture remains unjoined; retained…\n|             ^\n46|     }\n47|     await fixture.setupWorkerTurnLauncherTest();"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-44 (node)",
+      "reason": "The exact prepared-model-runtime publication timeout is waived for this beta across attempts and replacement candidates, without waiving other correctness failures.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts",
+            "test": "waits for reconnect and settles the exact interrupted claim before the next turn :: AssertionError: promise rejected \"Error: prepared model runtime publication…\" instead of resolving\n❯ src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts:387:28\n385|     await harness.reconnect();\n386|     expect(harness.reportFailure).toHaveBeenCalledTimes(1);\n387|     await expect(execution).resolves.toMatchObject({\n|                            ^\n388|       payloads: [{ text: replacementReply }],\n389|     });\n\nCaused by: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-21 (node)",
+      "reason": "The exact prepared-model-runtime publication timeout is waived for this beta across attempts and replacement candidates, without waiving other correctness failures.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts",
+            "test": "worker pre-launch claim recovery > recovers a warm second turn blocked in workspace resolution with exact custody :: AssertionError: promise rejected \"Error: prepared model runtime publication…\" instead of resolving\n❯ src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts:502:37\n500|       const clock = vi.spyOn(Date, \"now\");\n501|       try {\n502|         await expect(execute(first)).resolves.toMatchObject({\n|                                     ^\n503|           payloads: [{ text: \"First turn complete\" }],\n504|         });\n\nCaused by: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
+      "reason": "Z.AI Coding Plan provider returned billing-class failures; accept unavailable account entitlement, not passing live text proof.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live agents)",
+      "reason": "The only failed native-agent assertions were two Z.AI billing-class empty completions; other native-agent correctness failures are not accepted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live gateway profiles Z.ai)",
+      "reason": "All eight selected Z.AI probes returned billing errors and zero successful model runs; accept the account prerequisite gap, not passing model coverage.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (Z.ai)",
+      "reason": "All six selected Z.AI models returned HTTP 429 insufficient balance or missing resource package; accept the account prerequisite gap, not passing model coverage.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-16 (node)",
+      "reason": "Accepted exact prepared-runtime publication timeout after unchanged focused context-engine tests passed 3/3. Non-reproduction is not a proven flake or fix; raw failure retained and only the complete frozen-P-parsed signature is accepted.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-context-engine.test.ts",
+            "test": "prepares and settles with direct ownership :: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25\n34|       () => {\n35|         const operation = typeof label === \"function\" ? label() : (lab…\n36|         abortCtrl.abort(new Error(`${operation} timed out`));\n|                         ^\n37|       },\n38|       Math.max(0, Math.min(resolved, remainingMs)),"
+          }
+        ]
+      }
+    }
+  ]
 }
