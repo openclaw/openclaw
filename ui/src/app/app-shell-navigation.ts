@@ -8,6 +8,7 @@ import {
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { enterCommunityInviteVisit } from "../components/community-invite-state.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import {
@@ -58,7 +59,13 @@ export interface ShellNavigationHost {
 }
 
 export class ShellNavigationOwner {
+  private communityInviteVisitAllowed: boolean | undefined;
+
   constructor(private readonly host: ShellNavigationHost) {}
+
+  get communityInviteAllowed(): boolean {
+    return this.communityInviteVisitAllowed === true;
+  }
 
   selectChatSession(sessionKey: string, agentId?: string | null): void {
     const context = this.host.context;
@@ -268,6 +275,7 @@ export class ShellNavigationOwner {
     }
     const location = routeState.location;
     if (
+      !this.host.firstUse &&
       location &&
       (routeState.routeId === "custodian"
         ? resolveOnboardingMode(location.search)
@@ -275,6 +283,9 @@ export class ShellNavigationOwner {
           canonicalModelSetupLocation(location, this.host.context?.basePath ?? "") === location)
     ) {
       this.host.firstUse = true;
+      this.communityInviteVisitAllowed = enterCommunityInviteVisit(true);
+    } else if (routeState.routeId && this.communityInviteVisitAllowed === undefined) {
+      this.communityInviteVisitAllowed = enterCommunityInviteVisit(this.host.firstUse);
     }
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";
