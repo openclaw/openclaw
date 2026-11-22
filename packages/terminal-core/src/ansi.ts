@@ -69,7 +69,9 @@ function stripAnsiInternal(
     }
 
     const scan = index < failedOscUntil ? undefined : scanAnsiOscAt(input, index);
-    if (scan && !scan.value) failedOscUntil = scan.bodyEnd;
+    if (scan && !scan.value) {
+      failedOscUntil = scan.bodyEnd;
+    }
     const osc = scan?.value;
     const csi = osc ? undefined : scanAnsiCsiAt(input, index);
     let compatibilityMatch: string | undefined;
@@ -79,7 +81,9 @@ function stripAnsiInternal(
         compatibilityMatch = ANSI_COMPAT_OSC_AT_INDEX_REGEX.exec(input)?.[0];
         // Unlike strict OSC, this grammar crosses escapes. Failure at an OSC
         // opener proves there is no later terminator, but short controls remain.
-        if (!compatibilityMatch && scan) compatibilityOscFailed = true;
+        if (!compatibilityMatch && scan) {
+          compatibilityOscFailed = true;
+        }
       }
       if (!compatibilityMatch) {
         ANSI_COMPAT_CONTROL_AT_INDEX_REGEX.lastIndex = index;

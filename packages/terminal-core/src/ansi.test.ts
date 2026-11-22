@@ -27,6 +27,7 @@ function expectEverySplit(input: string, text: string, expected: string[]) {
 describe("terminal ansi helpers", () => {
   it("preserves complete OSC matching while exposing the first excluded body byte", () => {
     // Freeze the existing complete-match grammar as the independent compatibility oracle.
+    // eslint-disable-next-line no-control-regex -- Match actual ANSI control bytes in the independent compatibility oracle.
     const complete = /(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x1b\\|\x07|\x9c)/y;
     for (const opener of ["\u001b]", "\u009d"]) {
       for (const body of ["", "text😀", "\u009d\u009d", '"{}[]\r\n', "\u001bX", '\u009b1"q']) {
@@ -82,14 +83,17 @@ describe("terminal ansi helpers", () => {
     const complete = "\u009dtitle\u0007";
     const first = scanAnsiOscAt(unfinished, 0);
     expect(first).toEqual({ bodyEnd: 2, value: undefined });
+    if (!first) {
+      throw new Error("Expected OSC scan at the known introducer");
+    }
     expect(scanAnsiOscAt(complete, 0)?.value).toBe(complete);
-    expect(scanAnsiCsiAt(unfinished, first!.bodyEnd)?.value).toBe("\u001b[31m");
+    expect(scanAnsiCsiAt(unfinished, first.bodyEnd)?.value).toBe("\u001b[31m");
     expect(scanAnsiOscAt(unfinished, 0)).toEqual(first);
   });
 
   it("bounds OSC search work in the real strip and segment consumers", () => {
     const repeated = "\u009d".repeat(16_384);
-    const input = repeated + "\u001b[31m" + "tail";
+    const input = repeated + "\u001b[31mtail";
     const plain = repeated + "tail";
     const consumers = [
       () => stripAnsi(input),
@@ -102,6 +106,7 @@ describe("terminal ansi helpers", () => {
           .join(""),
     ];
     for (const consume of consumers) {
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
       const exec = RegExp.prototype.exec;
       let work = 0;
       const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (

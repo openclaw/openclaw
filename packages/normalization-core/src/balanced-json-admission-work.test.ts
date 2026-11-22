@@ -81,7 +81,7 @@ describe("balanced JSON extraction", () => {
   });
 
   it("uses original string ownership for opaque entry after hidden opening quotes", () => {
-    for (const text of ["text", "]", 'escaped \" quote']) {
+    for (const text of ["text", "]", 'escaped " quote']) {
       const parent = `[${JSON.stringify(text)}]`;
       const suffix = '{"after":true}';
       const source = parent + "] " + suffix;
@@ -156,7 +156,7 @@ describe("balanced JSON extraction", () => {
         ],
       },
       { source: '["[","]{}"]', quotes: [], intervals: [] },
-    ];
+    ] as const;
     for (const { source, quotes, intervals } of cases) {
       const opaqueSpans = quotes.map((index) => ({ startIndex: index, endIndex: index }));
       for (const raw of [source, source.replaceAll('"', " ")]) {
@@ -169,7 +169,7 @@ describe("balanced JSON extraction", () => {
             }),
           ).toEqual(
             intervals.map(([startIndex, endIndex]) => ({
-              json: source.slice(startIndex!, endIndex! + 1),
+              json: source.slice(startIndex, endIndex + 1),
               startIndex,
               endIndex,
             })),
@@ -222,7 +222,7 @@ describe("balanced JSON extraction", () => {
     const suffix = '{"after":true}';
     for (const parent of ["[]", "{}"]) {
       for (const separator of [" ", "\n", "\r\n", "\r"]) {
-        for (const prose of ["", '\"line one\n[0] line two\" ']) {
+        for (const prose of ["", '"line one\n[0] line two" ']) {
           const source = parent + separator + prose + suffix;
           for (const recoverAtLineStart of [false, true]) {
             expect(
@@ -407,16 +407,22 @@ describe("balanced JSON extraction", () => {
           for (const separator of [" ", "\n", "\r\n", "\r"]) {
             let source = `warning: ${opener}${placement === "outside" ? "warning " : ""}`;
             const opaqueSpans: { startIndex: number; endIndex: number }[] = [];
-            if (placement === "outside") source += closer + separator;
+            if (placement === "outside") {
+              source += closer + separator;
+            }
             for (const [index, frame] of frames.entries()) {
               opaqueSpans.push({
                 startIndex: source.length,
                 endIndex: source.length + frame.length - 1,
               });
               source += frame;
-              if (placement === "across" && index === 0) source += closer + separator;
+              if (placement === "across" && index === 0) {
+                source += closer + separator;
+              }
             }
-            if (placement === "inside") source += closer + separator;
+            if (placement === "inside") {
+              source += closer + separator;
+            }
             source += '"prose [0] end" ' + records.join("");
             const masked = source
               .split("")
@@ -721,7 +727,9 @@ describe("balanced JSON extraction", () => {
                 }),
               ).toEqual(
                 [crossing, ...(closeQuote ? records : [])]
-                  .filter((json) => !openers || openers.some((opener) => json.startsWith(opener)))
+                  .filter(
+                    (json) => !openers || openers.some((candidate) => json.startsWith(candidate)),
+                  )
                   .map((json) => ({
                     json,
                     startIndex: source.indexOf(json),
@@ -752,23 +760,27 @@ describe("balanced JSON extraction", () => {
         const push = Array.prototype.push;
         const pop = Array.prototype.pop;
         const parse = JSON.parse;
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
         const slice = String.prototype.slice;
         let pushes = 0;
         let pops = 0;
         let parsedUnits = 0;
         let copiedUnits = 0;
+        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
         Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
           pushes += items.length;
           return Reflect.apply(push, this, items);
         };
+        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
         Array.prototype.pop = function (this: unknown[]) {
           pops++;
           return Reflect.apply(pop, this, []);
         };
         JSON.parse = (text, reviver) => {
-          parsedUnits += String(text).length;
+          parsedUnits += text.length;
           return parse(text, reviver);
         };
+        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
         String.prototype.slice = function (this: string, start, end) {
           const result = Reflect.apply(slice, this, [start, end]);
           copiedUnits += result.length;
@@ -791,9 +803,12 @@ describe("balanced JSON extraction", () => {
             },
           });
         } finally {
+          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
           Array.prototype.push = push;
+          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
           Array.prototype.pop = pop;
           JSON.parse = parse;
+          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
           String.prototype.slice = slice;
         }
         expect(result).toEqual([
@@ -804,7 +819,9 @@ describe("balanced JSON extraction", () => {
         expect(copiedUnits).toBeLessThanOrEqual(3 * source.length);
         expect(pushes).toBeLessThanOrEqual(10 * source.length);
         expect(pops).toBeLessThanOrEqual(4 * source.length);
-        if (dangling) expect(pops).toBeGreaterThanOrEqual(depth + 1);
+        if (dangling) {
+          expect(pops).toBeGreaterThanOrEqual(depth + 1);
+        }
       }
     }
   });
@@ -862,8 +879,9 @@ describe("balanced JSON extraction", () => {
           startIndex: index,
           endIndex: index,
         }));
-        const openers = Array.from(source.matchAll(/[{\[]/g)).length;
+        const openers = Array.from(source.matchAll(/[{[]/g)).length;
         const parse = JSON.parse;
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
         const slice = String.prototype.slice;
         const push = Array.prototype.push;
         let parsedUnits = 0;
@@ -871,15 +889,17 @@ describe("balanced JSON extraction", () => {
         let calls = 0;
         let nodeEdges = 0;
         const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-          parsedUnits += String(text).length;
+          parsedUnits += text.length;
           calls++;
           return parse(text, reviver);
         });
+        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
         String.prototype.slice = function (this: string, start, end) {
           const result = Reflect.apply(slice, this, [start, end]);
           copiedUnits += result.length;
           return result;
         };
+        // eslint-disable-next-line no-extend-native -- Count native work without recursively recording spy calls.
         Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
           for (const item of items) {
             if (item && typeof item === "object" && "children" in item && "start" in item) {
@@ -895,7 +915,9 @@ describe("balanced JSON extraction", () => {
             strictJson: { source, opaqueSpans },
           });
         } finally {
+          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
           String.prototype.slice = slice;
+          // eslint-disable-next-line no-extend-native -- Restore synchronous work counters even if extraction fails.
           Array.prototype.push = push;
           spy.mockRestore();
         }
