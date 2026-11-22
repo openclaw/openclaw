@@ -21,9 +21,6 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
-    private(set) var nativeSessionCatalogs: [NativeSessionCatalog] = []
-    var nativeSessionCatalogsEnabled = false
-    private(set) var nativeSessionCatalogPreferenceRequired = false
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var activeAuthOption: AuthOption?
@@ -533,9 +530,6 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
-        self.nativeSessionCatalogs = []
-        self.nativeSessionCatalogsEnabled = false
-        self.nativeSessionCatalogPreferenceRequired = false
         self.detectedPrepareOptions = nil
         self.prepareAvailable = false
         self.clearProviderAuth()
@@ -632,9 +626,6 @@ extension OnboardingAISetupModel {
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
-            self.nativeSessionCatalogs = result.nativeSessionCatalogs ?? []
-            self.nativeSessionCatalogPreferenceRequired =
-                result.nativeSessionCatalogPreferenceRequired == true
             self.detectedPrepareOptions = result.prepareOptions
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
             self.providerAuthReconciliationPending = nil
@@ -828,10 +819,7 @@ extension OnboardingAISetupModel {
             gateway: self.gateway,
             serverLease: lease)
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        var params = request.params(supportsExactModel: supportsExactModel)
-        if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
-            params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
-        }
+        let params = request.params(supportsExactModel: supportsExactModel)
         // Keychain-unavailable degrades to an unbound per-attempt lease instead
         // of refusing setup: live matching stays attempt-exact, and relaunch
         // repeats activation rather than trusting the receipt, so a broken
@@ -1179,14 +1167,10 @@ extension OnboardingAISetupModel {
             return nil
         }
         guard let serverLease else { return nil }
-        var params = ["authChoice": AnyCodable(option.id)]
-        if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
-            params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
-        }
         return self.startSetupWizard(
             option,
             kind: kind,
-            params: params,
+            params: ["authChoice": AnyCodable(option.id)],
             serverLease: serverLease)
     }
 

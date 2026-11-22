@@ -848,6 +848,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-killed-run.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-checkout.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-refusals.process.test.ts",
+  "src/cli/update-cli/update-command-killed-run-replaced.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-restart.process.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",

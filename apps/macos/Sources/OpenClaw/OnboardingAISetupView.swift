@@ -461,26 +461,6 @@ struct OnboardingAISetupView: View {
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                if self.model.nativeSessionCatalogPreferenceRequired,
-                   !self.model.nativeSessionCatalogs.isEmpty
-                {
-                    Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show existing native conversations")
-                                .font(.callout.weight(.semibold))
-                            Text(String(
-                                format: String(localized: """
-                                Include existing %@ conversations in the sidebar. \
-                                This discovers them in place; it does not copy transcripts.
-                                """),
-                                self.model.nativeSessionCatalogSummary))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.checkbox)
-                    .padding(.bottom, 6)
-                }
                 Text("Connect an AI provider")
                     .font(.headline)
                 // Localization: the sign-in/API-key flow belongs to the selected provider, not OpenClaw.
