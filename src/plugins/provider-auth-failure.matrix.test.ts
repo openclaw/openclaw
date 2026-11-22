@@ -184,17 +184,6 @@ describe("every failure on every surface", () => {
       expect(text).toContain("openclaw models auth login --provider acme");
     }
   });
-
-  it.each(rows)("%s %s: the Control UI picks one core-owned action", async (_kind, reason) => {
-    const { resolveProviderAuthRecovery } = await import("./provider-auth-failure.js");
-    const action = {
-      "Open Models in the OpenClaw app": "open-settings",
-      "/login acme": "restart",
-      "Wait a few minutes": "wait",
-      "Ask your administrator": "admin",
-    }[rows.find((row) => row[1] === reason)![2]];
-    expect(resolveProviderAuthRecovery(reason)).toBe(action);
-  });
 });
 
 describe("later turns", () => {

@@ -19,6 +19,7 @@ const resolveChoice = vi.hoisted(() =>
 const runLoginFlow = vi.hoisted(() =>
   vi.fn<(opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>>(),
 );
+// mock-isolation: the core login flow writes config and auth stores; these tests observe only its options.
 vi.mock("../commands/models/auth.js", () => ({ runModelsAuthLoginFlowCore: runLoginFlow }));
 vi.mock("../plugins/provider-login-options.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-login-options.js")>()),

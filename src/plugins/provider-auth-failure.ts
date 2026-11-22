@@ -126,6 +126,7 @@ export function readProviderAuthFailure(error: unknown): ProviderAuthFailure | u
     if (current instanceof ProviderAuthFailure) {
       return current;
     }
+    // SAFETY: every field is optional and each one is type-checked below before use.
     const facts = current as Error & {
       reason?: unknown;
       providerDetail?: unknown;

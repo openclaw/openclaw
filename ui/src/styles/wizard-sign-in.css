@@ -100,42 +100,10 @@
   color: var(--text);
 }
 
-/* The pasted-address sign-in reads top to bottom, like the form it ends in. */
-.wizard-sign-in--paste {
-  justify-items: stretch;
-  gap: 8px;
-  padding: 4px 0 0;
-  text-align: start;
-}
-
-.wizard-sign-in--paste .wizard-sign-in__lead {
-  max-width: none;
-}
-
-.wizard-sign-in__header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.wizard-sign-in--paste .wizard-sign-in__badge {
-  flex: none;
-  width: 44px;
-  height: 44px;
+/* Paste sign-in shows the badge beside its title (64px to 44px). */
+.wizard-sign-in__badge--compact {
   margin: 0;
-}
-
-.wizard-sign-in--paste .wizard-sign-in__icon {
-  width: 28px;
-  height: 28px;
-  font-size: 14px;
-}
-
-.wizard-sign-in__paste-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
+  zoom: 0.69;
 }
 
 @media (prefers-reduced-motion: reduce) {
