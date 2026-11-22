@@ -798,6 +798,7 @@
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.370b34e5baa96ea1","source":"Hide Sub-sessions"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f2c9fb3155a5a6a7","source":"Home"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.348fd05d405dfcb4","source":"Loading sessions"},
+    {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2a07bf5bcaf8ff9f","source":"Mark as Read"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.fa49e465f1c719e4","source":"New Chat"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.168fc1131e0ed8f2","source":"No sessions"},
     {"path":"apps/ios/Sources/RootSidebar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5623a9086cb5ba2a","source":"Not pinned"},

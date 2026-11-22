@@ -998,6 +998,40 @@ struct ChatSessionSidebarModelTests {
         #expect(parent(runUnread: false)?.unreadSessionKeys == [])
     }
 
+    @Test func `a collapsed ancestor shows a folded run's unread while mark as read stays on its row`() throws {
+        // A completed run brings no spinner or failure subtitle; only the unread dot can reach grand.
+        let nodes = ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "agent:main:grand", updatedAt: 300, childSessions: ["agent:main:parent"]),
+                self.entry(key: "agent:main:parent", updatedAt: 200, parentSessionKey: "agent:main:grand"),
+                self.entry(
+                    key: "agent:main:subagent:run",
+                    updatedAt: 100,
+                    unread: true,
+                    spawnedBy: "agent:main:parent"),
+            ],
+            currentSessionKey: "agent:main:grand",
+            query: "")).flatMap(\.nodes)
+
+        let grand = try #require(nodes.first)
+        let parent = try #require(grand.children.first)
+        #expect(grand.showsUnread)
+        #expect(grand.unreadSessionKeys == [])
+        #expect(parent.showsUnread)
+        #expect(parent.unreadSessionKeys == ["agent:main:subagent:run"])
+    }
+
+    @Test func `mark as read on Home covers the runs folded into Home`() {
+        let roster = [
+            self.entry(key: "agent:main:main"),
+            self.entry(key: "agent:main:subagent:digest", unread: true, spawnedBy: "agent:main:main"),
+            self.entry(key: "agent:main:subagent:seen", spawnedBy: "agent:main:main"),
+        ]
+        let home = [roster[0]] + ChatSessionSidebarModel.foldedRuns(in: roster, under: "agent:main:main")
+
+        #expect(ChatSessionSidebarModel.unreadSessionKeys(in: home) == ["agent:main:subagent:digest"])
+    }
+
     @Test func `sessions without hierarchy data keep flat ordering`() {
         let nodes = ChatSessionSidebarModel.tree(from: [
             self.entry(key: "a"),

@@ -152,7 +152,13 @@ public enum ChatSessionSidebarModel {
 
         /// What Mark as Read clears: the row and the runs folded into it, which have no row of their own.
         public var unreadSessionKeys: [String] {
-            ([self.session] + self.foldedSessions).filter { $0.unread == true }.map(\.key)
+            ChatSessionSidebarModel.unreadSessionKeys(in: [self.session] + self.foldedSessions)
+        }
+
+        /// The row's unread dot: its own state, a folded run's, or one anywhere below it, so
+        /// collapsing a parent never hides a descendant's unread run (macOS reads badges.hasUnread too).
+        public var showsUnread: Bool {
+            self.badges.hasUnread
         }
     }
 
@@ -321,6 +327,12 @@ public enum ChatSessionSidebarModel {
                 ownerByChild: ownerByChild,
                 entry: { rowsByKey[$0] }) == parentKey
         }
+    }
+
+    /// Unread keys among a row and the runs folded into it. Home has no node, so it passes the
+    /// main session and `foldedRuns(in:under:)`.
+    public static func unreadSessionKeys(in sessions: some Sequence<OpenClawChatSessionEntry>) -> [String] {
+        sessions.filter { $0.unread == true }.map(\.key)
     }
 
     static func sidebarAgentID(_ session: OpenClawChatSessionEntry) -> String? {

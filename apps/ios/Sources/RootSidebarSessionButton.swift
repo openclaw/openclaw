@@ -25,8 +25,9 @@ struct RootSidebarSessionButton: View, Equatable {
     var body: some View {
         let session = self.node.session
         let isSelected = self.isSelected
-        // A folded run's unread state belongs to the row that replaces it.
-        let isUnread = !self.node.unreadSessionKeys.isEmpty
+        // A folded run's unread state belongs to the row that replaces it and to every
+        // ancestor, so a collapsed parent still shows it. Mark as Read stays row-scoped.
+        let isUnread = self.node.showsUnread
         Button {
             self.open(session)
         } label: {

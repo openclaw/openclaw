@@ -130,7 +130,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         if self.unreadKeys.isEmpty {
                             self.patch(unread: true)
                         } else {
-                            self.markRead(self.unreadKeys)
+                            self.performMutation(nil, Self.markingRead(self.unreadKeys))
                         }
                     }
                     self.actionButton("Rename…", systemImage: "pencil") {
@@ -224,8 +224,9 @@ struct CommandSessionActionsModifier: ViewModifier {
         self.unreadSessionKeys ?? (self.session.unread == true ? [self.session.key] : [])
     }
 
-    private func markRead(_ keys: [String]) {
-        self.performMutation(nil) { transport in
+    /// Clears unread on each key: a row and the runs folded into it, or Home and its runs.
+    static func markingRead(_ keys: [String]) -> Mutation {
+        { transport in
             for key in keys {
                 try await transport.patchSession(
                     key: key,

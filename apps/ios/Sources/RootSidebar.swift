@@ -495,7 +495,8 @@ struct RootSidebar: View {
         // Runs Home started have no row of their own; their status and attention belong here.
         let homeRuns = ChatSessionSidebarModel.foldedRuns(in: self.model.sessions, under: mainKey)
         let homeSessions = (mainSession.map { [$0] } ?? []) + homeRuns
-        let isUnread = homeSessions.contains { $0.unread == true }
+        let homeUnreadKeys = ChatSessionSidebarModel.unreadSessionKeys(in: homeSessions)
+        let isUnread = !homeUnreadKeys.isEmpty
         return HStack(spacing: 0) {
             Button {
                 self.appModel.openChat(sessionKey: mainKey)
@@ -540,6 +541,18 @@ struct RootSidebar: View {
             .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
             .overlay(alignment: .leading) {
                 OpenClawSessionColorStripe(color: mainSession?.color)
+            }
+            .contextMenu {
+                // Folded runs have no row of their own; Home clears them as a session row's menu does.
+                if isUnread {
+                    Button {
+                        self.performSessionMutation(
+                            resetActiveSessionKey: nil,
+                            CommandSessionActionsModifier.markingRead(homeUnreadKeys))
+                    } label: {
+                        Label(String(localized: "Mark as Read"), systemImage: "envelope.open")
+                    }
+                }
             }
             .accessibilityValue(isUnread ? String(localized: "Unread") : "")
             self.attentionBadges(for: homeSessions, targetID: "home")
