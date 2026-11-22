@@ -56,7 +56,7 @@ import { updateCommand } from "./update-command.js";
 // The next `openclaw update` after a real updater process was killed: each suite
 // importing this runs the update from its command entry to admitted execution.
 type Prepared = Awaited<ReturnType<typeof prepareUpdateCommand>>;
-const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn() }));
+const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn(), release: vi.fn() }));
 vi.mock("./shared.js", async (original) => ({
   ...(await original<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -68,6 +68,11 @@ vi.mock("./update-command-initialization-run.js", () => ({
 }));
 // mock-isolation: a dry run takes this path, and must never run a real preview from here.
 vi.mock("./update-command-admitted.js", () => ({ runAdmittedUpdate: mocks.proceed }));
+// Package installs past recovery prepare a release; preparing one builds a real package.
+vi.mock("../../update/cli.js", async (original) => ({
+  ...(await original<typeof import("../../update/cli.js")>()),
+  runReleaseUpdateCli: mocks.release,
+}));
 // Repair's finalization runs for real, as in the repair fixtures; only its Doctor
 // children, plugin installs and Doctor's own service maintenance are stand-ins.
 const finalization = vi.hoisted(() => ({
