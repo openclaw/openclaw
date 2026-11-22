@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import "../../components/modal-dialog.tsx";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
@@ -40,7 +41,7 @@ function Frame(props: {
   submitDisabled: boolean;
   danger?: boolean;
   wide?: boolean;
-  children: unknown;
+  children: JSX.Element;
 }) {
   return (
     <openclaw-modal-dialog
@@ -70,7 +71,7 @@ function Frame(props: {
           closeDisabled={props.busy}
           onClose={() => props.onClose()}
         />
-        <div class="oc-dialog__body roles-dialog__body">{props.children as never}</div>
+        <div class="oc-dialog__body roles-dialog__body">{props.children}</div>
         <openclaw-modal-actions class="oc-dialog__footer">
           <button type="button" class="btn" disabled={props.busy} onClick={() => props.onClose()}>
             {t("rolesPage.cancel")}
@@ -364,7 +365,9 @@ function DeleteRoleDialog(props: DialogProps) {
   const remove = async () => {
     const role = props.role;
     const target = replacement();
-    if (people().length && !(await props.roles.assign(people(), target))) {
+    // Mapped people follow their repointed GitHub mapping; only explicit assignments move here.
+    const assigned = people().filter((profile) => profile.roleSource === "assigned");
+    if (assigned.length && !(await props.roles.assign(assigned, target))) {
       return;
     }
     if (
@@ -390,7 +393,8 @@ function DeleteRoleDialog(props: DialogProps) {
       danger
       onClose={props.onClose}
       submitLabel={people().length ? t("rolesPage.deleteConfirm") : t("rolesPage.delete")}
-      submitDisabled={!replacement()}
+      // Reassignment needs the current roster; an unloaded one would look like nobody has the role.
+      submitDisabled={!replacement() || !props.roles.peopleLoaded()}
       onSubmit={() => void remove()}
     >
       <label class="field roles-field">

@@ -251,7 +251,10 @@ export function RoleEditor(props: {
                 label: t("rolesOptions.others." + value + ".label"),
               }))}
               onChange={(event) => {
-                const value = event.currentTarget.value as SessionsOthers;
+                const value = OTHERS.find((option) => option === event.currentTarget.value);
+                if (!value) {
+                  return;
+                }
                 edit((role) => {
                   role.sessions.others = value;
                   if (value === "invited") {
@@ -395,7 +398,12 @@ export function RoleEditor(props: {
                     label: t("rolesOptions.permission." + PERMISSION_KEYS[value] + ".label"),
                   }))}
                   onChange={(event) => {
-                    const value = event.currentTarget.value as InvitedPermission;
+                    const value = PERMISSIONS.find(
+                      (option) => option === event.currentTarget.value,
+                    );
+                    if (!value) {
+                      return;
+                    }
                     edit((role) => {
                       if (value === "workspace") {
                         delete role.sessions.invitedPermission;

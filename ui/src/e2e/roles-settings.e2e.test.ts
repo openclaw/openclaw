@@ -162,6 +162,29 @@ suite.define(() => {
     });
   });
 
+  it("drops an unsaved draft when another role opens", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await openRoles(page, undefined, "?role=collaborator");
+      await page.getByText("What this role allows").waitFor();
+      await page
+        .locator("label.roles-scope")
+        .filter({ hasText: "Approve agent actions" })
+        .locator("input")
+        .check();
+      await page.getByRole("region", { name: "Unsaved changes" }).waitFor();
+      await page.evaluate(() => {
+        history.pushState(null, "", "/settings/roles?role=operator");
+        dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await expect
+        .poll(() => page.locator(".content-header .page-title").textContent())
+        .toBe("operator");
+      await expect
+        .poll(() => page.getByRole("region", { name: "Unsaved changes" }).count())
+        .toBe(0);
+    });
+  });
+
   it("blocks saving a role that could not connect", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await openRoles(page, undefined, "?role=collaborator");

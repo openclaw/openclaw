@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Match, onSettled, Show, Switch } from "solid-js";
+import { createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
@@ -67,15 +67,20 @@ export function RolesPage() {
           </Match>
           <Match when={selected() ? definition() : undefined}>
             {(current) => (
-              <RoleEditor
-                roles={roles}
-                name={selected()}
-                definition={current()}
-                onBack={() => open("")}
-                onDuplicate={() => setDialog({ kind: "duplicate", role: selected() })}
-                onAssign={() => setDialog({ kind: "assign", role: selected() })}
-                onDelete={() => setDialog({ kind: "delete", role: selected() })}
-              />
+              // One editor per role: a draft never follows navigation to another role.
+              <For each={[selected()]}>
+                {(name) => (
+                  <RoleEditor
+                    roles={roles}
+                    name={name}
+                    definition={current()}
+                    onBack={() => open("")}
+                    onDuplicate={() => setDialog({ kind: "duplicate", role: selected() })}
+                    onAssign={() => setDialog({ kind: "assign", role: selected() })}
+                    onDelete={() => setDialog({ kind: "delete", role: selected() })}
+                  />
+                )}
+              </For>
             )}
           </Match>
           <Match when={true}>
