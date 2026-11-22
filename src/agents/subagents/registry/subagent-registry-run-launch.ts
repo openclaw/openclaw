@@ -1,4 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -231,6 +232,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
       };
       assertCurrent();
+      // Restart re-admits this source for the woken parent turn; unavailable ones get the baseline.
+      const requesterOperatorSource = captureQueuedOperatorRecoverySource(
+        authority?.operatorAuthority,
+      );
       preparedRows = await prepareSubagentRegistrationRows(
         childSessionKey,
         [
@@ -321,6 +326,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               },
               cfg,
             );
+          if (requesterOperatorSource && requesterOperatorSource.kind !== "unavailable") {
+            entry.requesterOperatorSource = requesterOperatorSource;
+          }
           const postimages = this.planSupersededKillReconciliations(rows, entry);
           postimages.set(runId, entry);
           plannedEntry = entry;

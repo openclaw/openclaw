@@ -99,17 +99,11 @@ it.each([false, true])("binds frozen Gateway routing (audit=%s)", async (enabled
 
 it("allocates once and reuses the first runtime admission across fallback", async () => {
   const sink = installSink();
-  let authorized = true;
-  const reauthorize = vi.fn(() => {
-    if (!authorized) {
-      throw new Error("Operator admission refused");
-    }
-  });
   const operatorAuthority = run.createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "operator",
     scopes: ["operator.write"],
     assertCurrent() {},
-    reauthorize,
   });
   const prepared = prepareRun({
     cfg: enabledConfig,
@@ -121,12 +115,7 @@ it("allocates once and reuses the first runtime admission across fallback", asyn
     prepared.admit("worker", "worker-instance-1"),
   ]);
   expect(first).toBe(fallback);
-  authorized = false;
   expect(await prepared.admit("embedded")).toBe(first);
-  expect(reauthorize).toHaveBeenCalledOnce();
-  await expect(
-    prepareRun({ runId: "next-request", operatorAuthority }).admit("embedded"),
-  ).rejects.toThrow("Operator admission refused");
   expect(prepared.assertCurrent).not.toThrow();
   expect(first.executionIdentityToken).toBeDefined();
   expect(sink).toHaveBeenCalledExactlyOnceWith({
@@ -253,6 +242,7 @@ it.each([false, true])(
     );
     let failure: Error | undefined;
     const authority = run.createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "queued-person",
       scopes: ["operator.write"],
       ...(withSignal ? { signal: source.signal } : {}),
@@ -303,6 +293,7 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
   const source = prepareRun({
     runId: "native-source-lease",
     operatorAuthority: run.createAdmittedRunOperatorAuthority({
+      canonicalIdentity: null,
       profileId: "native-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {

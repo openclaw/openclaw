@@ -13,6 +13,7 @@ import {
   createHostedWorker,
   isHostedWorkerEndpoint,
 } from "./shared-worker-host.js";
+import { sharedHostSqliteKeys } from "./shared-worker-host.types.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -224,7 +225,9 @@ export function createSqliteWorkerLifecycle({
     // Lean: one carrier per class is a logical endpoint; external databases stay isolated.
     // A broker that captured unqualified native close retires carriers by worker exit.
     const hostedKey =
-      options.carrierClass !== "external" ? `sqlite-store:${options.carrierClass ?? "agent"}` : "";
+      options.carrierClass !== "external"
+        ? sharedHostSqliteKeys[options.carrierClass ?? "agent"]
+        : "";
     const hosted =
       hostedKey !== "" &&
       explicitSqliteCloseReleasesNativeResources &&

@@ -28,7 +28,11 @@ import {
 import { buildModelsListResult } from "./models-list-result.js";
 import { startGatewayWizard } from "./setup-admission.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import { runSetupActivation, startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import {
+  admitProviderSignIn,
+  runSetupActivation,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -131,24 +135,21 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         }
         return model
           ? {
-              name: model.name,
-              activation: {
-                kind: toSavedAuthSetupKind(profileId),
-                ...(params.agentId ? { agentId: params.agentId } : {}),
-                modelRef: model.id.startsWith(`${model.provider}/`)
-                  ? model.id
-                  : `${model.provider}/${model.id}`,
-                selectModel: true,
-              },
+              kind: toSavedAuthSetupKind(profileId),
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              modelRef: model.id.startsWith(`${model.provider}/`)
+                ? model.id
+                : `${model.provider}/${model.id}`,
+              selectModel: true,
             }
           : undefined;
       };
+      const ownerKey = resolveSystemAgentSessionOwnerKey({ client });
       if (choice.appGuidedAuth && choice.credentialOnly !== true) {
         await startSetupActivationWizard({
           request: options,
           sessionId: params.sessionId,
-          ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
-          connectionBound: true,
+          ownerKey,
           isLocalClient: client.internal?.isLocalClient === true,
           assertCurrent: assertLoginCurrent,
           activation: {
@@ -161,11 +162,22 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      // The sign-in outlives its socket: the user leaves for the provider's page and
+      // comes back on a new connection. The retained grant still stops it on revocation.
       await startGatewayWizard({
         request: options,
         sessionId: params.sessionId,
-        connectionBound: true,
         assertCurrent: assertLoginCurrent,
+        ...(ownerKey
+          ? {
+              admit: (create: () => WizardSession, assertCurrent: () => void) =>
+                admitProviderSignIn(
+                  { sessionId: params.sessionId, ownerKey, starter: client, context },
+                  create,
+                  assertCurrent,
+                ),
+            }
+          : {}),
         createSession: (assertCurrent) =>
           new WizardSession(
             async (prompter, signal, runner) => {
@@ -236,14 +248,14 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 );
               }
               const profileId = result.profiles[0]?.profileId;
-              const first =
+              const activation =
                 params.selectModel === true && profileId
                   ? await resolveFirstModel(profileId)
                   : undefined;
-              if (first) {
+              if (activation) {
                 try {
                   await runSetupActivation({
-                    activation: first.activation,
+                    activation,
                     isLocalClient: client.internal?.isLocalClient === true,
                     prompter,
                     signal,
@@ -253,10 +265,10 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   });
                 } catch (error) {
                   signal.throwIfAborted();
-                  throw new ProviderCredentialsSavedError(
-                    `Your sign-in was saved, but ${first.name} could not be set up for this agent: ${formatErrorMessage(error)} Choose a model in Settings → Models.`,
-                    { cause: error },
-                  );
+                  // Activation's message already says the sign-in is saved and why the check failed.
+                  throw new ProviderCredentialsSavedError(formatErrorMessage(error), {
+                    cause: error,
+                  });
                 }
               }
             },

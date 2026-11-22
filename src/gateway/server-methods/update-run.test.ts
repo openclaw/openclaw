@@ -13,6 +13,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
+const install = vi.hoisted(() => ({ kind: "git" }));
 vi.mock("../../update/run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../update/run.js")>()),
   prepareUpdate,
@@ -26,7 +27,7 @@ vi.mock("../../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
     root: "/tmp/openclaw-checkout",
-    status: { root: "/tmp/openclaw-checkout", installKind: "git", packageManager: "pnpm" },
+    status: { root: "/tmp/openclaw-checkout", installKind: install.kind, packageManager: "pnpm" },
     installReceipt: null,
   }),
 }));
@@ -38,6 +39,7 @@ vi.mock("./update-admission.js", () => ({
 let lifecycle: UpdateCheckLifecycle;
 let home: TempHomeEnv;
 beforeEach(async () => {
+  install.kind = "git";
   home = await createTempHomeEnv("openclaw-update-run-git-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
@@ -89,14 +91,20 @@ it("shows a Control UI update in the app instead of the conversation", async () 
   );
 });
 
-it("applies the commit a scheduled campaign pinned instead of the moving upstream", async () => {
+it.each(["git", "package"])("applies the %s target a scheduled campaign pinned", async (kind) => {
+  install.kind = kind;
   const sha = "c".repeat(40);
+  const version = "2026.11.6";
+  const target =
+    kind === "git"
+      ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
+      : { kind: "package", version };
   const bindRun = vi.fn();
   lifecycle.campaign = {
     adopt: () => ({
       status: "adopted",
       campaignId: "campaign-1",
-      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 },
+      target,
     }),
     bindRun,
     clear: vi.fn(),
@@ -107,11 +115,13 @@ it("applies the commit a scheduled campaign pinned instead of the moving upstrea
   expect(run).toMatchObject({
     trigger: "campaign",
     origin: { campaignId: "campaign-1" },
-    target: { sha },
+    target: kind === "git" ? { sha } : { version },
   });
   expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
   await vi.waitFor(() =>
-    expect(prepareUpdate).toHaveBeenCalledWith(expect.objectContaining({ sha })),
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
+    ),
   );
 });
 
@@ -128,4 +138,29 @@ it("restarts into the prepared release after the requested delay", async () => {
       expect.objectContaining({ reason: "update.run", delayMs: 7000 }),
     ),
   );
+});
+
+it("prepares package installs through the release path on the stable channel", async () => {
+  install.kind = "package";
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runningRoot: "/tmp/openclaw-checkout",
+        channel: "stable",
+      }),
+    ),
+  );
+});
+
+it("refuses an unrecognized installation before recording or preparing an update", async () => {
+  install.kind = "unknown";
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({
+    ok: false,
+    runId: null,
+    code: "unmanaged-package-install",
+  });
+  expect(prepareUpdate).not.toHaveBeenCalled();
 });

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import {
   bindReplyInputChannel,
   bindWorkerToolPreparation,
@@ -29,7 +29,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import {
+  prepareGatewayOperatorRunAuthority,
+  type PreparedGatewayOperatorRunAuthority,
+} from "../gateway/operator-run-authority.js";
 import type { GatewayClient } from "../gateway/server-methods/client-types.js";
 import {
   dispatchProfile,
@@ -56,7 +59,7 @@ afterEach(() => testing.resetSessionControllerForTest());
 
 it("copies private turn participants and freezes only their shared command target", () => {
   let current = true;
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "participant",
     scopes: ["operator.read"],
     assertCurrent() {
@@ -254,8 +257,8 @@ it.each<[string, Outcome, JoinCase?]>([
     { sharedOwner: { direction: "incoming" }, after: "owner-revoke" },
   ],
   [
-    "shared WebUI authority revoked before submission",
-    "failed",
+    "admitted shared WebUI continuation survives source revocation",
+    "accepted",
     { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
   ],
 ])(
@@ -307,7 +310,7 @@ it.each<[string, Outcome, JoinCase?]>([
       const original = structuredClone([run.run.clientCaps, run.run.gatewayUiCommandTarget]);
       const sourceRevocation = new AbortController();
       const assertSource = () => sourceRevocation.signal.throwIfAborted();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "join-owner",
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
@@ -315,7 +318,7 @@ it.each<[string, Outcome, JoinCase?]>([
         assertCurrent: assertSource,
       });
       const sharedRevocation = new AbortController();
-      let sharedCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let sharedCapture: PreparedGatewayOperatorRunAuthority | undefined;
       if (c.sharedOwner && !c.sharedOwner.webSource) {
         ensureGatewayOwnerProfile(null);
         const client: GatewayClient = {
@@ -331,7 +334,7 @@ it.each<[string, Outcome, JoinCase?]>([
           authPolicy: captureGatewayAuthPolicy(cfg, { role: "operator", authMethod: "token" }),
           internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
         };
-        sharedCapture = await captureGatewayOperatorRunAuthority({
+        sharedCapture = await prepareGatewayOperatorRunAuthority({
           client,
           context: { getRuntimeConfig: () => cfg },
           sourceAuthority: {
@@ -348,7 +351,7 @@ it.each<[string, Outcome, JoinCase?]>([
       const webAuthority =
         sharedCapture?.authority ??
         (c.sharedOwner?.webSource === "forged"
-          ? createAdmittedRunOperatorAuthority({
+          ? createTestOperatorAuthority({
               ...operatorAuthority,
               profileId: "gateway-owner",
               recoverySnapshot: operatorRecoverySnapshotFixture("gateway-owner", "forged-grant", {
@@ -377,7 +380,7 @@ it.each<[string, Outcome, JoinCase?]>([
           run.originatingChannel = "telegram";
           run.run.messageProvider = "telegram";
         } else if (c.crossSurface === "shared") {
-          run.operatorAuthority = createAdmittedRunOperatorAuthority({
+          run.operatorAuthority = createTestOperatorAuthority({
             ...operatorAuthority,
             profileId: "gateway-owner",
           });
@@ -490,7 +493,7 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         const incomingRevocation = new AbortController();
         if (c.after === "caller-revoke") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
+          incoming.operatorAuthority = createTestOperatorAuthority({
             ...operatorAuthority,
             source: {},
             assertCurrent: () => incomingRevocation.signal.throwIfAborted(),
@@ -526,7 +529,7 @@ it.each<[string, Outcome, JoinCase?]>([
           incoming.run.workspaceDir = `${state.workspaceDir}/other`;
         }
         if (c.mismatch === "profile" || c.mismatch === "scopes") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
+          incoming.operatorAuthority = createTestOperatorAuthority({
             ...operatorAuthority,
             ...(c.mismatch === "profile"
               ? { profileId: "another-owner" }
@@ -756,13 +759,6 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             ),
           });
-          if (c.after === "shared-revoke") {
-            await expect(admission).rejects.toThrow("Shared browser authority revoked");
-            expect(delivered).not.toHaveBeenCalled();
-            expect(replacement).not.toHaveBeenCalled();
-            assertFrozen();
-            return;
-          }
           const attempt = await admission;
           expect((await attempt.outcome).status).toBe(outcome);
           expect(delivered).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);

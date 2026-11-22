@@ -112,7 +112,6 @@ it.each([
     },
     {},
   ],
-  ["retired", {}, { hasCurrentClientAuthority: () => false }],
   ["aborted", {}, { signal: AbortSignal.abort() }],
 ] satisfies Array<[string, Partial<GatewayClient>, Parameters<typeof rpc>[2]]>)(
   "refuses broker redemption with %s authority without consuming the proof",

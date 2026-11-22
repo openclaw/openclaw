@@ -624,6 +624,7 @@ describe("native command admission in DMs", () => {
 
   it("keeps the /think menu available to an explicitly authorized sender outside the DM allowlist", async () => {
     const bot = await createBot(true, true, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
       commands: { allowFrom: { telegram: [String(from.id)] } },
       channels: {
         telegram: {

@@ -56,6 +56,9 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentId: resolvedAgentId,
     allowPluginNormalization: false,
   });
+  if (!configuredDefault) {
+    return usage;
+  }
   const policy = resolveAgentHarnessPolicy({
     config,
     agentId: resolvedAgentId,

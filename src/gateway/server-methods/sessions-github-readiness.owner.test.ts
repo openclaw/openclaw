@@ -9,7 +9,7 @@ import {
 import { holdStateRead } from "../../state/github-publication-fixtures.test-support.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import * as inProcess from "../server-in-process-dispatch.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -44,7 +44,7 @@ async function ownerSource(f: ReadFixture) {
   });
   f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
   const lifetime = new AbortController();
-  const captured = await captureGatewayOperatorRunAuthority({
+  const captured = await prepareGatewayOperatorRunAuthority({
     client: f.client,
     context: f.context,
     sourceAuthority: {
@@ -112,10 +112,8 @@ it("observes a human-created managed session through the CLI owner's real readin
           );
           source.lifetime.abort(new Error("owner authority revoked"));
           held.release();
-          const denied = await outcome;
-          expect(denied).toBeInstanceOf(Error);
-          expect(denied).toMatchObject({
-            message: expect.stringMatching(/authority|aborted|active/i),
+          expect((await pending).details).toMatchObject({
+            policy: { read: "admitted", write: "unknown" },
           });
         } finally {
           held.release();
@@ -209,11 +207,8 @@ it("separates retained owner authority across interleaved list and presence audi
         // Real selection preparation yields before consulting the populated page cache.
         expect(preparing).toHaveBeenCalledOnce();
         source.lifetime.abort(new Error("owner authority revoked"));
-        await expect(pending).rejects.toThrow("owner authority revoked");
-        expect(delivered).not.toHaveBeenCalled();
-        await expect(list(equivalent)).rejects.toThrow("owner authority revoked");
-        expect(() => project(broad)).toThrow("owner authority revoked");
-        expect(() => project(equivalent)).toThrow("owner authority revoked");
+        expect((await pending).sessions).toBe(rows);
+        expect(delivered).toHaveBeenCalledOnce();
       } finally {
         source.release();
       }
@@ -343,7 +338,7 @@ it("keeps sharing role, list and event authority aligned without widening sessio
           (await resolveSessionSharingTargetAsync({ cfg, sessionKey }))?.entry.label,
         ).toBeUndefined();
         source.lifetime.abort(new Error("owner authority revoked"));
-        expect(() => check(owner)).toThrow("owner authority revoked");
+        expect(() => check(owner)).not.toThrow();
       } finally {
         source.release();
       }

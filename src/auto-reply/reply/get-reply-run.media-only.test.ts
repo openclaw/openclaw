@@ -15,8 +15,7 @@ vi.mock("./reply-tool-authority.js", async (importOriginal) => ({
 }));
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import * as runFixtures from "../../agents/admitted-run-context.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -701,7 +700,7 @@ describe("runPreparedReply media-only handling", () => {
       const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
       const admitted = kind === "owner" || kind === "revoked";
       setRuntimeConfigSnapshot(cfg);
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const { operationalRunInstance } = runFixtures.createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const identity: AgentRuntimeIdentity = {
         kind: "agentRuntime",
@@ -1837,7 +1836,7 @@ describe("runPreparedReply media-only handling", () => {
     const abortController = new AbortController();
     const sourceAbortController = new AbortController();
     const operatorController = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = runFixtures.createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       assertCurrent: () => operatorController.signal.throwIfAborted(),

@@ -14,17 +14,13 @@ import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
-import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handleApprovalResolve as handleOwnedApprovalResolve } from "./approval-shared.js";
 import type { createApprovalHandlers } from "./approval.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "./session-mutation-guards.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
 
 export async function createApprovalSessionFixture(
@@ -144,7 +140,6 @@ type ApprovalInvocationParams = {
   client: GatewayWsClient | null;
   context?: GatewayRequestHandlerOptions["context"];
   sessionMutationCommitGuard?: () => void;
-  transport?: "websocket" | "sdk";
 };
 
 export function createApprovalInvocation(params: ApprovalInvocationParams) {
@@ -168,13 +163,6 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
       ? { sessionMutationCommitGuard: params.sessionMutationCommitGuard }
       : {}),
   };
-  if (client && params.transport !== "sdk") {
-    bindWebSocketRequestMutationAuthority(
-      request,
-      client,
-      new SharedGatewaySessionGenerationState({ current: undefined, required: null }).reader,
-    );
-  }
   const options = bindGatewayRequestHandlerMutationAuthority(
     request,
     { ...request, params: params.body },
