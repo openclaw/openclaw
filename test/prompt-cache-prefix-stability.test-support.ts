@@ -462,11 +462,17 @@ export function usePrefixStabilityJourney() {
           });
         }
       };
-      const start = (sessionKey: string, message: string, queueMode?: "steer") =>
+      const start = (
+        sessionKey: string,
+        message: string,
+        queueMode?: "steer",
+        attachments?: Array<Record<string, string>>,
+      ) =>
         client.request<{ runId?: string }>("chat.send", {
           sessionKey,
           message,
           ...(queueMode ? { queueMode } : {}),
+          ...(attachments ? { attachments } : {}),
           deliver: false,
           idempotencyKey: `prefix-stability-${api}-${++ordinal}`,
         });
@@ -539,15 +545,26 @@ export function usePrefixStabilityJourney() {
         await client.request("sessions.subscribe", {});
         const steered = await start(TARGET, "STEP-SLOW steer target");
         await reached(() => sentToTarget("STEP-SLOW steer target"));
-        // A steer from the chat composer; the tool is held until the run has taken it.
-        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer");
+        // A steer from the chat composer with a document; the tool is held until the run has
+        // taken it. Later runs must replay the document text the model saw, not drop it.
+        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer", [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "steer-notes.txt",
+            content: Buffer.from("STEER-DOC-BODY notes for the steered run").toString("base64"),
+          },
+        ]);
         await reached(() => steersTaken > 0);
         await fs.writeFile(path.join(fixture.workspaceDir, "release-0"), "");
         await wait("steer", steered);
         await until(() => sentToTarget("STEER-INPUT"));
-        // The steered input joins the same run, right after the tool result it waited for.
+        // The steered input joins the same run, right after the tool result it waited for, with
+        // its document text.
         expect(
-          targetRequests.some((r) => /slow-finished[\s\S]*STEER-INPUT/.test(lastMessage(r))),
+          targetRequests.some((r) =>
+            /slow-finished[\s\S]*STEER-INPUT[\s\S]*STEER-DOC-BODY/.test(lastMessage(r)),
+          ),
         ).toBe(true);
         step = "cron";
         const cronJob = {

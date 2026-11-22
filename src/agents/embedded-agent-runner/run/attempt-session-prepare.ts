@@ -606,7 +606,11 @@ export async function prepareEmbeddedAttemptSessionManager(
       latestPersistedUserMessage = message;
       latestRuntimeUserMessage = runtimeMessage;
       if (runtimeMessage) {
-        userTranscriptContextRegistry.record(runtimeMessage, message);
+        userTranscriptContextRegistry.record(
+          runtimeMessage,
+          message,
+          latestUserTurnTranscriptRecorder,
+        );
       }
       attempt.onUserMessagePersisted?.(message);
     },
@@ -700,7 +704,11 @@ export async function prepareEmbeddedAttemptSessionManager(
         const runtimeMessage =
           latestRuntimeUserMessage ??
           (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
-        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
+        return userTranscriptContextRegistry.list(
+          runtimeMessage,
+          transcriptMessage,
+          latestUserTurnTranscriptRecorder,
+        );
       },
       preparedUserTurnMessage,
     },
