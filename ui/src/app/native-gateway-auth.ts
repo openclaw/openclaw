@@ -256,11 +256,11 @@ export function createNativeGatewayConnectAuth(
         waitingForPort.delete(request.id);
         clearTimeout(timer);
         stopAbort();
-        if (error instanceof NativeGatewayAuthUnavailableError) {
-          refusals += 1;
-          if (refusals >= NATIVE_AUTH_FAST_REFUSALS) {
-            error.retryAfterMs = NATIVE_AUTH_REFUSED_RETRY_MS;
-          }
+        if (
+          error instanceof NativeGatewayAuthUnavailableError &&
+          ++refusals >= NATIVE_AUTH_FAST_REFUSALS
+        ) {
+          error.retryAfterMs = NATIVE_AUTH_REFUSED_RETRY_MS;
         }
         if (error !== undefined) {
           reject(error);

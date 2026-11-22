@@ -138,15 +138,17 @@ export class GatewayBrowserClient {
       buildConnectParams: (plan) => plan.params,
       onConnectPlanError: (error) => {
         if (this.opts.nativeConnectAuth) {
-          const refused = error instanceof NativeGatewayAuthUnavailableError;
           this.nativeAuthError =
             error instanceof GatewayRequestError
               ? error
               : new GatewayRequestError({
                   code: "UNAVAILABLE",
                   message: formatConnectionErrorSummary(error),
-                  retryable: refused,
-                  retryAfterMs: refused ? error.retryAfterMs : undefined,
+                  retryable: error instanceof NativeGatewayAuthUnavailableError,
+                  retryAfterMs:
+                    error instanceof NativeGatewayAuthUnavailableError
+                      ? error.retryAfterMs
+                      : undefined,
                 });
           return {
             closeCode: CONNECT_FAILED_CLOSE_CODE,
