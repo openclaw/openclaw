@@ -2,7 +2,11 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+} from "../shared/operator-scope-compat.js";
 import {
   decideOperatorAdmission,
   prepareOperatorAdmission,
@@ -23,7 +27,8 @@ import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-t
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
-  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
+  /** Only Gateway recovery reauthenticates a Control UI profile. */
+  authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
   automationAdmin: boolean;
   release: () => void;
@@ -39,41 +44,47 @@ export async function restoreGatewayOperatorSource(params: {
   prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
   await params.prepareCurrent?.();
-  const facts = {
-    kind: "gateway",
-    snapshot: params.snapshot,
-    source: params.source,
+  return restoreGatewayQueuedOperatorRecovery({
+    source: { kind: "gateway", snapshot: params.snapshot },
+    operatorSource: params.source,
     agentId: params.agentId,
-  } as const;
-  const prepared = await prepareOperatorAdmission(facts, params.context);
-  try {
-    // This producer's custody fence checks the claim/occurrence, not requester policy.
-    params.assertCurrent();
-  } catch (error) {
-    prepared.ingress?.release();
-    prepared.identity?.release();
-    throw error;
-  }
-  return decideOperatorAdmission(facts, prepared);
+    context: params.context,
+    assertCurrent: params.assertCurrent,
+  });
 }
 
-/** A queued native launch reuses its original authenticated source, never profile attribution. */
-export async function restoreGatewayQueuedOperatorRecovery(params: {
+type QueuedRecoveryParams = {
   source: unknown;
   liveAuthority?: AdmittedRunOperatorAuthority;
   operatorSource?: RestartRecoveryOperatorSource;
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
-}): Promise<
-  Pick<
-    RestoredGatewayOperatorAuthority,
-    "authority" | "controlUiAdmin" | "automationAdmin" | "release"
-  > & {
-    /** Only Gateway recovery reauthenticates a Control UI profile. */
-    authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+};
+
+/**
+ * A queued native launch reuses its original authenticated source, never profile attribution.
+ * Every saved-requester start comes here. Admission only narrows scopes, so a start also needs
+ * the write grant a live chat.send needs: operator.sessions.write, which write, admin and
+ * own-session write satisfy. In-run continuations skip this; channel senders chat without one.
+ */
+export async function restoreGatewayQueuedOperatorRecovery(
+  params: QueuedRecoveryParams,
+): Promise<RestoredGatewayOperatorAuthority> {
+  const admitted = await admitQueuedSource(params);
+  const { channelRecoverySource, scopes } = admitted.authority;
+  if (!channelRecoverySource && !operatorScopeSatisfied("operator.sessions.write", scopes)) {
+    admitted.release();
+    throw new GatewayOperatorRecoveryAuthorizationError(
+      "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+    );
   }
-> {
+  return admitted;
+}
+
+async function admitQueuedSource(
+  params: QueuedRecoveryParams,
+): Promise<RestoredGatewayOperatorAuthority> {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
   const capturedFacts =
@@ -108,7 +119,7 @@ export async function captureGatewayOperatorContinuation(
   }
   const facts = captureQueuedOperatorRecoverySource(inherited) ?? { kind: "unavailable" };
   const context = input.context.resolveGatewayContext?.() ?? input.context;
-  const restored = await restoreGatewayQueuedOperatorRecovery({
+  const restored = await admitQueuedSource({
     source: facts,
     liveAuthority: inherited,
     agentId: input.agentId,
