@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import type { OperatorRunRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "../gateway/operator-run-recovery.js";
@@ -102,7 +99,6 @@ export function createPluginServiceSessionWork(params: {
       throw new Error("Session work requires its registered tool owner");
     }
     const caller = getGatewayToolCallerIdentity();
-    const assertCaller = captureGatewayToolCallerAssertion();
     if (caller && (caller.agentId !== input.agentId || caller.sessionKey !== input.sessionKey)) {
       throw new Error("Session work must target the invoking agent's own conversation");
     }
@@ -126,7 +122,6 @@ export function createPluginServiceSessionWork(params: {
         if (context() !== owner) {
           throw new Error("Session work Gateway changed");
         }
-        assertCaller?.();
         captured.assertInvocationCurrent?.();
         captured.authority?.assertCurrent();
         assertSession?.();
