@@ -1,0 +1,8 @@
+132
+# Participant yield extends the existing native invitee-child-grandchild proof:
+# both generations yield/resume with exact tool ceilings and private completion,
+# stable task identity survives the new execution generation, and revocation
+# while yielded cancels the pending child without an owner-authority resume.
+# Existing discovery and requester fixtures add fail-first allowlist/runtime
+# checks and reject earlier owner-turn children. No new test root, timeout,
+# retry, assertion removal, existing allocation change or threshold increase.

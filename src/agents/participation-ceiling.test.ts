@@ -18,6 +18,7 @@ import {
 } from "./embedded-agent-runner/run/permission-change.js";
 import { resolveExecDefaults } from "./exec-defaults.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import type { ParticipationCeiling } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
@@ -210,6 +211,7 @@ it("rejects plugin collisions within the participating core tool projection", ()
 it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
   const read = createStubTool("read");
   const spawn = createStubTool("sessions_spawn");
+  const yieldTool = createStubTool("sessions_yield");
   const denied = [
     "message",
     "github_publish",
@@ -223,19 +225,31 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   ].map(createStubTool);
   const plugin = createStubTool("web_fetch");
   setPluginToolMeta(plugin, { pluginId: "untrusted-plugin", optional: false });
-  for (const tool of [read, spawn, plugin, ...denied]) {
+  for (const tool of [read, spawn, yieldTool, plugin, ...denied]) {
     tool.execute = vi.fn(async () => ({ content: [], details: {} }));
   }
   const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [read, spawn, plugin, ...denied] });
+  registerHeadlessToolSearchCatalog({
+    catalogRef,
+    tools: [read, spawn, yieldTool, plugin, ...denied],
+  });
   const deniedIds = catalogRef
-    .current!.entries.filter((entry) => entry.name !== "read" && entry.name !== "sessions_spawn")
+    .current!.entries.filter(
+      (entry) => !["read", "sessions_spawn", "sessions_yield"].includes(entry.name),
+    )
     .map((entry) => entry.id);
   const runtime = new ToolSearchRuntime(
-    { catalogRef, participationCeiling: { ...ceiling, tools: ["read", "sessions_spawn"] } },
+    {
+      catalogRef,
+      participationCeiling: { ...ceiling, tools: ["read", "sessions_spawn", "sessions_yield"] },
+    },
     resolveToolSearchConfig(),
   );
-  expect(runtime.all().map((entry) => entry.name)).toEqual(["read", "sessions_spawn"]);
+  expect(runtime.all().map((entry) => entry.name)).toEqual([
+    "read",
+    "sessions_spawn",
+    "sessions_yield",
+  ]);
   expect(await runtime.search("message")).toEqual([]);
   for (const id of deniedIds) {
     await expect(runtime.describe(id)).rejects.toThrow();
@@ -245,6 +259,8 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   expect(read.execute).toHaveBeenCalledOnce();
   await runtime.call("sessions_spawn", {});
   expect(spawn.execute).toHaveBeenCalledOnce();
+  await runtime.call("sessions_yield", {});
+  expect(yieldTool.execute).toHaveBeenCalledOnce();
   for (const tool of [plugin, ...denied]) {
     expect(tool.execute).not.toHaveBeenCalled();
   }
@@ -401,4 +417,16 @@ it("discovers and reads eligible installed skills without widening participant f
     await expect(narrowed.describe(name)).rejects.toThrow();
     await expect(narrowed.call(name, { name: "guide", query: "guide" })).rejects.toThrow();
   }
+});
+
+it("does not lend a participant another turn's runtime yield claim", async () => {
+  const runtimeClaim = vi.fn(() => true);
+  const claim = createRequesterYieldCallback({
+    participationCeiling: ceiling,
+    requesterAgentId: "main",
+    requesterSessionKey: ceiling.sessionKey,
+    claimYieldCompletion: runtimeClaim,
+  });
+  expect(await claim?.()).toBe(false);
+  expect(runtimeClaim).not.toHaveBeenCalled();
 });
