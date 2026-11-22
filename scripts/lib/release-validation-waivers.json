@@ -268,7 +268,8 @@
           "jobName": "openclaw/ci-gate",
           "stepName": "Verify selected CI lanes",
           "causes": [
-            "checks-ui finished with cancelled (selected=true)"
+            "checks-ui finished with cancelled (selected=true)",
+            "checks-ui finished with failure (selected=true)"
           ]
         }
       ]
@@ -866,7 +867,7 @@
       "targetVersion": "2026.11.10-beta.2",
       "childRole": "normalCi",
       "jobName": "macos-swift (tests)",
-      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept Swift job cancellation after silent-pairing and normal socket half-close tests exceeded600s. Frozen publisher rejects cancelled jobs despite this waiver; this records acceptance without overriding that verifier.",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts: accept cancellation only in the Swift test step after the observed silent-pairing and normal socket half-close timeouts. This is missing execution evidence, not a proven flake or passing tests. Requires trusted publisher support for exact cancelled-step grants; raw cancelled conclusion is retained.",
       "aggregates": [
         {
           "jobName": "openclaw/ci-gate",
@@ -875,7 +876,8 @@
             "macos-swift finished with cancelled (selected=true)"
           ]
         }
-      ]
+      ],
+      "cancelledStep": "Swift test"
     }
   ]
 }
