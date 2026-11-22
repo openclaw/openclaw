@@ -18,10 +18,6 @@ import {
 // compromises"; docs/gateway/security/trust-model.md). Admission, cancellation, secrets and
 // data fences are not listed: they stay.
 export const LIFETIME_CHECK_CALLS = [
-  "captureRequestAuthorityAssertion",
-  "bindWebSocketRequestMutationAuthority",
-  "captureGatewayRequestOperatorGuard",
-  "retainGatewayRequestMutationAuthority",
   "captureOperatorToolGatewayAuthority",
   "resolveSessionRuntimeAuthority",
   "captureHttpRequestAuthority",
@@ -31,7 +27,6 @@ export const LIFETIME_CHECK_CALLS = [
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
   "captureGatewayToolReceiptAssertion",
-  "captureSourceInvocationGuard",
   "captureMediaGenerationAdmission",
 ] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);
