@@ -30,7 +30,9 @@ import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
+// Orphaned reindex scratch databases become stale quickly; a day-long grace period lets
+// leaked files accumulate across repeated reindex attempts within the same day.
+const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 1 * 60 * 60_000;
 
 function resolveMemoryReindexBaseName(
   databaseBaseName: string,
