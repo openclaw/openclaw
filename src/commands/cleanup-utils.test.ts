@@ -87,11 +87,11 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 
 import {
   buildCleanupPlan,
-  moveToTrash,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
+import { moveToTrash, moveToTrashResult } from "./trash-utils.js";
 
 afterEach(() => {
   fsSafeMocks.movePathToTrash.mockReset();
@@ -187,6 +187,32 @@ describe("moveToTrash", () => {
       allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
     });
   });
+
+  it.each([false, true])(
+    "keeps or erases the real fs-safe Trash copy (permanent=%s)",
+    async (permanent) => {
+      const home = await fs.realpath(tempDirs.make("openclaw-trash-permanent-"));
+      const target = path.join(home, "workspace");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "transcript.jsonl"), "private");
+      const { movePathToTrash } = await vi.importActual<
+        typeof import("@openclaw/fs-safe/advanced")
+      >("@openclaw/fs-safe/advanced");
+      fsSafeMocks.movePathToTrash.mockImplementationOnce(movePathToTrash);
+      vi.stubEnv("HOME", home);
+      try {
+        await expect(
+          moveToTrashResult(target, createTestRuntime(), undefined, undefined, { permanent }),
+        ).resolves.toEqual({
+          removed: { path: target, method: permanent ? "deleted" : "trash" },
+        });
+        await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readdir(path.join(home, ".Trash"))).toHaveLength(permanent ? 0 : 1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("moves a dangling symlink instead of treating it as already removed", async () => {
     const testRoot = tempDirs.make("openclaw-trash-dangling-link-");

@@ -194,6 +194,7 @@ ${formatHelpExamples([
     .command("delete <id>")
     .description("Delete an agent and prune workspace/state")
     .option("--force", "Skip confirmation", false)
+    .option("--permanent", "Erase files instead of moving them to Trash", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts): Promise<void> => {
       await runAgentsCommandAction(async () => {

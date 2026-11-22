@@ -5,7 +5,7 @@ import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { normalizeAgentDirRegistryPath } from "../../agents/agent-dir-registry.js";
 import type { AgentDeletionOperation } from "../../agents/agent-lifecycle-registry.js";
-import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
+import { discardTrashedCopy, trashAllowedRoots } from "../../commands/trash-utils.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -86,6 +86,7 @@ export async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) 
 export async function removeAgentPath(
   cleanupPath: AgentDeleteCleanupPath,
   deletion: AgentDeletionOperation,
+  permanent = false,
 ): Promise<AgentDeletePathOutcome> {
   const pathname = cleanupPath.path;
   const trashPath = cleanupPath.trashPath;
@@ -107,7 +108,7 @@ export async function removeAgentPath(
     // directory behind a workspace symlink stays fenced exactly as shipped, while the link
     // itself may always move (accepted edge: a link target beside its link is trashed too).
     deletion.assertCurrentFinal();
-    await movePathToTrash(trashPath, {
+    const trashedPath = await movePathToTrash(trashPath, {
       allowedRoots: [
         ...trashAllowedRoots(
           cleanupPath.sourcePaths,
@@ -117,7 +118,13 @@ export async function removeAgentPath(
         os.tmpdir(),
       ],
     });
-    return { removed: { path: pathname, method: "trash" } };
+    // A copy that cannot be erased stays in Trash and is reported as such.
+    return {
+      removed: {
+        path: pathname,
+        method: permanent && (await discardTrashedCopy(trashedPath)) ? "deleted" : "trash",
+      },
+    };
   } catch (error) {
     if (!isMissingPathError(error)) {
       return cleanupFailure(pathname, error);

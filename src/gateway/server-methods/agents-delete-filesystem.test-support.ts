@@ -2,7 +2,11 @@ import type { BigIntStats, Stats } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { expectPendingDeletion, expectRespondOk } from "./agents-mutate.test-support.js";
+import {
+  expectPendingDeletion,
+  expectRespondErrorContaining,
+  expectRespondOk,
+} from "./agents-mutate.test-support.js";
 
 const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
@@ -92,6 +96,40 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
       expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
     },
   );
+
+  it("erases each Trash copy when permanent deletion is requested", async () => {
+    const workspaceDir = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-permanent-"));
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+      agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
+    );
+    const container = "/home/.Trash/.fs-safe-trash-1-abc";
+    mocks.movePathToTrash.mockImplementation(
+      async (pathname) => `${container}/${path.basename(pathname ?? "")}`,
+    );
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+      permanent: true,
+    });
+    await promise;
+
+    const { removed } = expectRespondOk(respond, { ok: true });
+    expect(removed).toContainEqual({ path: workspaceDir, method: "deleted" });
+    expect(removed).not.toContainEqual(expect.objectContaining({ method: "trash" }));
+    expect(mocks.fsRm).toHaveBeenCalledWith(container, { recursive: true, force: true });
+  });
+
+  it("rejects permanent deletion that keeps files", async () => {
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+      deleteFiles: false,
+      permanent: true,
+    });
+    await promise;
+
+    expectRespondErrorContaining(respond, "permanent requires file deletion");
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+  });
 
   it("reports trash failures without deleting the retained directory", async () => {
     const workspaceDir = await actualFs.realpath(

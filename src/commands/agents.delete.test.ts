@@ -327,6 +327,26 @@ describe("agents delete command", () => {
     },
   );
 
+  it("forwards --permanent and warns about copies kept in Trash", async ({ state }) => {
+    await state.setup();
+    const workspace = path.join(state.stateDir, "workspace-ops");
+    gatewayMocks.callGateway.mockResolvedValue({
+      removedBindings: 0,
+      removed: [{ path: workspace, method: "trash" }],
+      failed: [],
+    });
+    await removeAgent({ permanent: true });
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agents.delete",
+        params: { agentId: "ops", deleteFiles: true, permanent: true },
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Warning: ${workspace} was moved to Trash but could not be erased; empty Trash to finish.`,
+    );
+  });
+
   it.for(["gateway", "remote JSON", "local"] as const)(
     "reports %s cleanup failure without undoing the committed deletion",
     async (mode, { state }) => {

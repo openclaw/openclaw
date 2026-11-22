@@ -7,6 +7,7 @@ import {
   AgentKindSchema,
   AgentOwnershipSchema,
 } from "./agent-summary-enums.js";
+import { AgentsDeleteParamsSchema, AgentsDeleteResultSchema } from "./agents-delete.js";
 import { AgentsListPlacementProperties } from "./agents-list-session-placement.js";
 import { closedObject } from "./closed-object.js";
 import {
@@ -139,35 +140,7 @@ export const AgentsUpdateResultSchema = closedObject({
   agentId: NonEmptyString,
 });
 
-/** Deletes an agent and optionally its workspace/config files. */
-export const AgentsDeleteParamsSchema = closedObject({
-  agentId: NonEmptyString,
-  deleteFiles: Type.Optional(Type.Boolean()),
-});
-
-/** Result returned after deleting an agent and unbinding sessions. */
-export const AgentsDeleteResultSchema = closedObject({
-  ok: Type.Literal(true),
-  agentId: NonEmptyString,
-  removedBindings: Type.Integer({ minimum: 0 }),
-  removed: Type.Optional(
-    Type.Array(
-      closedObject({
-        path: NonEmptyString,
-        method: Type.Union([Type.Literal("trash"), Type.Literal("missing")]),
-      }),
-    ),
-  ),
-  failed: Type.Optional(
-    Type.Array(
-      closedObject({
-        path: NonEmptyString,
-        reason: NonEmptyString,
-      }),
-    ),
-  ),
-  purgeFailed: Type.Optional(Type.Literal(true)),
-});
+export { AgentsDeleteParamsSchema, AgentsDeleteResultSchema };
 
 /** Runs a bounded live credential probe for one model provider. */
 export const ModelsProbeParamsSchema = closedObject({

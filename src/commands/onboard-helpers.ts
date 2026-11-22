@@ -24,8 +24,9 @@ import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-saf
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath, resolveConfigDir, shortenHomeInString, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { moveToTrash, removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
+import { removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
+import { moveToTrash } from "./trash-utils.js";
 export {
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,

@@ -613,10 +613,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentId = normalized.value;
 
     const requestedDeleteFiles = params.deleteFiles ?? true;
+    if (params.permanent === true && !requestedDeleteFiles) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "agents.delete permanent requires file deletion; omit deleteFiles:false or drop permanent.",
+        ),
+      );
+      return;
+    }
     const application = createAgentConfigApplication(respond);
     try {
       const result = await deleteGatewayAgent(agentId, requestedDeleteFiles, context, {
         writeOptions: application.attach({}),
+        permanent: params.permanent === true,
       });
       // Reload may need the mutation/deletion leases; wait only after they settle.
       if (!(await application.confirm())) {

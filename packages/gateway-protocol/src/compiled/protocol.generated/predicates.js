@@ -747,7 +747,7 @@ var External = [
     /(^agentId$|^prompt$)/u,
     /\S/u,
     /(^name$|^description$|^svg$)/u,
-    /(^agentId$|^deleteFiles$)/u,
+    /(^agentId$|^deleteFiles$|^permanent$)/u,
     /(^agentId$)/u,
     /(^agentId$|^name$)/u,
     /(^agentId$|^name$|^content$|^expectedWorkspace$|^expectedHash$|^expectedMissing$)/u,
@@ -4387,7 +4387,8 @@ var External = [
       (unique_251, unique_252) => External[124].test(unique_251) || check_2(value[unique_251]),
     ) &&
     check_6(value.agentId) &&
-    (value.deleteFiles === void 0 || !("deleteFiles" in value) || check_64(value.deleteFiles)),
+    (value.deleteFiles === void 0 || !("deleteFiles" in value) || check_64(value.deleteFiles)) &&
+    (value.permanent === void 0 || !("permanent" in value) || check_64(value.permanent)),
   check_481 = (value) => check_482(value),
   check_482 = (value) =>
     typeof value == "object" &&
