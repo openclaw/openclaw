@@ -187,7 +187,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                         class={[
                           "settings-row__desc",
                           "secrets-store__meta",
-                          { "secrets-store__meta--flow": secret() },
+                          { "secrets-store__meta--flow": secret() || Boolean(entry().updatedBy) },
                         ]}
                       >
                         <Show when={detail()}>

@@ -3,7 +3,10 @@ import { expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI team secrets mocked Gateway E2E",
@@ -162,6 +165,44 @@ suite.define(() => {
       }
     });
   });
+
+  it.each([820, 1180])(
+    "keeps an environment value readable beside its updater at %i px",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: width === 820 ? 1180 : 820 }, hasTouch: true },
+        async ({ page }) => {
+          await page.addInitScript(
+            (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          );
+          const region = {
+            ...entry("EXAMPLE_REGION", "eu-central-1"),
+            updatedBy: "atlas.workspace.automation.service.account@example.invalid",
+          };
+          await openStore(page, { list: { entries: [region] } }, ["secrets.store.set"]);
+          const row = page.getByRole("listitem", { name: region.name });
+          const value = row.locator(".secrets-store__value");
+          await value.waitFor({ state: "attached" });
+          await page.evaluate(() => document.fonts.ready);
+          const fits = await value.evaluate(
+            (el) => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth + 1,
+          );
+          expect(fits, "the full short environment value is painted").toBe(true);
+          const [byline, indicator] = await Promise.all([
+            row.locator("time").boundingBox(),
+            row.locator(".settings-status").boundingBox(),
+          ]);
+          expect(byline!.x + byline!.width).toBeLessThanOrEqual(indicator!.x);
+          await button(row, "Actions: " + region.name).tap();
+          await row.locator('.oc-menu-item[data-value="edit"]').click();
+          expect(await field(modal(page, "Edit secret"), "Value").inputValue()).toBe(
+            "eu-central-1",
+          );
+        },
+      );
+    },
+  );
 
   it("validates and saves protected, environment, and mixed bulk entries", async () => {
     await suite.withPage({ colorScheme: "dark" }, async ({ page }) => {
