@@ -27,6 +27,8 @@ export function createRealtimeCallPlayback(params: {
   initialGreetingInstructions?: string;
   /** True when the host, not the bridge's ready trigger, decides when the opening is spoken. */
   hostOwnsOpening: boolean;
+  /** The bridge sends no response receipts, so the opening ends on played-out quiet. */
+  finishGreetingOnQuietOutput?: boolean;
   holdOpeningMaxMs?: number;
   idleHangupMs?: number;
   getSession: () => RealtimeVoiceBridgeSession | undefined;
@@ -60,7 +62,9 @@ export function createRealtimeCallPlayback(params: {
     // Model audio can arrive long before the callee hears it; host speech and the
     // speech-idle timer follow what is actually played out on the call.
     onAudioSent: (audio) => {
-      if (calculateMulawRms(audio) >= 0.035) {
+      const audible = calculateMulawRms(audio) >= 0.035;
+      audioController.noteCarrierAudio(audible);
+      if (audible) {
         hostSpeech.noteAudibleOutput();
         activity.noteSpeech();
       }
@@ -159,6 +163,7 @@ export function createRealtimeCallPlayback(params: {
     onAudibleOutput: outboundGreeting.claim,
     pendingMarkAcks,
     providerCallId: callSid,
+    finishGreetingOnQuietOutput: params.finishGreetingOnQuietOutput,
   });
   const idleHangupMs =
     params.idleHangupMs ?? (callRecord.direction === "outbound" ? 30_000 : undefined);

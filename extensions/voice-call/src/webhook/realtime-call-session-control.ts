@@ -16,6 +16,9 @@ export const REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS = 30_000;
 export const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
 const ASSISTANT_SPEECH_RMS_THRESHOLD = 0.035;
 const ASSISTANT_ECHO_TAIL_MS = 400;
+// Models without response receipts (GPT-Live) stream continuous audio, so the opening ends on played-out quiet.
+const GREETING_QUIET_OUTPUT_MS = 1_500;
+const GREETING_AUDIBLE_START_TIMEOUT_MS = 5_000;
 
 export type RealtimeCallControlResult = {
   success: boolean;
@@ -283,10 +286,27 @@ export function createRealtimeCallAudioController(params: {
   onAudibleOutput?: () => void;
   pendingMarkAcks: Map<string, () => void>;
   providerCallId: string;
+  /** Finish the opening from played-out audio instead of a response receipt. */
+  finishGreetingOnQuietOutput?: boolean;
 }) {
   let callerSpeechDetected = false;
   let greetingPending = true;
   let greetingResponseDone = false;
+  let greetingAudible = false;
+  let greetingQuietTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleQuietGreetingFinish = (delayMs: number, reason: string) => {
+    clearTimeout(greetingQuietTimer);
+    greetingQuietTimer = setTimeout(() => {
+      if (!greetingPending) {
+        return;
+      }
+      greetingPending = false;
+      console.log(
+        `[voice-call] realtime opening greeting finished (${reason}) callId=${params.callId} providerCallId=${params.providerCallId}`,
+      );
+    }, delayMs);
+    greetingQuietTimer.unref?.();
+  };
   const isGreetingPlaying = (): boolean => {
     const playing = params.harness.talk.outputAudioActive || params.audioPacer.hasPlaybackAudio(0);
     if (greetingResponseDone && !playing) {
@@ -377,6 +397,22 @@ export function createRealtimeCallAudioController(params: {
     finishGreeting: () => {
       if (params.isOpening?.()) {
         greetingResponseDone = true;
+      }
+    },
+    /** Played-out carrier audio; native-delegation openings end after audible speech goes quiet. */
+    noteCarrierAudio(audible: boolean) {
+      if (
+        !params.finishGreetingOnQuietOutput ||
+        !greetingPending ||
+        params.isOpening?.() !== true
+      ) {
+        return;
+      }
+      if (audible) {
+        greetingAudible = true;
+        scheduleQuietGreetingFinish(GREETING_QUIET_OUTPUT_MS, "quiet output");
+      } else if (!greetingAudible && !greetingQuietTimer) {
+        scheduleQuietGreetingFinish(GREETING_AUDIBLE_START_TIMEOUT_MS, "no audible output");
       }
     },
     noteCallerSpeech: () => {

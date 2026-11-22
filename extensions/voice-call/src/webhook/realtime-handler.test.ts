@@ -15,7 +15,7 @@ import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.j
 import { connectWs as openWebSocket, waitForClose } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.test-helpers.js";
-import { RealtimeCallHandler } from "./realtime-handler.js";
+import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
   makeRequest,
@@ -112,6 +112,7 @@ function makeCallHarness(
       manager?: Partial<CallManager>;
       providerConfig?: Record<string, unknown>;
       realtimeProvider?: RealtimeVoiceProviderPlugin;
+      capabilities?: Awaited<ReturnType<ResolveRealtimeCallRegistration>>["capabilities"];
       resolveInstructions?: (call: CallRecord) => string;
       streamDisconnectLifecycle?: StreamDisconnectGrace;
     };
@@ -159,6 +160,8 @@ function makeCallHarness(
       provider,
       providerConfig: options.deps?.providerConfig ?? { apiKey: "test-key" },
       instructions: options.deps?.resolveInstructions?.(record) ?? config.instructions,
+      // Routed-model capabilities select native delegation (GPT-Live).
+      ...(options.deps?.capabilities ? { capabilities: options.deps.capabilities } : {}),
     }),
     "/voice/webhook",
     streamDisconnectLifecycle,
@@ -249,6 +252,7 @@ async function bargeInHarness(params: {
   bridgeHandlesInputAudioBargeIn?: boolean;
   handlesProviderBargeIn?: boolean;
   interruptResponseOnInputAudio?: boolean;
+  nativeConsult?: boolean;
   providerCallId: string;
 }) {
   const sendAudio = vi.fn();
@@ -278,6 +282,15 @@ async function bargeInHarness(params: {
             : PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES,
           id: params.handlesProviderBargeIn ? "openai" : "test",
         }),
+        ...(params.nativeConsult
+          ? {
+              capabilities: {
+                ...PROVIDER_BARGE_IN_CAPABILITIES,
+                handlesAgentConsult: true,
+                supportsToolCalls: false,
+              },
+            }
+          : {}),
       },
     },
   );
@@ -765,6 +778,60 @@ describe("RealtimeCallHandler path routing", () => {
       expect(talkEvents(call, "turn.cancelled")).toHaveLength(1);
     },
   );
+
+  it.each([false, true])(
+    "ends an opening without response receipts once played-out audio goes quiet (native consult=%s)",
+    async (nativeConsult) => {
+      const { callbacks, sendAudio, ws } = await bargeInHarness({
+        providerCallId: `CA-quiet-opening-${nativeConsult}`,
+        initialGreeting: "Hello, how can I help?",
+        handlesProviderBargeIn: true,
+        nativeConsult,
+      });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const syncCarrier = async () => {
+        const pong = once(ws, "pong");
+        ws.ping();
+        await pong;
+      };
+      const callerSpeaks = async () => {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        await syncCarrier();
+      };
+      // GPT-Live streams its opening, then continuous silence, and never sends response.done.
+      callbacks.onAudio(Buffer.alloc(160 * 50, 0x80));
+      for (let elapsedMs = 0; elapsedMs < 3_000; elapsedMs += 100) {
+        callbacks.onAudio(Buffer.alloc(800, 0xff));
+        await vi.advanceTimersByTimeAsync(100);
+        if (elapsedMs === 1_000) {
+          await callerSpeaks();
+          expect(sendAudio).not.toHaveBeenCalled();
+        }
+      }
+      await callerSpeaks();
+      if (nativeConsult) {
+        expect(sendAudio).toHaveBeenCalledOnce();
+      } else {
+        expect(sendAudio).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("releases a native-delegation opening that never becomes audible", async () => {
+    const { callbacks, sendAudio, ws } = await bargeInHarness({
+      providerCallId: "CA-silent-opening",
+      initialGreeting: "Hello, how can I help?",
+      handlesProviderBargeIn: true,
+      nativeConsult: true,
+    });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    for (let elapsedMs = 0; elapsedMs < 5_200; elapsedMs += 100) {
+      callbacks.onAudio(Buffer.alloc(800, 0xff));
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    sendMedia(ws, Buffer.alloc(160, 0x00));
+    await waitForCalls(sendAudio);
+  });
 
   it("lets a session bridge override provider-level barge-in capabilities", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =

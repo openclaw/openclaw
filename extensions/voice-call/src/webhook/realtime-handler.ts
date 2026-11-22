@@ -771,6 +771,7 @@ export class RealtimeCallHandler {
         harness,
         initialGreetingInstructions,
         hostOwnsOpening,
+        finishGreetingOnQuietOutput: handlesAgentConsult,
         holdOpeningMaxMs: this.holdOpeningMaxMs,
         idleHangupMs: this.config.idleHangupMs,
         getSession: () => nativeConsultOwner,
