@@ -80,8 +80,12 @@ Session tab cleanup applies only to tabs a session owns: tabs created by the
 OpenClaw browser tool with `action: "open"` and tabs opened from that session's
 Browser panel in the Control UI. OpenClaw does not adopt tabs that were already
 open, opened outside OpenClaw, or otherwise have unknown ownership. The
-`browser.tabCleanup` block controls periodic idle and cap sweeps for primary
-sessions. Changes apply on the next sweep without restarting the browser;
+`browser.tabCleanup` block controls periodic idle and per-session cap sweeps.
+Primary sessions get both sweeps. Running subagent sessions get only the cap
+sweep: once a subagent owns more than `maxTabsPerSession` tabs, its
+least-recently-used tabs close, but its tabs are never closed for being idle,
+because a parent may still be waiting on them. Cron and ACP sessions get
+neither sweep. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
 
 Ownership includes the agent identity: two agents using the same session key,
