@@ -33,7 +33,7 @@ async function selectProject(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("shows the distinguishing names of recent folders and registered projects on touch", async () => {
+  it("keeps project and folder titles on one line beside their icon, with the hint below", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
       async ({ page }) => {
@@ -73,13 +73,22 @@ suite.define(() => {
           expect(await identity.count()).toBe(2);
           expect(
             await identity.evaluateAll((parts) =>
-              parts.every(
-                (part) =>
-                  part.scrollWidth <= part.clientWidth + 1 &&
-                  part.scrollHeight <= part.clientHeight + 1,
-              ),
+              parts.every((part) => {
+                const style = getComputedStyle(part);
+                return (
+                  style.whiteSpace === "nowrap" &&
+                  style.textOverflow === "ellipsis" &&
+                  style.overflowX === "hidden"
+                );
+              }),
             ),
           ).toBe(true);
+          const title = (await identity.first().boundingBox())!;
+          const hint = (await identity.last().boundingBox())!;
+          const icon = (await row.locator(".session-menu__icon").boundingBox())!;
+          expect(Math.abs(icon.y + icon.height / 2 - title.y - title.height / 2)).toBeLessThan(1);
+          expect(hint.x).toBeCloseTo(title.x, 0);
+          expect(hint.y).toBeGreaterThanOrEqual(title.y + title.height - 1);
         }
         const amber = menu.locator('[data-value="project:amber"]');
         await amber.tap();
