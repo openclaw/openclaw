@@ -145,19 +145,12 @@ export async function sendCronAnnouncePayloadStrict(params: {
   });
   const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
   let recipientReached = false;
-  /** Whether the current attempt's durable dispatch was reported (per-attempt evidence). */
-  let attemptDispatched = false;
   return await retryTransientDirectCronDelivery({
     jobId: params.jobId,
     signal: params.abortSignal,
     shouldRetryError: () => !recipientReached,
     run: async () => {
       const deliveredPayloads: ReplyPayload[] = [];
-      // Each attempt carries its own evidence: a proven non-delivery from an
-      // earlier attempt must not keep a later attempt's deadline from proving
-      // non-delivery again. The observer only reports the current attempt's
-      // durable dispatch.
-      attemptDispatched = false;
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
@@ -198,15 +191,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
           assertDirectAdapterHandoff: fence?.assertCurrent,
           // Forwarded into the durable batch so the queue executor reports it from
           // its post-mark dispatch point, not from a receipt callback here. The
-          // report is scoped to this attempt: a proven non-delivery on a later
-          // attempt must not keep a prior attempt's dispatch alive.
+          // caller clears it per attempt via onTransportDispatchCleared when an
+          // attempt is proven not to have reached the recipient.
           ...(params.onTransportDispatched
-            ? {
-                onTransportDispatched: async () => {
-                  attemptDispatched = true;
-                  params.onTransportDispatched?.();
-                },
-              }
+            ? { onTransportDispatched: async () => params.onTransportDispatched?.() }
             : {}),
           onDeliveredPayload: ({ hookContent, ...payload }) => {
             deliveredPayloads.push({ ...payload, spokenText: hookContent });
@@ -248,7 +236,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
         // caller's deadline classifier must not treat the attempt as in flight.
         if (!recipientReached) {
           params.onTransportDispatchCleared?.();
-          attemptDispatched = false;
         }
       }
       if (
