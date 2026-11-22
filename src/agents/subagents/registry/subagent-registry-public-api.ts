@@ -1,6 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -239,10 +238,8 @@ export function createSubagentRegistryPublicApi(config: {
     params: Parameters<SubagentLifecycleController["markRequesterTurnYielded"]>[0],
   ): Promise<number> {
     const stateContext = params.stateContext ?? captureOpenClawStateWorkerContext();
-    const assertCallerCurrent = captureGatewayToolCallerAssertion();
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      assertCallerCurrent?.();
       params.assertCurrent?.();
     };
     assertCurrent();
@@ -303,11 +300,7 @@ export function createSubagentRegistryPublicApi(config: {
       acknowledgment?: string;
     }) => {
       const stateContext = captureOpenClawStateWorkerContext();
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
-      const assertCurrent = () => {
-        assertSubagentRegistryWriteSourceCurrent(stateContext);
-        assertCallerCurrent?.();
-      };
+      const assertCurrent = () => assertSubagentRegistryWriteSourceCurrent(stateContext);
       assertCurrent();
       await restoreOnce(stateContext);
       return await claimSubagentYieldInRuns({
