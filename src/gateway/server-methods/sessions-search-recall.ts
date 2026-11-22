@@ -13,8 +13,14 @@ import {
   resolveConfiguredSessionStoreTargets,
   type SessionStoreTarget,
 } from "../../config/sessions/targets.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility-internal.js";
 import { createAgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.read.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import {
   toProjectedSessionSharingTarget,
@@ -36,6 +42,17 @@ export async function searchRecallSessionTranscripts(params: {
   onResult: (result: SessionsSearchResult) => void;
 }): Promise<void> {
   const { projection, recall } = params;
+  const channelScopeFor = (row: {
+    key: string;
+    entry: Pick<SessionEntry, "chatType" | "space" | "delivery">;
+  }) =>
+    resolveSessionChannelScope({
+      key: row.key,
+      chatType: row.entry.chatType,
+      space: row.entry.space,
+      origin: sessionDeliveryOrigin(row.entry),
+      deliveryContext: deliveryContextFromSession(row.entry),
+    });
   const prepareTargets = () =>
     withReadySessionRows(
       projection,
@@ -52,10 +69,25 @@ export async function searchRecallSessionTranscripts(params: {
             .physicalPaths(target.storePath, target.agentId)
             .some((path) => scope.paths.has(path)),
         );
-        return { targets, revision: projection.sharingRevision };
+        const requester = read.describe({
+          agentId: recall.requesterAgentId,
+          key: recall.requesterSessionKey,
+        });
+        return {
+          targets,
+          revision: projection.sharingRevision,
+          requester: requester
+            ? { sessionId: requester.entry.sessionId, channelScope: channelScopeFor(requester) }
+            : undefined,
+        };
       },
     );
-  const authorize = (target: SessionStoreTarget, keys: string[], read: SessionRowReadView) => {
+  const authorize = (
+    target: SessionStoreTarget,
+    keys: string[],
+    read: SessionRowReadView,
+    requesterChannelScope?: ReturnType<typeof resolveSessionChannelScope>,
+  ) => {
     const cfg = read.state.cfg;
     const context = resolveSessionToolContext({
       config: cfg,
@@ -87,6 +119,7 @@ export async function searchRecallSessionTranscripts(params: {
         mainSessionKey: policy.mainSessionKey,
         visibility: policy.sessionVisibility,
         a2aPolicy: policy.a2aPolicy,
+        requesterChannelScope,
       }),
     );
     const now = Date.now();
@@ -145,19 +178,42 @@ export async function searchRecallSessionTranscripts(params: {
         return false;
       }
       return guards.every(
-        (guard) => guard.check({ key, agentId: row.agentId, childOwnerSessionKeys }).allowed,
+        (guard) =>
+          guard.check({
+            key,
+            agentId: row.agentId,
+            childOwnerSessionKeys,
+            channelScope: channelScopeFor(row),
+          }).allowed,
       );
     });
   };
-  const filter = (target: SessionStoreTarget, keys: string[]) =>
-    withReadySessionRows(
-      projection,
-      () => keys.map((key) => ({ ...target, key })),
-      (read) => authorize(target, keys, read),
-    );
+  const targetIdentity = (target: SessionStoreTarget, key: string) =>
+    JSON.stringify([target.agentId, target.storePath, key]);
   const limit = params.limit ?? 10;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { targets, revision } = await prepareTargets();
+    const { targets, revision, requester } = await prepareTargets();
+    const admittedSessionIds = new Map<string, string>();
+    const filter = (target: SessionStoreTarget, keys: string[]) =>
+      withReadySessionRows(
+        projection,
+        () => keys.map((key) => ({ ...target, key })),
+        (read) => {
+          const allowed = authorize(target, keys, read, requester?.channelScope);
+          if (recall.visibility === "channel") {
+            for (const [index, key] of keys.entries()) {
+              if (!allowed[index]) {
+                continue;
+              }
+              const row = read.describe({ ...target, key });
+              if (row) {
+                admittedSessionIds.set(targetIdentity(target, key), row.entry.sessionId);
+              }
+            }
+          }
+          return allowed;
+        },
+      );
     const pages: Array<{
       target: SessionStoreTarget;
       page: Awaited<ReturnType<typeof searchSessionTranscripts>>;
@@ -187,13 +243,31 @@ export async function searchRecallSessionTranscripts(params: {
         if (revision !== projection.sharingRevision) {
           return false;
         }
-        const current = pages.filter(({ target, page }) =>
-          authorize(
-            target,
-            page.hits.map((hit) => hit.sessionKey),
-            read,
-          ).every(Boolean),
-        );
+        const requesterCurrent =
+          recall.visibility !== "channel" ||
+          (requester !== undefined &&
+            read.describe({
+              agentId: recall.requesterAgentId,
+              key: recall.requesterSessionKey,
+            })?.entry.sessionId === requester.sessionId);
+        const current = requesterCurrent
+          ? pages.filter(({ target, page }) =>
+              recall.visibility === "channel"
+                ? page.hits.every((hit) => {
+                    const expected = admittedSessionIds.get(targetIdentity(target, hit.sessionKey));
+                    return (
+                      expected !== undefined &&
+                      read.describe({ ...target, key: hit.sessionKey })?.entry.sessionId ===
+                        expected
+                    );
+                  })
+                : authorize(
+                    target,
+                    page.hits.map((hit) => hit.sessionKey),
+                    read,
+                  ).every(Boolean),
+            )
+          : [];
         if (revision !== projection.sharingRevision) {
           return false;
         }

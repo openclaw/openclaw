@@ -14905,7 +14905,11 @@ var External = [
       check_181(value.restrictToSpawned)) &&
     (value.agentToAgent === void 0 || !("agentToAgent" in value) || check_2235(value.agentToAgent)),
   check_2232 = (value) =>
-    check_2233(value) || check_2234(value) || check_132(value) || check_225(value),
+    check_2233(value) ||
+    check_2234(value) ||
+    check_69(value) ||
+    check_132(value) ||
+    check_225(value),
   check_2233 = (value) => typeof value == "string" && value === "self",
   check_2234 = (value) => typeof value == "string" && value === "tree",
   check_2235 = (value) =>

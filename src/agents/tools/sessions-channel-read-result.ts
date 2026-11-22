@@ -1,13 +1,5 @@
 import type { SessionRowReadView } from "../../gateway/session-row-prepared-read.js";
-import {
-  createSessionVisibilityDecisionChecker,
-  resolveSessionChannelScope,
-} from "../../plugin-sdk/session-visibility-internal.js";
 import type { AgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.read.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 export type SessionChannelReadTarget = {
@@ -26,7 +18,7 @@ type ChannelReadParams = {
   allowArchivedMetadata?: boolean;
 };
 
-/** Check every buffered disclosure in the same synchronous owner read as its publication. */
+/** Keep an admitted disclosure bound to the same live transcript identities at publication. */
 export function currentSessionChannelReadAccess(
   params: ChannelReadParams,
   read?: SessionRowReadView,
@@ -41,52 +33,24 @@ export function currentSessionChannelReadAccess(
     }
     return params.targets.map(() => true);
   }
-  const scope = (target: Pick<SessionChannelReadTarget, "key" | "agentId" | "storePath">) => {
-    const row = read.describe(target);
-    return (
-      row && {
-        row,
-        channelScope: resolveSessionChannelScope({
-          key: row.key,
-          chatType: row.entry.chatType,
-          space: row.entry.space,
-          origin: sessionDeliveryOrigin(row.entry),
-          deliveryContext: deliveryContextFromSession(row.entry),
-        }),
-      }
-    );
-  };
-  const requester = scope({
+  const requester = read.describe({
     agentId: params.requesterAgentId,
     key: params.requesterSessionKey,
   });
-  const channelChecker = createSessionVisibilityDecisionChecker({
-    action: "history",
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
-    requesterChannelScope: requester?.channelScope,
-    visibility: "channel",
-    a2aPolicy: params.a2aPolicy,
-  });
   return params.targets.map((target) => {
     if (isSelf(target)) {
-      return true;
+      return requester !== undefined;
     }
-    const current = scope(target);
+    const current = read.describe(target);
     if (
+      !requester ||
       !current ||
-      (!params.allowArchivedMetadata && current.row.entry.archivedAt !== undefined) ||
-      (target.expectedSessionId && current.row.entry.sessionId !== target.expectedSessionId)
+      (!params.allowArchivedMetadata && current.entry.archivedAt !== undefined) ||
+      (target.expectedSessionId && current.entry.sessionId !== target.expectedSessionId)
     ) {
       return false;
     }
-    const row = {
-      ...target,
-      channelScope: current.channelScope,
-      spawnedBy: current.row.entry.spawnedBy,
-      parentSessionKey: current.row.entry.parentSessionKey,
-    };
-    return channelChecker.check(row).allowed;
+    return true;
   });
 }
 

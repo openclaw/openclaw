@@ -20,7 +20,7 @@ describe("sessions_history channel disclosure", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.each(["retained", "route-withdrawn", "policy-withdrawn"] as const)(
-    "retains admitted policy while checking the current channel owner (%s)",
+    "retains admitted authority while applying route and policy changes to the next read (%s)",
     async (mode) => {
       const requester = "agent:main:slack:channel:c111:thread:200.001";
       const target = "agent:main:slack:channel:c111:thread:200.002";
@@ -93,16 +93,11 @@ describe("sessions_history channel disclosure", () => {
       response.resolve({ messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }] });
       const result = await pending;
 
-      if (mode === "route-withdrawn") {
-        expect(result.details).toMatchObject({ status: "forbidden" });
-        expect(JSON.stringify(result)).not.toContain("BUFFERED HISTORY SECRET");
-      } else {
-        expect(result.details).toMatchObject({
-          sessionKey: target,
-          messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }],
-        });
-      }
-      if (mode === "policy-withdrawn") {
+      expect(result.details).toMatchObject({
+        sessionKey: target,
+        messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }],
+      });
+      if (mode === "route-withdrawn" || mode === "policy-withdrawn") {
         const next = await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: () => false },
           () => tool.execute("history-after-policy-reload", { sessionKey: target }),

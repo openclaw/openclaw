@@ -73,6 +73,9 @@ export async function runWithScopedSessionAccess<T>(params: {
         },
       );
     }
+  };
+  const assertAdmission = async (signal = params.signal) => {
+    await assertExpectedIncarnation(signal);
     await params.revalidateCurrent?.();
   };
   const admission = await beginSessionEffect({
@@ -83,7 +86,7 @@ export async function runWithScopedSessionAccess<T>(params: {
       incarnation: expectedSessionId,
       agentId,
     }),
-    assertAllowed: (signal) => assertExpectedIncarnation(signal),
+    assertAllowed: (signal) => assertAdmission(signal),
     revalidateAllowed: assertExpectedIncarnation,
     ...(params.signal ? { signal: params.signal } : {}),
   });

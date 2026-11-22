@@ -183,6 +183,73 @@ test.each(["needle", "会"])(
   },
 );
 
+test("channel recall searches the index and applies route changes to the next request", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("channel-recall@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      tools: { sessions: { visibility: "channel" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const route = (to: string) => ({
+      chatType: "channel" as const,
+      space: "t111",
+      delivery: {
+        kind: "external" as const,
+        route: {
+          channel: "slack",
+          accountId: "default",
+          target: { to, chatType: "channel" as const },
+        },
+        context: { channel: "slack", accountId: "default", to },
+        origin: { provider: "slack", chatType: "channel" as const },
+      },
+    });
+    const requester = await seed(
+      "main",
+      "slack:channel:c111:thread:1.001",
+      owner,
+      "channelneedle requester",
+      route("channel:c111"),
+    );
+    const sibling = await seed(
+      "main",
+      "slack:channel:c111:thread:1.002",
+      owner,
+      "channelneedle sibling",
+      route("channel:c111"),
+    );
+    const other = await seed(
+      "main",
+      "slack:channel:c222:thread:1.003",
+      owner,
+      "channelneedle other customer",
+      route("channel:c222"),
+    );
+    const context = requestContext(cfg);
+    const client = identifiedClient(owner);
+    const params = {
+      query: "channelneedle",
+      recall: {
+        requesterAgentId: "main",
+        requesterSessionKey: requester,
+        visibility: "channel" as const,
+      },
+    };
+    const initial = await search(context, client, params);
+    expect(initial.ok, initial.error?.message).toBe(true);
+    expect(new Set(initial.payload?.results.map((hit) => hit.sessionKey))).toEqual(
+      new Set([requester, sibling]),
+    );
+    expect(initial.payload?.results.map((hit) => hit.sessionKey)).not.toContain(other);
+
+    await upsertSessionEntryCore({ agentId: "main", sessionKey: sibling }, route("channel:c222"));
+    const next = await search(context, client, params);
+    expect(next.ok, next.error?.message).toBe(true);
+    expect(next.payload?.results.map((hit) => hit.sessionKey)).toEqual([requester]);
+  });
+});
+
 test("recall batch verdicts match singleton checks over mixed physical owners", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("recall-mixed@example.test").id;
