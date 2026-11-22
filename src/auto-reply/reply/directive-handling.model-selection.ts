@@ -71,7 +71,7 @@ export async function resolveModelSelectionFromDirective(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
@@ -108,7 +108,9 @@ export async function resolveModelSelectionFromDirective(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       policy: params.operatorAuthority?.modelPolicy,
-      model: { provider: params.defaultProvider, model: params.defaultModel },
+      model: params.defaultModel
+        ? { provider: params.defaultProvider, model: params.defaultModel }
+        : undefined,
       allows: policy.allows,
     });
     const errorText = validateOperatorSelection(params.operatorAuthority, selection);

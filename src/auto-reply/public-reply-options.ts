@@ -4,6 +4,7 @@ type PublicReplyOptions<T> = T extends undefined
   ? undefined
   : Omit<
       T,
+      | "replyExpectation"
       | "internalEventExecution"
       | "onReplyOperationAdmitted"
       | "onReplyOperationOwned"
@@ -32,7 +33,7 @@ export type PublicReplyParams<T> = {
         : T[K];
 };
 
-/** Event custody is issued by core, never accepted from plugin reply options. */
+/** Silence permission and event custody are host-owned, never accepted from plugin options. */
 export function publicReplyOptions(
   options: GetReplyOptions | undefined,
 ): GetReplyOptions | undefined {
@@ -40,6 +41,7 @@ export function publicReplyOptions(
     return undefined;
   }
   const publicOptions = { ...options };
+  Reflect.deleteProperty(publicOptions, "replyExpectation");
   Reflect.deleteProperty(publicOptions, "internalEventExecution");
   Reflect.deleteProperty(publicOptions, "onReplyOperationAdmitted");
   Reflect.deleteProperty(publicOptions, "onReplyOperationOwned");

@@ -11,11 +11,11 @@ export const agentDocuments = new Set<string>([
 
 // Workspace roles use exact root-relative names; nested lookalikes are ordinary files.
 const fileRoles = new Map<string, readonly [IconName, string]>([
-  ["AGENTS.md", ["scrollText", "agents"]],
-  ["SOUL.md", ["palette", "soul"]],
+  ["AGENTS.md", ["botText", "agents"]],
+  ["SOUL.md", ["drama", "soul"]],
   ["USER.md", ["circleUser", "user"]],
   ["IDENTITY.md", ["bot", "identity"]],
-  ["BOOTSTRAP.md", ["flag", "bootstrap"]],
+  ["BOOTSTRAP.md", ["rocket", "bootstrap"]],
   ["MEMORY.md", ["brain", "memory"]],
   ["TOOLS.md", ["wrench", "tools"]],
   ["HEARTBEAT.md", ["activity", "heartbeat"]],

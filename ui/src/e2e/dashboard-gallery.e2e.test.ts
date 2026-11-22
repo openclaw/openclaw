@@ -305,6 +305,9 @@ suite.define(() => {
           await gallery.locator("[data-dashboard-session]").first().waitFor();
           await gallery.locator("[data-dashboard-session]").waitFor();
           const loaded = await geometry();
+          const entry = (await gallery.locator("[data-dashboard-session]").boundingBox())!;
+          const search = (await gallery.locator(".dashboards-search").boundingBox())!;
+          expect(Math.abs(search.x - entry.x)).toBeLessThanOrEqual(1);
           console.log("phone gallery geometry", view, { loading, loaded });
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({

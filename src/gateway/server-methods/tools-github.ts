@@ -16,10 +16,7 @@ import {
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -58,7 +55,6 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     return;
   }
   const caller = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertCaller = caller && captureGatewayToolCallerAssertion();
   const assertToolAllowed = caller?.assertToolAllowed;
   const scope = getPluginRuntimeGatewayRequestScope();
   const registry = scope?.pluginRegistry;
@@ -68,8 +64,7 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     record &&
     capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
   if (
-    !caller ||
-    !assertCaller ||
+    !caller?.operationalRunInstance ||
     !assertToolAllowed ||
     client?.internal?.pluginRuntimeOwnerId !== "github" ||
     !pluginCurrent
@@ -86,7 +81,6 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
   );
   const signal = AbortSignal.any(signals);
   const assertActive = () => {
-    assertCaller();
     assertToolAllowed(toolName);
     options.sessionMutationCommitGuard?.();
     signal.throwIfAborted();

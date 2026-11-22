@@ -7,16 +7,15 @@ import {
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
-import { getImageMetadata } from "../media/image-ops.js";
-import { resizeToJpeg } from "../media/media-services.js";
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
 } from "./tool-images.js";
 
-vi.mock("../media/media-services.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
   return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
 });
 

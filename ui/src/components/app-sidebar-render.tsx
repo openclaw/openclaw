@@ -30,6 +30,7 @@ import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import {
   renderSessionUnreadBadge,
   SessionGlyph,
@@ -342,6 +343,30 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
   );
 }
 
+export function SidebarNewSessionAction(props: {
+  host: Pick<
+    AppSidebarRenderHost,
+    "basePath" | "expandedAgentId" | "readNewSessionAccess" | "requestOpenNewSession"
+  >;
+  class: string;
+}) {
+  const disabledReason = createMemo(() => {
+    const access = props.host.readNewSessionAccess();
+    return access.allowed ? undefined : access.reason;
+  });
+  return (
+    <NewSessionLink
+      basePath={props.host.basePath}
+      agentId={props.host.expandedAgentId()}
+      class={props.class}
+      label={t("agentChip.newConversation")}
+      showShortcut
+      disabledReason={disabledReason()}
+      onOpen={(agentId) => props.host.requestOpenNewSession(agentId)}
+    />
+  );
+}
+
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.Element {
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
@@ -426,7 +451,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <span class="sidebar-footer-actions">
-        {/* Search sits with the footer controls, above Home. */}
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
@@ -444,6 +468,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             <Icon name="search" />
           </button>
         </openclaw-tooltip>
+        <Show when={host.newSessionInRail}>
+          <SidebarNewSessionAction host={host} class="sidebar-rail__button sidebar-new-session" />
+        </Show>
         <openclaw-tooltip>
           <span slot="content">
             <ShortcutHint
@@ -520,7 +547,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
-          title={flagOpen() ? "" : identityLabel()}
+          title={flagOpen() ? "" : (statusLabel() ?? "")}
           data-connection-status={connectionStatus() ?? (host.connected ? "connected" : undefined)}
           aria-label={identityLabel()}
           onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}

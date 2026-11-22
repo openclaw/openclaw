@@ -32,6 +32,13 @@ field map and defaults.
 
 ## Minimal config
 
+**Configuration example — do not run in a terminal.** This is a minimal complete
+file for a new setup. Save it as `~/.openclaw/openclaw.json` only if you do not
+already have a config. For an existing setup, merge only the settings you want
+into the matching objects; do not replace the file or remove unrelated settings.
+Use `openclaw config file` in a terminal to find the active path if it differs
+from the default.
+
 ```json5
 // ~/.openclaw/openclaw.json
 {
@@ -44,17 +51,27 @@ field map and defaults.
 
 <Tabs>
   <Tab title="Interactive wizard">
+    **Terminal commands** — run on the machine hosting your Gateway. Use
+    `openclaw onboard` for onboarding or `openclaw configure` to edit selected
+    settings in an existing setup.
+
     ```bash
     openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
+
   </Tab>
   <Tab title="CLI (one-liners)">
+    **Terminal commands** — each command reads or changes only the named path
+    in your active config, preserving unrelated settings. Run only the command
+    for the setting you intend to inspect, change, or remove.
+
     ```bash
     openclaw config get agents.defaults.workspace
     openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
+
   </Tab>
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
@@ -71,7 +88,10 @@ field map and defaults.
     with **Hide advanced** on the divider to collapse them again.
   </Tab>
   <Tab title="Direct edit">
-    Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](/gateway/configuration/hot-reload)).
+    Edit `~/.openclaw/openclaw.json` directly, preserving unrelated settings.
+    Configuration examples are JSON5, not terminal commands: merge their keys
+    into the matching existing objects instead of replacing your whole file.
+    The Gateway watches the file and applies changes automatically (see [hot reload](/gateway/configuration/hot-reload)).
   </Tab>
 </Tabs>
 
@@ -127,6 +147,13 @@ to an already-truncated file does not approve that earlier loss for replacing th
 backup, so Doctor can still restore the intact configuration.
 The health owner carries that anomaly across automatic metadata stamping and later
 reads; stamping a missing `meta` section does not restore the lost settings.
+Explicit Doctor repair can restore a suspicious reduction even when the remaining
+file still validates and the anomaly was already reported. It prefers an eligible
+intact `.bak` over the trusted, hash-verified `.last-good` copy, and saves the exact
+replaced bytes as `.clobbered.*`. A backup that is itself truncated is not used
+to repair that loss. When a healthy baseline is recorded, Doctor uses only backup
+bytes it previously recorded as healthy. Other backup bytes remain
+available for manual recovery. Startup and hot-reload recovery policy is unchanged.
 
 ## Configuration pages
 

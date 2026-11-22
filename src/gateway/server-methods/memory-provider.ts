@@ -9,7 +9,7 @@ import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -113,7 +113,7 @@ async function captureMemoryReadAuthority(
 ): Promise<{ scopes: readonly string[]; assertCurrent: () => void; release: () => void }> {
   const { client, context, signal, hasCurrentClientAuthority } = options;
   if (isSyntheticGatewayCaller(client) || client?.internal?.remoteIngressPrincipal) {
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,

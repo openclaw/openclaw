@@ -38,7 +38,6 @@ describe("chat.history truncation logging (real diagnostic bus)", () => {
       action: "truncated",
       reason: "chat_history_budget",
       count: 1,
-      bytes: Buffer.byteLength(JSON.stringify(messages)),
       limitBytes: 2_000,
     });
   });

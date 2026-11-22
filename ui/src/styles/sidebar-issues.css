@@ -543,7 +543,7 @@ footer.sidebar-issues-panel__mentions-note {
   position: absolute;
   z-index: 1;
   inset-block-start: 6px;
-  inset-inline-end: 4px;
+  inset-inline-end: 0;
   display: inline-grid;
   width: 28px;
   height: 28px;

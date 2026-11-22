@@ -154,6 +154,7 @@ export async function runAgentTurnWithOutcome(
           ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
         },
         owners: eventExecution?.execRequestOwners,
+        continues: Boolean(eventExecution?.execRequestOwners?.length),
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
       () =>

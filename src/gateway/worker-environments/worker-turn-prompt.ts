@@ -11,7 +11,15 @@ import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner
 import { prepareAttemptSystemPromptAdditions } from "../../agents/embedded-agent-runner/run/attempt-system-prompt-additions.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "../../agents/embedded-agent-runner/run/attempt-system-prompt-prepare.js";
 import { resolveExistingAttemptTranscriptState } from "../../agents/embedded-agent-runner/run/attempt-transcript-helpers.js";
-import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import {
+  beginSessionSystemPrompt,
+  buildSystemPromptRouteKey,
+  createToolResultPromptProjectionState,
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
+} from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../../agents/embedded-agent-runner/session-prompt-update.js";
 import {
   prepareHarnessContextEnginePrompt,
   bootstrapHarnessContextEngine,
@@ -20,8 +28,12 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import { prepareAgentPromptProjects } from "../../agents/prompt-projects.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { sessionManagerReadTranscriptBranch } from "../../agents/sessions/session-manager-view-types.js";
+import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { TranscriptPolicy } from "../../agents/transcript-policy.types.js";
+import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createDiagnosticTraceContextFromActiveScope } from "../../infra/diagnostic-trace-context.js";
@@ -31,6 +43,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export const WORKER_CONTEXT_ENGINE_HOST = {
   id: "openclaw-worker",
@@ -228,6 +241,71 @@ export async function prepareWorkerTurnPrompt(params: {
       systemPromptText = value;
     },
   });
+  // Worker turns keep the session's pinned system prompt, like embedded turns. A change rides
+  // this turn's user message as model-only text, stored on that same user row.
+  let commitSystemPrompt:
+    | ((manager: SessionManager, write: <T>(run: () => Promise<T>) => Promise<T>) => Promise<void>)
+    | undefined;
+  if (!isRawModelRun) {
+    const routeKey = buildSystemPromptRouteKey({
+      provider: model.provider,
+      model: model.id,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
+      personalProfile: turn.sessionUserProfileId,
+      harness: "openclaw",
+      surface: params.surface.presentation.codeMode.enabled ? "code-mode" : "direct",
+    });
+    // The model-context view keeps only checkpoint navigation; read the newest checkpoint whole.
+    const entries = [...params.manager[sessionManagerReadTranscriptBranch]()];
+    const index = entries.findLastIndex(
+      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+    );
+    const checkpoint = entries[index];
+    const version = params.manager.getTranscriptSnapshotVersion();
+    if (checkpoint?.type === "custom" && version) {
+      const reader = prepareSessionTranscriptHydration(
+        resolveWorkerTurnTranscriptTarget(turn),
+        undefined,
+        turn.abortSignal,
+      );
+      const { event } = await reader.readCurrentTurnEntry({
+        entryId: checkpoint.id,
+        version,
+        includeEntry: true,
+      });
+      reader.assertCurrent();
+      if (isIndexedSessionEntry(event) && event.type === "custom") {
+        entries[index] = { ...checkpoint, data: event.data };
+      }
+    }
+    using lease = retainEmbeddedSessionPromptState(turn.sessionId);
+    const { state } = lease;
+    beginSessionSystemPrompt(state);
+    const pinned = prepareSessionSystemPrompt({
+      state,
+      routeKey,
+      systemPrompt: systemPromptText,
+      entries,
+      historyBoundaryCount: params.manager.getBoundaryCount(),
+    });
+    params.history = retireUserRowPromptUpdates(params.history, entries, pinned.restart);
+    if (pinned.update) {
+      assembly.effectivePrompt = `${assembly.effectivePrompt}\n\n${pinned.update.content}`;
+    }
+    systemPromptText = pinned.systemPrompt;
+    // The checkpoint follows the worker's committed rows; a failed turn writes none. Its
+    // restart flag marks a rebuild, so no separate retirement row is written first.
+    commitSystemPrompt = async (manager, write) => {
+      pinned.commit();
+      await persistSessionSystemPrompt(state, (customType, data) =>
+        write(() =>
+          withSessionManagerWrite(manager, () => manager.appendCustomEntryAsync(customType, data)),
+        ),
+      );
+    };
+  }
   const context = await prepareEmbeddedAttemptPromptContext({
     ...transcriptPolicy,
     attempt,
@@ -258,6 +336,10 @@ export async function prepareWorkerTurnPrompt(params: {
     contextEngineTurn,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
+    commitSystemPrompt,
+    // The worker's user row keeps the model-only text, so replay sends the same bytes.
+    modelPromptProjection:
+      context.promptForModel === context.promptForSession ? undefined : context.promptForModel,
     history,
     prompt: context.llmBoundaryPromptForPrecheck,
     runtimeContext: isRawModelRun ? undefined : context.runtimeContextFragments,

@@ -8,6 +8,7 @@ import {
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { compileNativeProject } from "../../scripts/lib/native-declaration-emitter.mts";
+import type { DeclarationLookup } from "../../scripts/lib/native-declaration-filesystem.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
 
@@ -118,7 +119,46 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   expect(matches(record)).toBe(true);
 
   const originalReceipt = fs.readFileSync(path.join(root, receipt), "utf8");
-  const receiptData: { inputs: string[]; lookups: unknown[] } = JSON.parse(originalReceipt);
+  const receiptData: { inputs: string[]; lookups: DeclarationLookup[] } =
+    JSON.parse(originalReceipt);
+  const withLookup = (lookup: DeclarationLookup) =>
+    [...receiptData.lookups, lookup].toSorted((left, right) => {
+      const a = `${left.kind}\0${left.path}`;
+      const b = `${right.kind}\0${right.path}`;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  const aliasTarget = path.join(root, "receipt-target");
+  const aliasOutside = path.join(parent, "receipt-outside");
+  const receiptAlias = path.join(root, "receipt-alias");
+  fs.mkdirSync(aliasTarget);
+  fs.mkdirSync(aliasOutside);
+  fs.symlinkSync(aliasTarget, receiptAlias, linkType);
+  const phase = new BoundaryInputSnapshot(root);
+  const firstReceipt = ".artifacts/first-lookup.inputs.json";
+  write(
+    firstReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "fileExists", path: "receipt-alias", result: false }),
+    }),
+  );
+  phase.record(config, args, firstReceipt, [firstReceipt]);
+  fs.unlinkSync(receiptAlias);
+  fs.symlinkSync(aliasOutside, receiptAlias, linkType);
+  const nextReceipt = ".artifacts/next-lookup.inputs.json";
+  write(
+    nextReceipt,
+    JSON.stringify({
+      ...receiptData,
+      lookups: withLookup({ kind: "realpath", path: "receipt-alias", result: "receipt-target" }),
+    }),
+  );
+  expect(() => phase.record(config, args, nextReceipt, [nextReceipt])).toThrow(
+    /Declaration input escapes checkout/,
+  );
+  fs.unlinkSync(receiptAlias);
+  fs.rmdirSync(aliasTarget);
+  fs.rmdirSync(aliasOutside);
   for (const contents of [
     JSON.stringify({ inputs: record.inputs }),
     JSON.stringify({ inputs: record.inputs, lookups: [] }),
@@ -133,6 +173,31 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     };
     expect(matches(forgedOutput)).toBe(false);
   }
+  for (const lookup of [
+    { kind: "fileExists", path: "../outside.ts", result: false },
+    { kind: "fileExists", path: "src/../outside.ts", result: false },
+    { kind: "realpath", path: ".", result: "../outside" },
+  ]) {
+    write(receipt, JSON.stringify({ ...receiptData, lookups: [...receiptData.lookups, lookup] }));
+    expect(() =>
+      new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt]),
+    ).toThrow();
+  }
+  const outside = path.join(parent, "outside");
+  fs.mkdirSync(outside);
+  const external = path.join(root, "external");
+  fs.symlinkSync(outside, external, linkType);
+  const escaped: DeclarationLookup = {
+    kind: "fileExists",
+    path: "external/missing.ts",
+    result: false,
+  };
+  const escapedLookups = withLookup(escaped);
+  write(receipt, JSON.stringify({ ...receiptData, lookups: escapedLookups }));
+  expect(() => new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt])).toThrow(
+    /Declaration input escapes checkout/,
+  );
+  fs.unlinkSync(external);
   write(receipt, originalReceipt);
   expect(matches({ ...record, inputs: [] })).toBe(false);
   expect(matches(record)).toBe(true);

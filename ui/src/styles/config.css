@@ -54,6 +54,11 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
+
+  /* In this row, scroll the tabs rather than pushing the settings page sideways. */
+  > .config-sections-hub-tabs {
+    flex-shrink: 1;
+  }
 }
 
 .config-raw-actions {

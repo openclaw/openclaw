@@ -4,7 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
-import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
@@ -190,12 +190,12 @@ it.each(["current", "requester-replaced", "preparation-failed"] as const)(
 );
 
 it.each(["release", "revoke", "gateway-close"] as const)(
-  "retains the original operator ceiling until %s",
+  "retains the admitted operator ceiling with %s",
   (ending) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { context, resolver, client, scope, capture } = operatorFixture("completion-owner");
       const revoked = new AbortController();
-      const source = (await captureGatewayOperatorRunAuthority({
+      const source = (await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
@@ -235,6 +235,13 @@ it.each(["release", "revoke", "gateway-close"] as const)(
           custody.release();
         } else if (ending === "revoke") {
           revoked.abort(new Error("operator revoked"));
+          runWithCustody(custody, scope, () => {
+            const authority =
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+            expect(authority?.source).toBe(source.authority.source);
+            expect(authority?.scopes).toEqual(["operator.write"]);
+          });
+          custody.release();
         } else {
           getGatewayContextLifetime(resolver).abort();
         }
@@ -316,14 +323,10 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
           await expect(delivery).rejects.toThrow(/custody|requester lifecycle/);
         } else {
           const outcome = await delivery;
-          expect(outcome, JSON.stringify(outcome)).toMatchObject(
-            callerState === "uncaptured"
-              ? {
-                  delivered: false,
-                  error: expect.stringContaining("authority is no longer active"),
-                }
-              : { delivered: true, path: "direct" },
-          );
+          expect(outcome, JSON.stringify(outcome)).toMatchObject({
+            delivered: true,
+            path: "direct",
+          });
         }
       } finally {
         custody?.release();

@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { chromium, type Browser, type CDPSession } from "playwright";
+import { failManagedCleanup } from "../lib/managed-cleanup-handoff.mts";
 import { analyzeReloadFrames } from "./warm-reload-frames.ts";
 
 const featureMembers = (arguments_: string[], name: string) =>
@@ -79,7 +80,19 @@ export async function launchWarmReloadBrowser(args: string[] = []) {
       },
     };
   } catch (error) {
-    await Promise.allSettled([probe?.close(), browser?.close()]);
+    const closed = await Promise.allSettled([probe?.close(), browser?.close()]);
+    const failures = closed.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      // Launch failed before handing its browser to main. Retain the same
+      // build inputs that a failed close of an admitted browser would protect.
+      failManagedCleanup();
+      throw Object.assign(
+        new AggregateError([error, ...failures], "Warm reload browser cleanup failed"),
+        { processTreeState: "indeterminate" },
+      );
+    }
     throw error;
   }
 }

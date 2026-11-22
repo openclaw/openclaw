@@ -609,6 +609,8 @@ export function completeSessionControllerSourceLifecycle(
       state.failure = error;
     }
     state.releaseAuthority = undefined;
+    state.releaseCallbacks?.();
+    state.releaseCallbacks = undefined;
     state.settling = undefined;
     const input = run.controllerInput;
     if (!run.controllerClaim && input && (!synchronous || !input.retirementRequested)) {

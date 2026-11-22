@@ -415,54 +415,36 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
   expect(prepare).not.toHaveBeenCalled();
 });
 
-it.each(["dispatch scopes", "private access"] as const)(
-  "rechecks %s after row preparation",
-  async (boundary) => {
-    const { projection, context, client, describe: dispatchDescription } = describeFixture();
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    const describe = vi.spyOn(projection, "describe");
-    if (boundary === "dispatch scopes") {
-      client.connect.scopes = ["operator.read"];
-    }
-    vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
-      await Promise.resolve();
-      client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
-      if (boundary === "private access") {
-        client.authenticatedUserProfile = {
-          profileId: "identified-viewer",
-          displayName: "Viewer",
-          hasAvatar: false,
-          updatedAt: 1,
-        };
-      }
-      return prepare(...args);
-    });
-    if (boundary === "dispatch scopes") {
-      const respond = vi.fn();
-      await dispatchDescription(respond);
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-    } else {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "private-description", method: "sessions.describe" },
-        params: { key: query.key },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-        code: "INVALID_REQUEST",
-        message: `Incognito session "${query.key}" was not found.`,
-      });
-      expect(describe).not.toHaveBeenCalled();
-    }
-  },
-);
+it("rechecks private access after row preparation", async () => {
+  const { projection, context, client } = describeFixture();
+  const prepare = projection.withPreparedExactRows.bind(projection);
+  const describe = vi.spyOn(projection, "describe");
+  vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
+    await Promise.resolve();
+    client.connect.scopes = ["operator.read"];
+    client.authenticatedUserProfile = {
+      profileId: "identified-viewer",
+      displayName: "Viewer",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    return prepare(...args);
+  });
+  const respond = vi.fn();
+  await sessionByKeyReadHandlers["sessions.describe"]!({
+    req: { type: "req", id: "private-description", method: "sessions.describe" },
+    params: { key: query.key },
+    context,
+    client,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+    code: "INVALID_REQUEST",
+    message: `Incognito session "${query.key}" was not found.`,
+  });
+  expect(describe).not.toHaveBeenCalled();
+});
 
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",

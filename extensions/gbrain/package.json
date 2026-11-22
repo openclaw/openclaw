@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gbrain",
-  "version": "2026.11.4",
+  "version": "2026.11.6",
   "description": "Connects OpenClaw to a GBrain brain over MCP.",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.11.4"
+      "pluginApi": ">=2026.11.6"
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/gbrain",
@@ -24,7 +24,7 @@
       "minHostVersion": ">=2026.11.4"
     },
     "build": {
-      "openclawVersion": "2026.11.4",
+      "openclawVersion": "2026.11.6",
       "bundledDist": false
     },
     "release": {
