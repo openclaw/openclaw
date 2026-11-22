@@ -1,2 +1,2 @@
-# Cover recovery after 16 held runs and requester membership revoked while a run is parked.
-46
+# Cover provider recovery under 16 held runs and membership removal while isolated or shared-session runs wait.
+131

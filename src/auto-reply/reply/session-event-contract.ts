@@ -151,6 +151,10 @@ export type ScheduledSessionAutomation = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
   automationAdmin?: true;
+  /** Restore the saved requester before an unstarted occurrence is admitted again. */
+  readmitOperator?: (
+    signal: AbortSignal,
+  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">>;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:

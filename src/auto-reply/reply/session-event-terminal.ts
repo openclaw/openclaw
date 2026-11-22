@@ -283,17 +283,23 @@ export async function settleSessionEventAttempt(params: {
       ? params.waitingProvider
       : undefined;
   const terminal = params.onSettling();
-  if (provider !== undefined) {
-    // The reply owner has settled. Keep the event claimed while other turns use the session.
+  if (next || provider !== undefined) {
     try {
-      await options.scheduledAutomation?.providerRunSlot?.wait(provider, signal);
+      const automation = options.scheduledAutomation;
+      if (provider !== undefined) {
+        // The reply owner has settled. Keep the event claimed while other turns use the session.
+        await automation?.providerRunSlot?.wait(provider, signal);
+      }
+      if (automation?.readmitOperator) {
+        const admission = await automation.readmitOperator(signal);
+        options.scheduledAutomation = { ...automation, ...admission };
+      }
+      signal.throwIfAborted();
     } catch (error) {
       const stopped = params.onSettling(error instanceof Error ? error : String(error));
       ownership.cancel();
       return finish(stopped);
     }
-  }
-  if (next || provider !== undefined) {
     ownership.release();
     const readmitted = readmitSessionEventOccurrence({
       text: params.text,
