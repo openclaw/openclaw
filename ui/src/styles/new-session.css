@@ -624,6 +624,10 @@ span.new-session-page__select {
 }
 
 .new-session-page__project-error {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  overflow-wrap: anywhere;
   color: var(--danger);
   padding: 5px 8px;
   font-size: 11px;
@@ -997,6 +1001,10 @@ span.new-session-page__select {
   gap: 8px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
+}
+
+.new-session-page__project-popover .new-session-page__browser > .new-session-page__error {
+  overflow-wrap: anywhere;
 }
 
 .new-session-page__browser > .new-session-page__error {
