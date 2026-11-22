@@ -57,6 +57,35 @@ it("emits a final tool event only after the bridge accepts the result", async ()
   expect(events).toEqual([expect.objectContaining({ type: "tool.error", final: true })]);
 });
 
+it.each(["safe-read-only", "owner", "none"] as const)(
+  "selects %s meeting context without changing requester lineage",
+  async (toolPolicy) => {
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: TEST_MEETING_PLATFORM_METADATA,
+      config: { realtime: { agentId: "main", toolPolicy } },
+      fullConfig: {},
+      runtime: { agent: {} } as never,
+      logger: {} as never,
+    });
+    await bindings.consultAgent({
+      meetingSessionId: "meeting-1",
+      requesterSessionKey: "agent:main:main",
+      transcript: [{ role: "user", text: "Public meeting question" }],
+      args,
+    });
+    expect(consultRealtimeVoiceAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextMode: toolPolicy === "none" ? "isolated" : "fork",
+        sessionKey:
+          toolPolicy === "none"
+            ? "agent:main:subagent:test-meeting:tool-free:meeting-1"
+            : "agent:main:subagent:test-meeting:meeting-1",
+        spawnedBy: "agent:main:main",
+      }),
+    );
+  },
+);
+
 it.each([
   [undefined, "operator"],
   ["Support", "support"],

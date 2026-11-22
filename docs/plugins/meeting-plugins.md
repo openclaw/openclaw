@@ -67,6 +67,13 @@ The four plugins share the same modes:
 
 Use `transcribe` when the agent only needs meeting text. Use `agent` for normal OpenClaw reasoning and tools. Use `bidi` when low-latency direct voice is more important than routing each turn through the regular agent.
 
+In `agent` mode, `realtime.toolPolicy: "none"` keeps consult history separate from
+the requesting chat. The consult receives the meeting transcript instead of
+forking that chat, including when an earlier consult for the same meeting had
+inherited chat history. Other tool policies retain their existing context behavior.
+The configured agent's workspace instructions still apply; use a separate agent
+when the meeting needs different workspace context.
+
 Google Meet, Teams, Slack huddles, and Zoom use one shared meeting audio engine. In `bidi`
 mode they support GPT-Live through the same provider selection, native agent
 delegation, and interruption policy used by Discord and Talk. GPT-Live owns
