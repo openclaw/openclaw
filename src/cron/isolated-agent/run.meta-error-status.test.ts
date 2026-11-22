@@ -202,6 +202,28 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
+  it("finishes silently after the run collected its only collector child", async () => {
+    await useRealOutcome();
+    mockAgentRun({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: { terminalReply: { disposition: "silent" } },
+      acceptedSessionSpawns: [
+        {
+          runId: "run-child",
+          childSessionKey: "agent:default:child",
+          collector: true,
+          collected: true,
+        },
+      ],
+    });
+    mockDelivery({});
+    const result = await runTurn();
+    expectObjectFields(result, { status: "ok" });
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: false }),
+    );
+  });
+
   it.each([true, false])("hands off a silent run only to a collector (%s)", async (collect) => {
     await useRealOutcome();
     mockChildRun([{ text: "NO_REPLY" }], collect, { terminalReply: { disposition: "silent" } });
