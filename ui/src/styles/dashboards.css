@@ -306,10 +306,15 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0 2px var(--space-3);
-  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.dashboards-group__heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboards-group__heading > openclaw-session-owner-chip {

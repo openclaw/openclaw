@@ -432,7 +432,7 @@ suite.define(() => {
   });
 
   it.each([2, 64])(
-    "wraps the full author heading above its first dashboard (%i dashboards)",
+    "keeps a long author heading on one line above its first dashboard (%i dashboards)",
     async (count) => {
       const name = "NorthernBookConservationAndLetterpressStudioInternationalEditionReviewDesk";
       const rows = Array.from({ length: count }, (_, index) => ({
@@ -455,18 +455,16 @@ suite.define(() => {
           await heading.waitFor();
           const label = heading.locator(":scope > span");
           expect(await label.textContent()).toBe(name);
-          expect(
-            await label.evaluate((e) => {
-              const range = document.createRange();
-              range.selectNodeContents(e);
-              const lines = [...range.getClientRects()];
-              const bounds = e.parentElement!.getBoundingClientRect();
-              return (
-                lines.length > 1 &&
-                lines.every((l) => l.left >= bounds.left - 1 && l.right <= bounds.right + 1)
-              );
-            }),
-          ).toBe(true);
+          expect(await label.getAttribute("title")).toBe(name);
+          const measured = await label.evaluate((el) => ({
+            clipped: el.scrollWidth > el.clientWidth,
+            overflow: getComputedStyle(el).textOverflow,
+            height: el.getBoundingClientRect().height,
+            line: Number.parseFloat(getComputedStyle(el).lineHeight),
+          }));
+          expect(measured.clipped).toBe(true);
+          expect(measured.overflow).toBe("ellipsis");
+          expect(measured.height).toBeCloseTo(measured.line, 0);
           const first = gallery.locator("[data-dashboard-session]").first();
           const bounds = (await heading.boundingBox())!;
           await expect
