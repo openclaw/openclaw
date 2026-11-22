@@ -130,7 +130,9 @@ suite.define(() => {
 
         // A 5xx is reported after one attempt, not after the chat retry ladder (~90 s).
         await startCheck();
-        await dialog.getByText(/temporarily overloaded/i).waitFor({ timeout: 20_000 });
+        await dialog
+          .getByText(/provider is busy or limiting requests/i)
+          .waitFor({ timeout: 20_000 });
         expect(inferenceRequests).toBe(1);
 
         // A silent remote API shows the wait and fails at 30 s, not 90 s.
@@ -143,7 +145,7 @@ suite.define(() => {
         upstreamMode = "reason";
         await startCheck();
         await dialog.waitFor();
-        const failure = dialog.getByText(/default unchanged/);
+        const failure = dialog.getByText(/Your sign-in is saved/);
         await expect
           .poll(async () => (await failure.isVisible()) || !(await dialog.isVisible()), {
             timeout: 30_000,
