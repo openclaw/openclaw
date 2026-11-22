@@ -167,6 +167,69 @@
           "exactCauses": true
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-ui (1/3)",
+      "reason": "Operator accepts the investigated Bun successor-state assertion failure for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-ui finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-32 (node)",
+      "reason": "Operator accepts the investigated Doctor session-owner mismatch and Gateway startup connection timeout for this release; preserve raw failures and require execution and evidence integrity.",
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/commands/doctor-telegram-general-topic-conversations.test.ts",
+            "test": "doctor Telegram General-topic conversation repair > canonicalizes a legacy-only current entry before later session writes :: Error: Session reader validation does not match its current physical owner\n❯ createError src/state/openclaw-state-worker-error-identity.ts:250:14\n248|       return new SessionMetadataUnavailableError(node.reason, undefine…\n249|     case \"error\":\n250|       return new Error(node.message);\n|              ^\n251|     case \"mcp-oauth-corruption\":\n252|       return new McpOAuthStoreCorruptionError(\"\", \"\");\n❯ src/state/openclaw-state-worker-error.ts:199:14\n❯ decodeErrorGraph src/state/openclaw-state-worker-error.ts:192:26\n❯ hydrateOpenClawStateWorkerError src/state/openclaw-state-worker-error.ts:277:57\n❯ decodeSessionTranscriptWorkerReadError src/config/sessions/session-history-worker-errors.ts:<redacted len=6>\n❯ unwrapSessionTranscriptWorkerReply src/config/sessions/session-history-worker-errors.ts:<redacted len=4>\n❯ Object.runRequest src/config/sessions/session-transcript-worker-runtime.ts:<redacted len=6>\n❯ dataOnly src/config/sessions/conversation-registry.ts:95:22\n❯ src/config/sessions/session-entry-read-runtime.ts:<redacted len=6>\n❯ withSessionHistoryWorkerDatabase src/config/sessions/session-transcript-worker-runtime.ts:<redacted len=6>\n❯ withSessionHistoryWorkerReadCandidates src/config/sessions/session-transcript-worker-resources.ts:<redacted len=6>\n❯ withSessionStoreReaderInWorker src/config/sessions/session-entry-read-runtime.ts:<redacted len=6>\n❯ expectCanonical src/commands/doctor-telegram-general-topic-conversations.test.ts:67:16\n❯ src/commands/doctor-telegram-general-topic-conversations.test.ts:147:5"
+          },
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server-startup-projection-warm.test.ts",
+            "test": "keeps headless rows lazy and serves sessions.list (configured UI: true) :: Error: gateway connect timeout\n❯ Timeout.<anonymous> test/helpers/gateway-client.ts:77:29\n75|     });\n76|     const timer = setTimeout(\n77|       () => settle({ error: new Error(wait.timeoutMessage) }),\n|                             ^\n78|       wait.timeoutMs,\n79|     );"
+          }
+        ]
+      },
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ],
+          "exactCauses": true
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.7",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live infra)",
+      "reason": "Operator accepts the investigated session-event-wake missing foreground STARTED reply for this release; preserve raw failures and require execution and evidence integrity.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ],
+          "exactCauses": true
+        }
+      ]
     }
   ]
 }
