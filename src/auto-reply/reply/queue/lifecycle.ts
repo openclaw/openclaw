@@ -6,13 +6,17 @@ import {
   GatewayOperatorAccessUnavailableError,
   isOperatorAuthorityUnavailable,
 } from "../../../infra/operator-authority-error.js";
-import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../../../infra/restart-recovery-errors.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
 import {
   retireSessionControllerInput,
   submitSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
+import { operatorScopeSatisfied } from "../../../shared/operator-scope-compat.js";
 import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
 import { replyCallbackCustody } from "../reply-callback-custody.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
@@ -168,6 +172,7 @@ export async function prepareFollowupRunOperatorAuthority(
   }
   try {
     const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
+    const channelSender = Boolean(run.operatorAuthority.channelRecoverySource);
     const restored = await restoreGatewayQueuedOperatorRecovery({
       context,
       agentId: run.run.agentId,
@@ -183,6 +188,17 @@ export async function prepareFollowupRunOperatorAuthority(
         }
       },
     });
+    // A Gateway turn starts only with a write grant, queued or live (chat.send needs
+    // operator.write or own-session operator.sessions.write). Channel senders chat without one.
+    if (
+      !channelSender &&
+      !operatorScopeSatisfied("operator.sessions.write", restored.authority.scopes)
+    ) {
+      restored.release();
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+      );
+    }
     const release = state.releaseAuthority;
     run.operatorAuthority = restored.authority;
     state.releaseAuthority = restored.release;
