@@ -40,7 +40,6 @@ import {
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
-import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
@@ -48,6 +47,7 @@ import { resolveWorkerPlacementCapabilities } from "../worker-environments/place
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
 import {
+  dispatchableWorkerProfileIds,
   listWorkerProfilesWithMachines,
   requireActiveCloudProfile,
 } from "./environments.profiles.js";
@@ -499,18 +499,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       const profiles = await listWorkerProfilesWithMachines(context);
       const suggestedProfile = await listSuggestedWorkerProfile(context);
       authority.assertCurrent();
-      const role = resolveOperatorRolePolicy(client ?? null, context.getRuntimeConfig());
-      const currentScopes = client?.connect.scopes ?? [];
-      const administrator =
-        currentScopes.includes(ADMIN_SCOPE) && (!role || role.scopes.includes(ADMIN_SCOPE));
-      const canWrite =
-        authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, currentScopes).allowed &&
-        (!role || authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, role.scopes).allowed);
-      const dispatchableProfileIds = profiles
-        .filter(
-          (profile) => canWrite && (administrator || role?.workerProfiles?.includes(profile.id)),
-        )
-        .map((profile) => profile.id);
+      const dispatchableProfileIds = dispatchableWorkerProfileIds(profiles, options);
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
         authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
