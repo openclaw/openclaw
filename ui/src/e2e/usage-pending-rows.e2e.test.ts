@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions, usageTotals } from "../pages/usage/view.test-support.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
@@ -80,16 +77,6 @@ suite.define(() => {
             .filter({ has: page.getByRole("button", { name: label, exact: true }) });
         const value = (label: string) => row(label).locator(".session-bar-value");
         await expect.poll(() => card.locator(".session-bar-row").count()).toBe(3);
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, card, [row("Awaiting usage")], {
-            animations: "disabled",
-            scrollTo: card,
-            elements: [card],
-          });
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-          await writeFile(path.join(suite.artifactDir, name + "-card.png"), frame.elements[0]!.png);
-        };
-        await capture("tokens");
         expect.soft(await value("Awaiting usage").textContent()).toBe("—");
         expect(await value("Measured zero").textContent()).toBe("0");
         expect(await value("Measured usage").textContent()).toBe("1.2K");
@@ -100,7 +87,6 @@ suite.define(() => {
           .click();
         await page.getByRole("button", { name: "Display", exact: true }).click();
         await expect.poll(() => value("Measured usage").textContent()).toBe("$1.20");
-        await capture("cost");
         expect.soft(await value("Awaiting usage").textContent()).toBe("—");
         expect(await value("Measured zero").textContent()).toBe("$0.00");
         const pendingRow = await row("Awaiting usage").elementHandle();
