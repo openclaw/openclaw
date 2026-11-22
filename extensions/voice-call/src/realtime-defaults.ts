@@ -13,9 +13,14 @@ const NATIVE_DELEGATION_DEFAULT_INSTRUCTIONS = `${DEFAULT_VOICE_CALL_ROLE} When 
 /** Swaps the built-in default for wording without function-tool names on native-delegation models. */
 export function resolveVoiceCallBaseInstructions(
   instructions: string,
-  handlesAgentConsult: boolean,
+  params: { handlesAgentConsult: boolean; configuredInstructions: string },
 ): string {
-  if (!handlesAgentConsult || !instructions.startsWith(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS)) {
+  // Only an unchanged default is ours to reword; custom text that starts with it is sent as written.
+  if (
+    !params.handlesAgentConsult ||
+    params.configuredInstructions !== DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS ||
+    !instructions.startsWith(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS)
+  ) {
     return instructions;
   }
   return (

@@ -703,7 +703,10 @@ export class RealtimeCallHandler {
     } = registration;
     const { handlesAgentConsult, toolPolicy } = sessionPolicy;
     const instructions = [
-      resolveVoiceCallBaseInstructions(registrationInstructions, handlesAgentConsult),
+      resolveVoiceCallBaseInstructions(registrationInstructions, {
+        handlesAgentConsult,
+        configuredInstructions: this.config.instructions,
+      }),
       consultPolicyInstructions,
     ]
       .filter(Boolean)

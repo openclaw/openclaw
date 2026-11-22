@@ -81,6 +81,8 @@ export function makeHandler(params: {
   nativeConsult?: boolean;
   consultPolicy?: ReturnType<typeof createRealtimeConfig>["consultPolicy"];
   instructions?: string;
+  /** Instructions the routed registration returns (base plus agent context). */
+  registrationInstructions?: string;
 }) {
   const config = {
     ...createRealtimeConfig(),
@@ -108,7 +110,7 @@ export function makeHandler(params: {
   } as unknown as CallManager;
   const handler = managedHandler(config, manager, () => ({
     agentId: "main",
-    instructions: config.instructions,
+    instructions: params.registrationInstructions ?? config.instructions,
     provider,
     providerConfig: { apiKey: "test-key" },
     capabilities: provider.capabilities,

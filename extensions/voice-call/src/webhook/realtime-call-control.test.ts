@@ -242,22 +242,29 @@ it.each([false, true])(
     }
   },
 );
-it.each([false, true])(
-  "words the default base prompt for the routed model (native consult=%s)",
-  async (nativeConsult) => {
+it.each([
+  ["default", false],
+  ["default", true],
+  ["customized default", true],
+] as const)(
+  "words the %s base prompt for the routed model (native consult=%s)",
+  async (base, nativeConsult) => {
+    const configured =
+      base === "default"
+        ? DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS
+        : `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS} Always speak Spanish.`;
     const { request } = await connectCall("CA-default-base", {
       nativeConsult,
-      instructions: `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS}\n\nAgent context.`,
+      instructions: configured,
+      registrationInstructions: `${configured}\n\nAgent context.`,
     });
-    if (nativeConsult) {
+    if (nativeConsult && base === "default") {
       expect(request.instructions).toMatch(
         /delegate it to OpenClaw before answering\.\n\nAgent context\./,
       );
       expect(request.instructions).not.toMatch(/openclaw_agent_consult|openclaw_end_call/);
     } else {
-      expect(request.instructions).toBe(
-        `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS}\n\nAgent context.`,
-      );
+      expect(request.instructions?.startsWith(`${configured}\n\nAgent context.`)).toBe(true);
     }
   },
 );
