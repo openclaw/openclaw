@@ -1468,8 +1468,6 @@ var External = [
     /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u,
     /(^source$|^generation$|^account$)/u,
     /(^accountId$|^login$)/u,
-    /(^action$|^sessionKey$|^agentId$|^title$|^body$)/u,
-    /^[^\r\n]*\S[^\r\n]*$/u,
     /(^action$|^pullRequestUrl$|^conflictsResolved$|^expectedHeadCommit$|^sessionKey$|^agentId$)/u,
     /^[a-f0-9]{40}$/u,
     /(^action$|^pullRequestUrl$|^sessionKey$|^agentId$)/u,
@@ -1481,6 +1479,8 @@ var External = [
     /(^action$|^pullRequestUrl$|^publishingSessionKey$|^requestId$|^expectedHeadCommit$|^mergeMethod$|^sessionKey$|^agentId$)/u,
     /(^action$|^conflictsResolved$|^baseCommit$|^sessionKey$|^agentId$)/u,
     /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u,
+    /(^action$|^sessionKey$|^agentId$|^title$|^body$)/u,
+    /^[^\r\n]*\S[^\r\n]*$/u,
     /(^sessionKey$|^agentId$|^requestId$)/u,
     /(^policy$|^custody$|^target$|^request$|^remedies$)/u,
     /(^read$|^write$)/u,
@@ -16921,33 +16921,34 @@ var External = [
   check_2536 = (value) =>
     check_2537(value) ||
     check_2540(value) ||
-    check_2543(value) ||
+    check_2542(value) ||
     check_2545(value) ||
-    check_2548(value) ||
-    check_2552(value) ||
-    check_2553(value) ||
+    check_2549(value) ||
+    check_2550(value) ||
+    check_2557(value) ||
     check_2560(value),
   check_2537 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "action" in value &&
+    "pullRequestUrl" in value &&
     "sessionKey" in value &&
-    "title" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1667, unique_1668) => External[845].test(unique_1667) || check_2(value[unique_1667]),
     ) &&
     check_2538(value.action) &&
+    check_2351(value.pullRequestUrl) &&
+    (value.conflictsResolved === void 0 ||
+      !("conflictsResolved" in value) ||
+      check_181(value.conflictsResolved)) &&
+    (value.expectedHeadCommit === void 0 ||
+      !("expectedHeadCommit" in value) ||
+      check_2539(value.expectedHeadCommit)) &&
     check_6(value.sessionKey) &&
-    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    check_2539(value.title) &&
-    (value.body === void 0 || !("body" in value) || check_1769(value.body)),
-  check_2538 = (value) => typeof value == "string" && value === "create_issue",
-  check_2539 = (value) =>
-    typeof value == "string" &&
-    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-    (value.length <= 256 || (value.length <= 512 && CodePointCount(value) <= 256)) &&
-    External[846].test(value),
+    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
+  check_2538 = (value) => typeof value == "string" && value === "prepare_pr",
+  check_2539 = (value) => typeof value == "string" && External[846].test(value),
   check_2540 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -16960,32 +16961,10 @@ var External = [
     ) &&
     check_2541(value.action) &&
     check_2351(value.pullRequestUrl) &&
-    (value.conflictsResolved === void 0 ||
-      !("conflictsResolved" in value) ||
-      check_181(value.conflictsResolved)) &&
-    (value.expectedHeadCommit === void 0 ||
-      !("expectedHeadCommit" in value) ||
-      check_2542(value.expectedHeadCommit)) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2541 = (value) => typeof value == "string" && value === "prepare_pr",
-  check_2542 = (value) => typeof value == "string" && External[848].test(value),
-  check_2543 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "action" in value &&
-    "pullRequestUrl" in value &&
-    "sessionKey" in value &&
-    Object.getOwnPropertyNames(value).every(
-      (unique_1671, unique_1672) => External[849].test(unique_1671) || check_2(value[unique_1671]),
-    ) &&
-    check_2544(value.action) &&
-    check_2351(value.pullRequestUrl) &&
-    check_6(value.sessionKey) &&
-    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2544 = (value) => typeof value == "string" && value === "inspect_pr",
-  check_2545 = (value) =>
+  check_2541 = (value) => typeof value == "string" && value === "inspect_pr",
+  check_2542 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -16993,22 +16972,22 @@ var External = [
     "expectedHeadCommit" in value &&
     "sessionKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1673, unique_1674) => External[850].test(unique_1673) || check_2(value[unique_1673]),
+      (unique_1671, unique_1672) => External[848].test(unique_1671) || check_2(value[unique_1671]),
     ) &&
-    check_2546(value.action) &&
+    check_2543(value.action) &&
     (value.pullRequestUrl === void 0 ||
       !("pullRequestUrl" in value) ||
       check_623(value.pullRequestUrl)) &&
-    (value.requestId === void 0 || !("requestId" in value) || check_2547(value.requestId)) &&
+    (value.requestId === void 0 || !("requestId" in value) || check_2544(value.requestId)) &&
     check_2018(value.expectedHeadCommit) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2546 = (value) => typeof value == "string" && value === "request_review",
-  check_2547 = (value) =>
+  check_2543 = (value) => typeof value == "string" && value === "request_review",
+  check_2544 = (value) =>
     typeof value == "string" &&
     (value.length <= 36 || (value.length <= 72 && CodePointCount(value) <= 36)) &&
-    External[851](value),
-  check_2548 = (value) =>
+    External[849](value),
+  check_2545 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17017,16 +16996,16 @@ var External = [
     "evidence" in value &&
     "sessionKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1675, unique_1676) => External[852].test(unique_1675) || check_2(value[unique_1675]),
+      (unique_1673, unique_1674) => External[850].test(unique_1673) || check_2(value[unique_1673]),
     ) &&
-    check_2549(value.action) &&
-    (value.requestId === void 0 || !("requestId" in value) || check_2547(value.requestId)) &&
+    check_2546(value.action) &&
+    (value.requestId === void 0 || !("requestId" in value) || check_2544(value.requestId)) &&
     check_2018(value.expectedHeadCommit) &&
-    check_2550(value.evidence) &&
+    check_2547(value.evidence) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2549 = (value) => typeof value == "string" && value === "upload_evidence",
-  check_2550 = (value) =>
+  check_2546 = (value) => typeof value == "string" && value === "upload_evidence",
+  check_2547 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -17034,31 +17013,31 @@ var External = [
     "sha256" in value &&
     "sizeBytes" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1677, unique_1678) => External[853].test(unique_1677) || check_2(value[unique_1677]),
+      (unique_1675, unique_1676) => External[851].test(unique_1675) || check_2(value[unique_1675]),
     ) &&
     check_1061(value.path) &&
     check_60(value.sha256) &&
-    check_2551(value.sizeBytes),
-  check_2551 = (value) =>
+    check_2548(value.sizeBytes),
+  check_2548 = (value) =>
     Number.isInteger(value) &&
     (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 1e7)),
-  check_2552 = (value) =>
+  check_2549 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "action" in value &&
     "sessionKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1679, unique_1680) => External[854].test(unique_1679) || check_2(value[unique_1679]),
+      (unique_1677, unique_1678) => External[852].test(unique_1677) || check_2(value[unique_1677]),
     ) &&
     check_373(value.action) &&
     (value.pullRequestUrl === void 0 ||
       !("pullRequestUrl" in value) ||
       check_623(value.pullRequestUrl)) &&
-    (value.requestId === void 0 || !("requestId" in value) || check_2547(value.requestId)) &&
+    (value.requestId === void 0 || !("requestId" in value) || check_2544(value.requestId)) &&
     (value.expectedHeadCommit === void 0 ||
       !("expectedHeadCommit" in value) ||
-      check_2542(value.expectedHeadCommit)) &&
+      check_2539(value.expectedHeadCommit)) &&
     (value.title === void 0 || !("title" in value) || check_2527(value.title)) &&
     (value.body === void 0 || !("body" in value) || check_321(value.body)) &&
     (value.expectedTitle === void 0 ||
@@ -17069,54 +17048,75 @@ var External = [
       check_321(value.expectedBody)) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2553 = (value) =>
+  check_2550 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "action" in value &&
     "sessionKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1681, unique_1682) => External[855].test(unique_1681) || check_2(value[unique_1681]),
+      (unique_1679, unique_1680) => External[853].test(unique_1679) || check_2(value[unique_1679]),
     ) &&
-    check_2554(value.action) &&
+    check_2551(value.action) &&
     (value.pullRequestUrl === void 0 ||
       !("pullRequestUrl" in value) ||
       check_623(value.pullRequestUrl)) &&
     (value.publishingSessionKey === void 0 ||
       !("publishingSessionKey" in value) ||
       check_63(value.publishingSessionKey)) &&
-    (value.requestId === void 0 || !("requestId" in value) || check_2547(value.requestId)) &&
+    (value.requestId === void 0 || !("requestId" in value) || check_2544(value.requestId)) &&
     (value.expectedHeadCommit === void 0 ||
       !("expectedHeadCommit" in value) ||
-      check_2542(value.expectedHeadCommit)) &&
-    (value.mergeMethod === void 0 || !("mergeMethod" in value) || check_2557(value.mergeMethod)) &&
+      check_2539(value.expectedHeadCommit)) &&
+    (value.mergeMethod === void 0 || !("mergeMethod" in value) || check_2554(value.mergeMethod)) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2554 = (value) =>
-    check_2020(value) || check_973(value) || check_2555(value) || check_2556(value),
-  check_2555 = (value) => typeof value == "string" && value === "merge",
-  check_2556 = (value) => typeof value == "string" && value === "close",
-  check_2557 = (value) => check_2555(value) || check_2558(value) || check_2559(value),
-  check_2558 = (value) => typeof value == "string" && value === "squash",
-  check_2559 = (value) => typeof value == "string" && value === "rebase",
-  check_2560 = (value) =>
+  check_2551 = (value) =>
+    check_2020(value) || check_973(value) || check_2552(value) || check_2553(value),
+  check_2552 = (value) => typeof value == "string" && value === "merge",
+  check_2553 = (value) => typeof value == "string" && value === "close",
+  check_2554 = (value) => check_2552(value) || check_2555(value) || check_2556(value),
+  check_2555 = (value) => typeof value == "string" && value === "squash",
+  check_2556 = (value) => typeof value == "string" && value === "rebase",
+  check_2557 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     "action" in value &&
     "sessionKey" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_1683, unique_1684) => External[856].test(unique_1683) || check_2(value[unique_1683]),
+      (unique_1681, unique_1682) => External[854].test(unique_1681) || check_2(value[unique_1681]),
     ) &&
-    check_2561(value.action) &&
+    check_2558(value.action) &&
     (value.conflictsResolved === void 0 ||
       !("conflictsResolved" in value) ||
       check_181(value.conflictsResolved)) &&
-    (value.baseCommit === void 0 || !("baseCommit" in value) || check_2562(value.baseCommit)) &&
+    (value.baseCommit === void 0 || !("baseCommit" in value) || check_2559(value.baseCommit)) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)),
-  check_2561 = (value) => typeof value == "string" && value === "refresh_base",
-  check_2562 = (value) => typeof value == "string" && External[857].test(value),
+  check_2558 = (value) => typeof value == "string" && value === "refresh_base",
+  check_2559 = (value) => typeof value == "string" && External[855].test(value),
+  check_2560 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "action" in value &&
+    "sessionKey" in value &&
+    "title" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_1683, unique_1684) => External[856].test(unique_1683) || check_2(value[unique_1683]),
+    ) &&
+    check_2561(value.action) &&
+    check_6(value.sessionKey) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
+    check_2562(value.title) &&
+    (value.body === void 0 || !("body" in value) || check_1769(value.body)),
+  check_2561 = (value) => typeof value == "string" && value === "create_issue",
+  check_2562 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 256 || (value.length <= 512 && CodePointCount(value) <= 256)) &&
+    External[857].test(value),
   check_2563 = (value) => check_2564(value),
   check_2564 = (value) =>
     typeof value == "object" &&
@@ -17128,7 +17128,7 @@ var External = [
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
-    (value.requestId === void 0 || !("requestId" in value) || check_2547(value.requestId)),
+    (value.requestId === void 0 || !("requestId" in value) || check_2544(value.requestId)),
   check_2565 = (value) => check_2566(value),
   check_2566 = (value) =>
     typeof value == "object" &&
@@ -17382,7 +17382,7 @@ var External = [
     check_2623(value.reason) &&
     (value.selectedRequestId === void 0 ||
       !("selectedRequestId" in value) ||
-      check_2547(value.selectedRequestId)),
+      check_2544(value.selectedRequestId)),
   check_2623 = (value) => check_545(value) || check_2624(value),
   check_2624 = (value) => typeof value == "string" && value === "not-observable",
   check_2625 = (value) =>
@@ -17985,7 +17985,7 @@ var External = [
     (value.description === void 0 || !("description" in value) || check_861(value.description)) &&
     (value.path === void 0 || !("path" in value) || check_2699(value.path)) &&
     (value.id === void 0 || !("id" in value) || check_102(value.id)),
-  check_2698 = (value) => check_2523(value) || check_211(value) || check_2556(value),
+  check_2698 = (value) => check_2523(value) || check_211(value) || check_2553(value),
   check_2699 = (value) =>
     typeof value == "string" &&
     (value.length <= 1024 || (value.length <= 2048 && CodePointCount(value) <= 1024)) &&

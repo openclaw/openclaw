@@ -94,7 +94,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-history.test.ts",
   "src/gateway/github-publication-imported-actions.test.ts",
   "src/gateway/github-publication-inspect.test.ts",
-  "src/gateway/github-publication-issue.test.ts",
   "src/gateway/github-publication-legacy-options.test.ts",
   "src/gateway/github-publication-native.test.ts",
   "src/gateway/github-publication-personal-pending.test.ts",
