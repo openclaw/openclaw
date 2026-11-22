@@ -590,6 +590,51 @@ private enum DashboardArticleFixture {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardNativeBrowserFaviconTests {
+    @Test func `tabs follow the dashboard appearance without reloading`() async throws {
+        func icon(_ fill: String) -> String {
+            let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>" +
+                "<circle cx='8' cy='8' r='8' fill='\(fill)'/></svg>"
+            return "data:image/svg+xml;base64," + Data(svg.utf8).base64EncodedString()
+        }
+        let light = icon("black")
+        let dark = icon("white")
+        let server = try await DashboardHTTPFixture.start(html: """
+        <!doctype html><html data-theme-mode="light"><title>Theme fixture</title><link rel="icon">
+        <script>
+          const preference = matchMedia('(prefers-color-scheme: dark)');
+          const icon = document.querySelector('link');
+          const update = () => { icon.href = preference.matches ? '\(dark)' : '\(light)'; };
+          preference.addEventListener('change', update);
+          update();
+        </script>
+        """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; img-src data:; connect-src data:")
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        let window = try #require(controller.window)
+        window.appearance = NSAppearance(named: .darkAqua)
+        try await waitForNativeDashboardDocument(controller)
+
+        let browser = controller.nativeBrowser
+        try browser.open(tabId: "mac-theme", url: server.url("/article"), sessionKey: "")
+        let webView = try #require(browser.webView(for: "mac-theme"))
+        try await TestWait.state("light favicon on a dark system appearance") {
+            browser.state.tabs.first?.favicon == light
+        }
+        let dashboardStillDark = try await controller.webView.evaluateJavaScript(
+            "matchMedia('(prefers-color-scheme: dark)').matches")
+        #expect(dashboardStillDark as? Bool == true)
+        _ = try await webView.evaluateJavaScript("window.openclawFixtureLoaded = true")
+
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'dark'")
+        try await TestWait.state("dark favicon after a dashboard theme change") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        let sameDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(sameDocument as? Bool == true)
+    }
+
     @Test func `navigations that keep the displayed page keep its favicon`() async throws {
         let unreachable = try await DashboardHTTPFixture.start()
         let unreachableURL = unreachable.url("/gone")

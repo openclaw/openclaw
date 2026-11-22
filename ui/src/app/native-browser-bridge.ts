@@ -3,7 +3,8 @@
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
- * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
+ * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope},
+ * set-color-scheme {colorScheme: light|dark} (macOS dashboard chrome).
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
  * Open replies include tabId. The host reuses a session's tab at the requested URL or its
  * retained initial-request alias, so the returned ID may differ from the request.
@@ -59,7 +60,8 @@ export type NativeBrowserMessage =
       rect: NativeBrowserRect | null;
       visible: boolean;
     }
-  | { type: "release-scope"; scope: string };
+  | { type: "release-scope"; scope: string }
+  | { type: "set-color-scheme"; colorScheme: "light" | "dark" };
 export type NativeBrowserReply =
   | {
       ok: true;

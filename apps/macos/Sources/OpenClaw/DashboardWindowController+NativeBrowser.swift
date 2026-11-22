@@ -42,6 +42,8 @@ extension DashboardWindowController {
                 try self.nativeBrowser.present(scope: scope, tabId: tabId, rect: rect, visible: visible)
             case let .releaseScope(scope):
                 self.nativeBrowser.releaseScope(scope)
+            case let .setColorScheme(colorScheme):
+                self.nativeBrowser.setColorScheme(colorScheme)
             case let .inspect(tabId, x, y):
                 self.performBrowserRequest(replyHandler: replyHandler) { browser, _ in
                     try await browser.inspect(tabId: tabId, x: x, y: y)
