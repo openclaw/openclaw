@@ -31,7 +31,7 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
 import {
@@ -383,11 +383,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "assign_owner") {
         // Responsibility assignment uses the live agent caller, not the assignee authority.
-        const assertCallerCurrent = captureGatewayToolCallerAssertion();
-        if (opts.senderIsOwner !== true && !assertCallerCurrent) {
+        if (
+          opts.senderIsOwner !== true &&
+          !getGatewayToolCallerIdentity()?.operationalRunInstance
+        ) {
           throw new ToolAuthorizationError("Non-owner assignment requires an admitted agent turn");
         }
-        assertCallerCurrent?.("sessions.assignOwner");
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
         const ownerId = readToolStringParam(params, "ownerId", { required: true });
         if (ownerType !== "human" && ownerType !== "agent") {
@@ -406,7 +407,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             owner: { type: ownerType, id: ownerId },
           },
           agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
-          ...(assertCallerCurrent ? { assertDispatchCurrent: assertCallerCurrent } : {}),
         });
         return jsonResult({
           status: "updated",

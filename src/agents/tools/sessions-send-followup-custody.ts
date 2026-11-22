@@ -12,10 +12,7 @@ import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 class FollowupAccessChangedError extends Error {}
 
@@ -33,8 +30,6 @@ export async function prepareSessionsSendFollowup(params: {
   if (!caller) {
     return undefined;
   }
-  const assertInvocation = captureGatewayToolCallerAssertion();
-  assertInvocation?.();
   if (
     caller.agentId !== params.requesterAgentId ||
     caller.sessionKey !== params.requesterSessionKey
@@ -70,7 +65,6 @@ export async function prepareSessionsSendFollowup(params: {
     releaseResources();
   };
   try {
-    assertInvocation?.();
     const cfg = getRuntimeConfig();
     const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
     const actor = resolveGatewayOperatorRoleActor(client ?? null);
@@ -89,7 +83,6 @@ export async function prepareSessionsSendFollowup(params: {
     if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
       throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
     }
-    assertInvocation?.();
     for (const target of [
       {
         agentId: params.requesterAgentId,
@@ -99,7 +92,6 @@ export async function prepareSessionsSendFollowup(params: {
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
-      assertInvocation?.();
       captured.assertCurrent();
     }
     const assertCurrent = () => {
