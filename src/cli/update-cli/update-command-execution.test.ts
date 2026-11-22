@@ -311,35 +311,27 @@ describe("mutable update execution", () => {
   );
 
   it.each([
-    { migrating: true, node: "running", nodeState: "same" },
-    { migrating: true, node: "running", nodeState: "alias" },
-    { migrating: true, node: "running", nodeState: "other" },
-    { migrating: true, node: "running", nodeState: "default" },
-    { migrating: true, node: "stopped", nodeState: "same" },
-    { migrating: false, node: "running", nodeState: "same" },
+    { node: "running", nodeState: "same" },
+    { node: "running", nodeState: "alias" },
+    { node: "running", nodeState: "other" },
+    { node: "running", nodeState: "default" },
+    { node: "stopped", nodeState: "same" },
   ] as const)(
-    "refuses before the Gateway stops while a node service keeps the migrating state open (migrating=$migrating, node=$node, node state=$nodeState)",
-    async ({ migrating, node, nodeState }) => {
-      await withTestDir({ prefix: "migration-node-" }, async (state) => {
-        // #203457: the node host keeps openclaw.sqlite open, so Doctor cannot take exclusion.
+    "refuses before the Gateway stops while a node service keeps the state open (node=$node, node state=$nodeState)",
+    async ({ node, nodeState }) => {
+      await withTestDir({ prefix: "update-node-" }, async (state) => {
+        // #203457: the node host keeps openclaw.sqlite open, so update Doctor cannot take exclusion.
         vi.stubEnv("OPENCLAW_STATE_DIR", state);
-        const shared = path.join(state, "state", "openclaw.sqlite");
         const alias = path.join(path.dirname(state), `${path.basename(state)}-alias`);
         await fs.symlink(state, alias);
-        vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
-          { path: shared, userVersion: migrating ? 14 : 15 },
-        ]);
-        mocks.checkCandidate.mockResolvedValue({
-          ...readyCandidate([]),
-          candidateSchemaVersions: { state: 15, agent: 19 },
-        });
-        const nodeStateDir = { same: state, alias, other: path.join(state, "other") }[
-          nodeState === "default" ? "other" : nodeState
-        ];
+        const nodeStateDir = { same: state, alias, other: path.join(state, "other") };
         mocks.nodeServiceCommand.mockResolvedValue({
           programArguments: ["node", "openclaw.mjs", "node", "run"],
           // A default node omits the selector and must not inherit this CLI's.
-          environment: nodeState === "default" ? {} : { OPENCLAW_STATE_DIR: nodeStateDir },
+          environment: {
+            OPENCLAW_SERVICE_KIND: "node",
+            ...(nodeState === "default" ? {} : { OPENCLAW_STATE_DIR: nodeStateDir[nodeState] }),
+          },
         });
         mocks.nodeServiceRuntime.mockResolvedValue({ status: node, pid: 5151 });
         mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
@@ -348,15 +340,14 @@ describe("mutable update execution", () => {
 
         const execution = await execute(params);
 
-        const refused =
-          migrating && node === "running" && (nodeState === "same" || nodeState === "alias");
+        const refused = node === "running" && (nodeState === "same" || nodeState === "alias");
         if (refused) {
           expect(execution).toMatchObject({
             mutationStarted: false,
             result: { status: "error", reason: "database-migration-owner-live" },
           });
           expect(JSON.stringify(execution?.result)).toContain(
-            `${shared} (schema 14 -> 15), which needs exclusive access to the state, but the node host service (PID 5151) keeps it open`,
+            `needs exclusive access to ${path.join(state, "state", "openclaw.sqlite")}, but the node host service (PID 5151) keeps it open`,
           );
         } else {
           expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
