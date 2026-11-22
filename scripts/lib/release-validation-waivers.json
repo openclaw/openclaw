@@ -150,7 +150,7 @@
       "targetVersion": "2026.11.10-beta.2",
       "childRole": "productPerformance",
       "jobName": "Kova mock provider performance",
-      "reason": "Accepted Kova performance threshold failures, including memory, for this beta. This grant does not authorize skipping required evidence or accepting correctness, isolation, integrity, or install/update failures.",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept Kova threshold failures including memory and the five observed CPU/startup accounting gaps: bundled-plugin-startup fresh sample2 resourceCpuCoverage and startupResourceCoverage; many-bundled-plugins warm-restart samples1/2 startupResourceCoverage and sample3 resourceCpuCoverage. This accepts incomplete measurements, not complete coverage. Artifact provenance, candidate identity and unrelated correctness, isolation or install/update failures are not waived.",
       "aggregates": []
     },
     {
@@ -721,6 +721,161 @@
           }
         ]
       }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-13 (node)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept the typed node-loss recovery test timeout120000ms.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+            "test": "worker turn launcher failure recovery > keeps the typed node-loss cause through the supervisor result and failed workspace recovery :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts:120:46\n118|   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers:…\n119|\n120|   it.each([\"supervisor\", \"runtime\"] as const)(\n|                                              ^\n121|     \"keeps the typed node-loss cause through the %s result and failed …\n122|     async (source) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-19 (node)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept the silent-exec goal continuation receiving the advance-goal prompt instead of Exec completed.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server.chat-goal.test.ts",
+            "test": "Goal chat admission and continuation > keeps pursuing after an owner's silent exec completion :: AssertionError: expected '[System] Advance the active goal; kee…' to contain 'Exec completed'\n\nExpected: \"Exec completed\"\nReceived: \"[System] Advance the active goal; keep it active until fully achieved. Use the current goal context, and verify the entire objective before marking it complete.\"\n\n❯ src/gateway/server.chat-goal-continuation.test-support.ts:276:29\n274|       restore();\n275|     }\n276|     expect(seen[1]?.prompt).toContain(\"Exec completed\");\n|                             ^\n277|     expect(seen.slice(2).map((turn) => turn.prompt)).toEqual([\n278|       expect.stringContaining(\"Advance\"),"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-39 (node)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept native models.list cached-read request count seven instead of six; cache concurrency correctness remains unproven.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
+            "test": "models.list discovers and renews native models (provider credentials: true) :: AssertionError: expected [ '/native/models', …(6) ] to have a length of 6 but got 7\n\n- Expected\n+ Received\n\n- 6\n+ 7\n\n❯ cachedReads src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts:245:28\n243|           const before = requests.length;\n244|           const results = await Promise.all([list(), list()]);\n245|           expect(requests).toHaveLength(before);\n|                            ^\n246|           results.forEach(check);\n247|         };\n❯ src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts:358:11"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-small-11 (node)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept all three update-resume assertions receiving warning instead of ok after post-plugin Doctor timeout exit124.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/cli/update-cli/update-command-resume-completion.test.ts",
+            "test": "update completion ownership > legacy resume repairs Doctor-only node state before plugins even when config is current :: AssertionError: {\n\"status\": \"warning\",\n\"changed\": false,\n\"sync\": {\n\"changed\": false,\n\"switchedToBundled\": [],\n\"switchedToNpm\": [],\n\"warnings\": [],\n\"errors\": []\n},\n\"npm\": {\n\"changed\": false,\n\"outcomes\": []\n},\n\"integrityDrifts\": [],\n\"doctorLint\": {\n\"name\": \"post-plugin-doctor-lint\",\n\"command\": \"doctor --lint --json --severity-min error\",\n\"cwd\": \"/tmp/oc-vt-jD5GrL/oc-vt-VcBy57/openclaw-test-state-update-lease-i4Yr6J\",\n\"durationMs\": 525,\n\"exitCode\": 0,\n\"doctorLintFindings\": [],\n\"termination\": \"exit\",\n\"signal\": null,\n\"killed\": false,\n\"stderrTail\": \"\"\n},\n\"warnings\": [\n{\n\"reason\": \"doctor-advisory\",\n\"message\": \"Post-update plugin Doctor did not complete (exit 124). Run `openclaw update repair` to retry post-update plugin repair.\\nUpdated post-plugin Doctor failed:\\nstderr: doctor fixture diagnostic\\ndoctor fixture phase: config:start +2460ms\\ndoctor fixture phase: maintenance:acquired +4305ms\\nDoctor: state write admission\\nDoctor: stale update runs\\nDoctor: state migrations import\\nDoctor: state dir migrations\\nDoctor: legacy conf\\n...\\nrepair\\nDoctor: cron policy scan\\nDoctor: legacy state migrations\\nDoctor: retired a2ui widgets\\nDoctor: relative session store\\nstdout: doctor fixture output\\n│\\n◇  Doctor changes ──────────────────────────────────────╮\\n│                                                       │\\n│  - Migrated node-host conf\\n...\\n────────────────────────────────────────╯\",\n\"guidance\": [\n\"Run `openclaw update repair` to retry post-update plugin repair.\"\n]\n}\n]\n}\ndoctor fixture phase: config:start +2460ms\ndoctor fixture phase: maintenance:acquired +4305ms: expected { status: 'warning', …(6) } to match object { status: 'ok' }\n(23 matching properties omitted from actual)\n\n- Expected\n+ Received\n\n{\n-   \"status\": \"ok\",\n+   \"status\": \"warning\",\n}\n\n❯ Module.expectSuccess src/cli/update-cli/update-command-lease.test-harness.ts:373:67\n371|     .join(\"\\n\")\n372|     .slice(-4096);\n373|   expect(result, `${JSON.stringify(result, null, 2)}\\n${phases}`).toMa…\n|                                                                   ^\n374|     lane === \"resume\"\n375|       ? { status: \"ok\" }\n❯ src/cli/update-cli/update-command-resume-completion.test.ts:335:5"
+          },
+          {
+            "kind": "vitest",
+            "file": "src/cli/update-cli/update-command-resume-completion.test.ts",
+            "test": "update completion ownership > resume repairs an old parent's restored config before unchanged plugins (metadata=false) :: AssertionError: {\n\"status\": \"warning\",\n\"changed\": false,\n\"sync\": {\n\"changed\": false,\n\"switchedToBundled\": [],\n\"switchedToNpm\": [],\n\"warnings\": [],\n\"errors\": []\n},\n\"npm\": {\n\"changed\": false,\n\"outcomes\": []\n},\n\"integrityDrifts\": [],\n\"doctorLint\": {\n\"name\": \"post-plugin-doctor-lint\",\n\"command\": \"doctor --lint --json --severity-min error\",\n\"cwd\": \"/tmp/oc-vt-jD5GrL/oc-vt-VcBy57/openclaw-test-state-update-lease-ZNKCf0\",\n\"durationMs\": 516,\n\"exitCode\": 0,\n\"doctorLintFindings\": [],\n\"termination\": \"exit\",\n\"signal\": null,\n\"killed\": false,\n\"stderrTail\": \"\"\n},\n\"warnings\": [\n{\n\"reason\": \"doctor-advisory\",\n\"message\": \"Post-update plugin Doctor did not complete (exit 124). Run `openclaw update repair` to retry post-update plugin repair.\\nUpdated post-plugin Doctor failed:\\nstderr: doctor fixture diagnostic\\ndoctor fixture phase: config:start +2454ms\\ndoctor fixture phase: maintenance:acquired +4291ms\\nConfig warnings: $OPENCLAW_STATE_DIR/openclaw.json: Config unavailable; using environment and default agent directory settings. (Invalid\\n...\\nns\\nDoctor: retired a2ui widgets\\nDoctor: relative session store\\nDoctor: automatic config repair\\nDoctor: heartbeat retirement\\nstdout: doctor fixture output\",\n\"guidance\": [\n\"Run `openclaw update repair` to retry post-update plugin repair.\"\n]\n}\n]\n}\ndoctor fixture phase: config:start +2454ms\ndoctor fixture phase: maintenance:acquired +4291ms: expected { status: 'warning', …(6) } to match object { status: 'ok' }\n(23 matching properties omitted from actual)\n\n- Expected\n+ Received\n\n{\n-   \"status\": \"ok\",\n+   \"status\": \"warning\",\n}\n\n❯ Module.expectSuccess src/cli/update-cli/update-command-lease.test-harness.ts:373:67\n371|     .join(\"\\n\")\n372|     .slice(-4096);\n373|   expect(result, `${JSON.stringify(result, null, 2)}\\n${phases}`).toMa…\n|                                                                   ^\n374|     lane === \"resume\"\n375|       ? { status: \"ok\" }\n❯ src/cli/update-cli/update-command-resume-completion.test.ts:365:7"
+          },
+          {
+            "kind": "vitest",
+            "file": "src/cli/update-cli/update-command-resume-completion.test.ts",
+            "test": "update completion ownership > resume repairs an old parent's restored config before unchanged plugins (metadata=true) :: AssertionError: {\n\"status\": \"warning\",\n\"changed\": false,\n\"sync\": {\n\"changed\": false,\n\"switchedToBundled\": [],\n\"switchedToNpm\": [],\n\"warnings\": [],\n\"errors\": []\n},\n\"npm\": {\n\"changed\": false,\n\"outcomes\": []\n},\n\"integrityDrifts\": [],\n\"doctorLint\": {\n\"name\": \"post-plugin-doctor-lint\",\n\"command\": \"doctor --lint --json --severity-min error\",\n\"cwd\": \"/tmp/oc-vt-jD5GrL/oc-vt-VcBy57/openclaw-test-state-update-lease-6hay2v\",\n\"durationMs\": 524,\n\"exitCode\": 0,\n\"doctorLintFindings\": [],\n\"termination\": \"exit\",\n\"signal\": null,\n\"killed\": false,\n\"stderrTail\": \"\"\n},\n\"warnings\": [\n{\n\"reason\": \"doctor-advisory\",\n\"message\": \"Post-update plugin Doctor did not complete (exit 124). Run `openclaw update repair` to retry post-update plugin repair.\\nUpdated post-plugin Doctor failed:\\nstderr: doctor fixture diagnostic\\ndoctor fixture phase: config:start +2460ms\\ndoctor fixture phase: maintenance:acquired +4328ms\\nConfig warnings: $OPENCLAW_STATE_DIR/openclaw.json: Config unavailable; using environment and default agent directory settings. (Invalid\\n...\\nns\\nDoctor: retired a2ui widgets\\nDoctor: relative session store\\nDoctor: automatic config repair\\nDoctor: heartbeat retirement\\nstdout: doctor fixture output\\n│\\n◇  Doctor changes ────────────────────────────────────────╮\\n│                                                         │\\n│  - Migrated config\\n...\\n────────────────────────────────────────╯\",\n\"guidance\": [\n\"Run `openclaw update repair` to retry post-update plugin repair.\"\n]\n}\n]\n}\ndoctor fixture phase: config:start +2460ms\ndoctor fixture phase: maintenance:acquired +4328ms: expected { status: 'warning', …(6) } to match object { status: 'ok' }\n(23 matching properties omitted from actual)\n\n- Expected\n+ Received\n\n{\n-   \"status\": \"ok\",\n+   \"status\": \"warning\",\n}\n\n❯ Module.expectSuccess src/cli/update-cli/update-command-lease.test-harness.ts:373:67\n371|     .join(\"\\n\")\n372|     .slice(-4096);\n373|   expect(result, `${JSON.stringify(result, null, 2)}\\n${phases}`).toMa…\n|                                                                   ^\n374|     lane === \"resume\"\n375|       ? { status: \"ok\" }\n❯ src/cli/update-cli/update-command-resume-completion.test.ts:365:7"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept native-hook pressure observing zero unacknowledged retries instead of greater than zero; retry behavior is not proven.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run Docker release-path validation / Docker E2E (plugins/runtime install B)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept Docker runtime-install B artifact download connection timeout before tests; this is missing coverage, not a passed install.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "docker_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "macos-swift (tests)",
+      "reason": "Explicit operator risk acceptance on 2026-11-22 across beta.2 candidates and attempts; not a proven flake or a passing test. Accept Swift job cancellation after silent-pairing and normal socket half-close tests exceeded600s. Frozen publisher rejects cancelled jobs despite this waiver; this records acceptance without overriding that verifier.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "macos-swift finished with cancelled (selected=true)"
+          ]
+        }
+      ]
     }
   ]
 }
