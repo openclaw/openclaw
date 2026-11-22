@@ -250,7 +250,7 @@ describe.each(["chat", "new-session"] as const)(
       ["@Bo", false, true],
     ] as const)(
       "undoes and redoes a person selected from %s (existing mention: %s)",
-      async (query, existing, dollar = false) => {
+      async (query, existing, dollar?: boolean) => {
         const prefix = existing ? "Ask @Alex after " : dollar ? "Use $HOME and " : "";
         const f = composerFixture(
           kind,

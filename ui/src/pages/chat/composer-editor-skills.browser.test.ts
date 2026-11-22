@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { createRoot } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { readComposerSkillReferences } from "../../lib/chat/skill-references.ts";
@@ -34,7 +35,7 @@ function fixture(value: string, person = false) {
   surface.append(input);
   document.body.append(surface);
   let raw = value;
-  let mentions = person ? [{ profileId: "alex-one", start: 0, end: 5 }] : [];
+  let mentions: readonly HumanMention[] = person ? [{ profileId: "alex-one", start: 0, end: 5 }] : [];
   input.addEventListener("input", () => {
     mentions = updateHumanMentions(raw, input.value, mentions) ?? [];
     raw = input.value;
