@@ -203,7 +203,8 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
-function enableWalJournalMode(
+/** Enable WAL without scheduling maintenance; the caller owns this connection. */
+export function enableSqliteWalJournalMode(
   db: DatabaseSync,
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
@@ -308,7 +309,7 @@ export function configureSqliteWalMaintenance(
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
   }
-  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableSqliteWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
       reclaimFreePages: (reclaimOptions = {}) =>

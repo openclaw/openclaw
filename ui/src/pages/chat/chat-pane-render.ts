@@ -142,6 +142,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalogState: readChatModelCatalogState(state),
       modelAuthStatusResult: state.modelAuthStatusResult,
       onSetup: () => this.context.navigate("model-setup"),
+      onOpenModels: (provider) =>
+        provider
+          ? navigateToModelProvider(this.context, currentAgentId ?? null, provider)
+          : this.context.navigate("model-providers"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const pendingReason = chatSendPendingReason(state, state.sessionKey, placementStartup !== null);
