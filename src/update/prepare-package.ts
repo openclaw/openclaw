@@ -18,7 +18,7 @@ const PROJECT_ONLY_INSTALL_SCRIPTS = [
 export async function preparePackage(params: {
   spec: string;
   staging: string;
-  npm: string;
+  npm: string[];
   node: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
@@ -41,7 +41,7 @@ export async function preparePackage(params: {
     await fs.mkdir(params.staging, { recursive: true });
     await params.onStep?.("pack");
     const packed = await runCommandWithTimeout(
-      [params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
+      [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
       {
         cwd: params.staging,
         baseEnv: env,
@@ -125,7 +125,7 @@ export async function preparePackage(params: {
       bun
         ? [params.node, "install", "--trust"]
         : [
-            params.npm,
+            ...params.npm,
             "install",
             "--omit=dev",
             "--no-fund",

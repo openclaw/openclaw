@@ -11,6 +11,7 @@ import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
@@ -271,7 +272,10 @@ export async function prepareUpdate(params: {
         : await preparePackage({
             spec: target.spec,
             staging: staging.path,
-            npm: npmBesideNode(node),
+            npm:
+              isBunRuntime(node) || (node === process.execPath && process.versions.bun)
+                ? resolveNpmCommand([])
+                : [npmBesideNode(node)],
             node,
             timeoutMs: Math.max(1, deadline - Date.now()),
             env,
@@ -416,10 +420,7 @@ async function markForwarding(runningRoot: string, launcher: string, prefix: str
 }
 
 function npmBesideNode(node: string): string {
-  // Bun installations do not carry npm beside their executable; use the tool on PATH.
-  return isBunRuntime(node) || (node === process.execPath && process.versions.bun)
-    ? "npm"
-    : path.join(path.dirname(node), process.platform === "win32" ? "npm.cmd" : "npm");
+  return path.join(path.dirname(node), process.platform === "win32" ? "npm.cmd" : "npm");
 }
 
 /** The new code judges itself, at the path it will serve from. */

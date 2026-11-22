@@ -12,6 +12,7 @@ import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -130,11 +131,10 @@ export async function preflight(params: {
     reason = "missing-tool";
     const tools = params.kind === "git" ? ["git", "pnpm"] : ["npm"];
     for (const tool of tools) {
-      const result = await runCommandWithTimeout([tool, "--version"], {
-        env,
-        timeoutMs: 10_000,
-        killProcessTree: true,
-      });
+      const result = await runCommandWithTimeout(
+        tool === "npm" ? resolveNpmCommand(["--version"]) : [tool, "--version"],
+        { env, timeoutMs: 10_000, killProcessTree: true },
+      );
       if (result.code !== 0) {
         return refuse(
           reason,
@@ -167,7 +167,7 @@ export async function preflight(params: {
       const metadata = await runCommandWithTimeout(
         params.target.kind === "git"
           ? ["git", "-C", params.target.checkout, "show", `${params.target.sha}:package.json`]
-          : ["npm", "view", params.target.spec, "engines", "--json"],
+          : resolveNpmCommand(["view", params.target.spec, "engines", "--json"]),
         { env, timeoutMs: 30_000, killProcessTree: true },
       );
       if (metadata.code !== 0) {

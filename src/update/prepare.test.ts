@@ -238,7 +238,7 @@ if (args[0] === 'pack') {
       const result = await preparePackage({
         spec: "openclaw@2026.11.21",
         staging,
-        npm,
+        npm: [npm],
         node: runner,
         timeoutMs: 10_000,
       });
