@@ -14,9 +14,12 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
   const [snapshot, setSnapshot] = createSignal<Snapshot>(() => props.client.read());
   const [tab, setTab] = createSignal("Progress");
   const [question, setQuestion] = createSignal(() => props.client.pending()?.question ?? "");
-  const [focusSource, setFocusSource] = createSignal<string>();
+  const [citationOrigin, setCitationOrigin] = createSignal<{
+    sourceId: string;
+    startByte: number;
+    report: string | undefined;
+  }>();
   const details = new Map<string, { details: HTMLDetailsElement; summary: HTMLElement }>();
-  let citationFocus: HTMLButtonElement | undefined;
   let reportRegion: HTMLElement | undefined;
   onSettled(() => {
     const client = props.client;
@@ -28,9 +31,11 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
       ) {
         setQuestion("");
         details.clear();
-        citationFocus = undefined;
+        setCitationOrigin(undefined);
         reportRegion = undefined;
-        setFocusSource(undefined);
+      }
+      if (value.selected !== snapshot().selected) {
+        setCitationOrigin(undefined);
       }
       if (value.sessionId && client.pending()) {
         setQuestion(client.pending()!.question);
@@ -44,9 +49,19 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
   const job = () => snapshot().job;
   const canMutate = () =>
     snapshot().writable && !snapshot().offline && !snapshot().busy && Boolean(snapshot().sessionId);
-  const citation = (sourceId: string, button: HTMLButtonElement) => {
-    citationFocus = button;
-    setFocusSource(sourceId);
+  const returnToCitation = createMemo(() => {
+    const origin = citationOrigin();
+    const current = job();
+    return origin &&
+      current?.report === origin.report &&
+      current?.citations.some(
+        (c) => c.startByte === origin.startByte && c.sourceId === origin.sourceId,
+      )
+      ? origin.startByte
+      : undefined;
+  });
+  const citation = (sourceId: string, startByte: number) => {
+    setCitationOrigin({ sourceId, startByte, report: job()?.report });
     setTab("Sources");
     onSettled(() => {
       const entry = details.get(sourceId);
@@ -57,14 +72,18 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
     });
   };
   const back = () => {
+    const startByte = returnToCitation();
+    setCitationOrigin(undefined);
     setTab("Report");
     onSettled(() => {
-      // Report tab is retained, so the originating citation remains a valid focus target.
-      if (citationFocus?.isConnected) {
-        citationFocus.focus();
-      } else {
-        reportRegion?.focus();
-      }
+      // Refresh may replace the rendered button without changing the report.
+      const citation =
+        startByte === undefined
+          ? null
+          : reportRegion?.querySelector<HTMLButtonElement>(
+              `button[data-citation-start="${startByte}"]`,
+            );
+      (citation ?? reportRegion)?.focus();
     });
   };
   return (
@@ -176,7 +195,12 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
                   <button
                     type="button"
                     aria-pressed={tab() === name ? "true" : "false"}
-                    onClick={() => setTab(name)}
+                    onClick={() => {
+                      if (tab() !== name) {
+                        setCitationOrigin(undefined);
+                        setTab(name);
+                      }
+                    }}
                   >
                     {name}
                     {name === "Sources" ? ` (${current().sources.length})` : ""}
@@ -224,11 +248,6 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
               <Gaps job={current()} />
             </section>
             <section hidden={tab() !== "Sources"} aria-label="Research sources">
-              <Show when={focusSource()}>
-                <button type="button" onClick={back}>
-                  Back to citation
-                </button>
-              </Show>
               <p class="deep-research-muted">
                 Attribution and quote matching are not verification of truth.
               </p>
@@ -238,18 +257,25 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
                 fallback={<p>No sources have been retained yet.</p>}
               >
                 {(source) => (
-                  <Source
-                    source={source()}
-                    job={current()}
-                    register={(id, entry) => {
-                      details.set(id, entry);
-                      return () => {
-                        if (details.get(id) === entry) {
-                          details.delete(id);
-                        }
-                      };
-                    }}
-                  />
+                  <>
+                    <Show when={citationOrigin()?.sourceId === source().id}>
+                      <button type="button" onClick={back}>
+                        {returnToCitation() === undefined ? "Back to report" : "Back to citation"}
+                      </button>
+                    </Show>
+                    <Source
+                      source={source()}
+                      job={current()}
+                      register={(id, entry) => {
+                        details.set(id, entry);
+                        return () => {
+                          if (details.get(id) === entry) {
+                            details.delete(id);
+                          }
+                        };
+                      }}
+                    />
+                  </>
                 )}
               </For>
             </section>
@@ -370,10 +396,7 @@ function Source(props: {
     </details>
   );
 }
-function Report(props: {
-  job: ResearchView;
-  onCitation: (id: string, button: HTMLButtonElement) => void;
-}) {
+function Report(props: { job: ResearchView; onCitation: (id: string, startByte: number) => void }) {
   const blocks = createMemo(() => reportBlocks(props.job));
   return (
     <div class="deep-research-report">
@@ -387,7 +410,8 @@ function Report(props: {
                     type="button"
                     class="deep-research-citation"
                     aria-label={`Source ${segment.sourceId}`}
-                    onClick={(event) => props.onCitation(segment.sourceId!, event.currentTarget)}
+                    data-citation-start={segment.startByte}
+                    onClick={() => props.onCitation(segment.sourceId, segment.startByte)}
                   >
                     {segment.text}
                   </button>

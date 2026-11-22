@@ -100,6 +100,108 @@ const read = (job: FixtureJob) => ({
 });
 
 suite.define(() => {
+  it("keeps citation return beside its source and within its report", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        reducedMotion: "reduce",
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const first = {
+          ...partial,
+          sources: Array.from({ length: 8 }, (_, index) => ({
+            ...running.sources[0]!,
+            id: `S${index + 1}`,
+            title: `Canopy study ${index + 1}`,
+          })),
+        };
+        const marker = "[S8]";
+        first.report = `First finding ${marker}.
+
+Second finding ${marker}.`;
+        first.citations = [...first.report.matchAll(/\[S8\]/g)].map((match) => ({
+          sourceId: "S8",
+          startByte: match.index!,
+          endByte: match.index! + marker.length,
+        }));
+        const second = { ...first, jobId: "b".repeat(64), title: "A different question" };
+        const gateway = await installNativePluginMockGateway(page, {
+          nativePlugins: [
+            {
+              pluginId: "deep-research",
+              rootDir: resolve("extensions/deep-research"),
+              source: "./browser/index.tsx",
+            },
+          ],
+          featureMethods: [...defaultControlUiFeatureMethods, ...["list", "read"].map(method)],
+          methodResponses: {
+            [method("list")]: { ...list(), jobs: [first, second] },
+            [method("read")]: read(first),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await openChatPanels(page, "mobile");
+        await page
+          .locator(".chat-mobile-host:not([hidden])")
+          .getByRole("button", { name: "Deep research", exact: true })
+          .tap();
+        const pane = page.locator(".deep-research-pane");
+        const reportTab = pane.getByRole("button", { name: "Report", exact: true });
+        const sourcesTab = pane.getByRole("button", { name: "Sources (8)", exact: true });
+        const cited = pane.getByRole("button", { name: "Source S8", exact: true }).last();
+        const source = pane.locator("details").last().locator("summary");
+        const back = pane.getByRole("button", { name: "Back to citation" });
+        await reportTab.tap();
+        await cited.tap();
+        await pw(source).toBeFocused();
+        expect(
+          await back.evaluate((button) => {
+            const r = button.getBoundingClientRect();
+            return button.contains(
+              document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await source.press("Shift+Tab");
+        await pw(back).toBeFocused();
+        const reads = (await gateway.getRequests(method("read"))).length;
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await expect
+          .poll(async () => (await gateway.getRequests(method("read"))).length)
+          .toBeGreaterThan(reads);
+        await pw(pane.getByRole("button", { name: "Refresh" })).toBeEnabled();
+        await back.press("Enter");
+        await pw(cited).toBeFocused();
+        await sourcesTab.tap();
+        await pw(back).toHaveCount(0);
+        await reportTab.tap();
+        await cited.tap();
+        await gateway.setMethodResponse(method("read"), read(second));
+        await pane.getByLabel("Retained research").selectOption(second.jobId);
+        await pw(pane.locator("details")).toHaveCount(8);
+        await pw(back).toHaveCount(0);
+        await reportTab.tap();
+        await cited.tap();
+        const revised = {
+          ...second,
+          revision: "revised",
+          report: "An updated report without this citation.",
+          citations: [],
+        };
+        await gateway.setMethodResponse(method("read"), read(revised));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        const reportReturn = pane.getByRole("button", { name: "Back to report", exact: true });
+        await pw(reportReturn).toBeVisible();
+        await pw(back).toHaveCount(0);
+        await reportReturn.tap();
+        await pw(pane.getByRole("region", { name: "Research report" })).toBeFocused();
+      },
+    );
+  });
+
   it("restores uncertain starts only for the same account after a native remount", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const questionA = "Private question belonging to A";
