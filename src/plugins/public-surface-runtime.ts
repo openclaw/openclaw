@@ -41,6 +41,11 @@ function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string
 }
 
 /** Normalizes a bundled plugin directory name and rejects path-like values. */
+/** A managed release layout installs the package inside node_modules, where Node cannot strip types. */
+function isUnderNodeModules(target: string): boolean {
+  return path.resolve(target).split(path.sep).includes("node_modules");
+}
+
 function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
@@ -103,10 +108,13 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
     throw new Error(`Plugin public surface entry must stay inside its plugin root: ${entrySource}`);
   }
   const sourceArtifacts = PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) => `${sourceBaseName}${ext}`);
+  // Node refuses type stripping under node_modules, so a managed release layout must
+  // load the compiled artifact even when its entry happens to be a source file.
+  const allowsTypeScriptSources = !isUnderNodeModules(pluginRoot);
   // Sidecars share the registered entry's source/build family and captured membership;
   // otherwise a stale build can split API state from the active source instance.
   const preferredArtifacts =
-    entrySource && isTypeScriptPackageEntry(entrySource)
+    allowsTypeScriptSources && entrySource && isTypeScriptPackageEntry(entrySource)
       ? sourceArtifacts.filter(isTypeScriptPackageEntry)
       : [];
   const entryArtifacts = [
@@ -115,11 +123,12 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
     ...sourceArtifacts.filter((artifact) => !isTypeScriptPackageEntry(artifact)),
   ];
   const checkedPaths = new Set<string>();
+  const sourceCandidates = allowsTypeScriptSources ? sourceArtifacts : [];
   for (const [directory, artifacts] of [
     [entryDir, entryArtifacts],
     [pluginRoot, [...preferredArtifacts, artifactBasename, path.join("dist", artifactBasename)]],
-    [entryDir, sourceArtifacts],
-    [pluginRoot, sourceArtifacts],
+    [entryDir, sourceCandidates],
+    [pluginRoot, sourceCandidates],
   ] as const) {
     if (!directory) {
       continue;
