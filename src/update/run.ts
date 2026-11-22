@@ -289,15 +289,15 @@ export async function prepareUpdate(params: {
         : ["check-release", "gateway-trial"].every((name) =>
             modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
           );
-    const verdict = releaseAware
-      ? await runCheckRelease(prepared.releaseRoot, node, env)
-      : { ok: true };
-    if (!verdict.ok) {
-      return await fail(
-        "release-check-failed",
-        `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
-        verdict.detail,
-      );
+    if (releaseAware) {
+      const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+      if (!verdict.ok) {
+        return await fail(
+          "release-check-failed",
+          `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
+          verdict.detail,
+        );
+      }
     }
     const releaseRoot = await publishStaging(staging);
     staging = undefined;
