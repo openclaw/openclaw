@@ -30,6 +30,7 @@ import {
   isMobileNavLayout,
   shouldFloatShellHeader,
   shouldMergeChatChrome,
+  usesBrowserDrawer,
 } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -275,6 +276,7 @@ export function readShellView(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
   const sidebarProperties = {
+    newSessionInRail: usesBrowserDrawer(mobileNavLayout),
     connectionPending: initialGatewayConnection,
     basePath: context.basePath,
     activeRouteId: activeRoute,

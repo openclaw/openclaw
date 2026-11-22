@@ -13,8 +13,9 @@ When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier for future
 agent runs. It engages Code Mode only for models marked preferred in the
 provider catalog. No configuration is required for this default.
 
-Use **Settings → Agents & Tools → Labs → Code Mode** to change the global
-setting. Changes apply to future agent runs without restarting the Gateway.
+Use **Settings → Agents → Agent defaults → Tools → Code Mode** to change the global
+setting. On selects Auto for evaluated models, not force-on for every model.
+Changes apply to future agent runs without restarting the Gateway.
 
 To enable the same tier without the Control UI, set it in config:
 

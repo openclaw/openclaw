@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { readPresenceEntries } from "../app/user-profile.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -282,6 +284,33 @@ suite.define(() => {
           await page.locator('[data-online-user-id="carol"]').getAttribute("aria-description"),
         ).toContain("Offline");
         await dismissHovercard();
+        // An avatar change refreshes the directory, not the list's membership or placement.
+        const carol = page.locator('[data-online-user-id="carol"]');
+        const position = await carol.boundingBox();
+        const snapshot = await evaluateControlUiContext(
+          page,
+          ({ gateway: connection }) => connection.snapshot.hello?.snapshot,
+        );
+        const presence = readPresenceEntries(snapshot);
+        expect(presence).toHaveLength(2);
+        const after = await gateway.deferNext("users.list");
+        const ada = presence?.find((entry) => entry.user?.id === "ada");
+        if (!ada?.user) {
+          throw new Error("Expected Ada in the presence fixture");
+        }
+        const avatarUpdate = {
+          ...ada,
+          user: { ...ada.user, avatarUrl: "/api/users/ada/avatar?v=2" },
+        };
+        await gateway.emitGatewayEvent("presence", {
+          presence: presence?.map((entry) => (entry === ada ? avatarUpdate : entry)),
+        });
+        await gateway.waitForRequest("users.list", { after });
+        const busy = page.locator('.sidebar-online__list[aria-busy="true"]');
+        await busy.waitFor();
+        expect(await carol.boundingBox()).toEqual(position);
+        await gateway.resolveDeferred("users.list");
+        await busy.waitFor({ state: "detached" });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
 

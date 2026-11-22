@@ -47,6 +47,7 @@ const SessionStorageSettings = lazy(() => import("./session-storage.tsx"), {
 });
 const TalkSettingsPage = lazy(() => import("./talk-page.tsx"), { export: "TalkSettingsPage" });
 const UpdatesPage = lazy(() => import("./updates-page.tsx"), { export: "UpdatesPage" });
+const ToolWorkflows = lazy(() => import("./tool-workflows.tsx"), { export: "ToolWorkflows" });
 
 export function preloadConfigPage(
   pageId: ConfigPageId,
@@ -145,21 +146,30 @@ function ConfigBody(props: {
     </>
   );
   const prelude = (
-    <Show
-      when={
-        props.config.activeSection === "browser" &&
-        isBrowserPanelAvailable(context().gateway.snapshot) &&
-        !hasNativeBrowserBridge()
-      }
-    >
-      <SettingsToggleRow
-        title={t("browserLinkPreferences.openInControlUi")}
-        checked={props.config.openLinksInControlUiBrowser === true}
-        onChange={(enabled) =>
-          props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
+    <>
+      <Show when={props.pageId === "ai-agents" && props.config.activeSection === "tools"}>
+        <ToolWorkflows
+          config={props.config.formValue}
+          disabled={props.state.mutationDisabled() || !props.config.formValue}
+          onPatch={(path, value) => props.config.onFormPatch(path, value)}
+        />
+      </Show>
+      <Show
+        when={
+          props.config.activeSection === "browser" &&
+          isBrowserPanelAvailable(context().gateway.snapshot) &&
+          !hasNativeBrowserBridge()
         }
-      />
-    </Show>
+      >
+        <SettingsToggleRow
+          title={t("browserLinkPreferences.openInControlUi")}
+          checked={props.config.openLinksInControlUiBrowser === true}
+          onChange={(enabled) =>
+            props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
+          }
+        />
+      </Show>
+    </>
   );
   const config = createMemo(() => ({ ...props.config, renderSection, sectionPrelude: prelude }));
   const editor = (section: string, label: string, schema = config().schema) => (

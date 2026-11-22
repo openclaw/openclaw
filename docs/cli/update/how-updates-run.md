@@ -167,6 +167,14 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
+When the service's Node fails the Gateway's runtime check, OpenClaw reruns the
+Gateway under a compatible Node it finds, such as its private runtime in
+`~/.openclaw/tools/cli-node`. The service's main process is then that
+launcher, and its direct child serves the Gateway. Maintenance drain accepts the
+child as the service's Gateway only when every listener on the Gateway port is
+that process and its parent is the service's main process; stopping the service
+stops both.
+
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a
 Linux systemd service the restart can land while a maintenance stop, such as
@@ -2022,6 +2030,8 @@ the update keeps the new package and exits 0. It records a
 `package-backup-retention` warning that names the link and any launcher backups
 or database snapshots left beside it, because cleanup stops at the link.
 Historical package backups from earlier updates also wait for a later update.
+A database snapshot left this way is removed by update cleanup after a later
+update is verified successful.
 The link still names your checkout, which the updater does not modify. After
 checking the installation, remove the link itself and not what it names: use
 `rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a

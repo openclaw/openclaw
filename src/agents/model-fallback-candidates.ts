@@ -35,9 +35,9 @@ import type {
 import {
   type ModelManifestNormalizationContext,
   modelKey,
-  normalizeModelRef,
   normalizeProviderId,
 } from "./model-ref-shared.js";
+import { normalizeModelRef } from "./model-selection-normalize.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelFallbacks,
