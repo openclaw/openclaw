@@ -5661,20 +5661,29 @@ describe("ci workflow guards", () => {
             ).toEqual(
               evaluateWorkflowExpression(expression, { ...qualified, runnerBackend: "hybrid" }),
             );
-            // Failed-job-only retries retain the successful preflight's first-attempt outputs.
-            expect(evaluateWorkflowExpression(expression, { ...qualified, runAttempt: 2 })).toEqual(
-              evaluateWorkflowExpression(expression, {
-                ...qualified,
-                runAttempt: 2,
-                runnerBackend: "github",
-                preflightOutputs: {
-                  ...qualified.preflightOutputs,
-                  ci_qualification: "false",
-                  qualification_runner_backend: "",
-                  effective_runner_backend: "github",
-                },
-              }),
-            );
+            // Failed-job-only retries retain qualification; ordinary routing remains equivalent,
+            // but the approved Node timeout is deliberately longer for qualification.
+            const qualifiedRetry = evaluateWorkflowExpression(expression, {
+              ...qualified,
+              runAttempt: 2,
+            });
+            const ordinaryRetry = evaluateWorkflowExpression(expression, {
+              ...qualified,
+              runAttempt: 2,
+              runnerBackend: "github",
+              preflightOutputs: {
+                ...qualified.preflightOutputs,
+                ci_qualification: "false",
+                qualification_runner_backend: "",
+                effective_runner_backend: "github",
+              },
+            });
+            if (name === "checks-node-core-test-nondist-shard" && key === "timeout-minutes") {
+              expect(qualifiedRetry).toBe(120);
+              expect(ordinaryRetry).toBe(60);
+            } else {
+              expect(qualifiedRetry).toEqual(ordinaryRetry);
+            }
           }
         }
         for (const task of ["dependencies", "lint", "test-types"]) {
