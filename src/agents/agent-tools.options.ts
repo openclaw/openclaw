@@ -136,8 +136,6 @@ export type OpenClawCodingToolsOptions = {
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   readDelegationConfig?: OpenClawToolsOptions["readDelegationConfig"];
-  admittedRunContext?: import("./admitted-run-context.js").AdmittedRunContext;
-  preparedRunAdmission?: import("./admitted-run-context.js").PreparedAgentRunAdmission;
   /** Internal listing owner pins discovery changes or renders a read-only inventory. */
   githubPublicationConfigurationAware?: true;
   /** Describe prospective GitHub actions before policy filtering; never executable. */

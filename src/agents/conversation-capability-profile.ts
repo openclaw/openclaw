@@ -12,12 +12,7 @@ import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import {
-  readRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-  type AdmittedRunContext,
-  type PreparedAgentRunAdmission,
-} from "./admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
@@ -63,8 +58,7 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
-  admittedRunContext?: AdmittedRunContext;
-  preparedRunAdmission?: PreparedAgentRunAdmission;
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   /** Captured policy owner; null excludes ambient request authority. */
@@ -230,7 +224,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
-    participationCeiling: readRunOperatorAuthority(params)?.participationCeiling,
+    operatorAuthority: params.pluginExecutionAuthority,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,

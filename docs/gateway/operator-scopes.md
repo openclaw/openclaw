@@ -503,8 +503,9 @@ Participant `sessions_spawn` calls create only hidden, same-agent, Gateway-local
 OpenClaw children. They cannot change the original root through `cwd`, projects,
 worktrees, thread binding, visible sessions, worker placement, ACP, or CLI runtimes.
 Every child and descendant retains the original invitation, creator, incarnation,
-root, tool ceiling, and permission ceiling. A new child turn, restart, or private
-completion rechecks that original invitation and the participant's current role.
+root, tool ceiling, and permission ceiling. Each new child turn or private completion
+rechecks that original invitation and the participant's current role. An admin
+sending a new input to the child cannot replace its original participant source.
 The parent's independent turns do not acquire the child's ceiling. Child exec
 approvals require the original session creator, not an assignee, participant, or
 unrelated administrator. Process tools expose only the child's own process scope.
@@ -512,8 +513,9 @@ unrelated administrator. Process tools expose only the child's own process scope
 Removing or reducing membership blocks new child work and completion admission.
 There is no invitation epoch: reinviting the same person may admit a retained child
 under the intersection of its stored ceiling and the current invitation. Missing
-child rows or envelopes never restore owner authority; the retained spawn record
-and private completion capability require the original child constraint.
+child rows or source bindings never restore owner authority. The retained spawn
+record can require current completion custody; it cannot reconstruct that custody
+or serve as a second restart mechanism.
 
 Include the discovery tools when the participant needs deferred tools. Explicitly
 allowing tools delegates the agent's or Gateway's capabilities intentionally.
@@ -530,6 +532,43 @@ inputs, not retained work. Participant turns require Gateway-local **OpenClaw**
 execution, not a native/CLI harness or remote worker. Allowing `exec` never disables
 the admitted permission ceiling, host approval requirements, sandbox policy, or
 file-tool containment.
+
+### Retained participant work
+
+Participation is part of the admitted operator run authority, not a separate
+execution option. The original input captures a bound invitation with the person's
+profile, source agent and session, session incarnation, creator, root, permission,
+and tool restrictions. Native execution, tools, approvals, and compaction consume
+that admitted authority.
+
+Queued inputs, scheduled work, and supported restart continuations retain the
+same strict operator recovery source. Participant snapshots use version 2 and
+include the bound invitation. Ordinary operator sources keep their existing
+unversioned snapshot shape, size limits, approval behavior, and recovery rules;
+no invitation is required for ordinary sessions or automations.
+
+Children store an immutable delegated operator source in their private session
+state. This is a restriction, not a grant: every new admission restores the
+original person's current authority and rechecks the original invitation.
+Recovery refuses changed source agents, session incarnations, creators, or roots.
+Missing or oversized participant sources cannot become source-less owner or
+System work. Sources are bounded; overflow is refused rather than truncating
+policy intersections.
+
+Removing membership or reducing it below `send` prevents new participant
+admissions. Re-adding `send` may admit a future scheduled occurrence under its
+retained ceiling; it does not revive cancelled queued input. Narrowing the same
+role's invitation tools or permission narrows retained work. Widening those
+fields does not widen work already accepted. Named-role reassignment and other
+operator-policy changes retain their existing source invalidation rules.
+
+Graceful restart uses the existing queued-input, scheduled-occurrence, and root
+resume owners. A root resume retains the interrupted requester's source, not the
+session owner's. Persisted child completion records alone do not authorize replay:
+unsupported child/completion recovery remains non-executing until a supported
+owner admits new work. Durable context-engine maintenance privately retains and
+re-admits the participant source before native compaction; it does not expose
+that source to context-engine plugins.
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.

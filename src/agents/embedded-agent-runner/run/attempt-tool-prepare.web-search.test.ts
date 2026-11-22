@@ -370,10 +370,7 @@ it.each(["full", null] as const)(
     await fixture.result.refreshPermissionMode(mode, () => {});
     const options = codingTools.mock.calls.at(-1)?.[0];
     assert(options);
-    expect(options).toMatchObject({
-      admittedRunContext: fixture.attempt.admittedRunContext,
-      approvalReviewerDeviceId: undefined,
-    });
+    expect(options.pluginExecutionAuthority?.participationCeiling).toEqual(participationCeiling);
     expect(prepareCoreToolPolicy(options).readOnly).toBe(mode === null);
     expect(options.sessionPermissionPolicy?.root).toBe("/tmp/workspace");
   },

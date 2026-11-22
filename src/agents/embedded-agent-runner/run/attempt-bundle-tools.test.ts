@@ -6,6 +6,7 @@ import {
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { prepareParticipationTestRun } from "../../participation-ceiling.test-support.js";
@@ -130,7 +131,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       }).preparedRunAdmission.admit("embedded");
       input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
         config: input.attempt.config,
-        admittedRunContext: input.attempt.admittedRunContext,
+        pluginExecutionAuthority: readAdmittedRunOperatorAuthority(
+          input.attempt.admittedRunContext,
+        ),
       });
       const actual = await vi.importActual<typeof import("../effective-tool-policy.js")>(
         "../effective-tool-policy.js",

@@ -4,7 +4,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
-import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import {
@@ -503,7 +502,7 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", a
   const scopedId = "after-turn-session",
     foreignId = "after-turn-foreign";
   for (const [id, scopeKey, pid] of [
-    [scopedId, "session-123", 1234],
+    [scopedId, "agent:main:session-123", 1234],
     [foreignId, "agent:main", undefined],
   ] as const) {
     addSession({
@@ -538,11 +537,11 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", a
         admittedRunContext: await prepareParticipationTestRun({
           kind: "send",
           profileId: "guest",
-          sessionKey: "session-123",
+          sessionKey: "agent:main:session-123",
           permission: "read-only",
         }).preparedRunAdmission.admit("embedded"),
         sessionId: "session-123",
-        sessionKey: "session-123",
+        sessionKey: "agent:main:session-123",
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         provider: "openai",
@@ -565,8 +564,8 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", a
       },
     });
     expect(
-      readRunOperatorAuthority(readCompactionAccountingRecorder(context) ?? {})
-        ?.participationCeiling?.permission,
+      readCompactionAccountingRecorder(context)?.operatorAuthority?.participationCeiling
+        ?.permission,
     ).toBe("read-only");
     expect(context).not.toHaveProperty("admittedRunContext");
     expect(context).not.toHaveProperty("participationCeiling");

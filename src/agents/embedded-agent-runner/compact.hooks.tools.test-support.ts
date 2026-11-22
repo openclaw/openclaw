@@ -2,7 +2,6 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
-import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import { expectRecordFields } from "./compact.hooks.assertions.test-support.js";
 
 function createMockToolDefinitions(tools: unknown[] = []) {
@@ -109,13 +108,16 @@ export function registerCompactionPermissionTests({
     },
   );
 
-  it("keeps default-mode participant compaction tools at the clamped root", async () => {
-    const directory = fixture.makeTempDir("participant-compaction-");
-    const root = await realpath(directory);
-    await compactDirect({
-      workspaceDir: workspaceDir(),
-      sessionRoot: workspaceDir(),
-      ...prepareParticipationTestRun({
+  it.each(["direct", "recorder"] as const)(
+    "keeps default-mode participant compaction tools at the clamped root via %s",
+    async (source) => {
+      const { createParticipationTestAuthority } =
+        await import("../participation-ceiling.test-support.js");
+      const { attachCompactionAccountingRecorder } =
+        await import("./run/compaction-accounting-bridge.js");
+      const directory = fixture.makeTempDir("participant-compaction-");
+      const root = await realpath(directory);
+      const operatorAuthority = createParticipationTestAuthority({
         kind: "send",
         profileId: "guest",
         sessionKey: "agent:main:invited",
@@ -127,12 +129,21 @@ export function registerCompactionPermissionTests({
           creatorProfileId: "creator",
           root,
         },
-      }),
-      execOverrides: { mode: "full" },
-    });
-    expect(toolOptions()).toMatchObject({
-      sessionPermissionPolicy: { root, mode: "workspace" },
-      exec: { mode: "auto" },
-    });
-  });
+      });
+      const contextEngineRuntimeContext = {};
+      attachCompactionAccountingRecorder(contextEngineRuntimeContext, { operatorAuthority });
+      await compactDirect({
+        workspaceDir: workspaceDir(),
+        sessionRoot: workspaceDir(),
+        ...(source === "direct"
+          ? { pluginExecutionAuthority: operatorAuthority }
+          : { contextEngineRuntimeContext }),
+        execOverrides: { mode: "full" },
+      });
+      expect(toolOptions()).toMatchObject({
+        sessionPermissionPolicy: { root, mode: "workspace" },
+        exec: { mode: "auto" },
+      });
+    },
+  );
 }

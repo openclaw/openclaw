@@ -9,13 +9,13 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import { normalizeGatewayOperatorRecoverySnapshot } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { testing as cliBackendsTesting } from "../../cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../cli-runner.test-helpers.js";
 import { harnessRegistry } from "../../model-catalog-fixtures.test-support.js";
 import type { ParticipationCeiling } from "../../participation-ceiling.js";
+import { createParticipationTestAuthority } from "../../participation-ceiling.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
@@ -63,35 +63,7 @@ function participantAuthority(permission: "read-only" | "workspace" = "read-only
       root: fixture.stateDir,
     },
   };
-  const recoverySnapshot = normalizeGatewayOperatorRecoverySnapshot({
-    version: 2,
-    participationCeiling,
-    profileId: ceiling.profileId,
-    scopes: ["operator.write"],
-    assignedRole: null,
-    githubLogin: null,
-    grant: null,
-    aliasBindingIds: [],
-    authPolicy: {
-      generation: "",
-      grantGeneration: "test-grant",
-      role: "operator",
-      authMethod: "token",
-    },
-    controlUiAdmin: false,
-    localOperator: false,
-    sourceIngress: "internal",
-  });
-  if (!recoverySnapshot) {
-    throw new Error("Participant recovery fixture failed shared source admission");
-  }
-  return createAdmittedRunOperatorAuthority({
-    profileId: ceiling.profileId,
-    scopes: ["operator.write"],
-    participationCeiling,
-    recoverySnapshot,
-    assertCurrent() {},
-  });
+  return createParticipationTestAuthority(participationCeiling, ["operator.write"]);
 }
 
 function runAsParticipant<T>(

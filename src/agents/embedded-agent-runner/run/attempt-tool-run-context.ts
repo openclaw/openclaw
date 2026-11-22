@@ -117,11 +117,8 @@ export function buildEmbeddedAttemptToolRunContext(
     operatorProfileId: params.operatorProfileId,
     conversationId: params.conversationId,
     scheduledToolPolicy: params.scheduledToolPolicy,
-    admittedRunContext: params.admittedRunContext,
-    preparedRunAdmission: params.preparedRunAdmission,
-    approvalReviewerDeviceId: readRunOperatorAuthority(params)?.participationCeiling
-      ? undefined
-      : params.approvalReviewerDeviceId,
+    pluginExecutionAuthority: readRunOperatorAuthority(params),
+    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
     currentMessagingTarget: params.currentMessagingTarget,
     currentThreadTs: params.currentThreadTs,

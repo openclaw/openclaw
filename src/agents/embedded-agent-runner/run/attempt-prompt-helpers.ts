@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
@@ -461,7 +462,7 @@ export function buildAfterTurnRuntimeContext(params: {
     ...(sessionTarget ? { sessionTarget } : {}),
   };
   attachCompactionAccountingRecorder(runtimeContext, {
-    admittedRunContext: params.attempt.admittedRunContext,
+    operatorAuthority: readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext),
   });
   return runtimeContext;
 }

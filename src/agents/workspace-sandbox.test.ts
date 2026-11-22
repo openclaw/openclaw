@@ -75,7 +75,10 @@ it("records managed workspace use and retains default-mode participant execution
       using workspace = await resolveAttemptWorkspaceSandbox({
         ...params,
         sessionRoot: state.workspaceDir,
-        ...prepareParticipationTestRun(participationCeiling),
+        admittedRunContext:
+          await prepareParticipationTestRun(participationCeiling).preparedRunAdmission.admit(
+            "embedded",
+          ),
         config: { ...sandboxConfig({ mode: "off" }), tools: { exec: { mode } } },
       });
       expect(workspace.sessionPermissionPolicy).toMatchObject({
@@ -100,12 +103,15 @@ it("records managed workspace use and retains default-mode participant execution
         root: state.workspaceDir,
         agentId: "main",
         sandboxAvailable: true,
-        participationCeiling,
+        ...prepareParticipationTestRun(participationCeiling),
       }),
     ).toMatchObject({ mode: "workspace", execPolicy: { security: "allowlist", ask: "on-miss" } });
     using alwaysAsk = await resolveAttemptWorkspaceSandbox({
       ...params,
-      ...prepareParticipationTestRun(participationCeiling),
+      admittedRunContext:
+        await prepareParticipationTestRun(participationCeiling).preparedRunAdmission.admit(
+          "embedded",
+        ),
       config: { tools: { exec: { security: "allowlist", ask: "always" } } },
     });
     const exact = projectAgentToolsExecPolicy({

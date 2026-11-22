@@ -22,7 +22,6 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
@@ -102,7 +101,7 @@ export function* assembleOpenClawCodingTools(
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
   assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config),
 ): CodingToolAssembly {
-  const participationCeiling = readRunOperatorAuthority(options ?? {})?.participationCeiling;
+  const participationCeiling = options?.pluginExecutionAuthority?.participationCeiling;
   const reviewerDeviceId = participationCeiling ? undefined : options?.approvalReviewerDeviceId;
   const preparedTools = preparedSurface?.tools;
   const listingClientCaps =

@@ -14,10 +14,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { resolveSessionControllerOperationForSignal } from "../../sessions/session-controller.state.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  readRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
@@ -300,12 +297,8 @@ export async function compactEmbeddedAgentSessionDirect(
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const requestedParams: CompactEmbeddedAgentSessionRuntimeParams & { sessionFile: string } = {
     ...paramsBase,
-    ...(accountingRecorder?.admittedRunContext || accountingRecorder?.preparedRunAdmission
-      ? {
-          admittedRunContext: accountingRecorder.admittedRunContext,
-          preparedRunAdmission: accountingRecorder.preparedRunAdmission,
-        }
-      : {}),
+    pluginExecutionAuthority:
+      accountingRecorder?.operatorAuthority ?? paramsBase.pluginExecutionAuthority,
     sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -351,7 +344,7 @@ export async function compactEmbeddedAgentSessionDirect(
       getCurrentSessionControllerOwner(),
     sourceAuthority: {
       assertActive: assertReadCurrent,
-      operatorAuthority: readRunOperatorAuthority(requestedParams),
+      operatorAuthority: requestedParams.pluginExecutionAuthority,
     },
     runtime: runtimeSelection.selectedHarnessRuntime,
     compactParams: {

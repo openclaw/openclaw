@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { captureScheduledOperatorSource } from "../agents/operator-run-recovery-source.js";
 import type { BoundParticipationCeiling } from "../agents/participation-ceiling.js";
+import { createTestCronOperatorSource } from "../cron/execution-context.test-support.js";
 import {
   decodeGatewayOperatorRecoverySource,
   decodeQueuedOperatorRecoverySource,
@@ -75,6 +76,49 @@ describe("shared operator recovery dialect", () => {
     expect(normalizeGatewayOperatorRecoverySnapshot(exact)).toEqual(exact);
     exact.aliasBindingIds[16] += "x";
     expect(normalizeGatewayOperatorRecoverySnapshot(exact)).toBeUndefined();
+  });
+
+  it("keeps the released cron source fixture byte-identical without an invitation", () => {
+    const released = {
+      executionRevision: "exec-1",
+      source: {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:ordinary-baseline",
+        sessionId: "parent-session",
+        lifecycleRevision: "rev-1",
+        sourceRunId: "source-run",
+        snapshot: {
+          profileId: "profile-1",
+          scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "grant-gen",
+            role: "operator",
+            authMethod: "device-token",
+          },
+          device: {
+            deviceId: "device-1",
+            key: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+          controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
+        },
+      },
+    };
+    const current = createTestCronOperatorSource("agent:main:ordinary-baseline");
+    expect(JSON.stringify(current)).toBe(JSON.stringify(released));
+    expect(JSON.stringify(decodeGatewayOperatorRecoverySource(released.source))).toBe(
+      JSON.stringify(released.source),
+    );
+    expect(
+      decodeQueuedOperatorRecoverySource({ kind: "gateway", snapshot: released.source.snapshot }),
+    ).toEqual({ kind: "gateway", snapshot: released.source.snapshot });
   });
 
   it("retains bound invitation evidence in both durable carriers", () => {

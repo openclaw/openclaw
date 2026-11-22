@@ -104,15 +104,13 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]
       : []),
     step(params.policies.inheritedToolPolicy, "inherited tools"),
-    ...(profile.participationCeiling
+    ...(profile.operatorAuthority?.participationCeiling
       ? [
-          {
-            ...step(
-              participationToolPolicy(profile.participationCeiling),
-              "participation ceiling",
-              "runtime",
-            ),
-          },
+          step(
+            participationToolPolicy(profile.operatorAuthority.participationCeiling),
+            "participation ceiling",
+            "runtime",
+          ),
         ]
       : []),
   ];

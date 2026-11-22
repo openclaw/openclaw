@@ -5,7 +5,7 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  readRunOperatorAuthority,
+  readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -41,7 +41,6 @@ export type WorkspaceSandboxParams = Pick<
   | "workspaceDir"
 > & {
   admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
-  preparedRunAdmission?: import("./admitted-run-context.js").PreparedAgentRunAdmission;
   /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
   placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
 };
@@ -119,7 +118,8 @@ export async function preparePluginHarnessWorkspace(
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.workspace.policy");
-  const participationCeiling = readRunOperatorAuthority(params)?.participationCeiling;
+  const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const participationCeiling = pluginExecutionAuthority?.participationCeiling;
   const assertRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
@@ -223,7 +223,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         const sessionPermissionPolicy = await prepareRunSessionPermissionPolicy({
           root: sessionPermissionRoot,
           mode: params.permissionMode,
-          participationCeiling,
+          pluginExecutionAuthority,
           config: params.config,
           agentId: sessionAgentId,
           sandboxAvailable: sandbox?.enabled === true,

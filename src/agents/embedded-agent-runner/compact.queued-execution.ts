@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
@@ -26,8 +25,6 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { readCompactionTranscriptBytes } from "../compaction-transcript-bytes.js";
@@ -54,7 +51,6 @@ import { log } from "./logger.js";
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import {
   attachCompactionAccountingRecorder,
-  readCompactionAccountingRecorder,
   type CompactionAccountingReceipt,
 } from "./run/compaction-accounting-bridge.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
@@ -317,6 +313,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           compact: async (backendParams) => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                operatorAuthority: host.sourceAuthority.operatorAuthority,
                 hostOwnsCompactionLifecycle: engineOwnsCompaction,
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,
@@ -346,26 +343,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               await assertPluginWriterActive(runtimeTarget, expectedEntry);
             }
             writeContext.assertCommitAllowed();
-            return runWithAsyncWorkResources(async (onAcquired) => {
-              const admission = prepareSystemAgentRunAdmission(
-                params.config ?? {},
-                `${params.runId ?? params.sessionId}:compact:${randomUUID()}`,
-                sessionAgentId,
-                "agents.context-engine-compaction",
-                assertCallerActive,
-                host.sourceAuthority.operatorAuthority,
-              );
-              onAcquired({ release: admission.close, releaseBeforeResultWhenIdle: true });
-              if (backendParams.runtimeContext) {
-                attachCompactionAccountingRecorder(backendParams.runtimeContext, {
-                  ...readCompactionAccountingRecorder(backendParams.runtimeContext),
-                  preparedRunAdmission: admission,
-                });
-              }
-              return withOwnedSessionTranscriptWrites(writeContext, () =>
-                contextEngine.compact(backendParams),
-              );
-            });
+            return withOwnedSessionTranscriptWrites(writeContext, () =>
+              contextEngine.compact(backendParams),
+            );
           },
         };
         result = await compactContextEngineWithSafetyTimeout(

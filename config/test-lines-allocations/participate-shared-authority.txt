@@ -1,0 +1,18 @@
+# Shared participation authority cutover, measured with check-test-lines-ratchet
+# against the current branch merge-base. This records the additional 2,075 lines
+# beyond the existing Participate records and the ordinary 400-line allowance.
+# Reuses the Gateway, cron, session-store and context-engine fixtures. The cases
+# cover independently owned boundaries: direct authenticated input, strict source
+# serialization, scheduled occurrence/readmission and source-control mutation,
+# immutable child storage and native descendant completion, cancelled queue input,
+# private approval/compaction consumers, and ordinary source byte compatibility.
+# The durable-maintenance cases exercise actual SQLite accepted/ready rows and
+# deferred scheduler lifetime; an in-memory authority test cannot prove recovery.
+# Native Gateway cases exercise the model/tool dispatch boundary, rather than
+# injecting an already-admitted ceiling into a helper. No assertion, runtime,
+# ordinary-source, or production-code limit is exempted by this allocation.
+# The measured additional 68 lines cover independently reproduced management-policy,
+# ambient spawn, mandatory automation capture/control-edit and detached repair
+# regressions, net of duplicate narrowing and fixture consolidation. Tool/compaction
+# integration retains its distinct existing prefix and private-recorder assertions.
+2075

@@ -7,7 +7,10 @@ import {
 } from "./admitted-run-context.js";
 import { DEFAULT_PARTICIPATION_TOOLS, type ParticipationCeiling } from "./participation-ceiling.js";
 
-export function createParticipationTestAuthority(ceiling: ParticipationCeiling) {
+export function createParticipationTestAuthority(
+  ceiling: ParticipationCeiling,
+  scopes: readonly string[] = [],
+) {
   const bound = {
     ...ceiling,
     tools: ceiling.tools ?? DEFAULT_PARTICIPATION_TOOLS,
@@ -22,7 +25,7 @@ export function createParticipationTestAuthority(ceiling: ParticipationCeiling) 
   };
   return createAdmittedRunOperatorAuthority({
     profileId: ceiling.profileId,
-    scopes: [],
+    scopes: [...scopes],
     assertCurrent() {},
     participationCeiling: bound,
     recoverySnapshot: expectDefined(
@@ -30,7 +33,7 @@ export function createParticipationTestAuthority(ceiling: ParticipationCeiling) 
         version: 2,
         participationCeiling: bound,
         profileId: bound.profileId,
-        scopes: [],
+        scopes: [...scopes],
         assignedRole: null,
         githubLogin: null,
         grant: null,
@@ -61,5 +64,5 @@ export function prepareParticipationTestRun(ceiling: ParticipationCeiling) {
     authority,
   );
   onTestFinished(admission.close);
-  return { preparedRunAdmission: admission };
+  return { preparedRunAdmission: admission, pluginExecutionAuthority: authority };
 }

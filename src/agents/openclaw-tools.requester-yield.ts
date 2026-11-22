@@ -1,10 +1,6 @@
 import type { ScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
-import {
-  readRunOperatorAuthority,
-  type AdmittedRunContext,
-  type PreparedAgentRunAdmission,
-} from "./admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { listFinishedSessions, listRunningSessions } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { awaitExecsForYield, listYieldAwaitableExecs } from "./bash-tools.exec-notify.js";
@@ -39,12 +35,11 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   processScopeKey?: string;
   swarmCollector?: boolean;
-  admittedRunContext?: AdmittedRunContext;
-  preparedRunAdmission?: PreparedAgentRunAdmission;
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
-  const participationCeiling = readRunOperatorAuthority(params)?.participationCeiling;
+  const participationCeiling = params.pluginExecutionAuthority?.participationCeiling;
   // A collector result is read by an explicit wait, never delivered by a requester
   // continuation, so a collector yield can only park the run its waiter is blocked
   // on. Reject before any claim source runs so no durable yield intent is recorded.

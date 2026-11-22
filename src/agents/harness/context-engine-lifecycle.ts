@@ -21,6 +21,7 @@ import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.j
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import {
+  readRunOperatorAuthority,
   runWithPreparedRunSourceScope,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
@@ -50,6 +51,7 @@ import {
   type ContextEngineAssemblySnapshot,
 } from "./context-engine-assembly-attempt.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
+import { captureContextEngineTurnOperatorSource } from "./context-engine-turn-authority.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -67,10 +69,7 @@ function preparePreTurnRuntimeContext(
   attachCompactionAccountingRecorder(fenced, {
     ...readCompactionAccountingRecorder(runtimeContext),
     ...(source.admittedRunContext || source.preparedRunAdmission
-      ? {
-          admittedRunContext: source.admittedRunContext,
-          preparedRunAdmission: source.preparedRunAdmission,
-        }
+      ? { operatorAuthority: readRunOperatorAuthority(source) }
       : {}),
   });
   return fenced;
@@ -512,6 +511,7 @@ export async function finalizeHarnessContextEngineTurn(
       if (terminal) {
         record({
           boundary: { admission, terminal },
+          operatorSource: captureContextEngineTurnOperatorSource(params.runtimeContext, params),
           sessionIdUsed: params.sessionIdUsed,
           sessionKey: params.sessionKey,
           sessionTarget: params.sessionTarget,

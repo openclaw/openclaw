@@ -7,15 +7,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
-  createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { projectAgentToolsExecPolicy } from "./agent-tools.execution-policy.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
-import { buildEmbeddedAttemptToolRunContext } from "./embedded-agent-runner/run/attempt-tool-run-context.js";
 import {
   createEmbeddedRunPermissionChanges,
   withAuthorizedPermissionChange,
@@ -30,7 +29,10 @@ import {
   resolveParticipationTools,
   type ParticipationCeiling,
 } from "./participation-ceiling.js";
-import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import {
+  createParticipationTestAuthority,
+  prepareParticipationTestRun,
+} from "./participation-ceiling.test-support.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -70,22 +72,10 @@ const policies = {
 } as const;
 
 it("enforces admitted-only permission, filesystem and exact-ID tool policy", async () => {
-  const authority = createAdmittedRunOperatorAuthority({
-    profileId: "participant",
-    scopes: [],
-    assertCurrent() {},
-    participationCeiling: {
-      ...ceiling,
-      permission: "read-only",
-      tools: ["read"],
-      source: {
-        agentId: "main",
-        sessionId: "clamp",
-        lifecycleRevision: null,
-        creatorProfileId: "creator",
-        root: "/synthetic",
-      },
-    },
+  const authority = createParticipationTestAuthority({
+    ...ceiling,
+    permission: "read-only",
+    tools: ["read"],
   });
   const admission = prepareSystemAgentRunAdmission(
     {},
@@ -97,7 +87,7 @@ it("enforces admitted-only permission, filesystem and exact-ID tool policy", asy
   );
   try {
     const options = {
-      admittedRunContext: await admission.admit("embedded"),
+      pluginExecutionAuthority: readAdmittedRunOperatorAuthority(await admission.admit("embedded")),
       sessionPermissionPolicy: { mode: "full" as const, root: "/workspace" },
     };
     expect(
@@ -225,7 +215,7 @@ describe("participation permission intersection", () => {
           projectAgentToolsExecPolicy({
             options: {
               config: cfg,
-              preparedRunAdmission: params.preparedRunAdmission,
+              pluginExecutionAuthority: params.pluginExecutionAuthority,
               exec: params.execOverrides,
               sessionPermissionPolicy: params.permissionMode
                 ? { root: "/workspace", mode: params.permissionMode }
@@ -244,19 +234,6 @@ describe("participation permission intersection", () => {
       }
     },
   );
-});
-
-it("never binds the participating device as approval reviewer", () => {
-  expect(
-    buildEmbeddedAttemptToolRunContext({
-      ...prepareParticipationTestRun(ceiling),
-      approvalReviewerDeviceId: "participant-device",
-    }),
-  ).toMatchObject({ approvalReviewerDeviceId: undefined });
-  expect(
-    buildEmbeddedAttemptToolRunContext({ approvalReviewerDeviceId: "owner-device" })
-      .approvalReviewerDeviceId,
-  ).toBe("owner-device");
 });
 
 it.each([

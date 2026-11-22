@@ -14,15 +14,18 @@ import {
   removeSessionMember,
   setSessionMemberAccess,
 } from "../config/sessions/session-sharing-store.native.js";
+import { createTestCronOperatorSource } from "../cron/execution-context.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeAgentTurnSession } from "./agent-turn/agent-turn-source-admission.js";
+import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
 import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { createCronJob } from "./server-methods/cron.validation.test-support.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
 import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
 import { prepareSessionDelegatedOperatorAuthority } from "./session-delegated-operator-source.js";
@@ -106,224 +109,205 @@ async function fixture(stateDir: string, tools = ["read", "write"]) {
   return { cfg, role, client, profileId, source, child, ceiling, context, entry, prepare };
 }
 
-it("restores every child turn from its original invitation, narrows current policy, and accepts reinvitation", async () => {
-  await withOpenClawTestState(
+function withFixture(
+  run: (f: Awaited<ReturnType<typeof fixture>>, stateDir: string) => Promise<void>,
+  tools?: string[],
+) {
+  return withOpenClawTestState(
     { scenario: "minimal", prepareProfileCatalog: true },
-    async ({ stateDir }) => {
-      const f = await fixture(stateDir);
-      const first = (await f.prepare())!;
-      expect(first.authority.scopes).toEqual(["operator.sessions.read"]);
-      expect(first.authority.participationCeiling).toEqual(f.ceiling);
-      first.release();
-      f.role.sessions.invitedTools = ["read"];
-      f.role.sessions.invitedPermission = "read-only";
-      setRuntimeConfigSnapshot(f.cfg);
-      const second = (await f.prepare())!;
-      expect(second.authority.participationCeiling).toMatchObject({
-        tools: f.ceiling.tools,
-        toolConstraints: [["read"]],
-        permission: "read-only",
-        source: f.ceiling.source,
-      });
-      setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
-      revokeSessionParticipation({ ...f.source, profileId: f.profileId, sessionId: "root-id" });
-      expect(second.authority.signal?.aborted).toBe(true);
-      expect(() => second.authority.assertCurrent()).toThrow();
-      await expect(f.prepare()).rejects.toThrow();
-      second.release();
-      removeSessionMember(f.source, f.profileId);
-      addSessionMember(f.source, {
-        identityId: f.profileId,
-        addedBy: "original-creator",
-        access: "send",
-      });
-      const reinvited = (await f.prepare())!;
-      expect(participationAllowsTool(reinvited.authority.participationCeiling!, "read")).toBe(true);
-      expect(participationAllowsTool(reinvited.authority.participationCeiling!, "write")).toBe(
-        false,
-      );
-      reinvited.release();
-      const restart = (await prepareSessionSystemTurnAuthority({
-        context: f.context,
-        ...f.child,
-        sessionId: "child-id",
-      }))!;
-      expect(restart.authority.profileId).toBe(f.profileId);
-      expect(restart.authority.participationCeiling?.source).toEqual(f.ceiling.source);
-      restart.release();
-      expect(
-        (await readSessionEntryReadOnlyInWorker(f.source))?.delegatedOperatorSource,
-      ).toBeUndefined();
-    },
+    async ({ stateDir }) => run(await fixture(stateDir, tools), stateDir),
   );
+}
+
+it("restores every child turn from its original invitation and accepts reinvitation", async () => {
+  await withFixture(async (f) => {
+    const first = (await f.prepare())!;
+    expect(first.authority.scopes).toEqual(["operator.sessions.read"]);
+    expect(first.authority.participationCeiling).toEqual(f.ceiling);
+    first.release();
+    const second = (await f.prepare())!;
+    setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
+    revokeSessionParticipation({ ...f.source, profileId: f.profileId, sessionId: "root-id" });
+    expect(second.authority.signal?.aborted).toBe(true);
+    expect(() => second.authority.assertCurrent()).toThrow();
+    await expect(f.prepare()).rejects.toThrow();
+    second.release();
+    removeSessionMember(f.source, f.profileId);
+    addSessionMember(f.source, {
+      identityId: f.profileId,
+      addedBy: "original-creator",
+      access: "send",
+    });
+    const reinvited = (await f.prepare())!;
+    expect(participationAllowsTool(reinvited.authority.participationCeiling!, "read")).toBe(true);
+    expect(reinvited.authority.participationCeiling).toEqual(first.authority.participationCeiling);
+    reinvited.release();
+    const restart = (await prepareSessionSystemTurnAuthority({
+      context: f.context,
+      ...f.child,
+      sessionId: "child-id",
+    }))!;
+    expect(restart.authority.profileId).toBe(f.profileId);
+    expect(restart.authority.participationCeiling?.source).toEqual(f.ceiling.source);
+    restart.release();
+    expect(
+      (await readSessionEntryReadOnlyInWorker(f.source))?.delegatedOperatorSource,
+    ).toBeUndefined();
+  });
 });
 
 it("refuses missing child envelopes and changed original agent, incarnation, creator, or root", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", prepareProfileCatalog: true },
-    async ({ stateDir }) => {
-      const f = await fixture(stateDir);
+  await withFixture(async (f) => {
+    await expect(
+      prepareSessionDelegatedOperatorAuthority({
+        context: f.context,
+        agentId: "main",
+        entry: { ...f.entry!, delegatedOperatorSource: { kind: "unavailable" } },
+      }),
+    ).rejects.toThrow("original participant source");
+    for (const patch of [
+      { agentId: "other" },
+      { sessionId: "replacement" },
+      { lifecycleRevision: "replacement" },
+      { creatorProfileId: "replacement" },
+      { root: "/outside" },
+    ]) {
       await expect(
         prepareSessionDelegatedOperatorAuthority({
           context: f.context,
           agentId: "main",
-          entry: { ...f.entry!, delegatedOperatorSource: { kind: "unavailable" } },
-        }),
-      ).rejects.toThrow("original participant source");
-      for (const patch of [
-        { agentId: "other" },
-        { sessionId: "replacement" },
-        { lifecycleRevision: "replacement" },
-        { creatorProfileId: "replacement" },
-        { root: "/outside" },
-      ]) {
-        await expect(
-          prepareSessionDelegatedOperatorAuthority({
-            context: f.context,
-            agentId: "main",
-            entry: {
-              ...f.entry!,
-              delegatedOperatorSource: {
-                kind: "gateway",
-                snapshot: expectDefined(
-                  normalizeGatewayOperatorRecoverySnapshot({
-                    ...snapshotFor(f.entry),
-                    version: 2,
-                    participationCeiling: {
-                      ...f.ceiling,
-                      sessionKey: patch.agentId
-                        ? `agent:${patch.agentId}:participation-root`
-                        : f.ceiling.sessionKey,
-                      source: { ...f.ceiling.source!, ...patch },
-                    },
-                  }),
-                  "patched source",
-                ),
-              },
+          entry: {
+            ...f.entry!,
+            delegatedOperatorSource: {
+              kind: "gateway",
+              snapshot: expectDefined(
+                normalizeGatewayOperatorRecoverySnapshot({
+                  ...snapshotFor(f.entry),
+                  version: 2,
+                  participationCeiling: {
+                    ...f.ceiling,
+                    sessionKey: patch.agentId
+                      ? `agent:${patch.agentId}:participation-root`
+                      : f.ceiling.sessionKey,
+                    source: { ...f.ceiling.source!, ...patch },
+                  },
+                }),
+                "patched source",
+              ),
             },
-          }),
-        ).rejects.toThrow();
-      }
-    },
-  );
+          },
+        }),
+      ).rejects.toThrow();
+    }
+  });
 });
 
 it("admits only an exact host-bound child launch, keeping generic agent unavailable", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", prepareProfileCatalog: true },
-    async ({ stateDir }) => {
-      const f = await fixture(stateDir);
-      f.role.sandbox = "required";
-      setRuntimeConfigSnapshot(f.cfg);
-      const request = bindInProcessSessionRun(
-        { sessionKey: f.child.sessionKey, idempotencyKey: "child-run" },
-        {
-          sessionKey: f.child.sessionKey,
-          sessionId: "child-id",
-          lifecycleRevision: null,
-          runId: "child-run",
-        },
-      );
-      const registry = createGatewayMethodRegistry([]);
-      expect(
-        authorizeGatewayMethod(
-          "agent",
-          { ...f.client, internal: { syntheticClient: true } },
-          { ...request },
-          registry,
-          f.context,
-        ).error,
-      ).not.toBeNull();
-      const captured = (await f.prepare())!;
-      using _ = { [Symbol.dispose]: captured.release };
-      f.client.internal = { ...f.client.internal, operatorRunAuthority: captured.authority };
-      const dispatch = authorizeGatewayMethod("agent", f.client, request, registry, f.context);
-      expect(dispatch.error).toBeNull();
-      const result = await resolveSessionMutationAuthorizationAsync({
-        client: f.client,
-        context: f.context,
-        method: "agent",
-        requestParams: request,
-        sessionScope: dispatch.sessionScope,
-      });
-      expect(result.error).toBeNull();
-      expect(result.authorization?.participationCeiling?.source).toEqual(f.ceiling.source);
-      const run = result.authorization?.retainForRun?.();
-      result.authorization?.release?.();
-      expect(run?.participationAuthority?.scopes).toEqual(["operator.sessions.read"]);
-      run?.assertCurrent();
-      run?.release();
-      await expect(
-        withPluginRuntimeGatewayRequestScope(
-          { context: f.context, isWebchatConnect: () => false },
-          () =>
-            authorizeAgentTurnSession({
-              cfg: f.cfg,
-              principal: f.client,
-              ...f.child,
-              entry: f.entry,
-            }),
-        ),
-      ).resolves.toBeUndefined();
-    },
-  );
+  await withFixture(async (f) => {
+    f.role.sandbox = "required";
+    setRuntimeConfigSnapshot(f.cfg);
+    const request = bindInProcessSessionRun(
+      { sessionKey: f.child.sessionKey, idempotencyKey: "child-run" },
+      {
+        sessionKey: f.child.sessionKey,
+        sessionId: "child-id",
+        lifecycleRevision: null,
+        runId: "child-run",
+      },
+    );
+    const registry = createGatewayMethodRegistry([]);
+    expect(
+      authorizeGatewayMethod(
+        "agent",
+        { ...f.client, internal: { syntheticClient: true } },
+        { ...request },
+        registry,
+        f.context,
+      ).error,
+    ).not.toBeNull();
+    const captured = (await f.prepare())!;
+    using _ = { [Symbol.dispose]: captured.release };
+    f.client.internal = { ...f.client.internal, operatorRunAuthority: captured.authority };
+    const dispatch = authorizeGatewayMethod("agent", f.client, request, registry, f.context);
+    expect(dispatch.error).toBeNull();
+    const result = await resolveSessionMutationAuthorizationAsync({
+      client: f.client,
+      context: f.context,
+      method: "agent",
+      requestParams: request,
+      sessionScope: dispatch.sessionScope,
+    });
+    expect(result.error).toBeNull();
+    expect(result.authorization?.participationCeiling?.source).toEqual(f.ceiling.source);
+    const run = result.authorization?.retainForRun?.();
+    result.authorization?.release?.();
+    expect(run?.participationAuthority?.scopes).toEqual(["operator.sessions.read"]);
+    run?.assertCurrent();
+    run?.release();
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        { context: f.context, isWebchatConnect: () => false },
+        () =>
+          authorizeAgentTurnSession({
+            cfg: f.cfg,
+            principal: f.client,
+            ...f.child,
+            entry: f.entry,
+          }),
+      ),
+    ).resolves.toBeUndefined();
+  });
 });
 
 it.each(["captured", "unavailable"] as const)(
   "keeps the interrupted participant's %s operator source during restart",
   async (sourceKind) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async ({ stateDir }) => {
-        const f = await fixture(stateDir);
-        f.cfg.agents = { defaults: { model: "fixture/a" } };
-        f.role.modelPolicy = { allow: ["fixture/a"] };
-        setRuntimeConfigSnapshot(f.cfg);
-        const recovery = await recoveryFixture(stateDir, f.profileId, {
-          config: f.cfg,
-          device: pairedOperator(),
-          scopes: f.role.scopes,
-        });
-        f.role.modelPolicy = { allow: ["fixture/a", "fixture/b"] };
-        setRuntimeConfigSnapshot(f.cfg);
-        const preparation = prepareSessionSystemTurnAuthority({
-          context: recovery.context,
-          ...f.child,
-          sessionId: f.entry!.sessionId,
-          preserveRecordedSource: true,
-          operatorSource:
-            sourceKind === "captured"
-              ? { kind: "gateway", snapshot: recovery.snapshot }
-              : { kind: "unavailable" },
-        });
-        if (sourceKind === "unavailable") {
-          await expect(preparation.then((result) => result?.release())).rejects.toThrow(
-            "cannot be recovered",
-          );
-          return;
-        }
-        const restored = (await preparation)!;
-        try {
-          expect(restored.authority.participationCeiling).toEqual(f.ceiling);
-          expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
-            true,
-          );
-          expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(
-            false,
-          );
-        } finally {
-          restored.release();
-        }
-      },
-    );
+    await withFixture(async (f, stateDir) => {
+      f.cfg.agents = { defaults: { model: "fixture/a" } };
+      f.role.modelPolicy = { allow: ["fixture/a"] };
+      setRuntimeConfigSnapshot(f.cfg);
+      const recovery = await recoveryFixture(stateDir, f.profileId, {
+        config: f.cfg,
+        device: pairedOperator(),
+        scopes: f.role.scopes,
+      });
+      f.role.modelPolicy = { allow: ["fixture/a", "fixture/b"] };
+      setRuntimeConfigSnapshot(f.cfg);
+      const preparation = prepareSessionSystemTurnAuthority({
+        context: recovery.context,
+        ...f.child,
+        sessionId: f.entry!.sessionId,
+        preserveRecordedSource: true,
+        operatorSource:
+          sourceKind === "captured"
+            ? { kind: "gateway", snapshot: recovery.snapshot }
+            : { kind: "unavailable" },
+      });
+      if (sourceKind === "unavailable") {
+        await expect(preparation.then((result) => result?.release())).rejects.toThrow(
+          "cannot be recovered",
+        );
+        return;
+      }
+      const restored = (await preparation)!;
+      try {
+        expect(restored.authority.participationCeiling).toEqual(f.ceiling);
+        expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
+          true,
+        );
+        expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(
+          false,
+        );
+      } finally {
+        restored.release();
+      }
+    });
   },
 );
 
 it("binds participant publication to the current native child without scope or owner-action grants", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", prepareProfileCatalog: true },
-    async ({ stateDir }) => {
-      const f = await fixture(stateDir, ["read", "github_publish"]);
+  await withFixture(
+    async (f) => {
       const source = (await f.prepare())!;
       using _ = { [Symbol.dispose]: source.release };
       const client = {
@@ -390,38 +374,50 @@ it("binds participant publication to the current native child without scope or o
         },
       );
     },
+    ["read", "github_publish"],
   );
 });
 
 it.each(["sessions.patch", "sessions.abort", "chat.abort"])(
   "keeps participant tool %s under the invited session's management policy",
   async (method) =>
-    withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async ({ stateDir }) => {
-        const f = await fixture(stateDir);
-        f.role.scopes.push("operator.write");
-        f.client.connect.scopes = [...f.role.scopes];
-        setRuntimeConfigSnapshot(f.cfg);
-        const restored = (await f.prepare())!;
-        onTestFinished(restored.release);
-        const authority = createAdmittedRunOperatorAuthority({
-          ...restored.authority,
-          scopes: f.role.scopes,
+    withFixture(async (f) => {
+      f.role.scopes.push("operator.write");
+      f.client.connect.scopes = [...f.role.scopes];
+      setRuntimeConfigSnapshot(f.cfg);
+      const restored = (await f.prepare())!;
+      onTestFinished(restored.release);
+      const authority = createAdmittedRunOperatorAuthority({
+        ...restored.authority,
+        scopes: f.role.scopes,
+      });
+      for (const operatorRunAuthority of [undefined, authority]) {
+        const result = await resolveSessionMutationAuthorizationAsync({
+          context: f.context,
+          client: { ...f.client, internal: { ...f.client.internal, operatorRunAuthority } },
+          method,
+          requestParams: { sessionKey: f.source.sessionKey, key: f.source.sessionKey },
         });
-        for (const operatorRunAuthority of [undefined, authority]) {
-          const result = await resolveSessionMutationAuthorizationAsync({
-            context: f.context,
-            client: { ...f.client, internal: { ...f.client.internal, operatorRunAuthority } },
-            method,
-            requestParams: { sessionKey: f.source.sessionKey, key: f.source.sessionKey },
-          });
-          try {
-            expect(result.error ?? result.authorization?.participationCeiling).toBeTruthy();
-          } finally {
-            result.authorization?.release?.();
-          }
+        try {
+          expect(result.error ?? result.authorization?.participationCeiling).toBeTruthy();
+        } finally {
+          result.authorization?.release?.();
         }
-      },
-    ),
+      }
+    }),
+);
+
+it.each(["read", "suggest"] as const)(
+  "refuses detached repair after participant becomes %s",
+  async (access) => {
+    await withFixture(async (f) => {
+      setSessionMemberAccess(f.source, { identityId: f.profileId, access });
+      const stored = createTestCronOperatorSource(f.source.sessionKey);
+      stored.source.snapshot = snapshotFor(f.entry);
+      const job = { ...createCronJob({ sessionKey: f.source.sessionKey }), operatorSource: stored };
+      await expect(
+        captureCronJobTurnTarget({ job, ...f.source, context: f.context }),
+      ).rejects.toThrow(/participant/i);
+    });
+  },
 );

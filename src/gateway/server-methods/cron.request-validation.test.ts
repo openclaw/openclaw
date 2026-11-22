@@ -73,7 +73,7 @@ it.each([false, true])(
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:invited";
       const client = createCronCallerClient("main", undefined, sessionKey);
-      if (participant)
+      if (participant) {
         client.internal!.operatorRunAuthority = createParticipationTestAuthority(
           {
             kind: "send",
@@ -82,6 +82,7 @@ it.each([false, true])(
           },
           ["operator.cron"],
         );
+      }
       const capture = captureCronCreatorSession(
         {
           ...createHistoryJob("main", sessionKey),
@@ -92,8 +93,11 @@ it.each([false, true])(
         { client, context: createDirectChatContext({ getRuntimeConfig: () => ({}) }) },
         {},
       );
-      if (participant) await expect(capture).rejects.toThrow(/participant|participating/i);
-      else expect((await capture).operatorSource).toBeUndefined();
+      if (participant) {
+        await expect(capture).rejects.toThrow(/participant|participating/i);
+      } else {
+        expect((await capture).operatorSource).toBeUndefined();
+      }
     });
   },
 );

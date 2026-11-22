@@ -53,9 +53,8 @@ type CompactionMemoryTranscript = {
 };
 
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
-  /** Private execution owner follows native delegation, never public runtime metadata. */
-  admittedRunContext?: import("../../admitted-run-context.js").AdmittedRunContext;
-  preparedRunAdmission?: import("../../admitted-run-context.js").PreparedAgentRunAdmission;
+  /** Host-issued operator authority follows native delegation, never public runtime metadata. */
+  operatorAuthority?: import("../../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** The queued host owns plugin hooks and refresh; native internal events still run. */
   hostOwnsCompactionLifecycle?: boolean;
   /** A precheck can require budget recovery while its user request is still pending. */

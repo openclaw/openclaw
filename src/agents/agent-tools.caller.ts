@@ -1,7 +1,6 @@
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
@@ -84,7 +83,7 @@ export function createCodingToolsGatewayCaller(params: {
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             // Events compare stored session settings. The participant's explicit
             // execution ceiling travels separately in its admitted authority.
-            permissionMode: readRunOperatorAuthority(options)?.participationCeiling
+            permissionMode: options.pluginExecutionAuthority?.participationCeiling
               ? options.sessionPermissionPolicy?.sourceMode
               : options.sessionPermissionPolicy?.mode,
           },

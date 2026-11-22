@@ -1,5 +1,4 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { readRunOperatorAuthority } from "./admitted-run-context.js";
 import { isAgentToolRepeatGuardEnabled } from "./agent-scope.js";
 import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
@@ -14,8 +13,7 @@ type CoreToolPolicyOptions = Pick<
   | "config"
   | "agentId"
   | "sessionPermissionPolicy"
-  | "admittedRunContext"
-  | "preparedRunAdmission"
+  | "pluginExecutionAuthority"
   | "requireWorkspaceOnly"
   | "trigger"
   | "memoryFlushWritePath"
@@ -30,7 +28,7 @@ export function prepareCoreToolPolicy(
   options: CoreToolPolicyOptions,
   execConfig = resolveExecToolConfig({ cfg: options.config, agentId: options.agentId }),
 ) {
-  const participationCeiling = readRunOperatorAuthority(options)?.participationCeiling;
+  const participationCeiling = options.pluginExecutionAuthority?.participationCeiling;
   const sessionPolicy = options.sessionPermissionPolicy
     ? resolveSessionPermissionCoreToolPolicy(options.sessionPermissionPolicy)
     : undefined;

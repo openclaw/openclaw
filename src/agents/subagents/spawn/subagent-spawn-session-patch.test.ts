@@ -15,15 +15,14 @@ import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
 } from "../../../gateway/in-process-session-run.js";
-import { normalizeGatewayOperatorRecoverySnapshot } from "../../../gateway/operator-run-recovery-source.codec.js";
 import { initializeRepository } from "../../../gateway/server-methods/projects.test-support.js";
 import * as sessionProjectSource from "../../../gateway/session-project-source.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
+import { createParticipationTestAuthority } from "../../participation-ceiling.test-support.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
@@ -504,35 +503,8 @@ it("persists the entire admitted delegated source and keeps ordinary children un
         root: "/synthetic/root",
       },
     };
-    const snapshot = normalizeGatewayOperatorRecoverySnapshot({
-      version: 2,
-      participationCeiling,
-      profileId: "participant",
-      scopes: ["operator.write"],
-      assignedRole: null,
-      githubLogin: null,
-      grant: null,
-      aliasBindingIds: [],
-      authPolicy: {
-        generation: "",
-        grantGeneration: "test-grant",
-        role: "operator",
-        authMethod: "token",
-      },
-      controlUiAdmin: false,
-      localOperator: false,
-      sourceIngress: "internal",
-    });
-    if (!snapshot) {
-      throw new Error("Shared source fixture admission failed");
-    }
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "participant",
-      scopes: ["operator.write"],
-      participationCeiling,
-      recoverySnapshot: snapshot,
-      assertCurrent() {},
-    });
+    const operatorAuthority = createParticipationTestAuthority(participationCeiling);
+    const snapshot = operatorAuthority.recoverySnapshot;
     const constrained = await spawn({
       operatorAuthority,
       sessionPermissionPolicy: { root: "/synthetic/root", mode: "guarded" },

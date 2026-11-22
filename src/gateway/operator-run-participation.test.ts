@@ -32,47 +32,6 @@ const bound: BoundParticipationCeiling = {
   },
 };
 
-it("intersects retained custody with current invitation authority and rejects a different invitation", () => {
-  const original = createAdmittedRunOperatorAuthority({
-    profileId: bound.profileId,
-    scopes: ["operator.sessions.read"],
-    participationCeiling: bound,
-    assertCurrent() {},
-  });
-  for (const different of [false, true]) {
-    const current = createAdmittedRunOperatorAuthority({
-      ...original,
-      participationCeiling: {
-        ...bound,
-        tools: ["*"],
-        permission: "workspace",
-        ...(different ? { source: { ...bound.source, root: "/other" } } : {}),
-      },
-    });
-    const derive = () =>
-      retainGatewayOperatorInvocation(
-        { authority: original, release() {} },
-        { participationAuthority: current, assertCurrent() {} },
-      );
-    if (different) {
-      expect(derive).toThrow("one original invitation");
-    } else {
-      const derived = derive();
-      try {
-        expect(derived.authority.participationCeiling?.permission).toBe("read-only");
-        expect(
-          participationAllowsTool(
-            expectDefined(derived.authority.participationCeiling, "retained invitation"),
-            "exec",
-          ),
-        ).toBe(false);
-      } finally {
-        derived.release();
-      }
-    }
-  }
-});
-
 it("captures a principal-ingress participant with the same strict durable dialect", () =>
   withRecovery(async (fixture, _root, profile) => {
     const identity = await prepareUserProfileIdentity(profile.id);
@@ -184,6 +143,33 @@ it("narrows same-role invitation fields on recovery without widening retained wo
         });
       const original = await restore();
       try {
+        for (const different of [false, true]) {
+          const current = createAdmittedRunOperatorAuthority({
+            ...original.authority,
+            participationCeiling: {
+              ...ceiling,
+              tools: ["*"],
+              permission: "full",
+              ...(different ? { source: { ...ceiling.source, root: "/other" } } : {}),
+            },
+          });
+          const derive = () =>
+            retainGatewayOperatorInvocation(
+              { authority: original.authority, release() {} },
+              { participationAuthority: current, assertCurrent() {} },
+            );
+          if (different) {
+            expect(derive).toThrow("one original invitation");
+          } else {
+            const derived = derive();
+            expect(derived.authority.participationCeiling).toEqual({
+              ...original.authority.participationCeiling,
+              toolConstraints: [["*"]],
+            });
+            derived.release();
+          }
+        }
+
         const child = await prepareSessionDelegatedOperatorAuthority({
           context: fixture.context,
           agentId: "main",

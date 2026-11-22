@@ -77,6 +77,7 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       }),
       sessionPermissionPolicy: { mode: "full", root: process.cwd() },
       exec: { notifyOnExit: true, approvalFollowupMode: "agent" },
+      approvalReviewerDeviceId: "participant-device",
     });
     await tools
       .find((tool) => tool.name === "exec")!
@@ -88,6 +89,7 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       expect.objectContaining({
         notifyOnExit: false,
         approvalFollowupMode: undefined,
+        approvalReviewerDeviceId: undefined,
         mode: "ask",
         bypassHostApprovalFloors: false,
       }),

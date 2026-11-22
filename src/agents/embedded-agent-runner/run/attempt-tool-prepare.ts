@@ -158,7 +158,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       contextTokenBudget: attempt.contextTokenBudget,
       executeTool: params.toolSearchCatalogExecutor,
     },
-    { admittedRunContext: attempt.admittedRunContext },
+    pluginExecutionAuthority,
   );
   const {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
@@ -359,7 +359,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
         getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
-        pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
         prepareHostFileMutation: assertActive?.prepareSessionSourceStorageEffect,
@@ -548,7 +547,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         const permission = await prepareRunSessionPermissionPolicy({
           root: params.setup.sessionPermissionRoot,
           mode: attempt.permissionMode,
-          participationCeiling,
+          pluginExecutionAuthority,
           config: attempt.config,
           agentId: params.setup.sessionAgentId,
           sandboxAvailable: params.setup.sandbox?.enabled === true,

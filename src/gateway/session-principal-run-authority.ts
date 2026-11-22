@@ -3,11 +3,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { intersectOperatorModelPolicy } from "../agents/operator-model-policy.js";
-import {
-  intersectParticipationCeilings,
-  DEFAULT_PARTICIPATION_TOOLS,
-  participationPermission,
-} from "../agents/participation-ceiling.js";
+import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -36,9 +32,12 @@ export function resolveSessionSystemTurnProfileId(
 
 /** Admit a new input as a recorded person using only that person's current grants. */
 export async function prepareSessionPrincipalRunAuthority(
-  params: Parameters<
-    typeof import("./session-sharing-authorization-async.js").prepareSessionPrincipalRunAccess
-  >[0],
+  params: Omit<
+    Parameters<
+      typeof import("./session-sharing-authorization-async.js").prepareSessionPrincipalRunAccess
+    >[0],
+    "participationCeiling"
+  >,
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const { prepareSessionPrincipalRunAccess } =
     await import("./session-sharing-authorization-async.js");
@@ -64,27 +63,6 @@ export async function prepareSessionPrincipalRunAuthority(
         channelRecoverySource: original.channelRecoverySource,
         get modelPolicy() {
           return intersectOperatorModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
-    }
-    if (params.participationCeiling) {
-      if (!source.participationCeiling || !params.participationCeiling.source) {
-        throw new Error("The original invitation no longer permits participation.");
-      }
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
-        participationCeiling: intersectParticipationCeilings(
-          {
-            ...params.participationCeiling,
-            source: params.participationCeiling.source,
-            tools: params.participationCeiling.tools ?? DEFAULT_PARTICIPATION_TOOLS,
-            permission: participationPermission(params.participationCeiling),
-          },
-          source.participationCeiling,
-        ),
-        get modelPolicy() {
-          return current.modelPolicy;
         },
       });
     }

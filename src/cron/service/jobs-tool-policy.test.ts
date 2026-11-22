@@ -138,12 +138,13 @@ it.each([false, true])(
   (participant) => {
     const key = "agent:main:invited";
     const source = createTestCronOperatorSource(key);
-    if (participant)
+    if (participant) {
       source.source.snapshot = createParticipationTestAuthority({
         kind: "send",
         profileId: "profile-1",
         sessionKey: key,
       }).recoverySnapshot!;
+    }
     const previousJob = { ...toolJob(["read"]), operatorSource: source };
     const job: CronStoredJob = {
       ...previousJob,
@@ -151,8 +152,9 @@ it.each([false, true])(
     };
     const reconcile = () =>
       reconcileCronOperatorSource({ job, previousJob, defaultAgentId: "main" });
-    if (participant) expect(reconcile).toThrow(/participant/i);
-    else {
+    if (participant) {
+      expect(reconcile).toThrow(/participant/i);
+    } else {
       reconcile();
       expect(job.operatorSource).toBeUndefined();
     }
