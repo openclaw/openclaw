@@ -88,7 +88,7 @@ it.each([
   ["host", "operator.write"],
 ] as const)(
   "carries an unbound %s conversation with %s after the project advances and preserves setup authority",
-  async (where, scope) => {
+  async (where, requesterScope) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
@@ -223,7 +223,7 @@ it.each([
           carrySource: source,
           projectId,
           checkout: "work",
-          requester: { profileId: undefined, scopes: [scope] },
+          requester: { profileId: undefined, scopes: [requesterScope] },
           assertCurrent() {},
         });
 
@@ -320,7 +320,7 @@ it.each([
         if (where === "host") {
           expect(branch).toBe(worktree.branch);
           const setup = fs.readFile(path.join(worktree.path, "setup-result"), "utf8");
-          if (scope === "operator.admin") {
+          if (requesterScope === "operator.admin") {
             await expect(setup).resolves.toBe("ready");
           } else {
             await expect(setup).rejects.toMatchObject({ code: "ENOENT" });

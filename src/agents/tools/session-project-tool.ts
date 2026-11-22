@@ -116,7 +116,7 @@ export function createSessionProjectTool(options: {
         // The move runs after this turn ends, still for the person who asked for it.
         retainRequester: true,
         fenceSuccessors: true,
-        run: async ({ assertCurrent, signal: handoffSignal }) => {
+        run: ({ assertCurrent, signal: handoffSignal }) => {
           const requester = currentRequester();
           return moveSessionIntoProject({
             context,
@@ -167,12 +167,10 @@ export function createSessionProjectTool(options: {
           });
         },
         formatResult: (result) =>
-          result.status === "moved"
-            ? "Moved this conversation from the default workspace into the selected project. " +
-              "Use the available tools now to finish any remaining instructions from the user's request in the new checkout before replying. " +
-              "In the final reply, confirm which project this conversation moved into and report any results. Mention the branch only if useful.\n" +
-              JSON.stringify(result)
-            : JSON.stringify(result),
+          "Moved this conversation from the default workspace into the selected project. " +
+          "Use the available tools now to finish any remaining instructions from the user's request in the new checkout before replying. " +
+          "In the final reply, confirm which project this conversation moved into and report any results. Mention the branch only if useful.\n" +
+          JSON.stringify(result),
       });
     },
   };
