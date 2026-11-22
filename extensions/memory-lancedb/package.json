@@ -48,6 +48,7 @@
       ]
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }
