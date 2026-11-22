@@ -306,6 +306,52 @@ describe("package release conversion", () => {
     }
   });
 
+  it.each(["git", "package"] as const)(
+    "refuses an older %s schema before staging",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      const schemaVersions = { state: 36, agent: 43 };
+      const target = await repository(false, ">=1", false, schemaVersions);
+      const runningRoot = kind === "git" ? target.checkout : path.join(root, "global-package");
+      if (kind === "package") {
+        await fs.mkdir(runningRoot);
+        vi.spyOn(targets, "resolveTarget").mockResolvedValue({
+          kind: "package",
+          version: "2026.11.6",
+          spec: "openclaw@2026.11.6",
+          engines: {},
+          schemaVersions,
+        });
+      }
+      try {
+        openOpenClawStateDatabase({ env: process.env });
+        const run = await createUpdateRunAsync({
+          trigger: "cli",
+          before: { version: "2026.11.21" },
+        });
+        const outcome = await prepareUpdate({
+          runId: run.runId,
+          runningRoot,
+          runningVersion: "2026.11.21",
+          channel: kind === "git" ? "dev" : "stable",
+          node,
+        });
+        expect(outcome).toMatchObject({ status: "failed", reason: "database-schema-preflight" });
+        expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
+        await expect(fs.stat(path.join(resolvePrefix(), "releases"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await readTrial()).toBeNull();
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
+
   it("refuses an unwritable global package before preparing or forwarding it", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const runningRoot = path.join(root, "global-package");

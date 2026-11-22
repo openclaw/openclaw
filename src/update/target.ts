@@ -18,7 +18,13 @@ import {
 
 export type UpdateTarget =
   | { kind: "git"; checkout: string; sha: string; version: string }
-  | { kind: "package"; spec: string; version: string; engines?: { node?: string } };
+  | {
+      kind: "package";
+      spec: string;
+      version: string;
+      engines?: { node?: string };
+      schemaVersions?: OpenClawSchemaVersions;
+    };
 
 /** The check command and launcher readiness sender were introduced together. */
 export async function gitTargetSupportsReleaseUpdates(
