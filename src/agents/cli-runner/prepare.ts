@@ -134,12 +134,13 @@ import { prepareCliTurnHookContext, runCliAuthorizedPromptBuild } from "./prepar
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
+  assertCliPreparedToolEnforcement,
   capCliToolAvailability,
   retainPolicyAllowedManagedNativeTools,
   keptManagedNativeTools,
   withCliToolSearch,
+  resolveCliBackendRuntimeToolPolicy,
   resolveCliBootstrapFileAccess,
-  resolveCliRuntimeToolPolicy,
   resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
 import {
@@ -316,16 +317,12 @@ async function prepareCliRunContextWithinReadFence(
     );
     return prepared;
   };
-  const toolPolicy = await resolveCliRuntimeToolPolicy({
+  const toolPolicy = await resolveCliBackendRuntimeToolPolicy({
     params,
+    backend: backendResolved,
     policySessionKey,
     policyAgentId,
-    backendId: backendResolved.id,
-    bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
-    projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
-    resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
-    sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation: skipsTurnPrefix,
   });
@@ -1062,6 +1059,7 @@ async function prepareCliRunContextWithinReadFence(
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability,
+      ...(hostOwnedTools ? { hostOwnedTools } : {}),
       env: preparedBackend.env,
       // Bundled owners may project this through a native per-process system-prompt
       // channel. Keep it private so exact isolated inference does not expand the SDK.
@@ -1110,15 +1108,12 @@ async function prepareCliRunContextWithinReadFence(
     if (params.isolatedCompletion && preparedExecution?.isolatedCompletionEnforced !== true) {
       throw unsupportedIsolatedCompletionError(backendResolved.id);
     }
-    if (
-      params.cliToolAvailability &&
-      backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-      preparedExecution?.toolAvailabilityEnforced !== true
-    ) {
-      throw new Error(
-        `CLI backend ${backendResolved.id} did not enforce exact per-run tool availability during execution preparation`,
-      );
-    }
+    assertCliPreparedToolEnforcement({
+      backend: backendResolved,
+      toolAvailability: params.cliToolAvailability,
+      hostOwnedTools,
+      preparedExecution,
+    });
     const skipLocalCredentialEpoch = Boolean(
       backendResolved.authEpochMode === "profile-only" &&
       effectiveAuthProfileId &&
