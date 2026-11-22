@@ -2007,6 +2007,49 @@
   margin-inline-start: 0;
 }
 
+/* Skills and Templates share the card surface, but only plugin entries pair a
+   package name and badge with a separately actionable publisher handle. */
+.plugin-catalog-entry {
+  .plugin-catalog-row__main {
+    flex-wrap: wrap;
+  }
+
+  .plugin-catalog-row__text {
+    flex-basis: 9em;
+  }
+
+  .plugin-card-title-row {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    line-height: calc(20px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-row__name {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 100%;
+
+    h3 {
+      overflow: visible;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .plugin-card-title-row .plugin-card-author {
+    flex: none;
+    margin-inline-start: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .plugin-catalog-card__action {
+    margin-inline-start: auto;
+  }
+}
+
 .settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
   height: 28px;
   min-height: 28px;

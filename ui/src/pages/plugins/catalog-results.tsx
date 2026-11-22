@@ -151,7 +151,10 @@ function CatalogCard(props: {
     !busy() &&
     !props.state.messages?.[`install:${props.plugin.id}`]?.savedInstall;
   return (
-    <article class="plugin-catalog-card plugin-catalog-row" data-plugin-id={props.plugin.id}>
+    <article
+      class="plugin-catalog-card plugin-catalog-row plugin-catalog-entry"
+      data-plugin-id={props.plugin.id}
+    >
       <a
         class="plugin-catalog-card__primary-link"
         href={props.state.entryHref(props.plugin.id)}
@@ -165,8 +168,10 @@ function CatalogCard(props: {
           <CatalogIcon plugin={props.plugin} state={props.state} />
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row">
-              <h3>{props.plugin.catalog.name}</h3>
-              {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+              <div class="plugin-catalog-row__name">
+                <h3>{props.plugin.catalog.name}</h3>
+                {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+              </div>
               {renderPluginAuthor(props.plugin.catalog.author)}
             </div>
             <PluginCardSummary
