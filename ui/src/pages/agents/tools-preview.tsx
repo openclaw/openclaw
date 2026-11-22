@@ -91,7 +91,7 @@ function previewStatus(preview: EffectivePreview) {
 export function ToolRuntime(props: {
   preview: EffectivePreview;
   sessionKey: string;
-  onJump?: (event: Event, anchorId: string) => void;
+  resolveJump: (anchorId: string) => ((event: Event) => void) | undefined;
 }) {
   const uniqueEffectiveTools = () => [...(props.preview.facts?.available.values() ?? [])];
   const visibleEffectiveTools = () => uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS);
@@ -143,12 +143,13 @@ export function ToolRuntime(props: {
                 <For each={visibleEffectiveTools()} keyed={(tool) => tool.id}>
                   {(tool) => {
                     const anchorId = () => toToolAnchorId(tool().id);
+                    const jump = createMemo(() => props.resolveJump(anchorId()));
                     return (
                       <Dynamic
-                        component={props.onJump ? "a" : "span"}
+                        component={jump() ? "a" : "span"}
                         class="agent-tools-runtime-chip"
-                        href={props.onJump ? `#${anchorId()}` : undefined}
-                        onClick={(event: Event) => props.onJump?.(event, anchorId())}
+                        href={jump() ? `#${anchorId()}` : undefined}
+                        onClick={(event: Event) => jump()?.(event)}
                       >
                         <span class="mono" translate="no">
                           {tool().label}
