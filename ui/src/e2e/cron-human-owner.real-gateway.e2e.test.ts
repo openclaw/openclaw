@@ -5,6 +5,7 @@ import { buffer } from "node:stream/consumers";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { summarizeMockInferenceRequest } from "../../../scripts/e2e/lib/mock-inference-facts.ts";
 import { loadCronStore, saveCronStore } from "../../../src/cron/store.ts";
 import type { CronStoredJob } from "../../../src/cron/types.ts";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
@@ -28,7 +29,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModel, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -45,6 +46,9 @@ const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profiles: string[] = [];
 const providerAuthorizations: (string | undefined)[] = [];
+const namingPrompt = "Every morning, check the water level in the fictional garden.";
+const namingTitle = "Morning garden watering";
+const namingModels: unknown[] = [];
 let heldProviderResponse: ServerResponse | undefined;
 const legacyRunKey = "agent:main:legacy-admin-run";
 let legacyOperation: "model" | "cap" | "run" | undefined;
@@ -65,7 +69,26 @@ const suite = createControlUiE2eSuite({
               response.writeHead(404).end();
               return;
             }
-            const body: { model?: unknown } = JSON.parse((await buffer(request)).toString("utf8"));
+            const body: { model?: unknown; input?: unknown } = JSON.parse(
+              (await buffer(request)).toString("utf8"),
+            );
+            if (summarizeMockInferenceRequest(body).purpose === "activity-recap") {
+              writeOpenAiResponsesText(response, {
+                text: "Legacy automation execution completed.",
+                messageId: "activity-recap-message",
+                responseId: "activity-recap-response",
+              });
+              return;
+            }
+            if (JSON.stringify(body.input)?.includes(namingPrompt)) {
+              namingModels.push(body.model);
+              writeOpenAiResponsesText(response, {
+                text: namingTitle,
+                messageId: "garden-message",
+                responseId: "garden-response",
+              });
+              return;
+            }
             providerAuthorizations.push(request.headers.authorization);
             if (legacyOperation) {
               legacyModels.push(body.model);
@@ -185,6 +208,7 @@ const suite = createControlUiE2eSuite({
           agents: {
             defaults: {
               model: "fixture/echo",
+              utilityModel: "fixture/edited",
               models: {
                 "fixture/echo": { agentRuntime: { id: "openclaw" } },
                 "fixture/edited": { agentRuntime: { id: "openclaw" } },
@@ -287,6 +311,38 @@ async function rpc<T>(page: Page, method: string, params: unknown): Promise<T> {
 }
 
 suite.define(() => {
+  it("creates a prompt-only automation with its utility model title", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    await page.goto(new URL("automations?new", urls[0]).toString());
+    await waitForControlUiGatewayReady(page);
+    await page.locator("#cron-payload-text").fill(namingPrompt);
+    expect(await page.locator("#cron-name").count()).toBe(0);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText(namingTitle, { exact: true }).first().waitFor();
+    const { jobs } = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    const created = jobs.filter((job) => job.name === namingTitle);
+    expect(created).toHaveLength(1);
+    await page.goto(new URL(`automations?job=${created[0]!.id}`, urls[0]).toString());
+    await page.locator('[data-test-id="cron-edit"]').click();
+    await page.locator("#cron-name").fill("");
+    expect(await page.locator("#cron-name").getAttribute("placeholder")).toBe(namingTitle);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.locator('[data-test-id="cron-edit"]').waitFor();
+    expect((await rpc<CronJob>(page, "cron.get", { id: created[0]!.id })).name).toBe(namingTitle);
+    const menu = page.locator(".cron-detail-actions .cron-job-menu");
+    await menu.locator(".cron-job-menu__trigger").click();
+    await menu.locator('[data-value="clone"]').click();
+    const name = page.locator("#cron-name");
+    expect(await name.inputValue()).toBe(`${namingTitle} copy`);
+    await name.fill("Second garden");
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText("Second garden", { exact: true }).first().waitFor();
+    const copies = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    expect(copies.jobs.filter((job) => job.name === "Second garden")).toHaveLength(1);
+    expect(namingModels).toEqual(["edited"]);
+  });
+
   it("saves and transfers an owned automation, then denies the former owner", async () => {
     const pages: Page[] = [];
     for (let index = 0; index < people.length; index++) {
@@ -339,6 +395,7 @@ suite.define(() => {
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
       await waitForControlUiGatewayReady(page);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("#cron-name").waitFor();
     }
     expect(await alice.locator("#cron-name").isDisabled()).toBe(false);
@@ -362,6 +419,8 @@ suite.define(() => {
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: job.id })).name)
       .toBe("Hourly ping edited by Alice");
+    await alice.locator('[data-test-id="cron-edit"]').click();
+    await alice.locator('[data-test-id="cron-advanced"]').click();
     await selectPickerValue(ownerPicker, profiles[2]!);
     await alice.locator('[data-test-id="cron-submit"]').click();
     await expect
@@ -369,12 +428,14 @@ suite.define(() => {
       .toBe(profiles[2]);
     const transferred = await rpc<CronJob>(admin, "cron.get", { id: job.id });
     expect(transferred.enabled).toBe(false);
+    await alice.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => alice.locator("#cron-name").isDisabled()).toBe(true);
     await expect(
       rpc(alice, "cron.update", { id: job.id, patch: { name: "Former owner cannot edit" } }),
     ).rejects.toThrow();
     await bob.reload();
     await waitForControlUiGatewayReady(bob);
+    await bob.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => bob.locator("#cron-name").isDisabled()).toBe(false);
     await bob.locator("#cron-name").fill("Hourly ping edited by Bob");
     await bob.locator('[data-test-id="cron-submit"]').click();
@@ -416,11 +477,9 @@ suite.define(() => {
     // The same administrator edits a fresh legacy job through the actual page.
     await admin.goto(new URL("automations?job=legacy-ui-edit", urls[0]).toString());
     await waitForControlUiGatewayReady(admin);
+    await admin.locator('[data-test-id="cron-edit"]').click();
     await admin.locator("#cron-name").waitFor();
-    await selectPickerValue(
-      admin.locator("openclaw-select-picker:has(#cron-payload-model-picker)"),
-      "fixture/edited",
-    );
+    await selectChatModel(admin.locator(".cron-prompt__run-controls"), "fixture/edited");
     await admin.locator('[data-test-id="cron-submit"]').click();
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: "legacy-ui-edit" })).payload)

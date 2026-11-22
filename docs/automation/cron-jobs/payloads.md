@@ -127,17 +127,33 @@ automation management remains self-scoped.
 
 The same applies to a new `isolated` or `current` `agentTurn` job that an
 authenticated operator turn links to its creating conversation. The job retains
-the creator's source privately, runs in its own detached session, and rechecks
-the original operator scopes, role, device, and access grant at each occurrence
-and before its effects. If the device or grant is revoked, or the role changes,
-the next occurrence is refused with a message asking you to recreate the
-automation from an authenticated turn, and the job is disabled. A revocation
-during a run stops that run's remaining operator effects.
+the creator's source privately and runs in its own detached session. Each
+occurrence checks the original operator scopes, role, device, access grant, and
+model restrictions once when it starts. A later revocation or policy change
+applies to the next occurrence, which is refused with a message asking you to
+recreate the automation from an authenticated turn; the job is then disabled.
+The already-started occurrence keeps its captured restriction until it finishes.
+Rotating a shared Gateway token or password refuses jobs created through it. A job
+created through [trusted-proxy authentication](/gateway/trusted-proxy-auth) follows
+its proxy user's grant instead: changing `trustedProxies`, `userHeader`, or
+`requiredHeaders` keeps it, while removing the user from `allowUsers`, changing
+its identity scopes, or leaving trusted-proxy mode refuses it.
 
 The link names the creating conversation by key. After a message edit, branch
 switch, or reset, a linked detached job keeps that conversation's workspace,
-memory, and sandbox requirement, and still rechecks the creator's device and grant.
+memory, and sandbox requirement. A new occurrence checks the creator's device and grant.
 A removed or archived conversation pauses the job.
+
+An agent-created job cannot use another conversation’s saved workspace or
+worktree, even when the same person owns both conversations. OpenClaw rejects
+that target when you create, retarget, edit the execution, or enable the job.
+Create the automation from an authenticated turn in the target conversation
+with `sessionTarget: "session:<that conversation’s session key>"` instead.
+Existing invalid jobs can still be paused, renamed, or removed; recreate them
+from their intended conversation rather than changing workspace paths or
+relaxing filesystem restrictions. Named sessions without a saved workspace
+binding and operator-created jobs retain their existing behavior. The run-time
+check remains in place if a target acquires a workspace binding after creation.
 
 Stored jobs are unchanged: a source is never inferred for an existing job, so
 jobs created before this behavior keep their recorded ownership check. Binding
@@ -149,14 +165,14 @@ an authenticated operator turn (such as `cron.add` from the CLI), or another
 conversation. An authenticated owner update can bind it again
 to the updated task. Executable edits without that authentication discard it.
 Display-only edits and disabling or re-enabling the job preserve its stored
-source; names, schedules, and other executable inputs remain bound. A fresh
-owner capture applies only to the definition captured, even if another manager
-edits the job before the update commits. Disabling or removing a job still
+source. Definition edits apply to the next occurrence, not one already running.
+A fresh owner capture applies only to the definition captured, even if another
+manager edits the job before the update commits. Disabling or removing a job still
 cancels its active occurrence; re-enabling it does not revive that cancelled
 occurrence. A turn the occurrence already started in another session, for
 example with `sessions_send`, belongs to that session: it keeps running when the
-occurrence ends or the job is removed, and still revalidates the operator's
-role, device, and access grant.
+occurrence ends or the job is removed. Queued or replayed work checks current
+authority when it starts.
 
 A continuation waits for its current conversation turn to finish before reading
 the current job and checking its source at launch. Trigger-supplied context does
@@ -192,7 +208,12 @@ preserve the recorded source. Changes to model-facing names, prompts, tools, sch
 or other executable behavior need fresh source authorization and clear the old source
 when none is present. Remote management alone cannot supply local-source authorization,
 and older jobs without a provable origin remain blocked until reauthorized or recreated
-from a fresh authorized source.
+from a fresh authorized source. Blocked jobs are discoverable: `openclaw automations status`
+reports a `reauthorizationRequired` count, and each affected job's details and list entries
+carry a `reauthorizationRequired` flag. Re-saving the job's tool cap from the creator's
+authenticated turn records a fresh origin and unblocks the job without changing its
+account-scoped authority; recreating it from the intended account is the fallback when the
+creator turn is unavailable.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated
@@ -380,8 +401,9 @@ the content instead of overwriting another edit.
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
 or `needs_attention`). `no_change` needs no summary; every other outcome requires
-a trimmed summary of 1–2000 characters. It records the result without sending a
-notification by itself. Structured results are retained in run history. After a
+a trimmed summary of 1–2000 characters. Repeating the accepted result returns it
+again; a different second result is rejected. It records the result without
+sending a notification by itself. Structured results are retained in run history. After a
 successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result
@@ -389,14 +411,21 @@ boilerplate to the conversation. This is not a delivery retry queue. `no_change`
 keeps runner delivery silent without hiding execution failures. A `progress`,
 `done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
 an earlier tool failure the run moved past no longer adds a generic
-`⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
-in the transcript and progress lane. Adaptive scheduling still uses `next_check` on a paced
+`⚠️ <tool> failed` notice to an otherwise silent run. The notice names the
+called tool, not the Tool Search dispatcher. The failure stays visible
+in the transcript and progress lane. A failed tool call counts as recovered
+once the same tool later succeeds. A call to a tool the run does not have never
+runs, so the next tool call that runs and succeeds recovers it. A run that only
+made that call and then ended silently is still a failure. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
 With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
 comments, headings, fence markers, and empty checklist stubs count as an empty
-checklist. Removing scratch with `--unset` is different: missing scratch does
+checklist. An empty checklist completes the run without a model call: history
+records `status: "ok"` and `completionStatus: "succeeded"` with the summary
+`Automation scratch is explicitly empty`, with no "did not start" notice or
+skipped-run alert. Removing scratch with `--unset` is different: missing scratch does
 not suppress a run. Disable the job when it should stop regardless of scratch.
 
 ### Command payloads

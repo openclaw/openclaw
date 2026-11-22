@@ -43,6 +43,7 @@ import {
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
+  resolveSetupContextShortfall,
   resolveToolFreeCliSetupError,
   SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
@@ -190,6 +191,7 @@ export async function runSetupInferenceTurn(params: {
         // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
         retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
+        refreshModelCatalog: !harness || harness === "openclaw",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
         lane: `session:probe-setup-inference:${route.provider}`,
@@ -235,6 +237,9 @@ export async function runSetupInferenceTurn(params: {
       latencyMs: Date.now() - started,
       text,
       auth: successfulAuth ?? (route.authProfileId ? { authProfileId: route.authProfileId } : {}),
+      ...(result.meta?.agentMeta?.contextTokens !== undefined
+        ? { contextTokens: result.meta.agentMeta.contextTokens }
+        : {}),
     };
   } catch (error) {
     const described = describeSetupInferenceError(error, route);
@@ -562,6 +567,8 @@ export async function verifySetupInferenceConfig(
     requireExecutionOwner?: boolean;
     assertSourceCurrent?: () => void;
     signal?: AbortSignal;
+    /** A model being chosen in setup gets a context warning; existing routes keep the runtime guard. */
+    candidateSetup?: true;
   },
 ): Promise<VerifySetupInferenceResult> {
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
@@ -658,10 +665,14 @@ export async function verifySetupInferenceConfig(
       return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
     }
   }
+  const warning = params.candidateSetup
+    ? resolveSetupContextShortfall(route, turn.contextTokens)
+    : undefined;
   return {
     ok: true,
     modelRef: route.modelLabel,
     latencyMs: turn.latencyMs,
     ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
+    ...(warning ? { warning } : {}),
   };
 }

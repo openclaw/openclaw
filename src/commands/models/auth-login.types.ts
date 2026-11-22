@@ -44,6 +44,7 @@ export type ModelsAuthLoginFlowOptions = ModelsAuthLoginOptions & {
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
   openUrl?: (url: string) => Promise<void>;
+  nodes?: ProviderAuthContext["nodes"];
   browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
   beforePersistentEffect?: () => void | Promise<void>;
 };

@@ -10,7 +10,6 @@ import {
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
@@ -72,7 +71,7 @@ describe("CLI operator model execution", () => {
           };
         });
         executePreparedCliRun.mockImplementation(async (prepared) => {
-          createCliRunCurrentAssertion(prepared.params)();
+          prepared.params.assertCurrent?.();
           return processStart();
         });
         try {

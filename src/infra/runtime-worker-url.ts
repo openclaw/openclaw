@@ -4,6 +4,7 @@ import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isEmbeddedStandaloneModule, resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.generated.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
 
@@ -90,6 +91,6 @@ export function resolveRuntimeWorkerThreadExecArgv(
     return [];
   }
   return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)
-    ? ["--import", new URL("./runtime-worker-loader.mjs", import.meta.url).href]
+    ? ["--import", resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.workerThreadLoader).href]
     : [];
 }

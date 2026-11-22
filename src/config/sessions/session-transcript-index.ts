@@ -102,7 +102,8 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
       )
       .select((eb) => [
         eb.fn.countAll<number>().as("event_count"),
-        eb.fn.sum<number>("stored.event_bytes").as("event_bytes"),
+        // PostgreSQL SUM(bigint) returns numeric text unless cast back to an integer.
+        eb.cast<number | null>(eb.fn.sum("stored.event_bytes"), "bigint").as("event_bytes"),
       ]),
   );
   if ((stored?.event_count ?? 0) + events.length > SYNC_REBUILD_MAX_ROWS) {

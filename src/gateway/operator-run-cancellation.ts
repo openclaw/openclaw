@@ -32,6 +32,20 @@ type OperatorRunCancellationContext = Pick<
   keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
+/** Admit a retained producer once; later policy changes apply to its next start. */
+export function retainGatewayOperatorRunAuthority(
+  captured: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>,
+) {
+  const { authority, release: releaseSource } = captured;
+  try {
+    authority.reauthorize?.();
+    return { authority, release: releaseSource };
+  } catch (error) {
+    releaseSource();
+    throw error;
+  }
+}
+
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
   params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
@@ -45,23 +59,25 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+    : // The requester's turn ending or chat edit does not revoke accepted work.
       await captureGatewayOperatorContinuation(params);
+  const retained = captured && retainGatewayOperatorRunAuthority(captured);
   const releaseSource =
-    captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
-  const signal = captured?.authority.signal;
+    retained?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const authority = retained?.authority;
+  const signal = authority?.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
     if (
       !params.systemTurn &&
-      captured &&
+      authority &&
       params.entry &&
       isRpcSourceRegistered(params.entry) &&
-      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === authority.profileId
     ) {
       // Retain human initiation across live queue handoffs. System-turn authority
       // can come from the current session owner and must not mint this fact.
-      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+      params.entry.adapter.initiatingPersonalOperator = authority;
     }
     partialSession =
       signal && params.entry
@@ -86,7 +102,7 @@ export async function retainGatewayOperatorRun(
           })
         : undefined;
     return {
-      authority: captured?.authority,
+      authority,
       armCancellation: () => cancellation?.arm(),
       retireCancellation: () => {
         cancellation?.release();

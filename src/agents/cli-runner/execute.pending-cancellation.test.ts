@@ -246,35 +246,37 @@ describe("CLI execution cancellation", () => {
     expect(resolveApproval).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("fences prepared execution (cancelled=%s)", async (cancelled) => {
-    const entered = createDeferred();
-    const prepared = createDeferred();
-    context.preparedBackend.beforeExecution = async () => {
-      entered.resolve();
-      await prepared.promise;
-    };
-    const revoke = cancelled ? () => controller.abort() : expiringAuthority(context);
-    const pluginExecute = vi.fn(async function* () {
-      yield { type: "result", result: "unexpected" };
-    });
-    if (!cancelled) {
-      context.preparedBackend.backend.command = process.execPath;
-      context.executionTarget = { kind: "plugin", execute: pluginExecute };
-    }
+  it.each([false, true])(
+    "finishes started execution unless cancelled (cancelled=%s)",
+    async (cancelled) => {
+      const entered = createDeferred();
+      const prepared = createDeferred();
+      context.preparedBackend.beforeExecution = async () => {
+        entered.resolve();
+        await prepared.promise;
+      };
+      const revoke = cancelled ? () => controller.abort() : expiringAuthority(context);
+      const pluginExecute = vi.fn(async function* () {
+        yield { type: "result", result: "completed" };
+      });
+      if (!cancelled) {
+        configurePlugin(context, pluginExecute, process.execPath);
+      }
 
-    const run = executePreparedCliRun(context);
-    const rejected = cancelled
-      ? expect(run).rejects.toMatchObject({ name: "AbortError" })
-      : expect(run).rejects.toThrow("Completion authority expired");
-    await entered.promise;
-    revoke();
-    prepared.resolve();
+      const run = executePreparedCliRun(context);
+      const outcome = cancelled
+        ? expect(run).rejects.toMatchObject({ name: "AbortError" })
+        : expect(run).resolves.toMatchObject({ text: "completed" });
+      await entered.promise;
+      revoke();
+      prepared.resolve();
 
-    await rejected;
-    expect(spawn).not.toHaveBeenCalled();
-    expect(createChildAdapterMock).not.toHaveBeenCalled();
-    expect(pluginExecute).not.toHaveBeenCalled();
-  });
+      await outcome;
+      expect(spawn).not.toHaveBeenCalled();
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+      expect(pluginExecute).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    },
+  );
 
   it("cancels a child adapter that is still starting by the caller run id", async () => {
     const startup = createDeferred<ChildAdapter>();
@@ -296,34 +298,27 @@ describe("CLI execution cancellation", () => {
     expect(managed.activity.resultSettled).toBe(true);
   });
 
-  it.each([false, true])("keeps the fenced process (cancelled=%s)", async (cancelled) => {
-    const revoke = cancelled ? () => controller.abort() : expiringAuthority(context);
+  it("keeps the fenced process when its replacement is cancelled", async () => {
     const { startup, adapter, first } = startFencedProcess(supervisor, context);
     const replacement = executePreparedCliRun(context, "resume-1");
-    const rejected = cancelled
-      ? expect(replacement).rejects.toMatchObject({ name: "AbortError" })
-      : expect(replacement).rejects.toThrow("Completion authority expired");
+    const rejected = expect(replacement).rejects.toMatchObject({ name: "AbortError" });
     await vi.waitFor(() => {
       expect(spawn).toHaveBeenCalledTimes(2);
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
     expect(cancel).not.toHaveBeenCalled();
     expect(adapter.kill).not.toHaveBeenCalled();
-    revoke();
-    if (cancelled) {
-      expect(cancel).toHaveBeenCalledWith("cli-run", "manual-cancel");
-    }
+    controller.abort();
+    expect(cancel).toHaveBeenCalledWith("cli-run", "manual-cancel");
     startup.resolve(adapter);
     const firstRun = await first;
     try {
       await rejected;
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
       expect(adapter.kill).not.toHaveBeenCalled();
-      if (cancelled) {
-        const replacementRun = await spawn.mock.results[1]!.value;
-        await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-        expect(replacementRun.activity.resultSettled).toBe(true);
-      }
+      const replacementRun = await spawn.mock.results[1]!.value;
+      await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+      expect(replacementRun.activity.resultSettled).toBe(true);
     } finally {
       firstRun.cancel();
       await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });

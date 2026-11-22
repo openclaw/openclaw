@@ -449,6 +449,7 @@ export function buildAgentSystemPrompt(params: {
       sessionKey: runtimeInfo?.sessionKey,
       resolveToolName,
     });
+  const delegationRenders = subagentDelegationPreferenceSection.includes("## Delegation");
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -470,18 +471,20 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
       : sanitizedWorkspaceDir;
+  // Reply file paths (#202534): repo-relative paths in a reply opened from the session
+  // workspace instead of the repository, so chat file links showed "session file not found".
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""}`
-      : "Single global file workspace unless explicitly told otherwise.";
+      ? `File tools use host workspace ${sanitizedWorkspaceDir}.${hasExec ? ` exec uses container ${sanitizedSandboxContainerWorkspace} or relative workdir paths; never host paths. Prefer relative paths for both.` : ""} Reply file paths: relative ones resolve from the working directory; write others as absolute paths.`
+      : "Single global file workspace unless explicitly told otherwise. Reply file paths: relative ones resolve from the working directory; write others as absolute paths.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
-      ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep TMPDIR, TMP, and TEMP at their inherited system paths; native tools need short temporary paths for Unix sockets.`
+      ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch; avoid explicit /tmp paths.`
       : "";
   const directorySection = hasSeparateRuntimeCwd
     ? [
         "## Directory Roles",
-        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
+        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools, deliverables, and relative reply file paths; write other files as absolute paths).`,
         `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
       ]
     : ["## Workspace", `Working directory: ${displayWorkspaceDir}`];
@@ -609,11 +612,9 @@ export function buildAgentSystemPrompt(params: {
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
       waitHints.length > 0 && `Wait: end turn if exit wakes you, else ${waitHints.join(" or ")}.`,
-      hasSessionsSpawn && [
-        "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
-        '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',
-        "Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work.",
-      ],
+      // `## Delegation` owns the child brief, waiting and synthesis when it renders.
+      hasSessionsSpawn &&
+        `Execute work directly by default; delegate bounded independent work via \`sessions_spawn\` (${delegationRenders ? "" : "objective/output/write-scope/verification; "}\`context:"isolated"\` for clean context, \`context:"fork"\` for transcript; \`taskName\` for stable handle, \`label\` for UI; hidden by default unless user needs to steer). Keep dependent steps with one owner${delegationRenders ? "." : " and synthesize child outputs."}`,
       availableTools.has("screen") &&
         "`screen` present: web/app turn may drive UI; messaging turn: don't.",
       // The repeat is noticed during ordinary work, not while reading the
@@ -623,19 +624,13 @@ export function buildAgentSystemPrompt(params: {
       // by the scheduler, while a job left disabled pending confirmation
       // is watched by nothing and dies silently.
       hasAutomations && [
-        `When \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` currently exposes list, add, run, and remove: same job asked a 3rd time => do permitted work, then offer a routine. Check list first; never duplicate one.`,
-        "For that supported promotion: restate schedule+task plainly, get a yes, create it (delivery defaults here), then force `run` once as a visible test; failed test => say so and remove it.",
+        `When \`${resolveToolName(AUTOMATIONS_TOOL_NAME)}\` exposes list/add/run/remove and the same job is asked a 3rd time: do the work, check list (no duplicates), offer a routine, restate schedule+task for confirmation, create it, and force \`run\` once (remove if test fails).`,
       ],
     ],
     ...nativeCommandGuidanceLines,
     acpHarnessSpawnAllowed && [
-      '"Do in claude code/cursor/gemini/opencode" = ACP intent: `sessions_spawn(runtime:"acp")`.',
-      'No thread-capable channel: one-shot `mode:"run"`; never claim binding.',
-      "Set `agentId` unless `acp.defaultAgent`; never route ACP through local subagent controls or a local PTY.",
+      'ACP ("do in claude code/cursor/gemini/opencode"): `sessions_spawn(runtime:"acp")` (set `agentId` unless `acp.defaultAgent`; one-shot `mode:"run"` without thread-capable channel—never claim binding or route through local subagent/PTY).',
     ],
-    renderOpenClawToolWorkflowHints &&
-      subagentStatusTools.length > 0 &&
-      `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") && !inTurnCollectionGuidance ? " Announcing children: Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
     renderOpenClawToolWorkflowHints &&
       sessionLookupTools.length > 0 &&
       `Asked about another chat/group/session not in context: check ${sessionLookupTools.map((name) => `\`${name}\``).join("/")} before claiming no access.`,
@@ -643,13 +638,15 @@ export function buildAgentSystemPrompt(params: {
     hasProcess &&
       "Before input: process log; log/poll shows waitingForInput/stdinWritable. Lost id: process list.",
     hasSessionsSpawn && [
-      "Follow each spawn's accepted completion mode: collectors need explicit result collection, not completion events.",
+      "Follow each spawn's accepted completion mode (collectors need explicit collection, not completion events).",
       inTurnCollectionGuidance ??
         (availableTools.has("sessions_yield")
-          ? "For announcing children, call `sessions_yield` if required completion events have not arrived; never busy-poll."
-          : "For announcing children, wait for runtime completion events; never busy-poll."),
-      "Treat subagent outputs as reports to synthesize.",
+          ? "Announcing children: wait via `sessions_yield`; never busy-poll."
+          : "Announcing children: wait for runtime completion events; never busy-poll."),
     ],
+    renderOpenClawToolWorkflowHints &&
+      subagentStatusTools.length > 0 &&
+      `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}; check status only on-demand/debug/intervention.`,
     ...buildMediaGenerationToolLines(availableTools),
     "",
     includeToolGuidance &&
@@ -777,25 +774,20 @@ export function buildAgentSystemPrompt(params: {
       runtimeChannel === "webchat" &&
       (!sourceMessageToolOnly || messageToolAvailable) && [
         "## Control UI Embed",
-        "`[embed ...]`: Control UI/webchat only; inline rich bubble. Else use regular links.",
+        "`[embed ...]` renders inline bubbles on Control UI/webchat only (use regular links elsewhere; quote attributes; hosted Canvas refs/URLs or YouTube URLs only—never local/file:// or arbitrary URLs).",
         sourceMessageToolOnly
-          ? "- Files: message attachment fields. Web rich render: `[embed ...]`."
+          ? "- Files: message attachment fields."
           : messageToolAvailable
-            ? "- Attachments: `MEDIA:`; local HTML reports: `message(action=send, media=<path>)` to this conversation. Web rich render: `[embed ...]`."
-            : "- Attachments: `MEDIA:`. Web rich render: `[embed ...]`.",
-        '- Hosted doc: `[embed ref="cv_123" title="Status" height="320" /]`; URL form: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
-        '- YouTube: `[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]`; no widget needed.',
-        "- Never local/file:// or arbitrary URL. Only hosted Canvas refs/URLs or YouTube video URLs.",
-        "- Quote attributes. Stage hosted docs in the profile-scoped root; prefer `ref` or use the full hosted URL.",
+            ? "- Attachments: `MEDIA:`; local HTML reports: `message(action=send, media=<path>)`."
+            : "- Attachments: `MEDIA:`.",
+        '- Hosted doc (stage in profile-scoped root, prefer `ref`): `[embed ref="cv_123" title="Status" height="320" /]` or `url="/__openclaw__/canvas/documents/cv_123/index.html"`.',
+        '- YouTube: `[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]` (no widget needed).',
         "",
       ],
     !isMinimal &&
       runtimeChannel === "webchat" && [
         "## Control UI Side Chat",
-        "- Operator has a read-only Side chat for this session's status and explanations.",
-        "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
-        hasSessionsSpawn &&
-          "- Reserve `sessions_spawn` for delegated work with its own deliverable.",
+        `- Operator has a read-only Side chat for status/explanations; do not burn main-thread turns${hasSessionsSpawn ? " or spawn subagents (`sessions_spawn` is for delegated deliverables)" : ""} merely to summarize status or re-explain recent work.`,
         "",
       ],
     ...buildMessagingSection({
@@ -810,16 +802,13 @@ export function buildAgentSystemPrompt(params: {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
-      delegationSectionRenders: subagentDelegationPreferenceSection.includes("## Delegation"),
-      inTurnCollectionGuidance,
     }),
     // Capability-gated reply guidance stays below the cache boundary so channel changes
     // cannot alter the byte-identical stable prefix shared across sessions.
     !isMinimal &&
       collapsibleDetailsSupported && [
         "## Collapsible Details",
-        "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
-        "Keep the primary answer, and anything the user must act on, outside the block. Never hide the actual answer behind a disclosure.",
+        "Supports `<details><summary>Label</summary> ... </details>` (on their own lines) for optional depth (derivations, logs, examples). Keep the primary answer and required actions outside.",
         "",
       ],
     !isMinimal && params.ttsHint?.trim() && ["## Voice (TTS)", params.ttsHint.trim(), ""],

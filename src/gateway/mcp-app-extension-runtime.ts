@@ -17,6 +17,7 @@ import {
   normalizeMcpToolFilter,
 } from "../agents/mcp-tool-filter.js";
 import type { McpAppPrepareToolCall } from "../agents/mcp-ui-resource.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -60,6 +61,9 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
     assertCurrent: access.assertCurrent,
   });
+  if (!selectedModel) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const harnessId = resolveEffectiveAgentRuntime({
     cfg,
     provider: selectedModel.provider,

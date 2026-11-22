@@ -7,14 +7,12 @@ import {
   type PreparedModelRuntimeLease,
   type PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type {
   SubagentRunRecord,
   SubagentAdmissionRejection,
 } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -70,18 +68,15 @@ import {
   releasePreparedAgentRunUserTurnAfterFailure,
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
-import { retainAgentTurnOperatorRun } from "./agent-turn-source-admission.js";
+import {
+  captureAgentTurnRequesterAuthority,
+  retainAgentTurnOperatorRun,
+} from "./agent-turn-source-admission.js";
 
 export async function prepareAgentRunDispatch(
   params: PrepareAgentRunDispatchParams,
 ): Promise<PreparedAgentRunDispatch | undefined> {
-  const assertRequesterCurrent = captureRequesterCronAuthorityAdmissionAssertion({
-    runId: params.runId,
-    sessionKey: params.resolvedSessionKey,
-    sessionId: params.getAdmittedSessionId(),
-    inputProvenance: params.inputProvenance,
-  });
-  assertRequesterCurrent?.();
+  const assertRequesterCurrent = captureAgentTurnRequesterAuthority(params);
   const privateConversationWork =
     params.privateCompletion || isSubagentCoordinationInputProvenance(params.inputProvenance);
   const controlUiVisible = !params.suppressVisibleSessionEffects && !privateConversationWork;
@@ -107,7 +102,11 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const admission = resolveAgentRunAdmissionModel(params);
+  if (!admission) {
+    return undefined;
+  }
+  const { resolvedRuntime, providerFacts, modelSelection } = admission;
   const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let preparing = true;
@@ -137,12 +136,6 @@ export async function prepareAgentRunDispatch(
         cfg: params.cfgForAgent ?? params.cfg,
         overrideSeconds: timeoutSeconds,
       });
-      const providerFacts = {
-        providerId: resolvedRuntime.provider,
-        authProviderId: resolveProviderIdForAuth(resolvedRuntime.provider, {
-          config: params.cfgForAgent ?? params.cfg,
-        }),
-      };
       if (existing?.entry) {
         // Retain the exact preparing input; admission adds presentation facts only.
         updateRpcSourceSessionId(existing.entry, params.getAdmittedSessionId());
@@ -495,7 +488,11 @@ export async function prepareAgentRunDispatch(
     }
   } catch (err) {
     const failure = userTurn
-      ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err)
+      ? await releasePreparedAgentRunUserTurnAfterFailure(
+          userTurn,
+          err,
+          activeRunAbort.controller.signal,
+        )
       : err;
     if (
       !(failure instanceof AgentRunUserTurnCleanupError) &&
@@ -583,7 +580,11 @@ export async function prepareAgentRunDispatch(
     assertInputOwnerCurrent();
     capturedOperator.authority?.assertCurrent();
   } catch (error) {
-    const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+      userTurn,
+      error,
+      activeRunAbort.controller.signal,
+    );
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
@@ -597,7 +598,11 @@ export async function prepareAgentRunDispatch(
       capturedOperator.authority?.assertCurrent();
     }
   } catch (error) {
-    const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+      userTurn,
+      error,
+      activeRunAbort.controller.signal,
+    );
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
   }
   try {
@@ -627,7 +632,11 @@ export async function prepareAgentRunDispatch(
         activeRunAbort.controller.signal.throwIfAborted();
         capturedOperator.authority?.assertCurrent();
       } catch (err) {
-        const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
+        const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+          userTurn,
+          err,
+          activeRunAbort.controller.signal,
+        );
         return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
@@ -694,6 +703,12 @@ export async function prepareAgentRunDispatch(
       workspaceOverride,
     };
   } catch (error) {
-    return releaseFailedAgentRunAdmission(userTurn, error, cleanupPreaccept);
+    return releaseFailedAgentRunAdmission(
+      userTurn,
+      error,
+      cleanupPreaccept,
+      activeRunAbort.controller.signal,
+      !preparing,
+    );
   }
 }

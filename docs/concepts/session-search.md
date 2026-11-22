@@ -86,6 +86,9 @@ normal, not a search-completeness warning; refine the query to narrow the result
 search completeness and cold archived transcripts excluded from search have separate status
 messages. Cold transcript history becomes searchable again when its session is opened
 and the history is restored. Search does not restore archived history automatically.
+Cold sessions are excluded as soon as archival commits. Maintenance removes their
+old full-text rows in bounded write transactions and resumes interrupted cleanup
+on a later pass; pending cleanup does not expose archived hits.
 
 ## Index lifecycle
 

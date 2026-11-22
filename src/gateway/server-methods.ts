@@ -454,6 +454,7 @@ export async function handleGatewayRequest(
           methodRegistry,
           expectedProfileBinding: profileBinding,
           hasCurrentClientAuthority,
+          admitted: true,
           assertInvocationCurrent: () => {
             runtimeAuthority?.assertCurrent();
             assertOperatorCurrent();

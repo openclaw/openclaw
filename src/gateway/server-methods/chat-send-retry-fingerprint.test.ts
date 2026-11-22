@@ -131,7 +131,7 @@ describe("chat.send persisted request identity", () => {
       if (source === "transcript") {
         expect((await recorder.persistApproved())?.appended).toBe(true);
       } else {
-        recorder.finishPendingInput?.("cancelled");
+        recorder.finishPendingInput?.("cancelled", "failed");
         await recorder.waitForPendingInputSettlement?.();
       }
       await fixture.finishDispatch();
@@ -159,16 +159,24 @@ describe("chat.send persisted request identity", () => {
       fixture.context.dedupe.clear();
       dispatchInboundMessageMock.mockClear();
 
-      expect(await fixture.send()).toHaveBeenCalledWith(
-        true,
-        {
-          runId: fixture.params.idempotencyKey,
-          status: "ok",
-          ...(source === "transcript" ? { messageSeq: 2 } : {}),
-        },
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
+      const replay = await fixture.send();
+      if (source === "input receipt") {
+        expect(replay).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause: "failed" },
+          }),
+        );
+      } else {
+        expect(replay).toHaveBeenCalledWith(
+          true,
+          { runId: fixture.params.idempotencyKey, status: "ok", messageSeq: 2 },
+          undefined,
+          expect.objectContaining({ cached: true }),
+        );
+      }
       const editedMessage = `${fixture.params.message} Edited input.`;
       for (const message of [editedMessage, "/stop"]) {
         fixture.params.message = message;

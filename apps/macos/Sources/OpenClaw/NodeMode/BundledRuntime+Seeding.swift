@@ -19,9 +19,11 @@ extension BundledRuntime {
     static func seed(
         bundle: Bundle = .main,
         profile: AppProfile = .current,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) async throws -> Self
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> Self
     {
-        try await BundledRuntimeSeeder.shared.seed(bundle: bundle, profile: profile, homeDirectory: homeDirectory)
+        try await BundledRuntimeSeeder.shared.seed(
+            bundle: bundle, profile: profile, homeDirectory: homeDirectory, environment: environment)
     }
 
     /// Read-only resolution never executes Bun or selects a checkout/PATH fallback.
@@ -45,7 +47,9 @@ extension BundledRuntime {
     }
 
     @concurrent
-    fileprivate static func prepareSeed(bundle: Bundle, profile: AppProfile, homeDirectory: URL) async throws -> Self {
+    fileprivate static func prepareSeed(
+        bundle: Bundle, profile: AppProfile, homeDirectory: URL, environment: [String: String]) async throws -> Self
+    {
         let source = try self.resolve(bundle: bundle)
         guard let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
               self.isBuildDirectoryName(buildID)
@@ -89,7 +93,8 @@ extension BundledRuntime {
             bundle: bundle,
             profile: profile,
             homeDirectory: homeDirectory,
-            allowsPersistentIntegration: allowsPersistentIntegration)
+            allowsPersistentIntegration: allowsPersistentIntegration,
+            environment: environment)
         return runtime
     }
 
@@ -296,11 +301,16 @@ private actor BundledRuntimeSeeder {
     static let shared = BundledRuntimeSeeder()
     private var pending: [String: Task<BundledRuntime, Error>] = [:]
 
-    func seed(bundle: Bundle, profile: AppProfile, homeDirectory: URL) async throws -> BundledRuntime {
+    func seed(
+        bundle: Bundle,
+        profile: AppProfile,
+        homeDirectory: URL,
+        environment: [String: String]) async throws -> BundledRuntime
+    {
         let key = profile.stateDirectoryURL(homeDirectory: homeDirectory).path
         if let task = self.pending[key] { return try await task.value }
         let task = Task { try await BundledRuntime.prepareSeed(
-            bundle: bundle, profile: profile, homeDirectory: homeDirectory) }
+            bundle: bundle, profile: profile, homeDirectory: homeDirectory, environment: environment) }
         self.pending[key] = task
         defer { self.pending[key] = nil }
         return try await task.value

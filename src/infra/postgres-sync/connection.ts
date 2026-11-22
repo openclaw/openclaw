@@ -3,7 +3,15 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { receiveMessageOnPort, threadId } from "node:worker_threads";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
-import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
+import {
+  POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS,
+  POSTGRES_STATEMENT_TIMEOUT_MS,
+} from "../database-engine/policy.js";
+import type {
+  PostgresSqlConnection,
+  PostgresTransactionOptions,
+  SqlStatement,
+} from "../sql-connection.js";
 import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
@@ -17,7 +25,11 @@ import {
   postgresBridgeReuseKey,
   takePreparedPostgresBridge,
 } from "./bridge-prestart.js";
-import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
+import {
+  takeIdlePostgresBridge,
+  retainIdlePostgresBridge,
+  POSTGRES_IDLE_VALIDATION_MS,
+} from "./idle-bridges.js";
 import { recordPostgresPoolFailure } from "./pool-state.js";
 import {
   decodePostgresError,
@@ -39,6 +51,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   readonly advisoryLockKey: bigint;
   private bridge?: PostgresBridge;
   private idleCheckout?: "reconnect" | "validate";
+  private lastResponseAt = Date.now();
   private readonly bridgeParameters: Parameters<typeof createPostgresBridge>[0];
   private failure: Error | undefined;
   private outcomeUnknown = true;
@@ -48,6 +61,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private readonly mainThread = threadId === 0;
   private readonly reuseKey?: string;
   private readonly admissionReadOnly: boolean;
+  private maintenance = false;
 
   constructor(
     url: string,
@@ -96,16 +110,22 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   runTransaction<T>(
     operation: () => T,
-    options?: { withCommit?: (commit: () => void) => void },
+    options?: PostgresTransactionOptions,
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
-    return runPostgresTransactionSync(
-      this,
-      operation,
-      options,
-      this.admissionReadOnly || modes[0],
-      modes[1],
-    );
+    const previous = this.maintenance;
+    this.maintenance = previous || options?.maintenance === true;
+    try {
+      return runPostgresTransactionSync(
+        this,
+        operation,
+        options,
+        this.admissionReadOnly || modes[0],
+        modes[1],
+      );
+    } finally {
+      this.maintenance = previous;
+    }
   }
 
   readRecoveryGeneration(lock = false): string {
@@ -178,13 +198,26 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (id > 2_147_483_647) {
       throw this.loseConnection();
     }
-    const deadline = performance.now() + 120_000;
+    // 120s with the runtime statement timeout; the worker retires a silent
+    // connection before this deadline resets its whole service. Fingerprints span
+    // many SQL statements in one bridge request; their migration owner retains the
+    // maintenance budget through beforeCommit as well as the migration SQL itself.
+    const deadlineMs =
+      (this.maintenance
+        ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS
+        : (this.bridgeParameters.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS)) + 30_000;
+    const deadline = performance.now() + deadlineMs;
+    const retainedIdle = bridge.inTransaction === false;
+    const reconnectIfIdle =
+      (this.idleCheckout !== undefined || retainedIdle) &&
+      (request.operation === "query" || request.operation === "recovery-generation");
+    // Wall time includes suspension, unlike the monotonic request deadline clock.
+    const validateIfIdle =
+      reconnectIfIdle &&
+      (this.idleCheckout === "validate" ||
+        (retainedIdle && Date.now() - this.lastResponseAt >= POSTGRES_IDLE_VALIDATION_MS));
     // A failed or unsettled request cannot reuse an earlier idle observation.
     bridge.inTransaction = undefined;
-    const reconnectIfIdle =
-      this.idleCheckout !== undefined &&
-      (request.operation === "query" || request.operation === "recovery-generation");
-    const validateIfIdle = reconnectIfIdle && this.idleCheckout === "validate";
     this.idleCheckout = undefined;
     bridge.port.postMessage(
       {
@@ -192,6 +225,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         ...(reconnectIfIdle ? { reconnectIfIdle } : {}),
         ...(validateIfIdle ? { validateIfIdle } : {}),
         id,
+        deadlineMs,
       },
       [],
     );
@@ -233,6 +267,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       throw decodePostgresError(reply.error);
     }
+    this.lastResponseAt = Date.now();
     if ("reusable" in reply) {
       bridge.inTransaction = !reply.reusable;
       return reply.reusable;

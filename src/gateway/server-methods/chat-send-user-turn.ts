@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
@@ -11,8 +14,10 @@ import {
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  UserTurnInput,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-input.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { PreparedSkillLibrarySession } from "../../skills/library/selection.js";
 import {
@@ -307,7 +312,7 @@ export function prepareChatSendUserTurn(params: {
     client &&
     requester &&
     (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
-    isBrowserOperatorUiClient(request.clientInfo) &&
+    (isBrowserOperatorUiClient(request.clientInfo) || isNativeAppUiClient(request.clientInfo)) &&
     !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {

@@ -144,7 +144,8 @@ migration originals it produced; without that verification, for example after
 update. Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 first if you want a downgrade path.
 A failed update that stopped before repair or activation does the same and also
-retires its own original-state capture, since nothing it captured changed.
+retires its own original-state capture if it took one, since nothing it captured
+changed. An update refused before its first state change took none.
 Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
@@ -1020,20 +1021,20 @@ observed candidate startup, and plugin count. Aggregate expiry reports `update-a
 retains ownership until writers settle; it does not authorize rollback or restart.
 Use `openclaw update status` and Doctor for recovery guidance.
 
-| Flag                                             | Description                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--no-restart`                                   | Skip the updater's managed restart and trailing Gateway readiness wait, including failure recovery; also applies with `--json`. A running package Gateway (npm/pnpm/bun global) restarts itself when it detects the replaced installation. Git checkouts retain operator-controlled restart behavior. Doctor still restores a service it stopped for maintenance. |
-| `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                                                 |
-| `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior.                     |
-| `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                     |
-| `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                         |
-| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                      |
-| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                        |
-| `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of candidate check and readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                               |
-| `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
-| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
-| `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
-| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
+| Flag                                             | Description                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--no-restart`                                   | Skip the updater's managed restart and trailing Gateway readiness wait, including failure recovery; also applies with `--json`. A running package Gateway (npm/pnpm/bun global) restarts itself when it detects the replaced installation. Git checkouts retain operator-controlled restart behavior. Doctor still restores a service it stopped for maintenance.                                |
+| `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                                                                                |
+| `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. On `extended-stable`, an explicit target overrides the default verified selection without replacing the saved channel; normal compatibility checks still apply. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior. |
+| `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                                                                    |
+| `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                                                        |
+| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                                                     |
+| `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                                                       |
+| `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of candidate check and readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                                              |
+| `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                                                  |
+| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                                                              |
+| `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                                                |
+| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                                                           |
 
 Invalid `--channel` values are quoted as JSON strings in diagnostics, including
 escaped quotes, newlines, and control characters. This applies to `update`,
@@ -1064,9 +1065,12 @@ activation to the operator. An in-use Git runtime is protected from replacement;
 the flag does not authorize overwriting files a running Gateway still needs.
 Restart through the installation's service owner when ready to activate it. A Git
 checkout that runs from releases builds the new release and leaves the serving one
-selected; the next service start selects the new release. That operator start has
-no updater to confirm it, so it does not get the automatic switch-back after two
-failed starts that an update with a restart gets.
+selected; the next service start selects the new release. If the managed service
+still starts the checkout, the updater stages the release launcher without starting
+or restarting the Gateway. The next OpenClaw restart or boot/login uses that
+definition; staging failures remain visible as an owed service-definition refresh.
+That operator start has no updater to confirm it, so it does not get the automatic
+switch-back after two failed starts that an update with a restart gets.
 After a successful update with changed plugins, the final report reminds you to
 restart to activate them, including when the core version also changed.
 
@@ -1181,9 +1185,9 @@ Managed update handoffs preserve the selected artifact, including already-curren
 repeats, so target checks use that artifact's database schema and runtime requirements.
 
 For source checkouts, `--dry-run` previews the update flow without fetching Git
-refs or checking working-tree changes. The real update checks for uncommitted
-changes before modifying the checkout. Use `openclaw update status` to inspect
-the current branch, version, and update availability.
+refs or building a release. A real update builds and validates a separate release
+worktree. It leaves the source checkout's files and `HEAD` unchanged.
+Use `openclaw update status` to inspect the current branch, version, and update availability.
 
 <Note>
 In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disabled. Update the Nix source or flake input for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start). `openclaw update status` remains read-only. `openclaw update --dry-run` previews the flow without changing the installation. It records a skipped run only when the profile already has a runtime database.
@@ -1210,6 +1214,22 @@ freshness or dependencies. Those checks run when you apply the update; use
 | ----------------------- | ------- | ------------------------------------------------------------ |
 | `--timeout <seconds>`   | Unset   | Optional overall update budget in seconds.                   |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
+
+## `update plugins`
+
+Plugin maintenance for the release this command runs from: channel sync, plugin
+updates and repair, the same work `openclaw update` does after a core update. On a
+Git install, `openclaw update` runs it from the new release before the restart, so
+the new core chooses its plugins, and from the serving release when the checkout is
+already current. A plugin problem is reported as a warning and never fails the update;
+`openclaw plugins update` retries it. You do not normally run this command yourself.
+
+| Flag                    | Default  | Description                                |
+| ----------------------- | -------- | ------------------------------------------ |
+| `--channel <channel>`   | Required | Update channel the plugins follow.         |
+| `--timeout <seconds>`   | Required | Budget for plugin maintenance in seconds.  |
+| `--accept-capabilities` | `false`  | Accept reviewed plugin capability changes. |
+| `--json`                | `false`  | Print the result as JSON.                  |
 
 ## Detailed topics
 
@@ -1239,7 +1259,7 @@ freshness or dependencies. Those checks run when you apply the update; use
 - <a id="git-checkout-flow"></a>[Git checkout flow](/cli/update/how-updates-run#git-checkout-flow)
 - <a id="channel-selection"></a>[Channel selection](/cli/update/how-updates-run#channel-selection)
 - <a id="update-steps"></a>[Update steps](/cli/update/how-updates-run#update-steps)
-  - <a id="verify-clean-worktree"></a>[Verify clean worktree](/cli/update/how-updates-run#verify-clean-worktree)
+  - <a id="verify-clean-worktree"></a>[Inspect the source and serving release](/cli/update/how-updates-run#verify-clean-worktree)
   - <a id="resolve-the-target"></a>[Resolve the target](/cli/update/how-updates-run#resolve-the-target)
   - <a id="build-a-candidate"></a>[Build a candidate](/cli/update/how-updates-run#build-a-candidate)
   - <a id="validate-the-candidate"></a>[Validate the candidate](/cli/update/how-updates-run#validate-the-candidate)

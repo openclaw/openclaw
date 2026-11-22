@@ -40,27 +40,22 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
-import {
-  formatUpdateOwedStep,
-  listUpdateOwedSteps,
-  selectUpdateOwedSteps,
-  UPDATE_OWED_STEP_HISTORY,
-  type UpdateOwedStep,
-} from "../../infra/update-run-owed-step.js";
-import { listUpdateRunsAsync, type getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
+import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { withArtifactPreservingStateSnapshot } from "../../state/openclaw-state-inspection-snapshot.js";
 import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
 
 async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
   try {
@@ -129,7 +124,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
       () =>
         scope.run(() =>
-          withArtifactPreservingStateReads(() =>
+          withArtifactPreservingStateSnapshot(scope.signal, () =>
             inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
           ),
         ),
@@ -147,23 +142,13 @@ async function inspectUpdateStatus(
   checkTimeoutMs: number | undefined,
 ): Promise<void> {
   const inspectionErrors: { section: string; message: string }[] = [];
-  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatus>> & {
-    owedSteps?: UpdateOwedStep[];
-  };
+  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>;
   let retainedRunStatus: RunStatus | undefined;
-  const readUpdateRunStatusWithOwedSteps = async (): Promise<RunStatus> => {
-    const status = await readUpdateRunStatus();
+  const readRunStatus = async (): Promise<RunStatus> => {
     // Keep completed history if optional enrichment outlives either enclosing deadline race.
-    retainedRunStatus = status;
-    if (!("lastRun" in status) || !status.lastRun) {
-      return status;
-    }
-    // An earlier run can still owe a step after a later one replaced it as the last run.
-    const owedSteps = await listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
-      selectUpdateOwedSteps,
-      () => [],
-    );
-    retainedRunStatus = owedSteps.length ? { ...status, owedSteps } : status;
+    retainedRunStatus = await readUpdateRunStatusWithOwedSteps((status) => {
+      retainedRunStatus = status;
+    });
     return retainedRunStatus;
   };
   const deadline = performance.now() + timeoutMs;
@@ -201,11 +186,9 @@ async function inspectUpdateStatus(
     () =>
       withUpdateDatabaseEngine(process.env, () =>
         Promise.all([
-          inspect<Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>>(
-            "update history",
-            readUpdateRunStatusWithOwedSteps,
-            { runStatusError: "Update history inspection unavailable" },
-          ),
+          inspect<RunStatus>("update history", readRunStatus, {
+            runStatusError: "Update history inspection unavailable",
+          }),
           inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
             "recovery sets",
             () => readUpdateRecoverySetStatus(),
@@ -667,12 +650,26 @@ async function inspectUpdateStatus(
       }
       if (abandonedRun) {
         defaultRuntime.log(
-          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
+      // A refused restart on a Gateway that is not responding has a recovery verified against
+      // the live service just now; name it as the next step, not as saved triage advice.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "unavailable"
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
+            )
+          : undefined;
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
+        refusedRestartRecovery
+          ? { nextAction: refusedRestartRecovery }
+          : run.status === "failed"
+            ? { currentHealth: currentRunHealth }
+            : {},
       );
       const historical =
         currentRunHealth?.kind === "responding"

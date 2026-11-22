@@ -20,6 +20,11 @@ const hooks = vi.hoisted(() => ({
   choice: vi.fn(),
   activate: vi.fn<typeof SetupExecution.activateGatewaySetupInference>(),
   admission: vi.fn(),
+  catalog: vi.fn(),
+}));
+vi.mock("./models-list-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-list-result.js")>()),
+  buildModelsListResult: hooks.catalog,
 }));
 vi.mock("../../commands/models/auth.js", () => ({ runModelsAuthLoginFlowForGateway: hooks.login }));
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
@@ -257,6 +262,51 @@ describe("models.authLogin ownership", () => {
     },
   );
 
+  it.each([
+    { primary: undefined, selects: true },
+    { primary: "other/chosen", selects: false },
+  ])(
+    "a credential-only sign-in selects the account's recommended model only without a primary ($primary)",
+    async ({ primary, selects }) => {
+      const h = harness(primary ? { agents: { defaults: { model: { primary } } } } : {});
+      hooks.catalog.mockResolvedValue({
+        models: [
+          { provider: "local", id: "model", name: "Local", available: true, recommended: true },
+          { provider: "fixture", id: "first", name: "First", available: true },
+          { provider: "fixture", id: "best", name: "Best", available: true, recommended: true },
+        ],
+      });
+      hooks.activate.mockResolvedValue({
+        ok: true,
+        modelRef: "fixture/best",
+        modelName: "Best",
+        latencyMs: 1,
+        lines: [],
+      });
+      await h.invoke("models.authLogin", {
+        sessionId: "login",
+        authChoice: "fixture/fixture-device",
+        selectModel: true,
+      });
+      const terminal = await h.next();
+      expect(terminal).toMatchObject({ done: true, status: "done" });
+      if (selects) {
+        expect(hooks.activate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "saved-auth:fixture%3Aowner",
+            modelRef: "fixture/best",
+            selectModel: true,
+          }),
+        );
+        expect(terminal.modelActivation).toEqual({ modelRef: "fixture/best", modelName: "Best" });
+      } else {
+        expect(hooks.catalog).not.toHaveBeenCalled();
+        expect(hooks.activate).not.toHaveBeenCalled();
+        expect(terminal.modelActivation).toBeUndefined();
+      }
+    },
+  );
+
   it("returns the recovery message without the error class name through wizard.next", async () => {
     hooks.login.mockRejectedValueOnce(
       Object.assign(new Error("Connection settings changed. Open Model Setup to try again."), {
@@ -279,7 +329,7 @@ describe("models.authLogin ownership", () => {
     expect(await h.next()).toMatchObject({
       done: true,
       status: "error",
-      error: expect.stringMatching(/sign-in was saved.*\/login refresh/),
+      error: expect.stringMatching(/sign-in was saved.*reopen Models/),
     });
     expect(hooks.login).toHaveBeenCalledTimes(1);
   });

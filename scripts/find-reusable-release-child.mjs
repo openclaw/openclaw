@@ -25,7 +25,8 @@ try {
   if (releaseChildSpec(role).workflow !== workflow) {
     throw new Error("Child workflow differs from its release role");
   }
-  // P evaluates current policy; dispatch inputs still come from the frozen Q workflow.
+  // The P verifier evaluates immutable current-Q waiver data; dispatch inputs
+  // still come from the frozen Q workflow.
   const sourcePath = process.env.CHILD_WORKFLOW_DIRECTORY
     ? resolve(process.env.CHILD_WORKFLOW_DIRECTORY, workflow)
     : new URL(`../.github/workflows/${workflow}`, import.meta.url);

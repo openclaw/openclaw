@@ -3394,7 +3394,11 @@ is_installer_git_wrapper() {
     IFS= read -r first < "$wrapper" || return 1
     second="$(sed -n '2p' "$wrapper")"; third="$(sed -n '3p' "$wrapper")"; fourth="$(sed -n '4p' "$wrapper")"
     [[ "$first" == "#!/usr/bin/env bash" && "$second" == "set -euo pipefail" && -z "$fourth" ]] || return 1
-    case "$third" in "exec "*"/dist/entry.js \"\$@\"") return 0 ;; *) return 1 ;; esac
+    # `openclaw update` points a Git install's wrapper at the release launcher.
+    case "$third" in
+        "exec "*"/dist/entry.js \"\$@\"" | "exec "*"/git-install/openclaw-launcher.mjs \"\$@\"") return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 prepare_git_wrapper_backup_for_npm() {
@@ -3937,18 +3941,6 @@ main() {
     OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
-    # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
-    local npm_bin=""
-    npm_bin="$(npm_global_bin_dir || true)"
-    if [[ "$INSTALL_METHOD" == "npm" ]]; then
-        warn_shell_path_missing_dir "$npm_bin" "npm global bin dir"
-    fi
-    if [[ "$INSTALL_METHOD" == "git" ]]; then
-        if [[ -x "$HOME/.local/bin/openclaw" ]]; then
-            warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir (~/.local/bin)"
-        fi
-    fi
-
     local config_present=false defer_success=false
     if has_openclaw_config; then
         config_present=true
@@ -4031,15 +4023,34 @@ main() {
         return 1
     fi
 
+    # Keep caller-shell setup separate from PATH changes in this child process.
+    local shell_bin="" shell_bin_label=""
+    if [[ "$INSTALL_METHOD" == "npm" ]]; then
+        shell_bin="$(npm_global_bin_dir || true)"
+        shell_bin_label="npm global bin dir"
+    elif [[ -x "$HOME/.local/bin/openclaw" ]]; then
+        shell_bin="$HOME/.local/bin"
+        shell_bin_label="user-local bin dir (~/.local/bin)"
+    fi
+    local shell_setup_needed=false
+    if [[ -n "$shell_bin" ]] && ! path_has_dir "$ORIGINAL_PATH" "$shell_bin"; then
+        shell_setup_needed=true
+    fi
+
     local installed_version=""
     installed_version="$(resolve_openclaw_version)"
     echo ""
-    if [[ -n "$installed_version" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        ui_warn "Installed; one shell setup step remains${installed_version:+ (${installed_version})}"
+    elif [[ -n "$installed_version" ]]; then
         ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
     else
         ui_celebrate "🦞 OpenClaw installed successfully!"
     fi
-    if [[ "$is_upgrade" == "true" ]]; then
+    if [[ "$shell_setup_needed" == "true" ]]; then
+        echo "  A piped installer cannot change its parent shell environment."
+        warn_shell_path_missing_dir "$shell_bin" "$shell_bin_label"
+    elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
     else
         local completion_messages=(
