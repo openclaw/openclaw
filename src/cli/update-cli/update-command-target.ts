@@ -435,14 +435,6 @@ export async function resolveUpdateCommandTarget(
           if (switchToPackage && packageInstallTarget.packageRoot) {
             // A switch from Git updates the package destination, which owns this update's
             // lease and publication recovery; the installed target's continuation checks them.
-            // A Gateway service on the Git install is retained and rebound after verification.
-            if (
-              managedServicePlan?.service &&
-              prepared.shouldRestart &&
-              process.platform !== "win32"
-            ) {
-              managedServiceRoot ??= discoveredRoot;
-            }
             root = packageInstallTarget.packageRoot;
             if (!opts.dryRun) {
               await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
