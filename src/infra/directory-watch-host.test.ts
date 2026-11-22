@@ -283,6 +283,39 @@ describe("directory watch host", () => {
     }
   });
 
+  it.runIf(process.platform === "linux").each([
+    [undefined, "1000"],
+    ["0", undefined],
+  ] as const)(
+    "makes the helper the preferred OOM victim unless opted out (%s)",
+    async (optOut, expected) => {
+      const previous = process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+      if (optOut === undefined) {
+        delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+      } else {
+        process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = optOut;
+      }
+      const spawned = vi.spyOn(childProcess, "spawn");
+      syncBuiltinESMExports();
+      const directory = tempDirs.make("directory-watch-oom-");
+      const live = Promise.withResolvers<void>();
+      const watch = watchDirectory(directory, () => live.resolve());
+      try {
+        await live.promise;
+        const helper = spawned.mock.results[0]!.value as childProcess.ChildProcess;
+        const score = fs.readFileSync(`/proc/${helper.pid}/oom_score_adj`, "utf8").trim();
+        expect(score).toBe(expected ?? fs.readFileSync("/proc/self/oom_score_adj", "utf8").trim());
+      } finally {
+        watch.close();
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;
+        } else {
+          process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = previous;
+        }
+      }
+    },
+  );
+
   // A watch close can hold the helper's loop on fseventsd long after its caller is
   // gone. A process that keeps the helper's pipes open models that unread input.
   it.skipIf(Boolean(process.versions.bun) || process.platform === "win32")(

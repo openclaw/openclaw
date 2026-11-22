@@ -29,17 +29,37 @@ const owner = resolveGlobalSingleton(
   },
 );
 
+function resolveProfile(
+  configured: GatewayResourceProfile["configured"],
+  memoryLimitBytes: number,
+): Pick<GatewayResourceProfile, "profile" | "reason"> {
+  if (configured !== "auto") {
+    return { profile: configured, reason: "explicit" };
+  }
+  return memoryLimitBytes < LEAN_PROFILE_MEMORY_THRESHOLD_BYTES
+    ? { profile: "lean", reason: "memory" }
+    : { profile: "standard", reason: "capacity" };
+}
+
+/**
+ * The profile startup will resolve for this configured value, for work that must start
+ * before bootstrap publishes it. Reads host memory; publishes nothing.
+ */
+export function predictGatewayResourceProfile(
+  configured: GatewayResourceProfile["configured"] | undefined,
+): ResourceProfile {
+  return resolveProfile(configured ?? "auto", readEffectiveMemoryLimit().memoryLimitBytes).profile;
+}
+
 /** Resolve once at Gateway startup; readers never inspect config or host files. */
 export function initializeGatewayResourceProfile(resources: GatewayConfig["resources"]) {
   const previous = getResourceProfile();
   const configured = resources?.profile ?? "auto";
   const memory = readEffectiveMemoryLimit();
   const cpus = os.availableParallelism();
-  const smallMemory = memory.memoryLimitBytes < LEAN_PROFILE_MEMORY_THRESHOLD_BYTES;
   owner.current = Object.freeze({
     configured,
-    profile: configured === "auto" ? (smallMemory ? "lean" : "standard") : configured,
-    reason: configured !== "auto" ? "explicit" : smallMemory ? "memory" : "capacity",
+    ...resolveProfile(configured, memory.memoryLimitBytes),
     ...memory,
     cpus,
   });
