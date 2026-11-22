@@ -61,7 +61,7 @@ export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: numb
     })
   ) {
     try {
-      root = nodeToJsoncValue(tree, lineForOffset, 0);
+      root = nodeToJsoncValue(tree, parseSource, lineForOffset, 0);
     } catch {
       // Depth-limited values remain unaddressable; raw bytes are retained.
     }
@@ -72,6 +72,7 @@ export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: numb
 
 function nodeToJsoncValue(
   node: JsoncParserNode,
+  source: string,
   lineForOffset: LineForOffset,
   depth: number,
 ): JsoncValue {
@@ -97,7 +98,7 @@ function nodeToJsoncValue(
             {
               key: String(keyNode.value),
               line: lineForOffset(keyNode.offset),
-              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1),
+              value: nodeToJsoncValue(valueNode, source, lineForOffset, depth + 1),
             },
           ];
         }),
@@ -107,13 +108,21 @@ function nodeToJsoncValue(
         kind: "array",
         line,
         items: (node.children ?? []).map((child) =>
-          nodeToJsoncValue(child, lineForOffset, depth + 1),
+          nodeToJsoncValue(child, source, lineForOffset, depth + 1),
         ),
       };
     case "string":
       return { kind: "string", value: String(node.value), line };
-    case "number":
-      return { kind: "number", value: Number(node.value), line };
+    case "number": {
+      const value = Number(node.value);
+      if (!Number.isSafeInteger(value)) {
+        const token = source.slice(node.offset, node.offset + node.length);
+        if (/^-?\d+$/.test(token)) {
+          return { kind: "number", value, integerText: token, line };
+        }
+      }
+      return { kind: "number", value, line };
+    }
     case "boolean":
       return { kind: "boolean", value: Boolean(node.value), line };
     case "null":

@@ -52,6 +52,25 @@ function limitPropertyReads<T extends object>(nodes: Iterable<T>, key: keyof T, 
   }
 }
 
+describe("JSON integer ID lookups", () => {
+  const ids = ["9007199254740992", "9007199254740993", "-9007199254740993"];
+  const rows = ids.map((id) => `{"id":${id}}`);
+  it.each([
+    {
+      file: "ids.jsonc",
+      ast: parseJsonc("\uFEFF[" + rows.join(",") + "]"),
+      slots: ["0", "1", "2"],
+    },
+    { file: "ids.jsonl", ast: parseJsonl(rows.join("\n")), slots: ["L1", "L2", "L3"] },
+  ])("finds and resolves each ID exactly in $file", ({ file, ast, slots }) => {
+    for (const [i, id] of ids.entries()) {
+      const matches = find(ast, `oc://${file}/[id=${id}]/id`);
+      expect(formattedPaths(matches)).toEqual([`oc://${file}/${slots[i]}/id`]);
+      expect(leafValues(matches)).toEqual([id]);
+    }
+  });
+});
+
 describe("empty string keys", () => {
   it.each([
     ["f.json", parseJsonc, '{"":"first","":"old","keep":"unchanged"}', '""'],
