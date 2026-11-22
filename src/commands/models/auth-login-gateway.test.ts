@@ -39,6 +39,15 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
       choiceLabel: "OpenAI API key",
       appGuidedSecret: true,
     },
+    {
+      pluginId: "openai",
+      providerId: "openai",
+      methodId: "oauth",
+      choiceId: "openai",
+      choiceLabel: "Codex login",
+      appGuidedAuth: "device-code",
+      credentialOnly: true,
+    },
   ],
 }));
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
@@ -96,6 +105,16 @@ it("maps normalized API-key method and agent to the exact plugin choice", async 
     authChoice: "openai/openai-api-key",
     agentId: "writer",
   });
+});
+
+it("routes --device-code to the declared device-code sign-in under another method id", async () => {
+  await expect(
+    readGatewayLoginParams(
+      { provider: "openai", method: "device-code" },
+      "login",
+      new AbortController().signal,
+    ),
+  ).resolves.toEqual({ sessionId: "login", authChoice: "openai/openai", agentId: undefined });
 });
 
 it("renders device codes and sends selection answers on the admitted session", async () => {

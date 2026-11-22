@@ -1576,12 +1576,19 @@ moved the package to a new versioned store directory. The updater that is alread
 installed runs these steps, so updates driven by 2026.11.4 or 2026.11.5 do not
 get them.
 
-When 2026.11.4 or 2026.11.5 updates a pnpm install to a release with this fix,
-it still publishes a launcher that points into its removed stage. The new
-package's Doctor, which runs during that update, repairs the launcher. Both of
-those updaters hand the later update steps to the new package, which restarts
-the Gateway on the new version. In test runs this first hop ended with a working
-CLI and Gateway.
+When 2026.11.4, 2026.11.5 or 2026.11.6 updates a pnpm install with a managed
+Gateway service to a release with this fix, it still publishes a launcher that points into its removed stage. The
+new package's Doctor, which runs during that update, repairs the launcher, so the
+`openclaw` command keeps working. These updaters hand the later update steps,
+including the Gateway restart, to the new package only when the update migrates
+the database schema. Otherwise they refuse the restart
+(`service-revalidation-failed`) and leave the Gateway stopped. When the service
+is this installation's own and still names the previous version's package, Doctor
+reports the recovery during that update, and `openclaw update status` and
+`openclaw gateway status --deep` name it afterwards: run
+`openclaw gateway install --force`, then `openclaw gateway restart`.
+`openclaw gateway restart` alone fails in that state, because the service still
+names the previous version's store directory.
 
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher

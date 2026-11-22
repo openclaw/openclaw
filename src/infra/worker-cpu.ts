@@ -56,6 +56,8 @@ type WorkerSource = {
   policy?: WorkerPoolPolicy;
   taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
   workerSlot?: number;
+  /** Live logical endpoints served by this one physical shared worker host. */
+  hostedEndpoints?: () => number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -187,6 +189,14 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   }
   source.postgresBridgeCounters = next;
   publishPostgresBridgeCounters();
+}
+
+/** The shared worker host stays one physical worker; its endpoints add no isolates. */
+export function setTrackedWorkerHostedEndpoints(worker: WorkerCpuHandle, count: () => number) {
+  const source = trackedWorkers.workers.get(worker);
+  if (source) {
+    source.hostedEndpoints = count;
+  }
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
