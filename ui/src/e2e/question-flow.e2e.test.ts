@@ -850,6 +850,14 @@ suite.define(() => {
     await input.setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from("Notes") });
     await remove.waitFor();
     await checkFit();
+    const filename = panel.getByText(name, { exact: true });
+    const label = await filename.boundingBox();
+    const action = await remove.boundingBox();
+    expect(await filename.getAttribute("title")).toBe(name);
+    expect(await filename.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(label!.x + label!.width).toBeLessThan(action!.x);
+    expect(label!.y).toBeGreaterThanOrEqual(action!.y - 1);
+    expect(label!.y + label!.height).toBeLessThanOrEqual(action!.y + action!.height + 1);
     await remove.tap();
     await remove.waitFor({ state: "detached" });
     await checkFit();

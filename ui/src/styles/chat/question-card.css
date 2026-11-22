@@ -602,3 +602,16 @@ openclaw-chat-question-panel {
 .chat-question-panel__resource-actions input[type="file"] {
   min-width: 0;
 }
+
+.chat-question-panel__selected-resource {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-question-panel__selected-resource > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
