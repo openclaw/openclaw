@@ -58,11 +58,7 @@ test("required operator sandbox follows new session ownership across create, pat
     }
     const client = {
       ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
-      connect: {
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        client: { id: "test" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write"]),
       authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     } as never;
     const key = `agent:main:dashboard:role-sandbox-${suffix}`;
@@ -125,11 +121,7 @@ test("operator role agent allowlists protect creation without blocking existing 
     },
   };
   const client = {
-    connect: {
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      client: { id: "test" },
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
     authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as never;
   const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
@@ -355,7 +347,7 @@ test("sessions.create revalidates parent participation before committing a fork 
   const client = {
     authenticatedUserId: "member@example.com",
     authenticatedUserProfile: gatewayProfile("member", "Member"),
-    connect: { role: "operator", scopes: ["operator.write"], client: { id: "test" } },
+    connect: gatewayConnect(["operator.write"]),
   } as never;
   const requestParams = {
     agentId: "main",
