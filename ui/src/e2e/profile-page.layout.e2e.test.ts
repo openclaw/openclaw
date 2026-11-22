@@ -1,6 +1,9 @@
 import { expect } from "playwright/test";
 import { it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Profile account status layout" });
@@ -17,6 +20,54 @@ const profile = {
 };
 
 suite.define(() => {
+  it("scales the profile name and keeps the verified login readable at 140% text", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        const login = "northwest-workshop-documentation-review";
+        await page.addInitScript(
+          (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        );
+        await installMockGateway(page, {
+          presenceUsers: [{ self: true, id: profile.id, name: profile.displayName }],
+          methodResponses: {
+            "users.self": {
+              profile: {
+                ...profile,
+                githubIdentity: { login, profileUrl: "https://github.com/" + login, avatarUrl: "" },
+              },
+            },
+          },
+        });
+        await page.goto(new URL("/settings/profile", suite.server.baseUrl).href);
+        const name = page.locator(".profile-hero__name");
+        await expect(name).toHaveText(profile.displayName);
+        await expect.soft(name).toHaveCSS("font-size", "28px");
+        await expect
+          .soft(page.locator(".identity-emails .identity-account"))
+          .toHaveCSS("font-size", "19.6px");
+        const account = page.getByRole("link", { name: "@" + login, exact: true });
+        await account.focus();
+        await expect(account).toBeFocused();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        expect(
+          await account.evaluate((link) => {
+            const range = document.createRange();
+            range.selectNodeContents(link);
+            const text = range.getBoundingClientRect(),
+              box = link.getBoundingClientRect();
+            return (
+              text.width > 0 &&
+              text.left >= box.left - 1 &&
+              text.right <= box.right + 1 &&
+              text.bottom <= box.bottom + 1
+            );
+          }),
+        ).toBe(true);
+      },
+    );
+  });
   it.each([
     { name: "unavailable", accounts: [] },
     {

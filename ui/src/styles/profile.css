@@ -39,6 +39,11 @@
   min-width: 0;
 }
 
+/* Linked emails are values; linked OpenClaw IDs in descriptions inherit the description size. */
+.settings-row__control .identity-emails {
+  font-size: var(--control-ui-text-md);
+}
+
 /* Refresh stays beside the subtitle, which wraps first on narrow columns. */
 .content-header--settings:has(> .page-header-actions .profile-refresh) {
   flex-wrap: nowrap;
@@ -93,7 +98,7 @@
 .profile-hero__name {
   max-width: 100%;
   overflow-wrap: anywhere;
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1.3;
   letter-spacing: -0.015em;
@@ -204,13 +209,10 @@
   text-align: start;
 }
 
-/* A handle reads as plain text in the meta line; a long one truncates, full handle in its title. */
+/* Keep a short login beside its status; let a long one wrap within the row. */
 .identity-github-login {
-  overflow: hidden;
   max-width: 100%;
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .identity-github-login:hover {
