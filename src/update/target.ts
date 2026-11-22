@@ -11,6 +11,10 @@ import { fetchGitUpdateTarget, selectChannelTag } from "../infra/update-runner-g
 import type { RunStepOptions } from "../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
 
 export type UpdateTarget =
   | { kind: "git"; checkout: string; sha: string; version: string }
@@ -77,6 +81,7 @@ export async function resolveTarget(params: {
           spec,
           version: packed.metadata.version,
           engines: manifest.engines ?? {},
+          schemaVersions: parsePackageOpenClawSchemaVersions(manifest),
         };
       });
     }
@@ -86,7 +91,13 @@ export async function resolveTarget(params: {
     if (!selected.version) {
       throw new Error(selected.error ?? "No release is available for this channel.");
     }
-    return { kind: "package", spec: `openclaw@${selected.version}`, version: selected.version };
+    return {
+      kind: "package",
+      spec: `openclaw@${selected.version}`,
+      version: selected.version,
+      engines: selected.metadata?.nodeEngine ? { node: selected.metadata.nodeEngine } : undefined,
+      schemaVersions: selected.metadata?.schemaVersions,
+    };
   }
   if (!params.checkout) {
     throw new Error("Git updates require a checkout.");

@@ -2,11 +2,21 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { satisfies } from "semver";
+import {
+  captureTargetDatabaseSchemaContext,
+  checkTargetDatabaseSchemasForContexts,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "../cli/update-cli/schema-preflight.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
 import type { UpdateTarget } from "./target.js";
 
 export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
@@ -146,6 +156,8 @@ export async function preflight(params: {
       }
     }
     let engine: string | undefined;
+    let schemaVersions: OpenClawSchemaVersions | undefined =
+      params.target.kind === "package" ? params.target.schemaVersions : undefined;
     if (params.target.kind === "package" && params.target.engines) {
       engine = params.target.engines.node;
     } else {
@@ -166,6 +178,9 @@ export async function preflight(params: {
         metadata.stdout || "{}",
       );
       engine = params.target.kind === "git" ? parsed.engines?.node : parsed.node;
+      if (params.target.kind === "git") {
+        schemaVersions = parsePackageOpenClawSchemaVersions(parsed);
+      }
     }
     const node = params.node ?? process.execPath;
     const runtime = await runCommandWithTimeout([node, "--version"], {
@@ -181,6 +196,14 @@ export async function preflight(params: {
         "node-engine-mismatch",
         `The new release requires Node ${engine ?? "(unavailable)"}; the service uses ${runtime.stdout.trim() || node}. Upgrade the service's Node and retry.`,
       );
+    }
+    if (schemaVersions) {
+      reason = "database-schema-preflight";
+      const context = await captureTargetDatabaseSchemaContext(env);
+      const schemas = await checkTargetDatabaseSchemasForContexts(schemaVersions, [context]);
+      if (hasSchemaRefusal(schemas)) {
+        return refuse(reason, formatSchemaRefusalLines(schemas).join("\n"));
+      }
     }
     reason = "disk-space-unavailable";
     const statfs = params.statfs ?? fs.statfs;

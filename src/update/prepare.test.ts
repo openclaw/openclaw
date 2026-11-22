@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -56,7 +57,12 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function repository(failBuild = false, engine = ">=1", releaseAware = false) {
+async function repository(
+  failBuild = false,
+  engine = ">=1",
+  releaseAware = false,
+  schemaVersions?: OpenClawSchemaVersions,
+) {
   const source = path.join(root, "source");
   const bare = path.join(root, "remote.git");
   const checkout = path.join(root, "checkout");
@@ -72,6 +78,7 @@ async function repository(failBuild = false, engine = ">=1", releaseAware = fals
       version: "2026.11.21",
       engines: { node: engine },
       scripts: { build: "node build.cjs", "ui:build": "node ui.cjs" },
+      ...(schemaVersions ? { openclaw: { schemaVersions } } : {}),
     }),
   );
   await fs.writeFile(path.join(source, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
