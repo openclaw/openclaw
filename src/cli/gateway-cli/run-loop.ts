@@ -543,6 +543,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
           }
         }
       }
+      gatewayLog.info("restart mode: full process restart (supervisor restart)");
       updateSuccessor.commit(true);
       return finishLoopAfterCleanup(respawn.exitCode ?? 0);
     }
@@ -580,9 +581,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     reportBudget: (budget) => {
       reportedBudget = budget;
     },
-    onTimeout: () => {
-      cleanup.retain(forceExitAfterStabilityBundle("gateway.restart_startup_request_timeout"));
-    },
+    onTimeout: () =>
+      cleanup.retain(forceExitAfterStabilityBundle("gateway.restart_startup_request_timeout")),
   });
 
   const runAcceptedRequest = (acceptedRequest: GatewayRunSignalRequest) => {

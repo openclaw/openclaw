@@ -22,6 +22,7 @@ import {
   resetRuntimeServiceMocks,
   runtimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
+import * as startupPlugins from "./server-startup-plugins.js";
 
 // mock-isolation: Scheduler tests must not start channel or transcript repair lifetimes.
 vi.mock("./server-startup-plugins.js", () => ({
@@ -69,6 +70,48 @@ describe("post-ready maintenance scheduling", () => {
       await scheduler.stop();
       sweep.mockRestore();
       startCleanup.mockRestore();
+      platform.mockRestore();
+    }
+  });
+
+  it("waits for cron startup before optional maintenance when registration deadlines differ", async () => {
+    const platform = mockProcessPlatform("darwin");
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler({
+      ...clock.clock,
+      monotonicNow: clock.clock.now,
+    });
+    const schedule = scheduler.schedule.bind(scheduler);
+    vi.spyOn(scheduler, "schedule").mockImplementationOnce((params) => {
+      const task = schedule(params);
+      // Let registration cross a clock tick before the later idle tasks are scheduled.
+      clock.setTime(1);
+      return task;
+    });
+    const cronReady = createDeferredCore();
+    const cron = { start: vi.fn(() => cronReady.promise) };
+    vi.mocked(startupPlugins.runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        delayMs: 1_000,
+        cronState: createTestCronState(cron),
+      }),
+    );
+    try {
+      clock.setTime(1_000);
+      await clock.wake();
+      expect(startupPlugins.runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      await clock.advanceTo(1_001);
+      expect(cron.start).toHaveBeenCalledOnce();
+      expect(startupPlugins.runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      cronReady.resolve();
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(startupPlugins.runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      cronReady.resolve();
+      await scheduler.stop();
       platform.mockRestore();
     }
   });

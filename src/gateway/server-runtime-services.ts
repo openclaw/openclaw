@@ -123,6 +123,65 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     getQueueSize(CommandLane.Background) > 0 ||
     getQueueSize(CommandLane.RestartRecovery) > 0 ||
     getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+  // Admit startup before idle work can report settlement. Separate registrations
+  // can get different deadlines; the existing root-work fence must cover cron first.
+  params.scheduler.schedule({
+    id: "startup:maintenance",
+    delayMs: params.delayMs,
+    run: () => {
+      if (params.isClosing()) {
+        return undefined;
+      }
+      return runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          await params.waitForPostReadyWork();
+          if (params.isClosing() || params.signal.aborted) {
+            return;
+          }
+          try {
+            // Registration must not wait for optional globally idle maintenance.
+            params.scheduleSessionFactsBackfill?.(
+              params.startupMaintenance.startupSessionDatabases,
+            );
+            if (!params.isClosing()) {
+              const maintenance = await params.startMaintenance();
+              if (params.isClosing()) {
+                // Startup may publish maintenance after shutdown has already fenced new work.
+                await clearGatewayMaintenanceHandles(maintenance);
+              } else if (maintenance) {
+                await params.applyMaintenance(maintenance);
+              }
+            }
+          } catch (err) {
+            params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
+          }
+          if (!params.isClosing() && params.shouldStartCron()) {
+            params.markCronStartHandled();
+            startGatewayCronWithLogging({
+              cronState: params.cronState,
+              cronReconciliation: params.cronReconciliation,
+              reason: "startup",
+              config: params.cronConfig,
+              logCron: params.logCron,
+            });
+          }
+          if (!params.isClosing()) {
+            params.recordPostReadyMemory();
+          }
+        },
+        "runtime:maintenance",
+        params.signal,
+      ).catch((err: unknown) => {
+        const ownedCancellation =
+          params.signal.aborted &&
+          (err === params.signal.reason ||
+            (err instanceof Error && err.cause === params.signal.reason));
+        if (!ownedCancellation) {
+          params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`);
+        }
+      });
+    },
+  });
   const idle = {
     scheduler: params.scheduler,
     delayMs: params.delayMs,
@@ -189,63 +248,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
           });
         },
       );
-    },
-  });
-  params.scheduler.schedule({
-    id: "startup:maintenance",
-    delayMs: params.delayMs,
-    run: () => {
-      if (params.isClosing()) {
-        return undefined;
-      }
-      return runWithGatewayIndependentRootWorkAdmission(
-        async () => {
-          await params.waitForPostReadyWork();
-          if (params.isClosing() || params.signal.aborted) {
-            return;
-          }
-          try {
-            // Registration must not wait for optional globally idle maintenance.
-            params.scheduleSessionFactsBackfill?.(
-              params.startupMaintenance.startupSessionDatabases,
-            );
-            if (!params.isClosing()) {
-              const maintenance = await params.startMaintenance();
-              if (params.isClosing()) {
-                // Startup may publish maintenance after shutdown has already fenced new work.
-                await clearGatewayMaintenanceHandles(maintenance);
-              } else if (maintenance) {
-                await params.applyMaintenance(maintenance);
-              }
-            }
-          } catch (err) {
-            params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
-          }
-          if (!params.isClosing() && params.shouldStartCron()) {
-            params.markCronStartHandled();
-            startGatewayCronWithLogging({
-              cronState: params.cronState,
-              cronReconciliation: params.cronReconciliation,
-              reason: "startup",
-              config: params.cronConfig,
-              logCron: params.logCron,
-            });
-          }
-          if (!params.isClosing()) {
-            params.recordPostReadyMemory();
-          }
-        },
-        "runtime:maintenance",
-        params.signal,
-      ).catch((err: unknown) => {
-        const ownedCancellation =
-          params.signal.aborted &&
-          (err === params.signal.reason ||
-            (err instanceof Error && err.cause === params.signal.reason));
-        if (!ownedCancellation) {
-          params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`);
-        }
-      });
     },
   });
 }
