@@ -50,26 +50,6 @@ import {
 import { readPluginCohortRecoveryPairRows } from "./update-run-recovery-store.js";
 import { finishUpdateRun } from "./update-run-write.js";
 
-const sqliteBoundaryHooks = vi.hoisted(() => ({ injectConversionFailure: false }));
-
-// Injects journal-conversion failures at the SQLite boundary so the real restore
-// owner and credential recovery path stay under test.
-vi.mock("node:sqlite", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:sqlite")>();
-  class BoundaryDatabaseSync extends actual.DatabaseSync {
-    override prepare(...args: Parameters<InstanceType<typeof actual.DatabaseSync>["prepare"]>) {
-      if (
-        sqliteBoundaryHooks.injectConversionFailure &&
-        String(args[0]).includes("journal_mode = WAL")
-      ) {
-        throw new Error("injected sqlite-boundary conversion failure");
-      }
-      return super.prepare(...args);
-    }
-  }
-  return { ...actual, DatabaseSync: BoundaryDatabaseSync };
-});
-
 async function createRestoreFixture(
   state: OpenClawTestState,
   linked = false,
@@ -283,7 +263,18 @@ it("completes credential rebinding when journal reconciliation fails", async () 
       });
       const fixture = await createRestoreFixture(state);
       const reportedFailures: string[][] = [];
-      sqliteBoundaryHooks.injectConversionFailure = true;
+      // Spy on the shared native prototype so createRequire-based SQLite owners
+      // see the failure without replacing the real restoration boundary.
+      const prepare = DatabaseSync.prototype.prepare;
+      const fault = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        ...args: Parameters<DatabaseSync["prepare"]>
+      ) {
+        if (args[0].includes("journal_mode = WAL")) {
+          throw new Error("injected sqlite-boundary conversion failure");
+        }
+        return prepare.apply(this, args);
+      });
       try {
         const displaced = await restoreUpdateDatabaseBackup({
           backup: fixture.backup,
@@ -306,7 +297,7 @@ it("completes credential rebinding when journal reconciliation fails", async () 
           restored.prepare("SELECT socket_token FROM native_exec_socket_credentials").all(),
         ).toEqual([{ socket_token: "synthetic-before-update" }]);
       } finally {
-        sqliteBoundaryHooks.injectConversionFailure = false;
+        fault.mockRestore();
         await fixture.close();
       }
     },
