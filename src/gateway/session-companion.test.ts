@@ -485,6 +485,26 @@ it("times out a pending context read and fences it from a replacement ask", asyn
   }
 });
 
+it("delivers an answer after the old one-minute deadline and keeps runner stalls retryable", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const harness = createHarness();
+  harness.run.mockImplementationOnce(async () => {
+    await vi.advanceTimersByTimeAsync(75_000);
+    return { meta: { durationMs: 75_000, finalAssistantVisibleText: answer } };
+  });
+  try {
+    await expectAnswer(harness.ask("Which pull requests?"));
+    expectSaved(harness.service, "Which pull requests?");
+  } finally {
+    vi.useRealTimers();
+  }
+  harness.run.mockResolvedValueOnce({
+    meta: { durationMs: 1, modelFallbackStopReason: "idle_timeout_circuit_breaker" },
+  });
+  await expectFailure(harness.ask("Another?"), "timeout");
+  expectSaved(harness.service, "Which pull requests?");
+});
+
 it("keeps the RPC source and busy slot through timed-out execution cleanup, then permits retry", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const harness = createHarness();
@@ -518,6 +538,9 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
     const internalTarget = { agentId, sessionId, sessionKey, storePath };
     expect(loadExactSessionEntry(internalTarget)).toBeDefined();
     await vi.advanceTimersByTimeAsync(60_000);
+    // An executing answer crosses the old wall-clock limit; the runner monitors stalls.
+    expect(run.abortSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(run.abortSignal?.aborted).toBe(true);
     // A deadline cancels execution, but must not retire its source facts before settlement.
     expect(() => run.preparedRunAdmission?.assertSourceCurrent()).not.toThrow();
@@ -549,7 +572,7 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
   }
 });
 
-it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
+it.each(["stop", "reset", "backing-reset", "disposal", "request-abort"] as const)(
   "%s cancels an active ask without committing its late result",
   async (cause) => {
     const pending = createDeferredCore<string>();
@@ -568,6 +591,7 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     await harness.ask("What is already known?");
     const active = harness.ask("Will a disconnected request commit?", {
       signal: controller.signal,
+      askId: "active-ask",
     });
     await awaitGateBeforeSettlement(
       started.promise,
@@ -576,7 +600,12 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     );
     expect(harness.run).toHaveBeenCalledTimes(2);
 
-    if (cause === "reset") {
+    if (cause === "stop") {
+      harness.service.reset({ ...target, cancelAskId: "old-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(false);
+      harness.service.reset({ ...target, cancelAskId: "active-ask" });
+      expect(harness.run.mock.calls[1]?.[1].runParams.abortSignal?.aborted).toBe(true);
+    } else if (cause === "reset") {
       harness.service.reset(target);
     } else if (cause === "backing-reset") {
       notifyGatewaySessionReset(target.sessionKey, target.agentId);
@@ -587,8 +616,15 @@ it.each(["reset", "backing-reset", "disposal", "request-abort"] as const)(
     }
     pending.resolve("late answer");
 
-    await expectFailure(active, cause === "backing-reset" ? "context-unavailable" : "unavailable");
-    if (cause === "request-abort") {
+    await expectFailure(
+      active,
+      cause === "backing-reset"
+        ? "context-unavailable"
+        : cause === "stop"
+          ? "stopped"
+          : "unavailable",
+    );
+    if (cause === "request-abort" || cause === "stop") {
       expectSaved(harness.service, "What is already known?", "existing answer");
     } else {
       expectEmpty(harness.service);

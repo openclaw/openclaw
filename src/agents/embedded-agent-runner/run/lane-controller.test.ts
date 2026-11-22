@@ -63,6 +63,7 @@ import { claimAgentSessionWriter } from "./session-bootstrap.js";
 // mock-isolation: Deadline and custody tests exercise raw work without durable writer admission.
 vi.mock("./session-bootstrap.js", () => ({
   claimAgentSessionWriter: vi.fn(async () => undefined),
+  claimRunProviderState: vi.fn(() => undefined),
 }));
 
 beforeEach(() => {

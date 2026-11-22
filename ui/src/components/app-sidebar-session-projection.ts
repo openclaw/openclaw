@@ -227,11 +227,12 @@ export class SidebarSessionProjection {
         this.#rosterPresentation.readRevision(
           () => [rosterSnapshot.cards],
           () =>
-            rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+            rosterSnapshot.cards.map(({ id, name, avatar, textAvatar, assistantPreview }) => [
               id,
               name,
               avatar,
               textAvatar,
+              assistantPreview,
             ]),
           sameSidebarPresentation,
         ),
@@ -537,7 +538,6 @@ export class SidebarSessionProjection {
       }
       observed.add(session.key);
       staleKeys.delete(session.key);
-      this.children.observe(session, input.listLoaded);
       this.#observeSubtitle(session, input.subtitle);
       pending.push(...session.children);
     }

@@ -137,6 +137,7 @@ export const SessionCompanionExchangeSchema = closedObject({
 
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
+  askId: Type.Optional(NonEmptyString),
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
@@ -172,10 +173,11 @@ export const SessionsCompanionStateResultSchema = closedObject({
   defaultModel: Type.Optional(NonEmptyString),
 });
 
-/** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject(
-  SessionsCompanionStateParamsSchema.properties,
-);
+/** Without cancelAskId clear the thread; with it stop only that question. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  ...SessionsCompanionStateParamsSchema.properties,
+  cancelAskId: Type.Optional(NonEmptyString),
+});
 
 export const SessionsCompanionResetResultSchema = closedObject({
   ok: Type.Literal(true),

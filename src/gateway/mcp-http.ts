@@ -299,7 +299,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   admittedRunContext: boundClientGrant.admittedRunContext,
                   receiptAuthority: isGrantAndLineageCurrent,
                   receiptAdmission: lineage.admission,
-                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
+                  approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
                   // Management binding needs the admitted identity, not execution's issuer.
                   mintCronRequesterGrant:
                     phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,

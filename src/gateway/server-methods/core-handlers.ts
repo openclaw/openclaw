@@ -180,7 +180,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./mcp-app-extensions.js").then((module) => module.mcpAppExtensionHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
-  update: () => import("./update.js").then((module) => module.updateHandlers),
+  update: () => import("./update-run.js").then((module) => module.routedUpdateHandlers),
   "update-handoff-sentinel": () =>
     import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),

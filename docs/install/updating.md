@@ -1047,6 +1047,17 @@ updater must contain this fix; without it the retry is refused as an
 uninspectable destination until the link is moved back by hand. No journal,
 schema, or protocol change is involved.
 
+Update cleanup retires the pre-migration `.databases` snapshot directory of an
+earlier update once a later update is verified successful. It finds a snapshot
+only through the location that update recorded in update history, including one
+under a previous install root, and deletes nothing an unfinished update or a
+pending recovery owns. This includes the snapshots that older updaters left in a
+Git checkout's `.artifacts` directory. Update history holds no usable location for
+a checkout outside the home directory; those snapshots stay. A verified update's own retained snapshot waits for the
+next verified update. The installed updater or Gateway that finishes the later
+update must contain this change; no schema, journal, or protocol change is
+involved.
+
 ### Migration integrity checks
 
 Cold update-history bookkeeping verifies shared-state integrity before acquiring
@@ -1274,6 +1285,15 @@ replacing the package. The refusal names each database with its schema hop and
 the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
 terminal, then rerun `openclaw update`. Updates that need no migration still
 run while it serves.
+
+Updates stop Gateways, not node services. The update Doctor needs exclusive
+access to `state/openclaw.sqlite`, and a running node host service using the
+same state directory keeps that database open. The update then refuses before
+it stops the Gateway or changes anything, naming the database and the node
+service PID. Run `openclaw node stop`, rerun `openclaw update`, then run
+`openclaw node start`. The installed updater must contain this check. Older
+updaters fail in Doctor with `database is locked` and refuse rollback; run
+`openclaw node stop`, then `openclaw update repair`, then `openclaw node start`.
 
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
@@ -1562,20 +1582,29 @@ and the package transaction restores the previous launchers. A launcher format
 the updater cannot read only produces a warning with repair guidance. A pnpm
 package update also restarts the Gateway on the new version even though pnpm
 moved the package to a new versioned store directory. The updater that is already
-installed runs these steps, so updates driven by 2026.11.4 or 2026.11.5 do not
-get them.
+installed runs these steps, so updates driven by 2026.11.4, 2026.11.5 or
+2026.11.6 do not get them.
 
-When 2026.11.4 or 2026.11.5 updates a pnpm install to a release with this fix,
-it still publishes a launcher that points into its removed stage. The new
-package's Doctor, which runs during that update, repairs the launcher. Both of
-those updaters hand the later update steps to the new package, which restarts
-the Gateway on the new version. In test runs this first hop ended with a working
-CLI and Gateway.
+When 2026.11.4, 2026.11.5 or 2026.11.6 updates a pnpm install with a managed
+Gateway service to a release with this fix, it still publishes a launcher that points into its removed stage. The
+new package's Doctor, which runs during that update, repairs the launcher, so the
+`openclaw` command keeps working. These updaters hand the later update steps,
+including the Gateway restart, to the new package only when the update migrates
+the database schema. Otherwise they refuse the restart
+(`service-revalidation-failed`) and leave the Gateway stopped. When the service
+is this installation's own and still names the previous version's package, Doctor
+reports the recovery during that update, and `openclaw update status` and
+`openclaw gateway status --deep` name it afterwards: run
+`openclaw gateway install --force`, then `openclaw gateway restart`.
+`openclaw gateway restart` alone fails in that state, because the service still
+names the previous version's store directory.
 
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher
 whose `cmd-shim-target` names this installation and whose stage directory is
-gone. This automatic repair runs on macOS and Linux only; on Windows, use the
+gone. Only a launcher owned by the account running the repair is rewritten, and
+set-ID bits are not kept; another account's launcher is left unchanged and
+reported with the reinstall command. This automatic repair runs on macOS and Linux only; on Windows, use the
 reinstall steps below. If the Gateway is also down and no new code has run yet, reinstall the same version
 with `pnpm add -g --allow-build=openclaw openclaw@<installed-version>` using the same account and global
 directories, then run `openclaw gateway install --force` and
@@ -2182,11 +2211,15 @@ Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
 
-The helper can refuse when retained launcher evidence is missing. In one
-report, the 2026.10.5 helper refused a 2026.9.33 `publication-complete` journal
-whose anchor held only `previous`, with `ENOENT` on
-`<anchor>/launchers`. No supported procedure covers that layout yet. Preserve
-the journal, anchor, and retained generation, and report the exact output.
+On Homebrew Node installs, `brew cleanup` (which Homebrew also runs periodically
+after `brew install` and `brew upgrade`) removes dangling symlinks and empty
+directories below its prefix. That deletes the relative launcher copies retained
+in `<anchor>/launchers` and `<anchor>/previous-launchers`, leaving an anchor that
+holds only `previous`. Older updaters and helpers refuse that layout with
+`ENOENT` on `<anchor>/launchers` ([#197910](https://github.com/openclaw/openclaw/issues/197910)).
+Repair now settles it: settlement never republishes those copies, so an absent
+launcher root is accepted, while a present one must still match its recorded
+identity. The live launchers and all other checks below are still required.
 
 If publication never started and the previous package is still installed, repair
 verifies its full tree fingerprint and unchanged launchers under the same device
@@ -2603,9 +2636,15 @@ Managed systemd or launchd updates can stop the Gateway before an intermediate
 notice is delivered. The complete four-message sequence is not guaranteed for
 those installations; the durable run report remains available after reconnect.
 
-Runs with an internal origin session, including Control UI and webchat, receive
-these notices directly in that session's transcript. Passing only `sessionKey`
-is enough; the caller does not need to supply `deliveryContext`.
+For updates requested from a Control UI or desktop conversation, the app shows
+progress and the result in a persistent top-right notification instead of
+appending update messages to the conversation. The notification reconnects to the
+existing run after a Gateway restart. Dismiss the result or open Settings → Updates
+for the full report. Native mobile and other chat clients keep their current delivery.
+
+Other runs with an internal origin session receive these notices in that session’s
+transcript. Passing only `sessionKey` is enough; the caller does not need to
+supply `deliveryContext`.
 Before stopping the managed service, the updater waits for the serving Gateway
 to finish its restart notice attempt. That wait is capped at 10 seconds so a
 stalled notice cannot block activation.
@@ -2773,7 +2812,8 @@ and protected or unknown artifacts remain. It is not a substitute for a
 [Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
 resuming interrupted deletion.
 Private package, command-shim, and Git runtime backups remain owned by the update
-transaction and are outside this migration cleanup. An interrupted entry in update
+transaction and are outside this migration cleanup. Their pre-migration database
+snapshot directories are retired once a later update is verified successful. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.
 
 ## After updating

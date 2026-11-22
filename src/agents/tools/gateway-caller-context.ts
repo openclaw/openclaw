@@ -435,56 +435,29 @@ export function resolveGatewayPersonalToolParticipant(
   return undefined;
 }
 
-/** Capture the admitted run and worker owner, independently of optional audit collection. */
+/** Admission checked authority; a started tool call only honors Stop and the session-store write fences. */
 export function captureGatewayToolCallerAssertion(
-  boundMethod?: string,
+  _boundMethod?: string,
 ): ((method?: string) => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
   }
-  const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
-  const selection = caller.personalToolIdentityScoped
-    ? resolveGatewayToolOperatorSelection()
-    : undefined;
-  const assertMethod = (method?: string) => {
-    if (method?.startsWith("cron.") && caller.cronAuthorityCheck?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+  const assertNotStopped = () => {
+    for (const signal of signals) {
+      signal.throwIfAborted();
     }
   };
-  const assertCurrent = composeSessionSourceAssertion(
-    [
-      selection?.assertCurrent,
-      // Selection already checks its exact operator source in this synchronous guard.
-      selection?.operatorAuthority === caller.operatorAuthority
-        ? undefined
-        : caller.operatorAuthority?.assertCurrent,
-      composeSessionSourceAssertion(
-        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
-        (assertReceipt) => {
-          try {
-            if (!isCurrent || signals.some((signal) => signal.aborted)) {
-              throw new Error("agent tool caller authority is no longer active");
-            }
-            assertReceipt();
-          } catch {
-            throw new Error("agent tool caller authority is no longer active");
-          }
-        },
-      ),
-    ],
+  // Prepared writes still run the receipt's session fences; the synchronous call checks Stop only.
+  const fences = composeSessionSourceAssertion(
+    caller.receiptAuthority ? [captureGatewayToolReceiptAssertion(caller.receiptAuthority)] : [],
     (assertSources) => {
+      assertNotStopped();
       assertSources();
-      assertMethod(boundMethod);
     },
   );
-  return Object.assign((method = boundMethod) => {
-    assertCurrent();
-    if (method !== boundMethod) {
-      assertMethod(method);
-    }
-  }, assertCurrent);
+  return Object.assign(assertNotStopped, fences);
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -37,7 +37,6 @@ import { gitHubPublicApi } from "./github-public-api.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import { retainGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 import {
@@ -60,7 +59,6 @@ import {
 } from "./server.auth.test-helpers.js";
 import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -229,12 +227,10 @@ const GITHUB_RATE_LIMITED_ERROR = {
   retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
 };
 
-test.each(["config", "config-revocation", "profile", "profile-revocation"] as const)(
+test.each(["config", "profile"] as const)(
   "renews the current person-timeline claim after committed %s changes",
   async (publication) => {
-    const configPublication = publication === "config" || publication === "config-revocation";
-    const revokeAcceptedWork =
-      publication === "config-revocation" || publication === "profile-revocation";
+    const configPublication = publication === "config";
     const roles: GatewayOperatorRolesConfig = {
       default: "member",
       definitions: {
@@ -254,21 +250,17 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
     let accepted = false;
     let revoked = false;
     const handler: GatewayRequestHandler = async (options) => {
-      let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
       let unbind = () => {};
       try {
         if (!options.client) {
           throw new Error("expected the authenticated WebSocket caller and owned effect");
         }
-        // Preserve the dispatcher's bound options; plugin adapters clone their input.
-        authority = retainGatewayRequestMutationAuthority(options);
         unbind = onGatewayPolicyClientInvalidated(options.client as GatewayWsClient, () => {
           revoked = true;
         });
         accepted = true;
         entered.resolve();
         await release.promise;
-        authority.assertCurrent();
         writeFileSync(effectPath, "committed", { flag: "wx", mode: 0o600 });
         options.respond(true, { completed: true });
         completed.resolve({ ok: true });
@@ -278,7 +270,6 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
         throw error;
       } finally {
         unbind();
-        authority?.release();
       }
     };
     const descriptor = createPluginGatewayMethodDescriptor({
@@ -377,30 +368,10 @@ test.each(["config", "config-revocation", "profile", "profile-revocation"] as co
             const replacement = await connect({ scopes: ["operator.sessions.write"] }, headers);
             expectScopes(replacement.connected, ["operator.sessions.write"]);
             expect(responseAuth(replacement.connected)?.profileActivityViewerId).toBe(person.id);
-            if (revokeAcceptedWork) {
-              // A later real authority loss must still reach the request retained after transport close.
-              if (configPublication) {
-                await patchRoles({
-                  ...roles,
-                  definitions: { ...roles.definitions, member: roles.definitions.denied! },
-                });
-              } else {
-                setUserProfileRole(person.id, "denied");
-              }
-              expect(revoked).toBe(true);
-            }
             release.resolve();
             const outcome = await completed.promise;
-            if (revokeAcceptedWork) {
-              expect(outcome).toMatchObject({
-                ok: false,
-                error: expect.any(SessionMutationAuthorizationChangedError),
-              });
-              expect(existsSync(effectPath)).toBe(false);
-            } else {
-              expect(outcome).toEqual({ ok: true });
-              expect(readFileSync(effectPath, "utf8")).toBe("committed");
-            }
+            expect(outcome).toEqual({ ok: true });
+            expect(readFileSync(effectPath, "utf8")).toBe("committed");
           } finally {
             release.resolve();
             if (accepted) {

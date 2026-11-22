@@ -469,6 +469,19 @@ describe("personal model account CLI over an identified Gateway connection", () 
     );
   });
 
+  it("forwards the shipped --method device-code alias for the Gateway to resolve", async () => {
+    await withAuthGateway({ status: () => connected }, async ({ port, requests }) => {
+      await modelsAccountsLoginCommand(
+        { port, provider: "openai", method: "device-code" },
+        runtime(),
+      );
+      expect(requestData(requests)).toContainEqual(
+        authRpc("start", { profileId: PROFILE_ID, provider: "openai", method: "device-code" }),
+      );
+      expectNoPrompt();
+    });
+  });
+
   it("rejects non-TTY sign-in without consuming input", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
     await expect(modelsAccountsLoginCommand({ provider: "openai" }, runtime())).rejects.toThrow(

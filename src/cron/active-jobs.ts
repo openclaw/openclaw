@@ -4,15 +4,9 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
-import {
-  composeSessionSourceAssertion,
-  prepareSessionSourceAuthority,
-  type SessionSourceAssertion,
-} from "../config/sessions/session-source-authority.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import type { ReplyOperationObservation } from "../sessions/reply-operation-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
@@ -22,7 +16,6 @@ type CronActiveJobState = {
     {
       context: AdmittedRunContext;
       assertActive: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
-      signal: AbortSignal;
     }
   >;
   generation: number;
@@ -39,125 +32,8 @@ export function bindCronJobAdmittedRun(
 ): void {
   const assertActive = resolveAdmittedRunActiveAssertion(context, signal);
   if (marker && assertActive && isCronActiveJobMarkerCurrent(marker)) {
-    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive, signal });
+    getCronActiveJobState().admittedJobRuns.set(marker, { context, assertActive });
   }
-}
-
-/** Capture occurrence authority once; subsequent uses keep cancellation and source ownership. */
-function captureCronJobMessageAuthority(
-  params: {
-    jobId: string;
-    operationalRunInstance: OperationalRunInstanceRef;
-  },
-  sourceSensitive: boolean,
-): SessionSourceAssertion | undefined {
-  const { jobId } = params;
-  const marker = getCurrentCronActiveJobMarker(jobId);
-  const isAuthorityCurrent = sourceSensitive
-    ? marker?.isMessageSourceAuthorityCurrent
-    : marker?.isMessageActionAuthorityCurrent;
-  if (!marker || !isAuthorityCurrent) {
-    return undefined;
-  }
-  const { instanceId, runId } = params.operationalRunInstance;
-  const { admittedJobRuns } = getCronActiveJobState();
-  let owner: ReturnType<typeof admittedJobRuns.get>;
-  const isMarkerCurrent = () => !marker.jobRemoved && marker.cancellation?.kind !== "requested";
-  const inactive = () => new Error("cron message action authority is no longer active");
-  if (!isAuthorityCurrent()) {
-    throw inactive();
-  }
-  const readOwner = () => {
-    const admitted = admittedJobRuns.get(marker);
-    if (
-      !isMarkerCurrent() ||
-      !admitted ||
-      admitted.context.operationalRunInstance.instanceId !== instanceId ||
-      admitted.context.operationalRunInstance.runId !== runId ||
-      (owner !== undefined && admitted !== owner)
-    ) {
-      throw inactive();
-    }
-    owner ??= admitted;
-    return owner;
-  };
-  // The occurrence binds its admitted run after this capability is created.
-  const source = Object.assign(() => readOwner().assertActive(), {
-    prepareSessionSource: () => prepareSessionSourceAuthority(readOwner().assertActive),
-  });
-  return composeSessionSourceAssertion([source], (assertSource) => {
-    readOwner();
-    assertSource();
-    marker.standingGrantAuthority?.assertCurrent();
-  });
-}
-
-export function captureCronJobMessageActionAuthority(params: {
-  jobId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-}) {
-  return captureCronJobMessageAuthority(params, false);
-}
-
-export function captureCronJobMessageSourceAuthority(params: {
-  jobId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-}) {
-  return captureCronJobMessageAuthority(params, true);
-}
-
-/** Source restoration belongs to one occurrence; returns whether it has removed itself. */
-export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | undefined {
-  const marker = getCurrentCronActiveJobMarker(jobId);
-  const owner = marker?.standingGrantAuthority;
-  if (!marker || !owner) {
-    return undefined;
-  }
-  return () => {
-    if (
-      (marker.jobRemoved && !isCronSelfRemovalCurrent(marker)) ||
-      marker.cancellation?.kind === "requested"
-    ) {
-      throw new Error("Cron occurrence source authority is no longer active");
-    }
-    owner.assertCurrent();
-    return marker.jobRemoved === true;
-  };
-}
-
-export function captureCronJobStandingGrantAuthority(params: {
-  jobId: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-}): CronStandingGrantAuthority | undefined {
-  const marker = getCurrentCronActiveJobMarker(params.jobId);
-  const receipt = marker?.standingGrantAuthority;
-  if (!marker || !receipt) {
-    return undefined;
-  }
-  const { instanceId, runId } = params.operationalRunInstance;
-  const { admittedJobRuns } = getCronActiveJobState();
-  let owner: ReturnType<typeof admittedJobRuns.get>;
-  const assertCurrent = () => {
-    const admitted = admittedJobRuns.get(marker);
-    if (
-      marker.jobRemoved ||
-      marker.cancellation?.kind === "requested" ||
-      !admitted ||
-      admitted.context.operationalRunInstance.instanceId !== instanceId ||
-      admitted.context.operationalRunInstance.runId !== runId ||
-      (owner !== undefined && admitted !== owner)
-    ) {
-      throw new Error("Cron standing-grant occurrence is no longer active");
-    }
-    owner ??= admitted;
-    owner.assertActive();
-    receipt.assertCurrent();
-  };
-  return {
-    context: receipt.context,
-    handle: { ...receipt.handle },
-    assertCurrent,
-  };
 }
 
 /** Captures host-owned admission; neither a copied token nor a same-id run can redeem it. */
@@ -212,7 +88,6 @@ export function bindCronSelfRemovalCommitGuard(
 
 export type CronActiveJobMarker = {
   jobId: string;
-  standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
   sessionKey?: string;
   stateIdentityKey?: string;
@@ -223,8 +98,6 @@ export type CronActiveJobMarker = {
     | { kind: "requested"; reason: string };
   scheduleMutated?: true;
   triggerMutated?: true;
-  isMessageActionAuthorityCurrent?: () => boolean;
-  isMessageSourceAuthorityCurrent?: () => boolean;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
   selfRemovalAccepted?: true;
@@ -307,8 +180,6 @@ export function markCronJobActive(
     sessionKey?: string;
     stateIdentityKey?: string;
     preserveAcrossGenerationAdvance?: boolean;
-    isMessageActionAuthorityCurrent?: () => boolean;
-    isMessageSourceAuthorityCurrent?: () => boolean;
   },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
@@ -322,12 +193,6 @@ export function markCronJobActive(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.sessionKey ? { sessionKey: opts.sessionKey } : {}),
     ...(opts?.stateIdentityKey ? { stateIdentityKey: opts.stateIdentityKey } : {}),
-    ...(opts?.isMessageActionAuthorityCurrent
-      ? { isMessageActionAuthorityCurrent: opts.isMessageActionAuthorityCurrent }
-      : {}),
-    ...(opts?.isMessageSourceAuthorityCurrent
-      ? { isMessageSourceAuthorityCurrent: opts.isMessageSourceAuthorityCurrent }
-      : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),

@@ -29,7 +29,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -119,7 +119,7 @@ function createReloader(
   return { reloader, write };
 }
 
-type AcceptedRun = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+type AcceptedRun = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
 function admittedDispatcher(
   context: ReturnType<typeof createGatewayTestContext>,
   client: ReturnType<typeof createOperatorWsClient>,
@@ -130,7 +130,7 @@ function admittedDispatcher(
     buildRequestContext: () => context,
     extraHandlers: {
       wake: async (options) => {
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client: options.client,
           context,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,
@@ -203,7 +203,7 @@ it("commits model-only role changes without retiring permitted models or origina
       }),
       requestRecoveryRestart,
     });
-    let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let original: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
     try {

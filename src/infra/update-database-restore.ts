@@ -10,6 +10,7 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -17,7 +18,9 @@ import {
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
@@ -25,6 +28,8 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
+import { enableSqliteWalJournalMode } from "./sqlite-wal.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -122,6 +127,29 @@ async function withDatabaseExclusion<T>(
   return outcome.value;
 }
 
+/**
+ * Converts one restored database image back to the journal mode its path
+ * resolves to. Snapshots are single DELETE-journal files by design; leaving a
+ * restored database in rollback-journal mode makes the next update's
+ * maintenance lease fail sqlite-busy against the updater's own readers and
+ * rolls the same failure forward on every retry. The client credential store
+ * is excluded by the caller: its exclusive custody design requires DELETE
+ * mode. Throws so per-file failures stay collectable by the restore owner.
+ */
+async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
+  if (resolvePathJournalPolicy(databasePath) !== "wal") {
+    return;
+  }
+  // The caller retains database exclusion; reuse native admission and the WAL
+  // owner without starting long-lived checkpoint maintenance for this handle.
+  const database = openNodeSqliteDatabase(databasePath);
+  try {
+    enableSqliteWalJournalMode(database, 0, { databasePath });
+  } finally {
+    database.close();
+  }
+}
+
 /** The caller owns a settled failed candidate that has never admitted user work. */
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
@@ -132,6 +160,13 @@ export async function restoreUpdateDatabaseBackup(params: {
   pluginCohortRecovery?: PluginCohortRecoveryBinding;
   /** Fires before the first live database changes; a failure before it left them untouched. */
   onLiveMutation?: () => void;
+  /**
+   * Receives recoverable journal-policy reconciliation failures after credential
+   * rebinding completes. The databases are restored either way, so callers report
+   * these separately from state restoration instead of failing the rollback or
+   * blocking Gateway restart.
+   */
+  onJournalReconciliationFailures?: (failures: readonly string[]) => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -346,7 +381,37 @@ export async function restoreUpdateDatabaseBackup(params: {
           await output.publish();
           assertOwned();
         }
+        // Snapshot images are single DELETE-journal files by design, so restored
+        // databases come back in rollback-journal mode. Re-establish the journal
+        // mode each path resolves to while the exclusion window still keeps every
+        // other holder out; leaving DELETE behind makes the next update's
+        // maintenance lease fail sqlite-busy against the updater's own readers and
+        // rolls the same failure forward on every retry. The client credential
+        // store is excluded: its exclusive custody design requires DELETE mode.
+        // Journal reconciliation is recoverable: credential rebinding below always
+        // completes first, and failures surface through
+        // onJournalReconciliationFailures instead of failing the published
+        // restoration or blocking Gateway restart.
+        const credentialStorePath = resolvePathViaExistingAncestorSync(
+          resolveClientCredentialStorePath(params.env),
+        );
+        const journalModeFailures: string[] = [];
+        for (const entry of sources) {
+          assertOwned();
+          if (entry.path === credentialStorePath) {
+            continue;
+          }
+          try {
+            await reestablishRestoredDatabaseJournalMode(entry.path);
+          } catch (error) {
+            journalModeFailures.push(`${entry.path}: ${formatErrorMessage(error)}`);
+          }
+        }
         restoreClientCredentials?.();
+        assertOwned();
+        if (journalModeFailures.length > 0) {
+          params.onJournalReconciliationFailures?.(journalModeFailures);
+        }
         assertOwned();
         return displaced;
       },

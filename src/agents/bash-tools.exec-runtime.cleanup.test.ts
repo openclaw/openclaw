@@ -2,7 +2,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { readBackgroundProcesses } from "./bash-process-observation.js";
 import type { ProcessSession } from "./bash-process-registry.js";
@@ -87,7 +87,7 @@ function createExecOperatorSource(profileId = "exec-guest") {
   const controller = new AbortController();
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes: ["operator.write"],
     signal: controller.signal,

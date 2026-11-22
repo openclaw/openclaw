@@ -117,11 +117,6 @@
   }
 }
 
-/* Child rows keep their hierarchy indent on the logical side so RTL dots stay on the axis. */
-.shell--mobile-nav .sidebar-session-tree__children {
-  margin-inline: calc(var(--sidebar-lead) + 5px) 0;
-}
-
 .shell--mobile-nav .sidebar-recent-sessions__head {
   padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
 }
