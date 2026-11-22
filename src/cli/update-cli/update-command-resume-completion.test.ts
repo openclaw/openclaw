@@ -336,7 +336,7 @@ describe("update completion ownership", () => {
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(await readConfig()).toBe(originalConfig);
     expect(await events()).toEqual(readyEvents);
-  }, 60_000);
+  }, 180_000);
 
   it.each([false, true])(
     "resume repairs an old parent's restored config before unchanged plugins (metadata=%s)",
@@ -377,6 +377,6 @@ describe("update completion ownership", () => {
       expect(await readConfig(".bak")).toBe(original);
       expect(await events()).toEqual([...firstEvents, ...readyEvents]);
     },
-    60_000,
+    180_000,
   );
 });

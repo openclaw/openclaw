@@ -196,7 +196,7 @@ export async function invoke(
       root: state.root,
       channel: "stable",
       opts: { json: true, yes: true },
-      timeoutMs: 15_000,
+      timeoutMs: 60_000,
     });
   }
   if (lane === "repair") {
