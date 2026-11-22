@@ -83,22 +83,19 @@ export function projectRequesterForProfile(
 
 /**
  * Background runs act for the operator that drove them (effective scopes, including
- * membership caps, and the admitted role's project grant). Without one they fall back
+ * membership caps, plus that person's live project grant). Without one they fall back
  * to the creator's live role; runs with neither (owner, cron, unlinked channels) stay internal.
  */
 export function resolveRunProjectRequester(
   cfg: OpenClawConfig,
   spawnedBy: {
     profileId?: string;
-    operatorAuthority?: {
-      readonly scopes: readonly string[];
-      readonly rolePolicy?: { readonly projects?: ProjectGrant };
-    };
+    operatorAuthority?: { readonly profileId: string; readonly scopes: readonly string[] };
   },
 ): ProjectRequester {
   const authority = spawnedBy.operatorAuthority;
   if (authority) {
-    return operatorProjectRequester(authority.scopes, () => authority.rolePolicy?.projects);
+    return projectRequesterForProfile(cfg, authority.scopes, authority.profileId);
   }
   const policy = spawnedBy.profileId
     ? resolveOperatorRolePolicyForProfile(spawnedBy.profileId, cfg)

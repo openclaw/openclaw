@@ -175,32 +175,28 @@ describe("project access", () => {
         ...guest,
         projects: ["openclaworg"],
       });
-      // Removing the grant from the live role denies the creator's next spawn.
-      const revoked = structuredClone(roles);
-      delete (revoked.definitions.guest as { projects?: unknown }).projects;
-      expect(
-        resolveRunProjectRequester({ gateway: { roles: revoked } } as OpenClawConfig, {
-          profileId: profile.id,
-        }),
-      ).toEqual(guest);
-      // The admitted operator's effective scopes (membership caps included) and
-      // prepared role grant win over the creator's live role.
-      expect(
-        resolveRunProjectRequester(cfg, {
-          profileId: profile.id,
-          operatorAuthority: { scopes: ["operator.sessions.write"], rolePolicy: { projects: "*" } },
-        }),
-      ).toEqual({ ...guest, projects: "*" });
+      // Grants are read live: removing one denies the creator's next spawn.
+      const revokedCfg = structuredClone(roleCfg);
+      delete revokedCfg.gateway!.roles!.definitions.guest!.projects;
+      expect(resolveRunProjectRequester(revokedCfg, { profileId: profile.id })).toEqual(guest);
+      // The admitted operator's effective scopes (membership caps included) win over the
+      // role, while its project grant follows that person's current role.
+      const operatorAuthority = { profileId: profile.id, scopes: ["operator.sessions.write"] };
+      expect(resolveRunProjectRequester(roleCfg, { operatorAuthority })).toEqual({
+        ...guest,
+        projects: ["openclaworg"],
+      });
+      expect(resolveRunProjectRequester(revokedCfg, { operatorAuthority })).toEqual(guest);
       expect(
         resolveRunProjectRequester(roleCfg, {
           profileId: profile.id,
-          operatorAuthority: { scopes: [] },
+          operatorAuthority: { profileId: profile.id, scopes: [] },
         }),
-      ).toEqual({ kind: "operator", scopes: [] });
-      // Full-access runs never carry a grant.
+      ).toEqual({ kind: "operator", scopes: [], projects: ["openclaworg"] });
+      // Full-access runs never consult their role.
       expect(
-        resolveRunProjectRequester(cfg, {
-          operatorAuthority: { scopes: ["operator.write"], rolePolicy: { projects: "*" } },
+        resolveRunProjectRequester(roleCfg, {
+          operatorAuthority: { profileId: profile.id, scopes: ["operator.write"] },
         }),
       ).toEqual(maintainer);
       // Owner, cron and unlinked runs carry no role and stay Gateway-internal.

@@ -365,7 +365,7 @@ With live configuration reload enabled, edits to `gateway.roles` (including
 GitHub login assignments) and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
 Gateway clients reconnect to receive the current scope ceiling, except for changes
-confined to model policies as described below and identity-scope edits that leave
+confined to model policies as described below, project grants, and identity-scope edits that leave
 an operator WebSocket login’s resolved grant set unchanged. Editing another login
 or reordering the same scopes preserves that connection, its accepted runs, and
 queued inputs. Changing its own resolved grants revokes retained and delegated
@@ -457,8 +457,11 @@ spawns, and inherited child checkouts. When the grant is the only reason a
 caller can use a project, the Gateway always creates an isolated managed
 worktree, even if the request asks for the current checkout. Grants do not
 extend folder browsing, `cwd`, `projectGitUrl`, or `projects.searchRemote`.
-Unknown or removed project IDs are ignored. Removing a grant denies new
-sessions, spawns, and inherited checkouts; existing checkouts are kept.
+Unknown or removed project IDs are ignored. Grant edits apply to the next
+request without reconnecting clients or stopping runs: background runs read the
+driving person's current grant when they spawn or inherit a checkout. Removing a
+grant denies new sessions, spawns, and inherited checkouts; existing checkouts
+are kept.
 Agent-workspace projects remain governed by `agents`.
 
 ```json5

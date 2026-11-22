@@ -10,11 +10,11 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
     return undefined;
   }
   // Keep the durable JSON shape while readers derive restrictions from current policy.
+  // Model policies and project grants are read live, so editing them retires no authority.
   return {
     sessions: role.sessions,
     agents: role.agents,
     scopes: role.scopes,
-    ...(role.projects !== undefined ? { projects: role.projects } : {}),
     ...(role.workerProfiles !== undefined ? { workerProfiles: role.workerProfiles } : {}),
     ...(role.accessPrograms
       ? { accessPrograms: { cyber: [...new Set(role.accessPrograms.cyber)].toSorted() } }

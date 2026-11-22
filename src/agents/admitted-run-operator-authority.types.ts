@@ -60,8 +60,6 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
     sandboxRequired: boolean;
     agents: "*" | readonly string[];
-    /** Registered projects granted beyond public repositories. */
-    projects?: "*" | readonly string[];
     accessPrograms?: Readonly<{
       cyber: ReadonlyArray<
         NonNullable<GatewayOperatorRoleDefinition["accessPrograms"]>["cyber"][number]
