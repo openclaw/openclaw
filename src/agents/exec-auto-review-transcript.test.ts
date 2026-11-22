@@ -1,13 +1,17 @@
+import path from "node:path";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as loggingConfig from "../logging/config.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildExecAutoReviewTranscript,
   createAdmittedTurnReviewTranscript,
 } from "./exec-auto-review-transcript.js";
+import { buildAgentRunBlockedUserMessage } from "./harness/before-agent-run.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const user = (content: string, metadata: Record<string, unknown> = {}): AgentMessage =>
@@ -349,19 +353,30 @@ describe("buildExecAutoReviewTranscript", () => {
 });
 
 describe("createAdmittedTurnReviewTranscript", () => {
-  it("gives the reviewer no turn when its transcript write was blocked", () => {
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "Send the synthetic report.", senderIsOwner: true },
-      target: {
+  it("gives the reviewer no turn when the run was blocked", async () =>
+    withOpenClawTestState({ label: "exec-review-blocked-turn" }, async (state) => {
+      const target = {
         agentId: "main",
         sessionId: "review-session",
         sessionKey: "agent:main:review",
-        storePath: "/nonexistent/sessions.json",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
         sessionEntry: undefined,
-      },
-    });
-    recorder.markBlocked();
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "Send the synthetic report.", senderIsOwner: true },
+        target,
+      });
+      await recorder.persistBlocked(
+        buildAgentRunBlockedUserMessage("review-run", {
+          message: "Blocked by the synthetic policy.",
+          blockedBy: "synthetic-policy",
+        }),
+      );
+      expect(recorder.getPersistedMessage?.()?.content).toEqual([
+        { type: "text", text: "Blocked by the synthetic policy." },
+      ]);
 
-    expect(createAdmittedTurnReviewTranscript(recorder)?.()).toBeUndefined();
-  });
+      expect(createAdmittedTurnReviewTranscript(recorder)?.()).toBeUndefined();
+    }));
 });
