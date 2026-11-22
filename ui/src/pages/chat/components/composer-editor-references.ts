@@ -17,10 +17,11 @@ export function mountReferenceComposerEditor(
   nativeHistory?: ComposerMentionSnapshot,
   avatarUrls?: ReadonlyMap<string, string>,
   forTransfer = false,
-  editingAt?: number,
+  editingValue?: string,
   previousInput?: ComposerMentionSnapshot,
 ) {
   const people = readHumanMentions(input.value, mentions()) ?? [];
+  const editingAt = editingValue === input.value ? input.selectionStart : undefined;
   if (
     !forTransfer &&
     !people.length &&

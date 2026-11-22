@@ -17,62 +17,57 @@ export function createReferenceComposerBinding(
     const native = new AbortController();
     let composing = false;
     let editingSkillValue: string | undefined;
-    let nativeEdit: InputEvent | undefined;
     let entryHistory:
       | import("../../pages/chat/components/composer-editor-mentions.tsx").ComposerMentionSnapshot
       | undefined;
     let previousInput: typeof entryHistory;
-    let feature:
-      | typeof import("../../pages/chat/components/composer-editor-references.ts")
+    const loader = createIdleImport(
+      () => import("../../pages/chat/components/composer-editor-references.ts"),
+    );
+    let editor:
+      | ReturnType<
+          typeof import("../../pages/chat/components/composer-editor-references.ts").mountReferenceComposerEditor
+        >
       | undefined;
-    let editor: ReturnType<NonNullable<typeof feature>["mountReferenceComposerEditor"]> | undefined;
-    let readSkills:
-      | typeof import("../chat/skill-references.ts").readComposerSkillReferences
+    let skillProbe:
+      | ReturnType<typeof import("../chat/skill-references.ts").createNativeSkillProbe>
       | undefined;
-    let stopCatalog: (() => void) | undefined;
     const skillsLoader = createIdleImport(
       () => import("../chat/skill-references.ts"),
       (module) => {
-        readSkills = module.readComposerSkillReferences;
-        stopCatalog = module.subscribeSlashCommands(requestActivation);
+        skillProbe = module.createNativeSkillProbe(node, requestActivation, native.signal);
+        requestActivation();
       },
     );
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
-    const editingAt = () =>
-      (nativeEdit?.inputType === "insertText" && !nativeEdit.defaultPrevented) ||
-      editingSkillValue === node.value
-        ? node.selectionStart
-        : undefined;
-    // A transfer mounts for its own insertion, which the editor's history then owns.
-    function activate(forTransfer = false) {
-      if (!native.signal.aborted && !composing && feature) {
-        editor = feature.mountReferenceComposerEditor(
-          node,
-          getMentions,
-          application,
-          entryHistory,
-          avatarUrls,
-          forTransfer,
-          editingAt(),
-          previousInput,
-        );
-        if (!editor) {
-          return;
+    // Both admissions and recipient transfers share the one deferred handoff.
+    async function activate(forTransfer = false) {
+      try {
+        const feature = await loader.load();
+        if (!native.signal.aborted && !composing) {
+          editor = feature.mountReferenceComposerEditor(
+            node,
+            getMentions,
+            application,
+            entryHistory,
+            avatarUrls,
+            forTransfer,
+            editingSkillValue,
+            previousInput,
+          );
+          if (editor) {
+            entryHistory = previousInput = undefined;
+            editingSkillValue = undefined;
+            native.abort();
+            skillsLoader.dispose();
+            skillProbe?.dispose();
+            skillProbe = undefined;
+          }
         }
-        entryHistory = previousInput = undefined;
-        nativeEdit = undefined;
-        // Retire only after a successful handoff; a failed mount keeps native editing.
-        native.abort();
-        stopActivation();
-        stopCatalog?.();
+      } catch {
+        // Optional decoration failed to load; keep the usable native draft.
       }
     }
-    const loader = createIdleImport(
-      () => import("../../pages/chat/components/composer-editor-references.ts"),
-      (module) => {
-        feature = module;
-      },
-    );
     const snapshot = () => ({
       value: node.value,
       mentions: mentions(),
@@ -98,58 +93,30 @@ export function createReferenceComposerBinding(
       "input",
       (event) => {
         if (!composing) {
+          skillProbe?.input(event);
+          // Capture the applied edit before controlled-input listeners reconcile it.
           editingSkillValue = event.inputType === "insertText" ? node.value : undefined;
-          nativeEdit = undefined;
           // Keep both sides until the lazy feature can distinguish a skill
           // insertion from a literal dollar followed by a person query.
           previousInput = entryHistory;
-          if (!readSkills?.(node.value).length) {
+          if (!skillProbe?.hasReferences()) {
             entryHistory = snapshot();
           }
           requestActivation();
         }
       },
-      { signal: native.signal },
+      { capture: true, signal: native.signal },
     );
-    listen(
-      node,
-      "selectionchange",
-      () => {
-        if (!composing) {
-          requestActivation();
-        }
-      },
-      { signal: native.signal },
-    );
-    // One observer follows the native port before and after rich-editor activation.
-    // Both attributes and feature metadata reconcile through the same owner.
+    // One observer follows the native port; the parser watches its own caret and catalog.
     function requestActivation() {
       if (editor) {
         editor.sync();
-      } else if (!composing && (mentions().length || node.value.includes("$"))) {
-        void loadAndActivate();
-      }
-    }
-    async function loadAndActivate() {
-      try {
-        if (!mentions().length) {
-          const skills = await skillsLoader.load();
-          if (
-            native.signal.aborted ||
-            composing ||
-            (!mentions().length &&
-              !skills.readComposerSkillReferences(node.value, editingAt()).length)
-          ) {
-            return;
-          }
+      } else if (!composing) {
+        if (mentions().length || skillProbe?.hasReferences(editingSkillValue)) {
+          void activate();
+        } else if (!skillProbe && node.value.includes("$")) {
+          void skillsLoader.load().catch(() => undefined);
         }
-        // Only admitted references need the rich editor. Literal dollars may
-        // load the small parser, never CodeMirror. Await also keeps widget
-        // roots outside the Solid apply phase after a module has loaded.
-        await loader.load();
-        activate();
-      } catch {
-        // Optional decoration failed to load; keep the usable native draft.
       }
     }
     const stopActivation = registerComposerActivation(node, requestActivation);
@@ -167,12 +134,7 @@ export function createReferenceComposerBinding(
         return;
       }
       event.preventDefault();
-      try {
-        await loader.load();
-        activate(true);
-      } catch {
-        // Handled below: the transfer still arrives, as plain text.
-      }
+      await activate(true);
       if (editor) {
         editor.transfer(copied.text, copied.raw, drop);
       } else if (!native.signal.aborted) {
@@ -206,9 +168,7 @@ export function createReferenceComposerBinding(
       node,
       "beforeinput",
       (event) => {
-        // Native input listeners can run microtasks between callbacks. An owner
-        // echo must already know this is typing before our input callback runs.
-        nativeEdit = event;
+        skillProbe?.beforeInput(event);
         const copied = dropped;
         dropped = undefined;
         if (event.inputType === "insertFromDrop") {
@@ -248,7 +208,7 @@ export function createReferenceComposerBinding(
       editor?.destroy();
       loader.dispose();
       skillsLoader.dispose();
-      stopCatalog?.();
+      skillProbe?.dispose();
     };
   });
 }

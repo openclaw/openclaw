@@ -1,7 +1,11 @@
 import { findMarkdownCodeRegions } from "../../../../packages/markdown-core/src/markdown-code-regions.js";
-import { getSkillDisplayName, SLASH_COMMANDS } from "./commands.ts";
+import { listen } from "../reactive/listener.ts";
+import { getSkillDisplayName, SLASH_COMMANDS, subscribeSlashCommands } from "./commands.ts";
 
 export { subscribeSlashCommands } from "./commands.ts";
+
+const skillToken = /\$([-a-zA-Z0-9_:]*)/gu;
+const lowerCase = /[a-z]/u;
 
 export type ComposerSkillReference = { start: number; end: number; name: string; label: string };
 
@@ -15,12 +19,12 @@ export function readComposerSkillReferences(
     return [];
   }
   const references: ComposerSkillReference[] = [];
-  for (const match of value.matchAll(/\$([-a-zA-Z0-9_:]+)/gu)) {
+  for (const match of value.matchAll(skillToken)) {
     const name = match[1]!.replace(/:+$/gu, "");
     const start = match.index;
     const end = start + name.length + 1;
     if (
-      !/[a-z]/u.test(name) ||
+      !lowerCase.test(name) ||
       (editingAt !== undefined && start < editingAt && editingAt <= end)
     ) {
       continue;
@@ -54,4 +58,89 @@ export function readComposerSkillReferences(
   return references.filter(
     ({ start }) => !code.some((region) => region.start <= start && start < region.end),
   );
+}
+
+/** Native drafts need only prove absence. Leave any possible reference (even an
+ * unknown name) to the parser, since the caret or catalog may admit it later. */
+export function createNativeSkillProbe(
+  node: HTMLTextAreaElement,
+  requestActivation: () => void,
+  signal: AbortSignal,
+) {
+  const dispose = subscribeSlashCommands(requestActivation);
+  listen(node, "selectionchange", requestActivation, { signal });
+  let inspected: string | undefined;
+  let literalEnd: number | undefined;
+  let insertion: { data: string; start: number; end: number } | undefined;
+
+  function mightHaveReferences() {
+    const value = node.value;
+    if (value !== inspected) {
+      inspected = value;
+      insertion = undefined;
+      literalEnd = -1;
+      for (const match of value.matchAll(skillToken)) {
+        if (lowerCase.test(match[1]!)) {
+          literalEnd = undefined;
+          break;
+        }
+        literalEnd = match.index + match[0].length;
+      }
+    }
+    return literalEnd === undefined;
+  }
+
+  return {
+    dispose,
+    hasReferences(editingValue?: string) {
+      return (
+        mightHaveReferences() &&
+        readComposerSkillReferences(
+          node.value,
+          editingValue === node.value ? node.selectionStart : undefined,
+        ).length > 0
+      );
+    },
+    beforeInput(event: InputEvent) {
+      const { data } = event;
+      const start = node.selectionStart;
+      // The delimiter immediately after the last token must survive the edit.
+      insertion =
+        event.isTrusted &&
+        !event.isComposing &&
+        event.inputType === "insertText" &&
+        data &&
+        !data.includes("$") &&
+        literalEnd !== undefined &&
+        start > literalEnd &&
+        node.value === inspected
+          ? {
+              data,
+              start,
+              end: node.selectionEnd,
+            }
+          : undefined;
+    },
+    input(event: InputEvent) {
+      const value = node.value;
+      if (
+        insertion &&
+        inspected !== undefined &&
+        event.isTrusted &&
+        !event.isComposing &&
+        event.inputType === "insertText" &&
+        event.data === insertion.data &&
+        value.length ===
+          inspected.length + insertion.start - insertion.end + insertion.data.length &&
+        node.selectionStart === insertion.start + insertion.data.length &&
+        // A later beforeinput listener can rewrite the draft without changing its length.
+        value.startsWith(inspected.slice(0, insertion.start)) &&
+        value.startsWith(insertion.data, insertion.start) &&
+        value.endsWith(inspected.slice(insertion.end))
+      ) {
+        inspected = value;
+      }
+      insertion = undefined;
+    },
+  };
 }

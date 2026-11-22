@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   focusComposerInput,
   readComposerEditor,
@@ -38,6 +39,57 @@ function countRecipientReads(text: string, action: () => void) {
 }
 
 afterEach(resetMentionComposerFixture);
+it.each(["positional edit", "controlled rewrite"] as const)(
+  "keeps edits past a shell variable native, then admits a skill after a %s",
+  async (kind) => {
+    const initial = "literal $HOME " + "ordinary prose ".repeat(4600);
+    const f = composerFixture("chat", initial);
+    vi.useRealTimers();
+    const input = f.query("textarea") as HTMLTextAreaElement;
+    focusComposerInput(input);
+    selectComposerInput(input, initial.length, initial.length);
+    await userEvent.keyboard("abc");
+    const middle = initial.indexOf("prose");
+    selectComposerInput(input, middle, middle);
+    await userEvent.keyboard("long ");
+    const edited = initial.slice(0, middle) + "long " + initial.slice(middle) + "abc";
+    f.expectValue(edited);
+    expect(readComposerEditor(input)).toBeUndefined();
+
+    await vi.dynamicImportSettled();
+    replaceSlashCommands([
+      {
+        key: "home",
+        name: "home",
+        description: "Home skill",
+        source: "skill",
+        skillReferenceable: true,
+        skillDisplayName: "Home skill",
+      },
+    ]);
+    onTestFinished(() => replaceSlashCommands(buildFallbackSlashCommands()));
+    if (kind === "controlled rewrite") {
+      selectComposerInput(input, edited.length, edited.length);
+      input.addEventListener(
+        "beforeinput",
+        () => {
+          input.value = edited.replace("$HOME", "$home");
+          input.setSelectionRange(edited.length, edited.length);
+        },
+        { once: true },
+      );
+      await userEvent.keyboard("z");
+      f.expectValue(edited.replace("$HOME", "$home") + "z");
+    } else {
+      const name = edited.indexOf("$HOME") + 1;
+      selectComposerInput(input, name, name + "HOME".length);
+      await userEvent.keyboard("home ");
+      f.expectValue(edited.replace("$HOME", "$home "));
+    }
+    await expect.poll(() => f.query(".chat-composer-skill")?.textContent).toBe("Home skill");
+  },
+);
+
 describe.each(["chat", "new-session"] as const)(
   "%s rich composer controller integration",
   (kind) => {

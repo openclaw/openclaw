@@ -171,7 +171,8 @@ it.each([false, true])(
     selectComposerInput(f.input, f.input.value.length, f.input.value.length);
     await userEvent.keyboard("Use $clawhub");
     expect(f.chip()).toBeNull();
-    await userEvent.keyboard("{Home}");
+    expect(f.input.selectionStart).toBe(f.input.value.length);
+    await userEvent.keyboard("{ArrowLeft}".repeat("$clawhub".length));
     await expect.poll(() => f.chip()?.textContent).toBe("ClawHub");
     if (!rich) {
       expect(undo(f.view())).toBe(true);
@@ -242,7 +243,10 @@ it("reconciles unchanged native and rich drafts when the catalog arrives, rename
 it("maps unaffected skills and invalidates token, escape, command and code changes", async () => {
   const f = fixture("@Alex use $clawhub after", true);
   await expect.poll(f.chip).not.toBeNull();
+  const trailingColons = "$clawhub" + ":".repeat(64);
   const cases = [
+    [trailingColons, trailingColons.length, trailingColons.length, "x"],
+    [trailingColons + "x", trailingColons.length, trailingColons.length + 1, ""],
     ["hello $clawhub after", 0, 0, "please "],
     ["hello $clawhub after", 14, 19, "later"],
     ["$clawhu after", 7, 7, "b"],
@@ -272,11 +276,11 @@ it("maps unaffected skills and invalidates token, escape, command and code chang
 });
 
 it("keeps single-line prose edits local and reparses combined indentation", async () => {
-  const f = fixture("$clawhub " + "ordinary prose ".repeat(5000));
+  const f = fixture("$clawhub ");
   await expect.poll(f.chip).not.toBeNull();
   // Count this extension, not the host's required raw-value publication.
   const state = EditorState.create({
-    doc: f.input.value,
+    doc: "$clawhub " + "a".repeat(65_536),
     extensions: composerSkillExtension(f.input),
   });
   const doc = state.doc;
@@ -286,6 +290,7 @@ it("keeps single-line prose edits local and reparses combined indentation", asyn
       state.update({ changes: { from: doc.length, insert: "x" }, userEvent: "input.type" }).state
         .doc.length,
     ).toBe(doc.length + 1);
+    expect(read.mock.calls.length).toBeLessThanOrEqual(8);
     expect(read.mock.calls.every(([from, to]) => (to ?? doc.length) - from < 100)).toBe(true);
   } finally {
     read.mockRestore();

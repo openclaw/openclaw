@@ -634,6 +634,8 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
     { name: "repeated-skills", mode: "skill", bytes: 65536, action: "type", catalog: 200 },
     { name: "native-short", mode: "native", bytes: 256, action: "type", catalog: 200 },
     { name: "native-long", mode: "native", bytes: 65536, action: "type", catalog: 200 },
+    { name: "native-long-dollar", mode: "native", bytes: 69014, action: "type", catalog: 200 },
+    { name: "person-undo", mode: "person", bytes: 256, action: "undo", catalog: 200 },
     { name: "person-long", mode: "person", bytes: 65536, action: "type", catalog: 200 },
     { name: "skill-long", mode: "skill", bytes: 65536, action: "type", catalog: 200 },
     { name: "mixed-long", mode: "mixed", bytes: 65536, action: "type", catalog: 200 },
@@ -648,6 +650,7 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
       catalog: 200,
     },
     { name: "activate-skill", mode: "native", bytes: 256, action: "activate-skill", catalog: 200 },
+    { name: "first-person", mode: "native", bytes: 256, action: "first-person", catalog: 200 },
     { name: "first-skill", mode: "native", bytes: 256, action: "first-skill", catalog: 200 },
     { name: "literal-dollar", mode: "native", bytes: 256, action: "literal-dollar", catalog: 200 },
     { name: "cycles", mode: "mixed", bytes: 256, action: "cycles", catalog: 200 },
@@ -719,9 +722,11 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
                 .waitFor();
             }
             const prefix =
-              "Synthetic draft line for composer qualification.\n"
-                .repeat(1400)
-                .slice(0, workload.bytes) + "\n";
+              workload.name === "native-long-dollar"
+                ? ("literal $HOME " + "ordinary prose ".repeat(4600)).slice(0, workload.bytes)
+                : "Synthetic draft line for composer qualification.\n"
+                    .repeat(1400)
+                    .slice(0, workload.bytes) + "\n";
             await input(page).fill(prefix);
             if (workload.mode === "person" || workload.mode === "mixed") {
               const text = people.map((person) => "@" + person.displayName).join(" ") + " ";
@@ -855,25 +860,23 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
             } else if (
               workload.action === "activate-person" ||
               workload.action === "activate-skill" ||
+              workload.action === "first-person" ||
               workload.action === "first-skill"
             ) {
-              // Unlike selection-only activation, include the first dollar,
-              // catalog readiness, parser and editor imports in this window.
-              if (workload.action === "first-skill") {
-                await input(page).pressSequentially("$skill_0199");
-                await page
-                  .getByRole("listbox", { name: "Skill references" })
-                  .getByRole("option")
-                  .first()
-                  .waitFor();
-                expected += "$skill_0199";
-              }
-              const person = workload.action === "activate-person";
-              await page
+              const person =
+                workload.action === "activate-person" || workload.action === "first-person";
+              const option = page
                 .getByRole("listbox", { name: person ? "Mention a person" : "Skill references" })
                 .getByRole("option")
-                .first()
-                .click();
+                .first();
+              // Include the trigger and editor loading in first-use measurements.
+              if (workload.action === "first-person" || workload.action === "first-skill") {
+                const query = person ? "@Casey" : "$skill_0199";
+                await input(page).pressSequentially(query);
+                await option.waitFor();
+                expected += query;
+              }
+              await option.click();
               expected = expected.replace(
                 person ? /@Casey$/u : /\$skill_0199$/u,
                 person ? "@Casey 00 " : "$skill_0199 ",
@@ -881,6 +884,9 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
               // Includes lazy fetch settlement equally in both variants; wall time is
               // action-to-network-settled time, never claimed as input latency.
               await page.waitForLoadState("networkidle");
+            } else if (workload.action === "undo") {
+              await input(page).pressSequentially("x");
+              await input(page).press("ControlOrMeta+z");
             } else if (workload.action === "switch") {
               await navigation(page, "sessions");
               for (let cycle = 0; cycle < 21; cycle++) {
@@ -918,7 +924,9 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
               (await page.locator(raw).getAttribute("data-composer-mentions")) ?? "[]",
             ).length;
             const skills = await page.locator(root + " .chat-composer-skill").count();
-            if (persons !== start.persons + Number(workload.action === "activate-person")) {
+            const addedPerson =
+              workload.action === "activate-person" || workload.action === "first-person";
+            if (persons !== start.persons + Number(addedPerson)) {
               throw new Error("Composer qualification lost recipient chips");
             }
             if (

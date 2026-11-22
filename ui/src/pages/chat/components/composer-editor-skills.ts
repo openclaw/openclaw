@@ -1,6 +1,7 @@
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import { createIconElement } from "../../../components/markdown-icon.ts";
+import { SLASH_COMMANDS } from "../../../lib/chat/commands.ts";
 import {
   readComposerSkillReferences,
   subscribeSlashCommands,
@@ -30,7 +31,20 @@ class SkillChip extends WidgetType {
   }
 }
 
-function decorations(value: string, editingAt?: number) {
+const noSkillDecorations = {
+  ranges: Decoration.none,
+  editing: undefined,
+  hasDollar: false,
+  plain: true,
+  images: false,
+  firstContent: -1,
+  maxCommandNameLength: 0,
+};
+
+function decorations(value: string, editingAt?: number, maxCommandNameLength?: number) {
+  if (!value.includes("$")) {
+    return noSkillDecorations;
+  }
   let editing: ComposerSkillReference | undefined;
   const ranges = Decoration.set(
     readComposerSkillReferences(value).flatMap((reference) => {
@@ -45,10 +59,13 @@ function decorations(value: string, editingAt?: number) {
   return {
     ranges,
     editing,
-    hasDollar: value.includes("$"),
+    hasDollar: true,
     plain: !/[`~\t]| {4}/u.test(value),
     images: value.includes("!["),
     firstContent: value.search(/\S/u),
+    maxCommandNameLength:
+      maxCommandNameLength ??
+      SLASH_COMMANDS.reduce((max, command) => Math.max(max, command.name.length), 0),
   };
 }
 
@@ -59,6 +76,9 @@ const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
   update(value, transaction) {
     const refreshed = transaction.effects.find((effect) => effect.is(skillCatalogChanged));
     if (refreshed) {
+      if (!value.hasDollar && !transaction.docChanged) {
+        return value;
+      }
       return decorations(transaction.newDoc.toString(), refreshed.value ?? value.editing?.end);
     }
     if (!transaction.docChanged) {
@@ -118,13 +138,15 @@ const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
           doc.sliceString(Math.max(0, from - 1), from) + doc.sliceString(to, to + 1),
         ) ||
         / {4}/u.test(transaction.newDoc.sliceString(Math.max(0, newFrom - 3), newTo + 3));
-      // Inspect only the contiguous token suffix, not the entire (possibly huge) line.
-      for (let at = from; !reparse && at > 0; at--) {
-        const char = doc.sliceString(at - 1, at);
-        if (!/[-a-zA-Z0-9_:]/u.test(char)) {
-          reparse = char === "$";
-          break;
-        }
+      if (!reparse) {
+        const start = Math.max(0, from - value.maxCommandNameLength - 2);
+        const prefix = doc.sliceString(start, from);
+        const boundary = /[^-a-zA-Z0-9_:][-a-zA-Z0-9_:]*$/u.exec(prefix);
+        // A name reaching beyond the window can only resolve if its excess is
+        // all trailing colons, which the canonical parser strips.
+        reparse = boundary
+          ? boundary[0].startsWith("$")
+          : start > 0 && !/[^:]/u.test(prefix.slice(value.maxCommandNameLength));
       }
     });
     if (!reparse) {
@@ -134,6 +156,7 @@ const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
     return decorations(
       text,
       transaction.isUserEvent("input.type") ? transaction.state.selection.main.head : undefined,
+      value.hasDollar ? value.maxCommandNameLength : undefined,
     );
   },
   provide: (field) => [

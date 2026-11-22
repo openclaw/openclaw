@@ -60,12 +60,6 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     return null;
   }
   const dollar = start - 1;
-  if (
-    isEscapedReference(value, dollar) ||
-    findMarkdownCodeRegions(value).some((region) => region.start <= dollar && dollar < region.end)
-  ) {
-    return null;
-  }
   let end = safeCaret;
   while (end < value.length && SKILL_MENTION_CHAR.test(value[end] ?? "")) {
     end += 1;
@@ -84,6 +78,12 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     if (!/\p{L}/u.test(query)) {
       return null;
     }
+  }
+  if (
+    isEscapedReference(value, dollar) ||
+    findMarkdownCodeRegions(value).some((region) => region.start <= dollar && dollar < region.end)
+  ) {
+    return null;
   }
   return { start: dollar, end: referenceEnd, query };
 }
@@ -169,14 +169,12 @@ export function createSkillMenu() {
     opts: { skipRefresh?: boolean } = {},
   ): void {
     let target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
-    const textarea = host.getTextarea();
     // Navigating a selected chip is not editing another $query.
-    if (
-      target &&
-      textarea &&
-      readComposerEditor(textarea)?.isAtomicRange(target.start, target.end)
-    ) {
-      target = null;
+    if (target) {
+      const textarea = host.getTextarea();
+      if (textarea && readComposerEditor(textarea)?.isAtomicRange(target.start, target.end)) {
+        target = null;
+      }
     }
     if (!target) {
       if (state.skillMenuTarget !== null) {
