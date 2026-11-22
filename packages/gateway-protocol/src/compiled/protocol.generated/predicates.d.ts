@@ -2672,6 +2672,16 @@ export function isProjectsRemoveParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ProjectsRemoveParamsSchema
 >;
+export function isProjectsMoveSessionOptionsParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionOptionsParamsSchema
+>;
+export function isProjectsMoveSessionParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionParamsSchema
+>;
 export function isWorktreesListParams(
   value: unknown,
 ): value is import("typebox").Static<
