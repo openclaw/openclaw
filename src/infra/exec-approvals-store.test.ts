@@ -551,7 +551,7 @@ describe("exec approvals SQLite store", () => {
   });
 
   it.each(["usage", "one-shot", "allow-always"] as const)(
-    "fences concurrent %s writes only when they can change policy",
+    "keeps an admitted launch guard usable during a concurrent %s write",
     async (kind) => {
       const input = authorizeEcho();
       const assertCurrent = await commitExecAuthorizationLocked(input);
@@ -589,10 +589,7 @@ describe("exec approvals SQLite store", () => {
       }
       const next = await Promise.all(requests);
       expect(stages).toEqual(["transaction", "commit"]);
-      const changing = expect.objectContaining({
-        message: "Exec approval policy is unavailable or changing before execution",
-      });
-      expect(failures).toEqual(kind === "allow-always" ? [changing, changing] : []);
+      expect(failures).toEqual([]);
       expect(assertCurrent).not.toThrow();
       for (const guard of next) {
         expect(guard).not.toThrow();
