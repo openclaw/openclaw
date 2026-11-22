@@ -389,33 +389,18 @@ describe("gateway caller context wrapper", () => {
     );
   });
 
-  it.each(["same", "distinct"] as const)("retains %s run receipts and signals", async (kind) => {
+  it.each(["same", "distinct"] as const)("retains %s run signals", async (kind) => {
     const sameRun = kind === "same";
     const run = runInstance("outer");
-    let outerActive = sameRun;
-    let innerActive = true;
-    const outer = () => outerActive;
-    const inner = () => innerActive;
     const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
     const innerSignal = new AbortController().signal;
     const identity = await withCallers(
-      [outer, inner].map((receiptAuthority, index) => ({
+      [outerSignal, innerSignal].map((signal, index) => ({
         operationalRunInstance: index === 0 || sameRun ? run : runInstance("child"),
-        receiptAuthority,
-        approvalSignals: [index === 0 ? outerSignal : innerSignal],
+        approvalSignals: [signal],
       })),
       getCaller,
     );
-    expect(identity?.receiptAuthority?.()).toBe(true);
-    if (sameRun) {
-      outerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
-      outerActive = true;
-      innerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
-      expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
-    } else {
-      expect(identity?.approvalSignals).toEqual([innerSignal]);
-    }
+    expect(identity?.approvalSignals).toEqual(sameRun ? [outerSignal, innerSignal] : [innerSignal]);
   });
 });

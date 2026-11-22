@@ -125,8 +125,6 @@ type GatewayToolCallerIdentity = {
   /** Host-only native issuer retained by the current MCP grant; never serialized. */
   mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
-  /** Cron permission can end while the admitted run retains its other tools. */
-  cronAuthorityCheck?: () => boolean;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceLocal?: true;
@@ -162,7 +160,6 @@ type AdmittedGatewayToolCallerParams = {
   requesterOrigin?: RequesterOrigin;
   receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
-  cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
   approvalSignals?: readonly AbortSignal[];
   agentId?: string;
@@ -176,87 +173,37 @@ type AdmittedGatewayToolCallerParams = {
 
 function composeReceiptAuthority(
   ...predicates: Array<ReceiptAuthority | undefined>
-): ((() => boolean) & ReceiptAuthority) | undefined {
-  const checks = predicates.filter(
-    (predicate, index): predicate is ReceiptAuthority =>
-      predicate !== undefined && predicates.indexOf(predicate) === index,
-  );
-  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
-  return checks.length === 0
+): ReceiptAuthority | undefined {
+  const sources = predicates
+    .filter(
+      (predicate, index): predicate is ReceiptAuthority =>
+        predicate !== undefined && predicates.indexOf(predicate) === index,
+    )
+    .map((predicate) => captureGatewayToolReceiptAssertion(predicate));
+  return sources.length === 0
     ? undefined
-    : Object.assign(
-        () => {
-          let active = true;
-          for (const check of checks) {
-            try {
-              active = check() !== false && active;
-            } catch {
-              active = false;
-            }
+    : Object.assign(composeSessionSourceAssertion(sources), {
+        assertScopeCurrent: () => {
+          for (const source of sources) {
+            (source.assertScopeCurrent ?? source)();
           }
-          return active;
         },
-        composeSessionSourceAssertion(sources),
-        {
-          assertScopeCurrent: () => {
-            for (const source of sources) {
-              (source.assertScopeCurrent ?? source)();
-            }
-          },
-        },
-      );
+      });
 }
 
-/** Preserve boolean refusal across the receipt owner's prepared assertion. */
+/** Admission checked authority; a started receipt keeps only its owners' session fences. */
 export function captureGatewayToolReceiptAssertion(
   receipt: ReceiptAuthority,
-  message = "agent tool caller authority is no longer active",
+  _message?: string,
 ): SessionSourceAssertion {
-  const assertAllowed = (result: boolean | void) => {
-    if (result === false) {
-      throw new Error(message);
-    }
-  };
-  const prepare = receipt.prepareSessionSource?.bind(receipt);
-  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
-  return Object.assign(() => assertAllowed(receipt()), {
+  return Object.assign(() => void receipt(), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
+    prepareSessionSource: receipt.prepareSessionSource?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    prepareSessionSourceEffect: receipt.prepareSessionSourceEffect?.bind(receipt),
     prepareSessionSourceStorageEffect: receipt.prepareSessionSourceStorageEffect?.bind(receipt),
-    ...(prepareEffect
-      ? {
-          async prepareSessionSourceEffect() {
-            const prepared = await prepareEffect();
-            return {
-              ...prepared,
-              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
-              release: prepared.release?.bind(prepared),
-            };
-          },
-        }
-      : {}),
-    ...(prepare
-      ? {
-          async prepareSessionSource() {
-            const prepared = await prepare();
-            const release = prepared.release?.bind(prepared);
-            const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
-            return {
-              ...prepared,
-              nativeSource: prepared.nativeSource,
-              opaqueCommitGuard: prepared.opaqueCommitGuard,
-              checks: prepared.checks,
-              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
-              ...(assertPrepared
-                ? { assertPreparedCurrent: () => assertAllowed(assertPrepared()) }
-                : {}),
-              ...(release ? { release } : {}),
-            };
-          },
-        }
-      : {}),
   });
 }
 
@@ -279,7 +226,6 @@ export function createAdmittedGatewayToolCallerIdentity(
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
-    ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
     gatewayContextResolver: captureGatewayContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
@@ -636,10 +582,6 @@ export async function withGatewayToolCallerIdentity<T>(
         identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant,
       mintCronRequesterGrant: inheritedValue("mintCronRequesterGrant"),
       cronManagementGrant: identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant,
-      cronAuthorityCheck: composeReceiptAuthority(
-        inheritedOwner?.cronAuthorityCheck,
-        identity.cronAuthorityCheck,
-      ),
       executionIdentityToken: inheritedValue("executionIdentityToken"),
       receiptAuthority: composeReceiptAuthority(
         inheritedOwner?.receiptAuthority,
