@@ -285,7 +285,8 @@ function resolveGoalSettlement(
   sessionKey: string | undefined,
 ): GoalSettlement | undefined {
   const settlement = goalSettlements.getStore();
-  return settlement?.runId === runId &&
+  return settlement &&
+    settlement.runId === runId &&
     settlement.owner.params.sessionKey === sessionKey &&
     !settlement.owner.closed &&
     settlement.isCurrent()
