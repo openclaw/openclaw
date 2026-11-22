@@ -199,6 +199,22 @@ export function setTrackedWorkerHostedEndpoints(worker: WorkerCpuHandle, count: 
   }
 }
 
+/** Stable census identity for a pool, assigned on first use. */
+export function getWorkerPoolId(pool: object): number {
+  let poolId = trackedWorkers.poolIds.get(pool);
+  if (poolId === undefined) {
+    poolId = ++trackedWorkers.nextPoolId;
+    trackedWorkers.poolIds.set(pool, poolId);
+  }
+  return poolId;
+}
+
+/** Visit live native workers, including pending retirement. */
+export function forEachTrackedWorker(visit: (script: string, poolId?: number) => void): void {
+  pruneExitedWorkers();
+  trackedWorkers.workers.forEach((source) => visit(source.script, source.poolId));
+}
+
 /** Pool identity follows its live Workers without retaining the pool itself. */
 export function attributeWorkerToPool(
   worker: WorkerCpuHandle,
@@ -210,12 +226,7 @@ export function attributeWorkerToPool(
   if (!source) {
     return;
   }
-  let poolId = trackedWorkers.poolIds.get(pool);
-  if (poolId === undefined) {
-    poolId = ++trackedWorkers.nextPoolId;
-    trackedWorkers.poolIds.set(pool, poolId);
-  }
-  source.poolId = poolId;
+  source.poolId = getWorkerPoolId(pool);
   source.policy = policy;
   attributeWorkerMetrics(source, workerClass, 0);
 }

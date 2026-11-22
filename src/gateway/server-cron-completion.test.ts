@@ -128,7 +128,7 @@ async function createCompletionFixture(
     enqueueSystemEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
-  const marker = markServiceCronJobActive(service, job, receipt);
+  const marker = markServiceCronJobActive(job, receipt);
   const controller = new AbortController();
   const deliveryAttemptFence = createCronCompletionDeliveryFence({
     state: service,

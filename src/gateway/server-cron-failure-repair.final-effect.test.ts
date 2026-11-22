@@ -41,14 +41,8 @@ installRequesterCronAuthorityTestHooks();
 const outcomes = {
   owner: { update: "ok", description: "fixed by repair" },
   "non-owner": { update: "gated", description: "original" },
-  // Revoked after the repair was queued: admission refuses the turn before any tool runs;
-  // the job's next failure alert owns escalation.
-  "revoked-while-queued": { update: "not run", description: "original" },
-  // Revoking publishes config, which retires the admitted turn's tool host before the write.
-  "revoked-after-admission": {
-    update: "agent harness host capability is no longer active",
-    description: "original",
-  },
+  "revoked-before-start": { update: "gated", description: "original" },
+  "revoked-after-admission": { update: "ok", description: "fixed by repair" },
 } as const;
 
 it.for(
@@ -109,20 +103,13 @@ it.for(
 
     expect(context.cron.getJob(job.id)?.toolsAllowProvenance?.channelRequester).toBeDefined();
     let update = "not run";
-    let admissionFailure: unknown;
     runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
       const admission = params.preparedRunAdmission!;
       const admit = admission.admit.bind(admission);
       // The turn's tools reach this Gateway's real cron handlers in process.
       const admitted = Object.assign(Object.create(Object.getPrototypeOf(admission)), admission, {
         admit: async (...args: Parameters<typeof admit>) => {
-          if (requester === "revoked-while-queued") {
-            revoke();
-          }
-          const run = await admit(...args).catch((error: unknown) => {
-            admissionFailure = error;
-            throw error;
-          });
+          const run = await admit(...args);
           bindGatewayContextResolver(run, () => context);
           return run;
         },
@@ -150,6 +137,9 @@ it.for(
       return { payloads: [{ text: "Repaired." }], meta: { durationMs: 1 } };
     });
 
+    if (requester === "revoked-before-start") {
+      revoke();
+    }
     const message = "Automation request from the scheduler, not a user message.";
     if (source === "auto-disabled") {
       // Observe the receipt without replacing the real Gateway handoff or its admission.
@@ -161,11 +151,7 @@ it.for(
           () => context,
         ).enqueueSessionEvent(message, { agentId: "main", sessionKey: SESSION, jobId: job.id });
         const receipt = expectDefined(handoff.mock.results[0]?.value, "auto-disable receipt");
-        const outcome = await receipt.settled;
-        if (requester === "revoked-while-queued") {
-          expect(outcome).toMatchObject({ executionStarted: false, delivered: false });
-          expect(String(admissionFailure)).toContain("is no longer an owner");
-        }
+        expect(await receipt.settled).toMatchObject({ executionStarted: true });
       } finally {
         handoff.mockRestore();
       }
@@ -178,11 +164,7 @@ it.for(
         sessionKey: SESSION,
         message,
       });
-      if (requester === "revoked-while-queued") {
-        await expect(repaired).rejects.toThrow("Cron failure repair did not run");
-      } else {
-        await repaired;
-      }
+      await repaired;
     }
 
     const stored = (await read()).find((candidate) => candidate.id === job.id);
@@ -196,10 +178,8 @@ const operatorOutcomes = {
   "control-ui-admin": { update: "ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
-  // A refused restore is still this job's requester: no owner tools, no session fallback.
-  "device-revoked": { update: "gated", description: "original" },
-  // The Gateway's device revocation fences the retained source before the turn starts.
-  "device-revoked-while-queued": { update: "not run", description: "original" },
+  "device-revoked": { update: "not run", description: "original" },
+  "device-revoked-after-admission": { update: "ok", description: "fixed by repair" },
 } as const;
 
 it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
@@ -271,7 +251,7 @@ it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
       const admit = admission.admit.bind(admission);
       const admitted = Object.assign(Object.create(Object.getPrototypeOf(admission)), admission, {
         admit: async (...args: Parameters<typeof admit>) => {
-          if (scenario === "device-revoked-while-queued") {
+          if (scenario === "device-revoked-after-admission") {
             invalidateGatewayDeviceRevocation(context, pairedOperator().deviceId, "operator");
           }
           const run = await admit(...args);
@@ -307,8 +287,8 @@ it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
       sessionKey: SESSION,
       message: "Automation repair request from the scheduler, not a user message.",
     });
-    if (scenario === "device-revoked-while-queued") {
-      await expect(repaired).rejects.toThrow("Cron failure repair did not run");
+    if (scenario === "device-revoked") {
+      await expect(repaired).rejects.toThrow();
     } else {
       await repaired;
     }

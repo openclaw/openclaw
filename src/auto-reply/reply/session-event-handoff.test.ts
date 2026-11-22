@@ -8,10 +8,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -714,13 +712,13 @@ describe("session event target custody", () => {
 it("retains one requester until pre-admission cancellation", async ({ signal, state: { env } }) => {
   const release = vi.fn();
   const retain = vi.fn(() => release);
-  const guest = createAdmittedRunOperatorAuthority({
+  const guest = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.write"],
     assertCurrent() {},
     retain,
   });
-  const admin = createAdmittedRunOperatorAuthority({
+  const admin = createTestOperatorAuthority({
     profileId: "admin",
     scopes: ["operator.admin"],
     assertCurrent() {},

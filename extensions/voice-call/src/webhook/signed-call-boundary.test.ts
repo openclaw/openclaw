@@ -241,9 +241,9 @@ async function createSignedBoundaryHarness() {
     undefined,
     undefined,
     {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
+      info: (...a: unknown[]) => console.error("DBG info", ...a),
+      warn: (...a: unknown[]) => console.error("DBG warn", ...a),
+      error: (...a: unknown[]) => console.error("DBG error", ...a),
     },
   );
   const realtimeHandler = new RealtimeCallHandler(

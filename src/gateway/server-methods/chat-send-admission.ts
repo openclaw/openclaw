@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
@@ -110,8 +111,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     requestedSessionId,
     backingSessionId,
     agentId,
-    resolvedSessionModel,
-    resolvedSessionAuthProvider,
+    resolvedSessionModel: sessionModel,
     activeRunScopeKey,
     timeoutMs,
     expectedLeafEntryId,
@@ -227,8 +227,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     ownerConnId: normalizeOptionalString(client?.connId),
     ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
-    providerId: resolvedSessionModel.provider,
-    authProviderId: resolvedSessionAuthProvider,
+    providerId: sessionModel?.provider,
+    authProviderId:
+      sessionModel && resolveProviderIdForAuth(sessionModel.provider, { config: cfg }),
     resolveTerminalProducer: (active) =>
       resolveActiveReplyRunOwnerForSignal(active.input.abortSignal),
     kind: "chat-send",

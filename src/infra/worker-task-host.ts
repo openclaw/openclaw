@@ -28,6 +28,7 @@ import {
   receiveWorkerMemoryPort,
   isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
+import { createWorkerPoolMemoryBudget } from "./worker-memory-budget.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
@@ -86,6 +87,8 @@ export function createWorkerTaskHost(
     : undefined;
   return {
     maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
+    createMemoryBudget: (pool, url, maxWorkers) =>
+      createWorkerPoolMemoryBudget(pool, url, maxWorkers, !owner.nativeResource),
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
@@ -209,6 +212,7 @@ export function createWorkerTaskHost(
     workerStarted(worker, pool, cap, options, policyOwner) {
       if (isHostedWorkerEndpoint(worker)) {
         // The physical host owns admission tracking and the worker census entry.
+        worker.pool = pool;
         return;
       }
       // Read-only connections also retain admission references until their worker exits.
