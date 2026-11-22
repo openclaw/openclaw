@@ -40,6 +40,8 @@ vi.mock("../tool-result-truncation.js", () => ({
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
+import { resolveAgentProfile } from "../../agent-profiles.js";
+import { resolveContextSerialization } from "../../context-serialization/resolve.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptContext as prepareContext } from "./attempt-prompt-build.js";
 import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
@@ -551,6 +553,130 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
     },
   );
+
+  describe("compact context serialization", () => {
+    const compactSerialization = { mode: "compact", source: "agent-profile" } as const;
+    const verboseInbound = "Conversation info: verbose block with every channel field";
+    const compactInbound = "Compact conversation info";
+
+    it("carries the compact inbound text instead of the default text on a normal turn", async () => {
+      const fixture = createInput({
+        attempt: createAttempt({
+          currentInboundContext: { text: verboseInbound, compactText: compactInbound },
+        }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        contextSerialization: compactSerialization,
+      });
+
+      const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+      expect(carrier).toContain(compactInbound);
+      expect(carrier).not.toContain(verboseInbound);
+      expect(carrier).not.toContain("OpenClaw runtime facts");
+      expect(carrier).not.toContain("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
+    });
+
+    it("carries the compact inbound text once, in the carrier, on a runtime-only turn", async () => {
+      const fixture = createInput({
+        attempt: createAttempt({
+          currentInboundContext: { text: verboseInbound, compactText: compactInbound },
+          runtimeContextFragments: [{ kind: "runtime-instruction", text: "Runtime room event" }],
+          currentInboundEventKind: "room_event",
+        }),
+        prompt: createPrompt({ effectivePrompt: "", effectiveTranscriptPrompt: "" }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        contextSerialization: compactSerialization,
+        sessionVersion: 4,
+      });
+
+      const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+      expect(result.promptForModel).not.toContain(compactInbound);
+      expect(carrier).toContain("Runtime room event");
+      expect(carrier).toContain(compactInbound);
+      expect(carrier.split(compactInbound)).toHaveLength(2);
+      expect(carrier).not.toContain(verboseInbound);
+    });
+
+    it.each([
+      { agentProfileId: undefined, mode: "default" },
+      { agentProfileId: "openclaw/base", mode: "default" },
+      { agentProfileId: "openclaw/small", mode: "compact" },
+      { agentProfileId: "auto", mode: "compact" },
+    ] as const)(
+      "sends the $mode inbound block for agentProfileId $agentProfileId on a small model",
+      async ({ agentProfileId, mode }) => {
+        const config = {
+          agents: {
+            defaults: { userTimezone: "UTC", ...(agentProfileId ? { agentProfileId } : {}) },
+          },
+        };
+        const contextSerialization = resolveContextSerialization({
+          resolvedProfile: resolveAgentProfile({
+            config,
+            agentId: "main",
+            modelSizeClass: "small",
+          }),
+        });
+        const fixture = createInput({
+          attempt: createAttempt({
+            config,
+            currentInboundContext: { text: verboseInbound, compactText: compactInbound },
+          }),
+        });
+
+        const result = await prepareContext({ ...fixture.input, contextSerialization });
+
+        const carrier = String(result.runtimeContextMessageForCurrentTurn?.content ?? "");
+        expect(contextSerialization.mode).toBe(mode);
+        expect(carrier).toContain(mode === "compact" ? compactInbound : verboseInbound);
+        expect(carrier).not.toContain(mode === "compact" ? verboseInbound : compactInbound);
+        expect(fixture.report.contextSerialization?.mode).toBe(mode);
+      },
+    );
+
+    it("keeps the delivery directive an instruction in the compact carrier of a v4 session", async () => {
+      const directive =
+        "To respond visibly, use message(action=send); your final text stays private.";
+      const fixture = createInput({
+        attempt: createAttempt({
+          currentInboundContext: {
+            text: verboseInbound,
+            compactText: `${compactInbound}\n\n${directive}`,
+            compactFragments: [
+              { kind: "conversation-data", text: compactInbound },
+              { kind: "runtime-instruction", text: directive },
+            ],
+          },
+        }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        contextSerialization: compactSerialization,
+        sessionVersion: 4,
+      });
+
+      const details = result.runtimeContextMessageForCurrentTurn?.details as
+        | { fragments?: Array<{ kind: string; text: string }> }
+        | undefined;
+      expect(details?.fragments).toEqual(
+        expect.arrayContaining([
+          { kind: "conversation-data", text: compactInbound },
+          { kind: "runtime-instruction", text: directive },
+        ]),
+      );
+      expect(
+        details?.fragments?.filter(
+          (fragment) => fragment.kind === "conversation-data" && fragment.text.includes(directive),
+        ),
+      ).toEqual([]);
+    });
+  });
 
   it("keeps the live orphan-repair heartbeat task active without parsing its marker", async () => {
     const taskPrompt = "Check the deployment and report any failures.";

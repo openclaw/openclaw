@@ -130,6 +130,7 @@ async function plan(
       additionalInheritedToolNamesRef: [],
       agentProfile: resolveAgentProfile({}),
       agentProfilePreserveToolNames: [],
+      contextSerialization: { mode: "default", source: "fallback" },
       replaySafetyOptions: { declaredReplaySafe: () => undefined },
       runtimeCapabilityProfile: resolveConversationCapabilityProfile({ config, agentId: "main" }),
       releaseTools: async () => surface.cleanup(),
