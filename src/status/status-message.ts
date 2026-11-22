@@ -38,7 +38,6 @@ import {
   resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";

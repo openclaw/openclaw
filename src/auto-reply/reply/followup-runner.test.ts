@@ -670,7 +670,7 @@ describe("createFollowupRunner", () => {
           },
         });
       state.admit.mockResolvedValue({ kind: "admitted", turn });
-      state.execute.mockResolvedValue(createSettledExecution());
+      state.execute.mockResolvedValue(createExecution());
       state.account.mockResolvedValue({
         scheduleContinuation: async () => {
           order.push("continuation-scheduled");
