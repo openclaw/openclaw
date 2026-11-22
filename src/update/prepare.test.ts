@@ -848,21 +848,20 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
   });
 
-  it("refuses a Docker marker without running any preparation", async () => {
-    const access = fs.access.bind(fs);
-    vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (file === "/.dockerenv") {
-        return;
-      }
-      return access(file, mode);
-    });
+  it("prepares an install that runs inside a container", async () => {
+    // Devcontainers, LXC and self-built images update their own installs; the official
+    // image refuses through its install owner marker instead.
+    const target = await repository();
     expect(
       await preflight({
-        kind: "package",
-        target: { kind: "package", spec: "openclaw@2026.11.21", version: "2026.11.21" },
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
         stateDir: root,
+        node,
+        env: { ...process.env, container: "podman" },
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
-    ).toMatchObject({ ok: false, reason: "container-install" });
+    ).toMatchObject({ ok: true });
   });
 });
