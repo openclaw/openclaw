@@ -649,7 +649,7 @@ async function inspectUpdateStatus(
       }
       if (abandonedRun) {
         defaultRuntime.log(
-          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
         );
       }
       const report = renderUpdateRunReport(
