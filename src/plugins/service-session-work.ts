@@ -3,7 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import type { OperatorRunRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "../gateway/operator-run-recovery.js";
+import {
+  restoreGatewayOperatorSource,
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "../gateway/operator-run-recovery.js";
 import { runWithOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { runWithPluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
@@ -21,6 +25,7 @@ import {
   GatewayOperatorRecoveryAuthorizationError,
 } from "../infra/restart-recovery-errors.js";
 import { createCorePluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -260,7 +265,7 @@ export function createPluginServiceSessionWork(params: {
           );
         }
       };
-      let restored: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+      let restored: RestoredGatewayOperatorAuthority | undefined;
       let session: Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>> | undefined;
       const active = new AbortController();
       let started = false;
@@ -269,21 +274,24 @@ export function createPluginServiceSessionWork(params: {
         active.signal.throwIfAborted();
       };
       try {
-        restored = await restoreGatewayOperatorSource({
-          snapshot: accepted.snapshot,
-          context: owner,
-          agentId: accepted.target.agentId,
-          assertCurrent: assertOwner,
-          prepareCurrent: async () => {
-            const current = await durable.lookup(id);
-            assertOwner();
-            await projection.prepareMembership();
-            assertTarget();
-            if (!isDeepStrictEqual(current, accepted)) {
-              throw new SessionWorkAuthorizationError("Accepted source no longer owns this work");
-            }
-          },
-        });
+        const latest = await durable.lookup(id);
+        assertOwner();
+        await projection.prepareMembership();
+        assertTarget();
+        if (!isDeepStrictEqual(latest, accepted)) {
+          throw new SessionWorkAuthorizationError("Accepted source no longer owns this work");
+        }
+        const { snapshot } = accepted;
+        const restore = { context: owner, agentId: accepted.target.agentId };
+        // Work accepted inside a chat turn needs write now. Work a cron run accepted carries the
+        // automation's source without write, so it needs the automation grant now.
+        restored = operatorScopeSatisfied("operator.sessions.write", snapshot.scopes)
+          ? await restoreGatewayOperatorSource({ ...restore, snapshot, assertCurrent: assertOwner })
+          : await restoreScheduledAutomationOperator({
+              ...restore,
+              source: { kind: "gateway", snapshot },
+              assertCurrent: assertOwner,
+            });
         const authority = restored.authority;
         const signal = AbortSignal.any([
           params.signal,
