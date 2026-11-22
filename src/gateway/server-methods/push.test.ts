@@ -371,7 +371,19 @@ describe("push.web.subscribe handler", () => {
   it.each([
     { options: {}, error: "paired browser device identity required" },
     {
-      options: { deviceId: "browser-device", config: { gateway: { roles: { definitions: {} } } } },
+      options: {
+        deviceId: "browser-device",
+        config: {
+          gateway: {
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: { sessions: { others: "none" as const }, agents: [], scopes: [] },
+              },
+            },
+          },
+        },
+      },
       error: "authenticated user profile",
     },
   ])("rejects subscriptions missing $error", async ({ options, error }) => {

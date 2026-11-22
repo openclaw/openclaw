@@ -1,5 +1,5 @@
 /**
- * Tests mock this module to exercise local sessions.list/sessions.resolve/sessions.search/chat.history
+ * Tests mock this module to exercise local session reads and chat.history
  * behavior without importing the full Gateway server graph.
  */
 export { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -20,4 +20,7 @@ export { prepareChatHistoryResponsePage } from "../../gateway/chat-history-respo
 export { listProjectedSessions } from "../../gateway/session-utils-list.js";
 export { loadGatewaySessionEntryReadOnlyInWorker } from "../../gateway/session-utils-store-worker.js";
 export { withPreparedSessionResolve } from "../../gateway/sessions-resolve.js";
+export { resolveRequestedSessionAgentId } from "../../gateway/session-request-agent.js";
+export { withReadySessionRows } from "../../gateway/session-row-prepared-read.js";
+export { prepareProjectedSessionPresentation } from "../../gateway/session-row-presentation.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

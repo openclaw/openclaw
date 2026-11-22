@@ -1,3 +1,4 @@
+import { hasChannelMessageSender } from "../../channels/message/adapter.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -53,11 +54,7 @@ function hasOutboundSurface(
   return (
     hasChannelMessageActionHandler(plugin, action) ||
     (requireActivatedRuntime
-      ? Boolean(
-          plugin?.outbound?.sendText ||
-          plugin?.outbound?.deliveryMode === "gateway" ||
-          resolveSendCapableMessageAdapter(plugin),
-        )
+      ? hasChannelMessageSender(plugin)
       : Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin)))
   );
 }

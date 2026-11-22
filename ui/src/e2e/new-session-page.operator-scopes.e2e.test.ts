@@ -1,9 +1,10 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import type {
-  ControlUiMockGatewayScenario,
-  MockGatewayControls,
+import {
+  type ControlUiMockGatewayScenario,
+  type MockGatewayControls,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -97,6 +98,7 @@ async function withFolder(
   run: (draft: Draft) => Promise<void>,
 ) {
   return suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       workspace,
       workspaceGit: true,
@@ -238,7 +240,7 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("Image uploads require permission to edit your profile.", { exact: true })
+        .getByText("You need permission to edit your profile to upload images.", { exact: true })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {
@@ -270,7 +272,9 @@ suite.define(() => {
                 .poll(() => evaluateControlUiContext(page, (app) => app.gateway.snapshot.phase))
                 .toBe("reconnecting");
             } else {
-              await pollDisabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
+              await pollDisabled(
+                page.locator(".sidebar-session-toolbar .sidebar-new-session"),
+              ).toBe(true);
             }
             const submit = page.getByRole("button", { name: "Start session" });
             await pollDisabled(submit).toBe(true);
@@ -305,7 +309,7 @@ suite.define(() => {
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
-      await pollEnabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
+      await pollEnabled(page.locator(".sidebar-session-toolbar .sidebar-new-session")).toBe(true);
       await pollEnabled(submit).toBe(true);
       await pollDisabled(incognito).toBe(true);
       await page.locator("#new-session-where-trigger").click();
@@ -403,41 +407,6 @@ suite.define(() => {
     });
   });
 
-  it("lets read-scoped operators search projects without exposing clone actions", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["projects.add", "projects.list", "projects.searchRemote"],
-        operatorScopes: ["operator.read"],
-        methodResponses: {
-          "projects.list": { projects: [] },
-          "projects.searchRemote": {
-            credential: "missing",
-            projects: [
-              {
-                name: "openclaw",
-                fullName: "openclaw/openclaw",
-                cloneUrl: "https://github.com/openclaw/openclaw.git",
-                webUrl: "https://github.com/openclaw/openclaw",
-                private: false,
-              },
-            ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("projects.list");
-      await page.locator("#new-session-project-trigger").click();
-      const place = page.locator(".oc-popover.new-session-page__project-popover");
-      await place.locator(".header-search__toggle").click();
-      await place.getByRole("searchbox").fill("openclaw");
-      await gateway.waitForRequest("projects.searchRemote");
-      const remote = place.getByRole("button", { name: /openclaw\/openclaw/u });
-      await pollDisabled(remote).toBe(true);
-      await remote.click({ force: true });
-      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
-    });
-  });
-
   it("lets write-scoped operators browse and restore only workspace-contained folders", async () => {
     const contained = `${workspace}/packages/app`;
     await withFolder(
@@ -470,41 +439,57 @@ suite.define(() => {
     );
   });
 
-  it("explains when browsing outside the workspace requires admin scope", async () => {
-    await withFolder(
-      { featureMethods: [...chatMethods, "fs.listDir", "worktrees.branches"] },
-      async ({ page, gateway }) => {
-        await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
-          params: { path: workspace },
-        });
-        const pathInput = page.locator("input.new-session-page__browser-path");
-        await pollValue(pathInput).toBe(workspace);
-        await page
-          .locator(".new-session-page__browser")
-          .getByText("No subfolders yet.", { exact: true })
-          .waitFor();
-        await gateway.deferNext("fs.listDir", { path: "/tmp" });
-        await pathInput.fill("/tmp");
-        await pathInput.press("Enter");
-        await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(2);
-        expect((await gateway.getRequests("fs.listDir"))[1]?.params).toEqual({ path: "/tmp" });
-        await gateway.rejectDeferred("fs.listDir", {
-          code: "FORBIDDEN",
-          message: "Folder access was denied.",
-          details: {
-            code: "MISSING_SCOPE",
-            missingScope: "operator.admin",
-            requiredScopes: ["operator.admin"],
-          },
-        });
-        await pollLocatorText(
-          page.locator(".new-session-page__browser .new-session-page__error"),
-        ).toContain("You need admin access to browse outside agent workspaces.");
-        expect(await pathInput.inputValue()).toBe("/tmp");
-        expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
-      },
-    );
-  });
+  it.each(["before", "after"] as const)(
+    "explains when browsing outside the workspace requires admin scope (Enter %s debounce)",
+    async (timing) => {
+      await withFolder(
+        { featureMethods: [...chatMethods, "fs.listDir", "worktrees.branches"] },
+        async ({ page, gateway }) => {
+          await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
+            params: { path: workspace },
+          });
+          const pathInput = page.locator("input.new-session-page__browser-path");
+          await pollValue(pathInput).toBe(workspace);
+          await page
+            .locator(".new-session-page__browser")
+            .getByText("No subfolders yet.", { exact: true })
+            .waitFor();
+          await pauseVirtualClock(page);
+          await gateway.deferNext("fs.listDir", { path: "/tmp" });
+          await pathInput.fill("/tmp");
+          const expectedRequests = [{ path: workspace }];
+          if (timing === "after") {
+            // Typing /tmp lists its parent for completion after the 300 ms debounce.
+            await page.clock.runFor(400);
+            expectedRequests.push({ path: "/" });
+          }
+          await pathInput.press("Enter");
+          // Enter must cancel a pending completion, not let it issue a trailing read.
+          await page.clock.runFor(400);
+          expectedRequests.push({ path: "/tmp" });
+          await expect
+            .poll(async () => (await gateway.getRequests("fs.listDir")).map(({ params }) => params))
+            .toEqual(expectedRequests);
+          await gateway.rejectDeferred("fs.listDir", {
+            code: "FORBIDDEN",
+            message: "Folder access was denied.",
+            details: {
+              code: "MISSING_SCOPE",
+              missingScope: "operator.admin",
+              requiredScopes: ["operator.admin"],
+            },
+          });
+          await pollLocatorText(
+            page.locator(".new-session-page__browser .new-session-page__error"),
+          ).toContain("You need admin access to browse outside agent workspaces.");
+          expect(await pathInput.inputValue()).toBe("/tmp");
+          expect((await gateway.getRequests("fs.listDir")).map(({ params }) => params)).toEqual(
+            expectedRequests,
+          );
+        },
+      );
+    },
+  );
 
   it("keeps a canonical browser selection submittable for a symlinked workspace alias", async () => {
     const workspaceAlias = "/var/folders/openclaw/workspace-alias";
@@ -555,8 +540,8 @@ suite.define(() => {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
       });
-      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
-        "missing scope: operator.admin",
+      await pollLocatorText(page.locator(".new-session-page__error")).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
       );
     });
   });

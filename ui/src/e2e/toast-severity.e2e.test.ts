@@ -90,7 +90,7 @@ suite.define(() => {
             await expect.poll(() => toast.count()).toBe(1);
             await expect
               .poll(() => toast.textContent())
-              .toContain(failed ? "Copy failed" : "Copied");
+              .toContain(failed ? "Couldn’t copy. Try again." : "Copied");
             await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
             await toast.locator("button").last().focus();
             await toast.hover();

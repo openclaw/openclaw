@@ -32,6 +32,7 @@ import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placem
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
+  modelCostPricing?: SessionListRowContext["modelCostPricing"];
   sessionKeys?: readonly string[];
   subagentRuns?: SessionListRowContext["subagentRuns"];
   projectedAgentRuns?: ProjectedAgentRunIndex;
@@ -80,7 +81,7 @@ export function buildSessionListRowMetadataContext(params: {
       return selected;
     },
     displayModelIdentityByKey: new Map(),
-    modelCostConfigByModelRef: new Map(),
+    modelCostPricing: params.modelCostPricing,
     userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
   };
 }
@@ -195,7 +196,6 @@ export function resolveTranscriptUsageFallbacks(params: {
     if (
       params.freshTotalTokens !== undefined &&
       resolveEstimatedSessionCostUsd({
-        cfg: params.cfg,
         provider: resolvedModel.provider,
         model: resolvedModel.model,
         entry,
@@ -205,7 +205,6 @@ export function resolveTranscriptUsageFallbacks(params: {
       continue;
     }
     const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-      cfg: params.cfg,
       provider: snapshot.modelProvider ?? resolvedModel.provider,
       model: snapshot.model ?? resolvedModel.model,
       explicitCostUsd: snapshot.costUsd,

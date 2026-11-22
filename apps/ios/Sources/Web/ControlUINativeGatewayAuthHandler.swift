@@ -32,16 +32,23 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         }
     }
 
-    private let config: GatewayConnectConfig
-    private let expectedToken: String
+    private let provider: IOSDashboardNativeGatewayAuthProvider?
+    private let gatewayURL: URL
+    private let allowedMainFramePathPrefix: String?
+    private let accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?
     weak var webView: WKWebView?
-    private weak var appModel: NodeAppModel?
     var document = IOSDeviceSettingsDocument()
 
-    init(config: GatewayConnectConfig, expectedToken: String, appModel: NodeAppModel) {
-        self.config = config
-        self.expectedToken = expectedToken
-        self.appModel = appModel
+    init(
+        url: URL,
+        allowedMainFramePathPrefix: String?,
+        provider: IOSDashboardNativeGatewayAuthProvider?,
+        accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?)
+    {
+        self.gatewayURL = provider?.controlUIRootURL ?? url
+        self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
+        self.provider = provider
+        self.accessAdmissionIsCurrent = accessAdmissionIsCurrent
     }
 
     func userContentController(
@@ -49,112 +56,44 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         didReceive message: WKScriptMessage,
         replyHandler: @escaping @MainActor (Any?, String?) -> Void)
     {
-        guard let appModel, self.isAvailable(for: message, appModel: appModel),
+        guard self.isAvailable(for: message),
+              let provider = self.provider, provider.isCurrent(),
               let request = Request(message.body)
         else {
             replyHandler(nil, "Native gateway authentication is unavailable for this document.")
             return
         }
-        let document = self.document.requestIdentity(authorityGeneration: appModel.operatorAuthorityGeneration)
-        Task { @MainActor in
-            let session = appModel.operatorSession
-            let gatewayID = self.config.nodeOptions.deviceAuthGatewayID ?? self.config.effectiveStableID
-            guard let route = await session.currentRoute(ifGatewayID: gatewayID),
-                  let binding = await session.authBinding(ifCurrentRoute: route)
-            else {
-                replyHandler(nil, "The native gateway connection is no longer current.")
-                return
+        let documentID = self.document.id
+        Task { @MainActor [weak self] in
+            do {
+                let response = try await provider.authorize(nonce: request.nonce, signedAt: request.signedAt)
+                // The last actor hop can outlive navigation, disconnect, or Access retirement.
+                guard await response.isCurrent(), let self,
+                      self.document.id == documentID, self.isAvailable(for: message),
+                      provider.isCurrent(),
+                      let value = try? JSONSerialization.jsonObject(with: response.json)
+                else { throw CancellationError() }
+                replyHandler(["id": request.id, "result": value], nil)
+            } catch {
+                replyHandler(["id": request.id, "error": "The native gateway connection is no longer current."], nil)
             }
-            let scopes = await session.currentOperatorScopes(ifCurrentRoute: route).map { $0.sorted() }
-            // Actor hops may outlive navigation, disconnect, or reassignment. Revalidate at signing.
-            guard await session.currentRoute() == route,
-                  self.document.accepts(document, authorityGeneration: appModel.operatorAuthorityGeneration),
-                  self.isAvailable(for: message, appModel: appModel),
-                  let result = Self.signedResult(
-                      request: request,
-                      config: self.config,
-                      expectedToken: self.expectedToken,
-                      binding: binding,
-                      scopes: scopes)
-            else {
-                replyHandler(nil, "The native gateway connection is no longer current.")
-                return
-            }
-            replyHandler(["id": request.id, "result": result], nil)
         }
     }
 
-    private func isAvailable(for message: WKScriptMessage, appModel: NodeAppModel) -> Bool {
-        message.name == Self.name && self.document.isAvailable && appModel.isOperatorGatewayConnected &&
-            appModel.activeGatewayConnectConfig?.hasSameControlUIInputs(as: self.config) == true &&
-            IOSDeviceSettingsBridge.isTrustedSource(
-                message.frameInfo.request.url,
-                webViewURL: self.webView?.url,
-                gatewayURL: AuthenticatedControlUI.pageURL(config: self.config, path: "", queryItems: []),
-                isMainFrame: message.frameInfo.isMainFrame,
-                isHostingWebView: message.webView != nil && message.webView === self.webView)
-    }
-
-    /// Reloads the stored grant and preserves the credential selected by the live native socket.
-    static func signedResult(
-        request: Request,
-        config: GatewayConnectConfig,
-        expectedToken: String,
-        binding: GatewayAuthBinding,
-        scopes: [String]?) -> [String: Any]?
-    {
-        guard let authorization = AuthenticatedControlUI.storedOperatorAuthorization(
-            config: config, expectedToken: expectedToken),
-            authorization.identity.deviceId == binding.deviceId
-        else { return nil }
-        let identity = authorization.identity
-        let scopes = scopes ?? authorization.entry.scopes
-        let auth: [String: String]
-        let signatureToken: String?
-        switch binding.source {
-        case .sharedToken:
-            guard let token = config.token?.trimmedNonEmpty else { return nil }
-            auth = ["token": token]
-            signatureToken = token
-        case .password:
-            guard let password = config.password?.trimmedNonEmpty else { return nil }
-            auth = ["password": password]
-            signatureToken = nil
-        case .deviceToken, .bootstrapToken, .none:
-            let token = authorization.entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            auth = ["deviceToken": token]
-            signatureToken = token
+    private func isAvailable(for message: WKScriptMessage) -> Bool {
+        guard message.name == Self.name, self.document.isAvailable,
+              self.accessAdmissionIsCurrent?() ?? true,
+              IOSDeviceSettingsBridge.isTrustedSource(
+                  message.frameInfo.request.url,
+                  webViewURL: self.webView?.url,
+                  gatewayURL: self.gatewayURL,
+                  isMainFrame: message.frameInfo.isMainFrame,
+                  isHostingWebView: message.webView != nil && message.webView === self.webView)
+        else { return false }
+        guard let prefix = self.allowedMainFramePathPrefix else { return true }
+        return [message.frameInfo.request.url, self.webView?.url].allSatisfy { url in
+            guard let path = url?.path else { return false }
+            return path == prefix || path.hasPrefix(prefix.hasSuffix("/") ? prefix : prefix + "/")
         }
-        let fields = GatewayDeviceAuthPayload.Fields(
-            deviceId: identity.deviceId,
-            client: .init(id: config.nodeOptions.clientId, mode: "ui"),
-            role: "operator",
-            scopes: scopes,
-            signedAtMs: request.signedAt,
-            token: signatureToken,
-            nonce: request.nonce)
-        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(fields: fields)
-        guard let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-              let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
-        else { return nil }
-        return [
-            "client": [
-                "id": config.nodeOptions.clientId,
-                "mode": "ui",
-                "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
-                "platform": InstanceIdentity.platformString,
-                "deviceFamily": InstanceIdentity.deviceFamily,
-                "instanceId": InstanceIdentity.instanceId,
-            ],
-            "scopes": scopes,
-            "auth": auth,
-            "device": [
-                "id": identity.deviceId,
-                "publicKey": publicKey,
-                "signature": signature,
-                "signedAt": request.signedAt,
-                "nonce": request.nonce,
-            ],
-        ]
     }
 }

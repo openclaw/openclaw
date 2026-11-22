@@ -130,7 +130,16 @@ suite.define(() => {
         const captureUrl = `${suite.server.baseUrl}${capturePath}`;
         await page.goto(meetingUrl);
         const view = page.locator("openclaw-meetings-page");
-        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        const title = view.getByRole("heading", { name: "Design review", exact: true });
+        await expect
+          .poll(() => title.evaluate((heading) => heading === document.activeElement))
+          .toBe(true);
+        const excessFocusWidth = await title.evaluate((heading) => {
+          const text = document.createRange();
+          text.selectNodeContents(heading);
+          return heading.getBoundingClientRect().width - text.getBoundingClientRect().width;
+        });
+        expect(Math.abs(excessFocusWidth)).toBeLessThan(1);
         const capture = view.getByRole("link", { name: "Meeting capture", exact: true });
         expect(await capture.getAttribute("href")).toBe(`/${capturePath}`);
         await capture.click();
@@ -413,9 +422,7 @@ suite.define(() => {
 
       await trigger.click();
       await panel.waitFor();
-      await panel
-        .getByRole("searchbox", { name: "Provider ID", exact: true })
-        .fill("discord-voice");
+      await panel.getByRole("searchbox", { name: "Provider", exact: true }).fill("discord-voice");
       await panel.getByLabel("Started on or after", { exact: true }).fill("2026-08-01");
       await panel.getByRole("button", { name: "Filter", exact: true }).click();
       await page.waitForURL(/providerId=discord-voice/u);

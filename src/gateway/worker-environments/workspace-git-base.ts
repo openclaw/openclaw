@@ -112,6 +112,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
   root: string;
   baseCommit: string;
   retainedCommit?: string;
+  idleIoPriority?: boolean;
   temporaryRoot: string;
   signal: AbortSignal;
   baseEnv?: NodeJS.ProcessEnv;
@@ -135,6 +136,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       const donor = requireGitCommandOutput(
         "git cat-file",
         await executeGitCommand(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
+          idleIoPriority: params.idleIoPriority,
           input: `${retainedCommit}\n`,
           baseEnv: params.baseEnv,
           env: gitEnvironment({ GIT_NO_LAZY_FETCH: "1" }),
@@ -159,6 +161,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       );
     } else {
       await runWorkspaceInventoryCommandToFile({
+        idleIoPriority: params.idleIoPriority,
         argv: [
           "git",
           "-C",
@@ -177,6 +180,7 @@ export async function prepareWorkerWorkspaceGitPack(params: {
       await fsp.appendFile(objectListPath, `${baseCommit}\n`);
     }
     await runWorkspaceInventoryCommandToFile({
+      idleIoPriority: params.idleIoPriority,
       argv: [
         "git",
         "-C",

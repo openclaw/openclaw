@@ -42,6 +42,7 @@ function projectionInput(
 ): ProjectionInput {
   return {
     rows,
+    selectedSessionKey: null,
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
@@ -203,39 +204,14 @@ it("promotes newly created sessions without losing the order of existing peers",
   ]);
 });
 
-it("reveals newly added children while preserving a manual collapse through ordinary updates", () => {
+it("preserves Show more as background children change", () => {
   const parent = parentRow("first", "second");
-  project([sessionRow(parent.key)]);
   project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-  expect(projection.children.toggle(parent.key)).toEqual({ expanded: false });
-
-  project([parentRow("second", "first")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  // Compare identities, not counts: one child can replace another between snapshots.
-  project([parentRow("second", "third")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-
+  projection.children.toggle(parent.key);
   projection.children.showMore(parent.key);
-  project([parentRow("second", "third", "fourth")]);
+  project([parentRow("second", "third")]);
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
-
-it.each(["route placeholder", "restored collapse"])(
-  "baselines children from a %s before revealing additions",
-  (origin) => {
-    if (origin === "route placeholder") {
-      project([sessionRow("parent")], { listLoaded: false });
-    } else {
-      projection.children.restore([{ key: "parent", childrenDisplayMode: "collapsed-by-user" }]);
-    }
-    project([parentRow("first")]);
-    expect(projection.children.isExpanded("parent")).toBe(false);
-    project([parentRow("first", "second")]);
-    expect(projection.children.isExpanded("parent")).toBe(true);
-  },
-);
 
 it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
   const rows = [
@@ -257,21 +233,12 @@ it("preserves restored expansion through the live handoff but clears it on a lat
   project(rows, { connectionIdentity: liveConnection, listSource: {} });
   expect(projection.children.isExpanded("expanded")).toBe(true);
   expect(projection.children.isFullyShown("fully-shown")).toBe(true);
-  expect(projection.children.isExpanded("collapsed")).toBe(false);
-  expect(projection.children.isExpanded("untouched")).toBe(true);
+  expect(projection.children.capture("collapsed")).toBe("collapsed-by-user");
+  expect(projection.children.isExpanded("untouched")).toBe(false);
   project(rows, { connectionIdentity: {} });
   expect(projection.children.isExpanded("expanded")).toBe(false);
   expect(projection.children.isFullyShown("fully-shown")).toBe(false);
-  expect(projection.children.isExpanded("collapsed")).toBe(true);
-});
-
-it("keeps an explicitly collapsed parent closed when a later descendant becomes active", () => {
-  const active = sessionRow("parent", { containsActiveDescendant: true });
-  project([active]);
-  expect(projection.children.toggle(active.key)).toEqual({ expanded: false });
-  project([sessionRow("parent")]);
-  project([active]);
-  expect(projection.children.isExpanded("parent")).toBe(false);
+  expect(projection.children.capture("collapsed")).toBeUndefined();
 });
 
 it("forgets expansion when a session disappears before returning", () => {
@@ -327,4 +294,81 @@ it("never leaks a held backing-work subtitle into a catalog display that omits o
     subtitle: undefined,
     narration: undefined,
   });
+});
+
+it("reveals late active ancestry once per navigation without changing other disclosure choices", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const leaf = sessionRow("leaf", { active: true, visuallyActive: true });
+  const middle = sessionRow("middle", {
+    children: [leaf],
+    childSessionKeys: [leaf.key],
+    containsActiveDescendant: true,
+  });
+  const root = sessionRow("root", {
+    children: [middle],
+    childSessionKeys: [middle.key],
+    containsActiveDescendant: true,
+  });
+  const runningChild = sessionRow("unrelated-running", { hasActiveRun: true });
+  const unrelated = sessionRow("unrelated", {
+    children: [runningChild],
+    childSessionKeys: [runningChild.key],
+    containsActiveDescendant: true,
+  });
+  treeProjection.children.restore(
+    [root, middle, unrelated].map(({ key }) => ({
+      key,
+      childrenDisplayMode: "collapsed-by-user",
+    })),
+  );
+  const projectTree = (
+    rows: SidebarRecentSession[],
+    selectedSessionKey: string | null = leaf.key,
+  ) => treeProjection.project(projectionInput(rows, { selectedSessionKey }));
+  projectTree([sessionRow(root.key), unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(false);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+  treeProjection.children.showMore(root.key);
+  treeProjection.children.toggle(middle.key);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isFullyShown(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  // A partial refresh is not a navigation away from the selected session.
+  projectTree([
+    {
+      ...root,
+      containsActiveDescendant: false,
+      children: [
+        { ...middle, children: [], loadingChildren: true, containsActiveDescendant: false },
+      ],
+    },
+    unrelated,
+  ]);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  projectTree([unrelated], null);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+});
+
+it("keeps the selected descendant's root visible beyond the first sidebar page", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const selected = sessionRow("selected", { active: true, visuallyActive: true });
+  const ancestor = sessionRow("older-ancestor", {
+    childSessionKeys: [selected.key],
+    children: [selected],
+    containsActiveDescendant: true,
+  });
+  const quietRoots = Array.from({ length: 30 }, (_, index) => sessionRow("quiet-" + index));
+  const projected = treeProjection.project(
+    projectionInput([...quietRoots, ancestor], { grouping: "none" }),
+  );
+  expect(treeProjection.children.isExpanded(ancestor.key)).toBe(true);
+  expect(projected.sections.flatMap(({ rows }) => rows.map(({ key }) => key))).toContain(
+    ancestor.key,
+  );
 });

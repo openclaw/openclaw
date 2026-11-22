@@ -9,6 +9,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -170,8 +171,8 @@ describe("installPackageDir rollback", () => {
         failure === "retry" ? "EBUSY" : "EPERM",
       );
       if (failure === "I/O failure") {
-        const copy = fsSync.cpSync.bind(fsSync);
-        vi.spyOn(fsSync, "cpSync").mockImplementation((source, destination, options) => {
+        const copy = fs.cp.bind(fs);
+        vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
           if (recovering) {
             throw ioError("recovery disk full", "ENOSPC");
           }
@@ -544,6 +545,16 @@ describe("installPackageDir rollback", () => {
       expect(await listMatchingDirs(installBaseDir, ".openclaw-install-rollback-")).toEqual([]);
     },
   );
+
+  it("rolls back a published install without synchronous metadata mutations", async () => {
+    const { targetDir, retain } = await createFixture("rollback-async-metadata");
+    const { transaction } = await retain();
+    using observation = observeMainThreadFs();
+    await transaction.rollback();
+    expect(observation.calls().renameSync ?? 0).toBe(0);
+    expect(observation.calls().cpSync ?? 0).toBe(0);
+    await expectText(targetDir, "old");
+  });
 
   it.each([false, true])(
     "keeps a one-shot backup retirement refusal (retained=%s)",

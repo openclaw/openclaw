@@ -17,13 +17,17 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import {
   splitWorkspaceFilename,
   type WorkspaceCatalogFile,
@@ -31,6 +35,18 @@ import {
 } from "./chat-session-workspace-catalog.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { FileDisclosure } from "./file-disclosure.tsx";
+
+function formatWorkspaceFileSize(size: number | undefined): string {
+  return typeof size !== "number" || !Number.isFinite(size) || size < 0
+    ? ""
+    : formatByteSize(size, {
+        style: "legacy-binary",
+        maxUnit: "mega",
+        separator: " ",
+        fractionDigits: (value, unit) =>
+          unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0,
+      });
+}
 
 export function WorkspaceFilename(props: { name: string }) {
   const parts = createMemo(() => splitWorkspaceFilename(props.name));
@@ -59,6 +75,63 @@ export function WorkspaceFilename(props: { name: string }) {
   );
 }
 
+/** Shared tile face: admitted image pixels or the large file icon, with an optional name. */
+export function WorkspaceTileBody(props: {
+  name: string;
+  mimeType?: string;
+  previewUrl?: string;
+  pending?: boolean;
+  caption: boolean;
+  activity?: string;
+  changed?: boolean;
+}) {
+  // A preview that fails to decode falls back to the file icon instead of a broken image.
+  const [failedUrl, setFailedUrl] = createSignal<string>();
+  const previewUrl = () =>
+    props.previewUrl && props.previewUrl !== failedUrl() ? props.previewUrl : undefined;
+  return (
+    <>
+      <Show
+        when={previewUrl()}
+        fallback={
+          <span class="workspace-desktop__tile-media">
+            <AttachmentFileIcon
+              filename={props.name}
+              mimeType={props.mimeType}
+              mode="large-placeholder"
+              loading={props.pending}
+            />
+          </span>
+        }
+      >
+        {(url) => (
+          <img
+            class="workspace-desktop__tile-media"
+            src={url()}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(url())}
+          />
+        )}
+      </Show>
+      <Show when={props.caption}>
+        <span class="workspace-desktop__name-line">
+          <WorkspaceFilename name={props.name} />
+          <Show when={props.activity}>
+            <span
+              class={["workspace-desktop__activity", { "is-changed": props.changed }]}
+              role="img"
+              aria-label={props.activity}
+            />
+          </Show>
+        </span>
+      </Show>
+    </>
+  );
+}
+
 export function RailRow(props: {
   file: WorkspaceCatalogFile;
   workspace: SessionWorkspaceProps;
@@ -68,11 +141,17 @@ export function RailRow(props: {
   searching?: boolean;
   position?: number;
   setSize?: number;
+  /** Session files can render as tiles; tree rows and search results stay rows. */
+  view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
+  onDownloadStart?: () => () => void;
 }) {
+  // Default session rows retain selection when a read publishes its canonical ID.
   const selected = createMemo(() =>
     props.file.artifactId ||
-    (props.file.origin === "session" && props.file.workspacePath === undefined)
+    (props.workspace.presentation !== undefined &&
+      props.file.origin === "session" &&
+      props.file.workspacePath === undefined)
       ? props.workspace.activeId === props.file.key
       : isSessionWorkspaceFileSelected(
           props.workspace.activeId,
@@ -82,7 +161,11 @@ export function RailRow(props: {
           props.file.workspacePath,
         ),
   );
-  const onOpen = (disposition: "preview" | "pinned" = "preview") => {
+  const onOpen = (
+    disposition: "preview" | "pinned" | undefined = props.workspace.presentation === "desktop"
+      ? "preview"
+      : undefined,
+  ) => {
     if (props.file.artifactId) {
       props.workspace.onOpenArtifact(props.file.artifactId, disposition);
     } else {
@@ -96,78 +179,174 @@ export function RailRow(props: {
         ? t("chat.workspaceFiles.read")
         : undefined;
   return (
-    <div
-      role="listitem"
-      class="workspace-desktop__item"
-      aria-posinset={props.position}
-      aria-setsize={props.setSize}
-    >
-      <button
-        type="button"
-        class={["workspace-desktop__row", { "is-active": selected() }]}
-        style={{
-          "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
-        }}
-        aria-label={props.file.path}
-        aria-description={activity()}
-        aria-current={selected() ? "true" : undefined}
-        aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
-        onClick={(event) => {
-          if (props.directory) {
-            props.onToggle?.(event.detail === 0);
-          } else {
-            onOpen();
-          }
-        }}
-        onDblClick={() => {
-          if (!props.directory) {
-            onOpen("pinned");
-          }
-        }}
-      >
-        <Show
-          when={props.directory}
-          fallback={
-            <AttachmentFileIcon
-              filename={props.file.name}
-              mimeType={props.file.mimeType}
-              mode="preview-with-favicon"
-            />
-          }
+    <Show
+      when={props.view === "grid" && !props.directory}
+      fallback={
+        <div
+          role="listitem"
+          class={[
+            "workspace-desktop__item",
+            {
+              "workspace-desktop__item--actions":
+                props.workspace.presentation === undefined && !props.directory,
+            },
+          ]}
+          aria-posinset={props.position}
+          aria-setsize={props.setSize}
         >
-          <span class="workspace-desktop__folder-icon">
-            <Show when={props.expanded} fallback={<Icon name="folder" />}>
-              {/* Lucide folder-open, the approved Files glyph (ISC). */}
-              <StrokeIcon aria-hidden="true">
-                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-              </StrokeIcon>
+          <button
+            type="button"
+            class={["workspace-desktop__row", { "is-active": selected() }]}
+            style={{
+              "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
+            }}
+            aria-label={props.file.path}
+            aria-description={activity()}
+            aria-current={selected() ? "true" : undefined}
+            aria-expanded={
+              props.directory && props.workspace.presentation !== undefined
+                ? props.expanded
+                  ? "true"
+                  : "false"
+                : undefined
+            }
+            onClick={(event) => {
+              if (props.directory) {
+                props.onToggle?.(event.detail === 0);
+              } else {
+                onOpen();
+              }
+            }}
+            onDblClick={() => {
+              if (!props.directory) {
+                onOpen("pinned");
+              }
+            }}
+          >
+            <Show
+              when={props.directory}
+              fallback={
+                <AttachmentFileIcon
+                  filename={props.file.name}
+                  mimeType={props.file.mimeType}
+                  mode="preview-with-favicon"
+                />
+              }
+            >
+              <span class="workspace-desktop__folder-icon">
+                <Show when={props.expanded} fallback={<Icon name="folder" />}>
+                  {/* Lucide folder-open, the approved Files glyph (ISC). */}
+                  <StrokeIcon aria-hidden="true">
+                    <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+                  </StrokeIcon>
+                </Show>
+              </span>
             </Show>
-          </span>
-        </Show>
-        <span class="workspace-desktop__identity">
-          <span class="workspace-desktop__name-line">
-            <WorkspaceFilename name={props.file.name} />
-            <Show when={!props.directory && activity()}>
-              <span
-                class={[
-                  "workspace-desktop__activity",
-                  { "is-changed": props.file.activity !== "read" },
-                ]}
-                role="img"
-                aria-label={activity()}
-              />
-            </Show>
-          </span>
-          <Show when={props.searching}>
-            <span class="workspace-desktop__location">
-              {props.file.artifactId
-                ? t("chat.workspaceFiles.desktop.sessionFiles")
-                : (props.file.workspacePath ?? props.file.path)}
+            <span class="workspace-desktop__identity">
+              <span class="workspace-desktop__name-line">
+                <WorkspaceFilename name={props.file.name} />
+                <Show when={!props.directory && activity()}>
+                  <span
+                    class={[
+                      "workspace-desktop__activity",
+                      { "is-changed": props.file.activity !== "read" },
+                    ]}
+                    role="img"
+                    aria-label={activity()}
+                  />
+                </Show>
+              </span>
+              <Show when={props.searching || props.workspace.presentation === undefined}>
+                <span class="workspace-desktop__location">
+                  {props.file.artifactId
+                    ? t("chat.workspaceFiles.desktop.sessionFiles")
+                    : (props.file.workspacePath ?? props.file.path)}
+                </span>
+              </Show>
+              <Show when={props.workspace.presentation === undefined}>
+                <span class="workspace-desktop__location">
+                  {[
+                    props.file.artifactId ? props.file.mimeType : undefined,
+                    formatWorkspaceFileSize(props.file.size),
+                  ]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </span>
+                <Show when={props.file.missing}>
+                  <span class="workspace-desktop__location">
+                    {t("chat.workspaceFiles.missing")}
+                  </span>
+                </Show>
+              </Show>
+            </span>
+          </button>
+          <Show when={props.workspace.presentation === undefined && !props.directory}>
+            <span
+              class="workspace-desktop__actions"
+              role="group"
+              aria-label={t("chat.workspaceFiles.actions")}
+            >
+              <button
+                class="workspace-desktop__action"
+                type="button"
+                aria-label={t("chat.workspaceFiles.preview")}
+                ref={nativeListener("click", (event) => {
+                  event.stopPropagation();
+                  onOpen();
+                })}
+              >
+                <Icon name="eye" />
+              </button>
+              <Show when={!props.file.artifactId}>
+                <Show when={props.workspace.onDownloadFile}>
+                  {(download) => (
+                    <FileDownloadButton
+                      scopeKey={JSON.stringify([
+                        props.workspace.sessionKey,
+                        props.file.origin,
+                        props.file.path,
+                        props.workspace.connectionEpoch,
+                      ])}
+                      download={(signal) => download()(props.file.path, props.file.origin, signal)}
+                      disabled={props.file.missing}
+                      onDownloadStart={props.onDownloadStart}
+                      class="workspace-desktop__action"
+                    />
+                  )}
+                </Show>
+                <span ref={nativeListener("click", (event) => event.stopPropagation())}>
+                  <CopyButton
+                    text={props.file.path}
+                    idleLabel={t("chat.workspaceFiles.copyPath")}
+                  />
+                </span>
+              </Show>
             </span>
           </Show>
-        </span>
-      </button>
-    </div>
+        </div>
+      }
+    >
+      <div role="listitem" class="workspace-desktop__item">
+        <button
+          type="button"
+          class={["workspace-desktop__row workspace-desktop__tile", { "is-active": selected() }]}
+          title={props.file.name}
+          aria-label={props.file.path}
+          aria-description={activity()}
+          aria-current={selected() ? "true" : undefined}
+          onClick={() => onOpen()}
+          onDblClick={() => onOpen("pinned")}
+        >
+          <WorkspaceTileBody
+            name={props.file.name}
+            mimeType={props.file.mimeType}
+            caption
+            activity={activity()}
+            changed={props.file.activity !== "read"}
+          />
+        </button>
+      </div>
+    </Show>
   );
 }
 
@@ -183,6 +362,16 @@ export function WorkspaceRows(props: {
   let list: HTMLDivElement;
   const mountedRows = new Set<HTMLDivElement>();
   const [focusedKey, setFocusedKey] = createSignal<string>();
+  const [downloads, setDownloads] = createSignal<ReadonlySet<string>>(new Set());
+  const retainDownload = (key: string) => {
+    setDownloads((keys) => new Set([...keys, key]));
+    return () =>
+      setDownloads((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
+        return next;
+      });
+  };
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>();
   const rowsActive = createMemo(() => props.active);
   // Keep a 250 -> 125 Changed filter windowed; small and mixed lists stay eager.
@@ -216,6 +405,11 @@ export function WorkspaceRows(props: {
     // Endpoints admit native Tab from either direction; neighbors let it keep
     // advancing without intercepting keys or creating a second focus owner.
     const indexes = [0, props.rows.length - 1, selected];
+    // Pending actions pin only authoritative current rows; an admitted removal
+    // still disposes the button and cancels its request.
+    for (const key of downloads()) {
+      indexes.push(rowIndexes().get(key));
+    }
     if (focused !== undefined) {
       indexes.push(focused - 1, focused, focused + 1);
     }
@@ -371,12 +565,17 @@ export function WorkspaceRows(props: {
     return (
       <div class="workspace-desktop__branch">
         <Show
-          when={childProps.row.directory}
+          when={childProps.row.directory && props.workspace.presentation !== undefined}
           fallback={
             <RailRow
               file={childProps.row}
               workspace={props.workspace}
               depth={props.depth}
+              directory={childProps.row.directory}
+              onDownloadStart={() => retainDownload(childProps.row.key)}
+              onToggle={() =>
+                props.workspace.onBrowsePath(childProps.row.workspacePath ?? childProps.row.path)
+              }
               position={childProps.position}
               setSize={childProps.setSize}
             />

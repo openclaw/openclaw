@@ -1,0 +1,3 @@
+# Native receipt delivery: large array/reload/entry shapes conserve worker bytes;
+# serialization failures retain known totals, unsampled frames skip attribution.
+107

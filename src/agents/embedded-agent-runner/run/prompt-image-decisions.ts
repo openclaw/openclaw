@@ -110,6 +110,14 @@ export async function resolvePromptImageDecisions(params: {
       imageFactIndexes.push(part);
     }
   });
+  // Once an included source is unavailable or changed, pin its omission too.
+  // Otherwise both context hydration and provider replay retry it on every call.
+  const retainedParts = new Set(imageFactIndexes);
+  for (const part of previous.hashes.keys()) {
+    if (!retainedParts.has(part)) {
+      previous.hashes.delete(part);
+    }
+  }
   // Pinned omissions are already counted; only a previously included image that
   // is now missing or changed is a new failure.
   return {

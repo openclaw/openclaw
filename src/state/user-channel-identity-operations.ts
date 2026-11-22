@@ -61,6 +61,18 @@ function unwrapIdentityResult<T>(result: UserChannelIdentityResult<T>, profileId
   throw new Error("Unsupported channel identity result");
 }
 
+/** A presentation lookup: the returned profile ID is not an authority lease. */
+export async function readCanonicalUserChannelIdentityProfileId(
+  identity: UserChannelIdentity,
+  options: IdentityOptions = {},
+): Promise<string | undefined> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "userProfiles.channelIdentity.resolve",
+    identity: { ...identity },
+  });
+  return reply?.linked?.profileId;
+}
+
 export async function listCanonicalUserChannelIdentities(
   profileId: string,
   options: IdentityOptions = {},
@@ -98,6 +110,7 @@ async function changeIdentity(
       assertCurrent,
       createAdmission: (operation) => {
         let fence: ReturnType<typeof fenceUserProfileMutationAuthority> | undefined;
+        let notifyProfiles = false;
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           if (
             (request.stage !== "transaction" && request.stage !== "commit") ||
@@ -122,6 +135,7 @@ async function changeIdentity(
             const { profiles, channels } = request.facts;
             if (
               !grant(() => {
+                notifyProfiles = profiles.length > 0 || channels.length > 0;
                 fence = fenceUserProfileMutationAuthority(context.admission, {
                   profiles,
                   identities: [],
@@ -140,7 +154,7 @@ async function changeIdentity(
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
           if (
-            captured.action !== "authorize" &&
+            notifyProfiles &&
             committed &&
             isRecord(committed.facts) &&
             committed.facts.kind === "channel-identity" &&
@@ -283,6 +297,9 @@ export async function prepareUserProfileRolePolicyAuthority(
           profileId: profile.profileId,
           role: profile.role,
           githubLogin: profile.githubLogin ?? null,
+          ...(profile.openclawIdAccountIds
+            ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+            : {}),
         }
       );
     }
@@ -295,6 +312,9 @@ export async function prepareUserProfileRolePolicyAuthority(
             profileId: profile.profileId,
             role: profile.role,
             githubLogin: profile.githubLogin ?? null,
+            ...(profile.openclawIdAccountIds
+              ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+              : {}),
           }
         );
       } finally {

@@ -34,7 +34,6 @@ vi.mock("../model-auth.js", async (importOriginal) => {
   };
 });
 
-const AGENT_DIR = "/tmp/openclaw-model-config-helper";
 const MODEL = "gpt-5.5";
 
 function providerConfig(provider = "hatchery", key = "sk-configured"): OpenClawConfig {
@@ -85,7 +84,6 @@ const resolveMedia = (
   overrides: Partial<Parameters<typeof resolveOpenAiImageMediaCandidate>[0]> = {},
 ) =>
   resolveOpenAiImageMediaCandidate({
-    agentDir: AGENT_DIR,
     authStore: store({}),
     openAiModel: MODEL,
     resolveCodexMediaRoute: () => ({ model: MODEL }),

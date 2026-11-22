@@ -2,7 +2,9 @@ import path from "node:path";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
+import { resolveSandboxDependencyStore } from "./config-contract.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
@@ -33,6 +35,10 @@ const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
 const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
+class SandboxDependencyPreparationError extends Error {}
+const MISSING_IDLE_PRIORITY =
+  "Background dependency preparation requires ionice in the sandbox image";
+
 type StartedBuilder = {
   containerName: string;
   containerId: string;
@@ -40,23 +46,23 @@ type StartedBuilder = {
 };
 
 function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDockerConfig {
-  return {
+  const storeDir = cfg.docker.env?.PNPM_CONFIG_STORE_DIR ?? cfg.docker.env?.npm_config_store_dir;
+  return resolveSandboxDependencyStore({
     ...cfg.docker,
     image,
     containerPrefix: CONTAINER_PREFIX,
     // Builder state must be writable even with a missing image HOME, and never staged.
-    tmpfs: [...cfg.docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
     env: {
       CI: "1",
       HOME: "/tmp/openclaw-deps",
       XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
       XDG_DATA_HOME: "/tmp/openclaw-deps/data",
       XDG_STATE_HOME: "/tmp/openclaw-deps/state",
-      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+      ...(storeDir !== undefined ? { PNPM_CONFIG_STORE_DIR: storeDir } : {}),
     },
     setupCommand: undefined,
     binds: undefined,
-  };
+  });
 }
 
 export type SandboxDependencyTemplateIdentity = {
@@ -109,6 +115,7 @@ export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
   started?: StartedBuilder,
+  stateGuard?: WorkspaceStateGuard,
 ): Promise<void> {
   using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.registry`);
   const context = captureOpenClawStateWorkerContext();
@@ -125,7 +132,7 @@ export async function retireSandboxDependencyTemplate(
   phases.mark(`${DEPENDENCY_PHASE}.retire.builders`);
   for (const entry of entries) {
     if (entry.sessionKey.startsWith(SCOPE_PREFIX)) {
-      await retireSandboxDependencyBuilder(entry, assertOwner, false, started);
+      await retireSandboxDependencyBuilder(entry, assertOwner, false, started, stateGuard);
     }
   }
 }
@@ -136,6 +143,7 @@ export async function retireSandboxDependencyBuilder(
   assertOwner: () => void,
   remove = false,
   started?: StartedBuilder,
+  stateGuard?: WorkspaceStateGuard,
 ): Promise<void> {
   using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.lock`);
   const context = captureOpenClawStateWorkerContext();
@@ -145,6 +153,7 @@ export async function retireSandboxDependencyBuilder(
       phases.mark(`${DEPENDENCY_PHASE}.retire.claim`);
       assertOwner();
       const entry = await beginSandboxRegistryRemoval(candidate, {
+        ...stateGuard,
         beforeLegacyApply: assertOwner,
       });
       if (!entry) {
@@ -161,10 +170,12 @@ export async function retireSandboxDependencyBuilder(
       ) {
         throw new Error("Dependency template builder has no local engine owner; template retained");
       }
-      const engine =
-        entry.backendId === "podman"
+      const engine = {
+        ...(entry.backendId === "podman"
           ? bindPodmanSandboxEngine(entry.backendTarget!)
-          : DOCKER_SANDBOX_ENGINE;
+          : DOCKER_SANDBOX_ENGINE),
+        stateGuard,
+      };
       phases.mark(`${DEPENDENCY_PHASE}.retire.target`);
       await validateSandboxContainerEngineTarget(engine, entry.backendTarget);
       assertCurrent();
@@ -243,6 +254,7 @@ export async function prepareSandboxDependencyTemplate(params: {
   cfg: SandboxConfig;
   scopeKey: string;
   identity: SandboxDependencyTemplateIdentity;
+  idleIoPriority?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
   rollbackGuard: () => void;
@@ -305,6 +317,7 @@ export async function prepareSandboxDependencyTemplate(params: {
       const installTimeout = AbortSignal.timeout(15 * 60_000);
       timeout = installTimeout;
       phases.mark(`${DEPENDENCY_PHASE}.install`);
+      // Retained dependencies must still run lifecycle scripts for the new source commit.
       const installed = await timeWorktreePreparationPhase("setup", () =>
         execContainer(
           identity.engine,
@@ -315,7 +328,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
+            `${params.idleIoPriority ? `command -v ionice >/dev/null 2>&1 || { echo '${MISSING_IDLE_PRIORITY}' >&2; exit 127; }; exec ionice -c 3 ` : "exec "}pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
           ],
           {
             allowFailure: true,
@@ -329,6 +342,22 @@ export async function prepareSandboxDependencyTemplate(params: {
       if (installed.code === 0) {
         return { installed: true };
       }
+      if (
+        params.idleIoPriority &&
+        installed.code === 127 &&
+        installed.stderr.includes(MISSING_IDLE_PRIORITY)
+      ) {
+        // Leave foreground installation available instead of caching a priority-tool failure.
+        throw new SandboxDependencyPreparationError(MISSING_IDLE_PRIORITY);
+      }
+      // Detect before truncation: pnpm may emit progress after its storage error.
+      if (
+        /ENOSPC|no\s+space\s+left\s+on\s+device/iu.test(`${installed.stdout}\n${installed.stderr}`)
+      ) {
+        throw new SandboxDependencyPreparationError(
+          "Sandbox dependency installation ran out of space. Check free bytes and inodes in /tmp/openclaw-deps and the workspace. For a full temporary pnpm store, set sandbox.docker.env.PNPM_CONFIG_STORE_DIR to a disk-backed workspace path, then retry.",
+        );
+      }
       // pnpm reports some failures on stdout. Redact before truncating secret context.
       const tail = redactSensitiveText(`${installed.stdout}\n${installed.stderr}`, {
         mode: "tools",
@@ -339,9 +368,12 @@ export async function prepareSandboxDependencyTemplate(params: {
         installed: false,
         reason: `pnpm install failed (exit ${installed.code})${tail ? `: ${tail}` : ""}`,
       };
-    } catch {
+    } catch (error) {
       // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
+      if (error instanceof SandboxDependencyPreparationError) {
+        throw error;
+      }
       return {
         installed: false,
         reason: timeout?.aborted
@@ -353,7 +385,9 @@ export async function prepareSandboxDependencyTemplate(params: {
       // Cleanup outlives cancellation. A failed retirement must preserve the template
       // reservation rather than publish or delete bytes a live builder can still write.
       try {
-        await retireSandboxDependencyTemplate(directory, params.rollbackGuard, started);
+        await timeWorktreePreparationPhase("templateRetire", () =>
+          retireSandboxDependencyTemplate(directory, params.rollbackGuard, started),
+        );
       } finally {
         try {
           await started?.cgroup.close();

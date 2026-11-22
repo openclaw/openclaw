@@ -50,6 +50,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   const attribution = prepareGatewayIngressAttribution({
     req,
     trustedProxies,
+    trustedProxy: auth.trustedProxy,
     allowRealIpFallback,
   });
   if (attribution.kind === "unattributable-proxy") {

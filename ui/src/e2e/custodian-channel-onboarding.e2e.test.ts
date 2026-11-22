@@ -124,7 +124,7 @@ suite.define(() => {
           retryable: true,
         });
         const channelStatusError = page.getByRole("alert").filter({
-          hasText: "Channel status is unavailable",
+          hasText: "Couldn’t check channel status",
         });
         await channelStatusError.waitFor();
         await capture(page, "02-channel-status-error-before-retry");

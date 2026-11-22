@@ -5,7 +5,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
-import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
+import {
+  downloadExactActionsArtifactArchive,
+  validateActionsArtifactProducerJob,
+} from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   createPluginPublicationArtifact,
   downloadActionsArtifactArchive,
@@ -784,6 +787,39 @@ describe("plugin publication artifact", () => {
     },
   );
 
+  it.each([
+    { label: "short outer deadline caps explicit phase deadline", phaseMs: 480_000, outerMs: 500 },
+    { label: "long outer deadline preserves default phase deadline", outerMs: 600_000 },
+  ])("bounds artifact transfer phases: $label", async (scenario) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const fixture = createDownloadFixture();
+      const urls: string[] = [];
+      const result = downloadExactActionsArtifactArchive({
+        expected: fixture.expected,
+        deadlineMs: scenario.phaseMs === undefined ? undefined : Date.now() + scenario.phaseMs,
+        outerDeadlineMs: Date.now() + scenario.outerMs,
+        fetchImpl: async (input: string | URL | Request) => {
+          urls.push(String(input));
+          return urls.length === 1
+            ? new Response("rate limited", { status: 429, headers: { "retry-after": "300" } })
+            : fixture.fetchImpl(input);
+        },
+        token: "test-token",
+      });
+      const assertion = expect(result).rejects.toThrow(
+        "deadline would be exceeded before the permitted retry",
+      );
+      await Promise.all([assertion, vi.advanceTimersByTimeAsync(300_000)]);
+      expect(urls).toEqual([
+        "https://api.github.com/repos/" + REPOSITORY + "/actions/artifacts/" + ARTIFACT_ID,
+      ]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([403])("does not retry permanent HTTP %i artifact failures", async (status) => {
     const fixture = createDownloadFixture();
     let requests = 0;
@@ -960,6 +996,49 @@ describe("plugin publication artifact", () => {
     );
     await expect(downloadForAttempts(3, 2)).rejects.toThrow(
       "Producer workflow run attempt must not be newer than the consumer attempt.",
+    );
+  });
+
+  it("requires explicit same-attempt upload-step binding to consume an active producer job", () => {
+    const fixture = createDownloadFixture(2);
+    const producerJobName = "Publish plugins, then OpenClaw";
+    const workflowJobs = {
+      total_count: 1,
+      jobs: [
+        {
+          ...workflowJobsMetadata(producerJobName, 2, "success").jobs[0]!,
+          status: "in_progress",
+          conclusion: null,
+          steps: [
+            { name: "Upload immutable artifact", status: "completed", conclusion: "success" },
+          ],
+        },
+      ],
+    };
+    const params = {
+      expected: {
+        ...fixture.expected,
+        consumerRunAttempt: 2,
+        producerJobName,
+        producerStepName: "Upload immutable artifact",
+        runStatePolicy: "same-run-producer-success",
+      },
+      workflowJobs,
+    };
+    expect(() => validateActionsArtifactProducerJob(params)).toThrow("producer job");
+    expect(() =>
+      validateActionsArtifactProducerJob({ ...params, allowActiveJob: true }),
+    ).not.toThrow();
+    expect(() =>
+      validateActionsArtifactProducerJob({
+        ...params,
+        allowActiveJob: true,
+        expected: { ...params.expected, consumerRunAttempt: 3 },
+      }),
+    ).toThrow("producer job");
+    workflowJobs.jobs[0]!.steps[0]!.conclusion = "failure";
+    expect(() => validateActionsArtifactProducerJob({ ...params, allowActiveJob: true })).toThrow(
+      "producer step",
     );
   });
 

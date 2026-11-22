@@ -173,6 +173,9 @@ export function prependOlderChatItems(
         !sameSeamItem(retainedItems[turn.index + index]!, item, same),
     ) ||
     pageFacts.modelBefore !== seamFacts.modelBefore ||
+    [...(pageFacts.completionIds ?? [])].some(
+      (id) => facts.completionIds?.has(id) && !seamFacts.completionIds?.has(id),
+    ) ||
     [...pageFacts.firsts].some(
       ([key, message]) => pageMessages.has(message) && facts.firsts.has(key),
     ) ||
@@ -217,6 +220,9 @@ export function prependOlderChatItems(
     facts: {
       ...facts,
       history,
+      completionIds: new Set([...(facts.completionIds ?? []), ...(pageFacts.completionIds ?? [])]),
+      hasContentBeforeProgress:
+        pageFacts.hasContentBeforeProgress === true || facts.hasContentBeforeProgress === true,
       indexedDividers: [
         ...pageFacts.indexedDividers.filter((message) => pageMessages.has(message)),
         ...facts.indexedDividers,

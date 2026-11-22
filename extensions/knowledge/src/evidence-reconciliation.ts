@@ -1,6 +1,7 @@
 import { parseDocument } from "yaml";
 import { annotationEvidence } from "./annotations.js";
 import type { ReconcileEvidenceInput } from "./evidence-reconciliation-contract.js";
+import { hashMatches } from "./hash-fence.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import type { LoadedRecord } from "./model.js";
 import { encodeRecordEvidence } from "./source-records.js";
@@ -13,7 +14,7 @@ export function prepareEvidenceRevision(
 ) {
   if (
     !previous.valid ||
-    previous.hash !== input.expectedHash ||
+    !hashMatches(previous.hash, input.expectedHash) ||
     previous.revision !== input.expectedRevision
   ) {
     throw new Error("Evidence reconciliation conflict: target invalid or changed.");

@@ -351,28 +351,76 @@ export function prepareGatewaySuspend(params: {
   }
 }
 
-function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandoffOwner) {
+type HandoffRefusal = {
+  message: string;
+  details?: {
+    terminalPersistence: { count: number; oldestAgeMs: number | null; runIds: string[] };
+  };
+};
+
+/** Late final writes share the original 30-second drain budget, never its cleanup grace. */
+export async function requestGatewaySuspendHandoff(
+  params: Parameters<typeof armGatewaySuspendHandoff>[0] & { assertCurrent: () => void },
+): Promise<ReturnType<typeof armGatewaySuspendHandoff>> {
+  params.assertCurrent();
+  const initial = armGatewaySuspendHandoff(params);
+  if (initial.ok || !initial.error.details?.terminalPersistence) {
+    return initial;
+  }
+  const held = COORDINATOR_STATE.current;
+  if (!held?.drain) {
+    return initial;
+  }
+  while (
+    COORDINATOR_STATE.current === held &&
+    params.owner.isCurrent() &&
+    (held.inspect?.getTerminalPersistence?.() ?? 0) > 0
+  ) {
+    const remainingMs =
+      Math.min(held.expiresAtMs - held.nowMs(), held.deadlineAtMs - performance.now()) - 15_000;
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(250, remainingMs));
+    });
+  }
+  params.assertCurrent();
+  return armGatewaySuspendHandoff(params);
+}
+
+function handoffRefusal(
+  held: HeldGatewaySuspension,
+  owner: GatewaySuspendHandoffOwner,
+): HandoffRefusal | undefined {
   if (
     COORDINATOR_STATE.current !== held ||
     held.nowMs() >= held.expiresAtMs ||
     performance.now() >= held.deadlineAtMs ||
     !owner.isCurrent()
   ) {
-    return "gateway suspension or host iteration changed";
+    return { message: "gateway suspension or host iteration changed" };
   }
   // READY retains this server-owned inspector too: final-chat writes can arrive
   // after preparation and must never be replaced by the process-only inventory.
   if (!held.inspect?.getTerminalPersistence) {
-    return "gateway terminal persistence inspection is unavailable";
+    return { message: "gateway terminal persistence inspection is unavailable" };
   }
   const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
     ignoreTerminalSessions: held.terminalPolicy === "terminate",
   });
   if (snapshot.counts.terminalPersistence > 0) {
-    return "gateway terminal persistence is still pending";
+    const terminalPersistence = {
+      count: snapshot.counts.terminalPersistence,
+      ...(held.inspect.getTerminalPersistenceDiagnostics?.() ?? { oldestAgeMs: null, runIds: [] }),
+    };
+    return {
+      message: `gateway terminal persistence is still pending: ${JSON.stringify(terminalPersistence)}`,
+      details: { terminalPersistence },
+    };
   }
   if (snapshot.writeCustody.some(({ count }) => count > 0)) {
-    return "gateway write custody is still pending";
+    return { message: "gateway write custody is still pending" };
   }
   return undefined;
 }
@@ -382,7 +430,7 @@ export function armGatewaySuspendHandoff(params: {
   suspensionId: string;
   owner: GatewaySuspendHandoffOwner;
   commit?: true;
-}): Result<GatewaySuspendHandoffResult, string> {
+}): Result<GatewaySuspendHandoffResult, HandoffRefusal> {
   const committed = params.commit ? getRestartingSuspension() : undefined;
   if (
     committed?.suspensionId === params.suspensionId &&
@@ -396,18 +444,18 @@ export function armGatewaySuspendHandoff(params: {
   }
   const held = COORDINATOR_STATE.current;
   if (!held || held.suspensionId !== params.suspensionId) {
-    return resultError("gateway suspension id does not match");
+    return resultError({ message: "gateway suspension id does not match" });
   }
   const refusal = handoffRefusal(held, params.owner);
   if (refusal) {
     return resultError(refusal);
   }
   if (held.handoff && held.handoff !== params.owner) {
-    return resultError("gateway suspension already belongs to another host iteration");
+    return resultError({ message: "gateway suspension already belongs to another host iteration" });
   }
   if (params.commit) {
     if (!params.owner.commitStop) {
-      return resultError("gateway host does not support committed suspension stop");
+      return resultError({ message: "gateway host does not support committed suspension stop" });
     }
     const changed = handoffRefusal(held, params.owner);
     if (changed) {
@@ -419,7 +467,7 @@ export function armGatewaySuspendHandoff(params: {
     } catch {
       // The callback may already have committed shutdown. Never reopen admission
       // or turn an unknown stop outcome into permission to replay native effects.
-      return resultError("gateway suspension stop commitment outcome is uncertain");
+      return resultError({ message: "gateway suspension stop commitment outcome is uncertain" });
     }
     const signal = getGatewayRestartDrainSignal();
     if (
@@ -428,7 +476,7 @@ export function armGatewaySuspendHandoff(params: {
       held.shutdown?.signal !== signal ||
       !isGatewayRestartDraining()
     ) {
-      return resultError("gateway suspension stop commitment outcome is uncertain");
+      return resultError({ message: "gateway suspension stop commitment outcome is uncertain" });
     }
     held.committedStopOwner = params.owner;
     return ok({
@@ -451,7 +499,7 @@ export function consumeGatewaySuspendHandoff(
   }
   held.handoff = undefined;
   const refusal = handoffRefusal(held, owner);
-  return refusal ? resultError(refusal) : ok(true);
+  return refusal ? resultError(refusal.message) : ok(true);
 }
 
 export function disarmGatewaySuspendHandoff(owner: GatewaySuspendHandoffOwner): void {

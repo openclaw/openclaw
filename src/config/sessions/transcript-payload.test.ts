@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
 import {
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
@@ -55,7 +56,11 @@ function createTable(database: DatabaseSync): void {
     navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER NOT NULL DEFAULT 0,
     message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
     navigation_valid INTEGER NOT NULL DEFAULT 1
-  ) STRICT`);
+  ) STRICT;
+  CREATE TABLE session_transcript_active_event_facts (
+    session_id TEXT NOT NULL, seq INTEGER NOT NULL, serialized_bytes INTEGER NOT NULL,
+    dependency_navigation_json TEXT NOT NULL, PRIMARY KEY(session_id, seq)
+  ) STRICT, WITHOUT ROWID`);
   admitSqliteSchema(database);
 }
 
@@ -222,6 +227,12 @@ describe("transcript payload storage boundary", () => {
       navigation_valid: 1,
     };
     expect(read()).toEqual(original);
+    database.exec(
+      "INSERT INTO session_transcript_active_event_facts VALUES ('session', 1, 79, '{}')",
+    );
+    const facts = () =>
+      database.prepare("SELECT * FROM session_transcript_active_event_facts").all();
+    const beforeFacts = facts();
     database.exec("BEGIN");
     createTranscriptPayloadUpdater(
       database,
@@ -240,9 +251,43 @@ describe("transcript payload storage boundary", () => {
       message_role: null,
       navigation_valid: 1,
     });
+    expect(facts()).toEqual([]);
     database.exec("ROLLBACK");
     expect(read()).toEqual(original);
+    expect(facts()).toEqual(beforeFacts);
   });
+
+  it.each([true, false])(
+    "requires facts except in an admitted predecessor repair (legacy: %s)",
+    (legacy) => {
+      using database = openNodeSqliteDatabase(":memory:");
+      createTable(database);
+      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+      ALTER TABLE transcript_events ADD COLUMN created_at INTEGER;
+      DROP TABLE session_transcript_active_event_facts;
+      PRAGMA user_version = ${AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION - (legacy ? 1 : 0)};
+      INSERT INTO transcript_events (seq, session_id, event_json, created_at) VALUES (1, 'repair', '{}', 1)`);
+      admitSqliteSchema(database);
+      database.exec("BEGIN");
+      const rewrite = () =>
+        createTranscriptPayloadUpdater(
+          database,
+          "repair",
+        )({ seq: 1, ...prepareTranscriptPayload(database, '{"type":"custom","id":"repaired"}') });
+      if (legacy) {
+        expect(rewrite).not.toThrow();
+        expect(database.prepare("SELECT event_json FROM transcript_events").get()?.event_json).toBe(
+          '{"type":"custom","id":"repaired"}',
+        );
+      } else {
+        expect(rewrite).toThrow(/session_transcript_active_event_facts/);
+      }
+      database.exec("ROLLBACK");
+      expect(database.prepare("SELECT event_json FROM transcript_events").get()?.event_json).toBe(
+        "{}",
+      );
+    },
+  );
 
   it.each([
     ["UTF-16le", "UTF-8"],
@@ -325,6 +370,12 @@ describe("transcript payload storage boundary", () => {
           1,
         ],
         ['{"type":"custom","id":"\\ud800","data":"a\\u0000b"}', "custom", null, 1],
+        [
+          JSON.stringify({ type: "session", id: "header", version: 3, padding: "x".repeat(4096) }),
+          "session",
+          null,
+          1,
+        ],
         ['{"type":"custom","data":"literal\0nul"}', null, null, 0],
         ["null", null, null, 1],
       ] as const;
@@ -352,44 +403,12 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each([[3]])("keeps a genuine large header in identity storage with version %j", (version) => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
-      admitSqliteSchema(database);
-      const original = JSON.stringify({
-        type: "session",
-        id: "header",
-        version,
-        padding: "x".repeat(4096),
-      });
-      const payload = prepareTranscriptPayload(database, original);
-      expect(payload).toEqual({
-        event_json: original,
-        event_zstd: null,
-        event_utf8_bytes: Buffer.byteLength(original),
-        navigation_json: null,
-        navigation_type: "session",
-        navigation_custom_type: null,
-        navigation_display: 0,
-        message_role: null,
-        navigation_last_type: "session",
-        navigation_last_custom_type: null,
-        navigation_valid: 1,
-      });
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each(["text fallback"])("preserves owner projections with %s JSON", (mode) => {
-    const jsonb =
-      mode === "text fallback"
-        ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
-        : undefined;
+  it("preserves owner projections with text fallback JSON", () => {
+    const jsonb = vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false);
     const database = openNodeSqliteDatabase(":memory:");
     try {
       createTable(database);
-      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(mode === "large" ? 256 * 1024 : 512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
+      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
       const prepared = prepareTranscriptPayload(database, original);
       expect(prepared.event_zstd).not.toBeNull();
       insert(database, 0, {
@@ -470,7 +489,7 @@ describe("transcript payload storage boundary", () => {
       expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
     } finally {
       database.close();
-      jsonb?.mockRestore();
+      jsonb.mockRestore();
     }
   });
 
@@ -562,6 +581,32 @@ describe("transcript payload storage boundary", () => {
       2 * original.byteLength * decoded.length + 2 * Buffer.poolSize,
     );
   });
+
+  it.each(["sql", "row"] as const)(
+    "classifies missing and malformed bodies through %s reads",
+    (mode) => {
+      using database = openNodeSqliteDatabase(":memory:");
+      createTable(database);
+      insert(database, 7, {
+        event_json: null,
+        event_zstd: null,
+        event_utf8_bytes: 128,
+        navigation_json: '{"type":"message"}',
+      });
+      const read = () => readBody(database, 7, mode);
+      expect(read).toThrow(
+        expect.objectContaining({ name: "SessionTranscriptColdError", code: "TRANSCRIPT_COLD" }),
+      );
+      database.prepare("UPDATE transcript_events SET event_zstd = ?").run(Buffer.alloc(0));
+      expect(read).toThrow(
+        expect.objectContaining({
+          name: "SessionTranscriptCorruptionError",
+          code: "TRANSCRIPT_CORRUPT",
+          message: expect.stringContaining("Restore a verified backup"),
+        }),
+      );
+    },
+  );
 
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");

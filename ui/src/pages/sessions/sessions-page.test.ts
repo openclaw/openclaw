@@ -179,16 +179,16 @@ describe("sessions page lifecycle", () => {
     agentIdentity.invalidate(["main"]);
     await agentIdentity.ensure(["main"]);
     await page.updateComplete;
-    expect(page.querySelector(".session-link")?.textContent).toContain("After");
+    expect(page.querySelector(".session-key-display-name")?.textContent).toContain("After");
     const checkbox = page.querySelector<HTMLInputElement>(".session-data-row input")!;
-    const menu = page.querySelector<HTMLButtonElement>(".session-actions .icon-btn")!;
-    const english = [checkbox.getAttribute("aria-label"), menu.title];
+    const menu = page.querySelector(".session-row-menu-trigger")!.closest("openclaw-tooltip")!;
+    const english = [checkbox.getAttribute("aria-label"), menu.content];
     try {
       await i18n.setLocale("de");
       await i18n.prepareLocale();
       await page.updateComplete;
       expect(checkbox.getAttribute("aria-label")).not.toBe(english[0]);
-      expect(menu.title).not.toBe(english[1]);
+      expect(menu.content).not.toBe(english[1]);
     } finally {
       await i18n.setLocale("en");
     }
@@ -346,14 +346,14 @@ describe("sessions page lifecycle", () => {
       expect(sessions.deleteMany).not.toHaveBeenCalled();
       answerConfirmDialog(actions, "confirm");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       pending.reject(new Error("Deletion unavailable. Try again."));
       await waitForFast(() =>
         expect(page.querySelector('[role="alert"]')?.textContent).toContain(
           "Deletion unavailable. Try again.",
         ),
       );
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       expect(page.textContent).toContain("Command fixture");
     } finally {
       pending.resolve(emptyDeletion());
@@ -397,19 +397,19 @@ describe("sessions page lifecycle", () => {
     try {
       await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       changeScope("reviewer");
       await page.updateComplete;
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       const nextTarget = sessionRow("new-scope-command", {
         key: "agent:reviewer:new-scope-command",
       });
       page.result = sessionsResult([nextTarget], 2);
       await chooseAdvanced(page, nextTarget, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       next.resolve(emptyDeletion());
-      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      await waitForFast(() => expect(page.textContent).not.toContain("Working"));
       pending.reject(new Error("Old agent deletion failed"));
       await page.updateComplete;
       expect(page.textContent).not.toContain("Old agent deletion failed");

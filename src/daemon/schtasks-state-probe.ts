@@ -7,6 +7,7 @@ import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import {
@@ -345,9 +346,9 @@ export function prepareScheduledTaskSettlement(taskName: string) {
     end: () => Promise<void>,
   ): Promise<ScheduledTaskSettlement> => {
     let ended = false;
-    const deadline = Date.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    const deadline = monotonicDeadlineAfter(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
     for (;;) {
-      const remaining = Math.max(1, deadline - Date.now());
+      const remaining = Math.max(1, remainingMonotonicMs(deadline));
       const task = probeScheduledTaskState(
         taskName,
         Math.min(WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, remaining),
@@ -362,18 +363,21 @@ export function prepareScheduledTaskSettlement(taskName: string) {
           return { status: "settled", taskName, lastRunResult, ended };
         }
         // Reserve 60s for query, 15s for /End, and 60s to confirm the observed task run.
-        if ((state === 2 || state === 4) && Date.now() >= deadline - (ended ? 0 : 135_000)) {
-          if (ended || Date.now() >= deadline) {
+        if (
+          (state === 2 || state === 4) &&
+          remainingMonotonicMs(deadline) <= (ended ? 0 : 135_000)
+        ) {
+          if (ended || remainingMonotonicMs(deadline) <= 0) {
             throw new Error(`Task ${taskName} did not settle; /Run refused.`);
           }
           await end();
           ended = true;
         }
       }
-      if (Date.now() >= deadline) {
+      if (remainingMonotonicMs(deadline) <= 0) {
         return { status: "unavailable", taskName, ended };
       }
-      await sleep(Math.min(100, deadline - Date.now()));
+      await sleep(Math.min(100, remainingMonotonicMs(deadline)));
     }
   };
 }

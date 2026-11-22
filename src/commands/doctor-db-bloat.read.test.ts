@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sha256File } from "../infra/crypto-digest.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { BLOAT_MIN_FILE_BYTES } from "./doctor-db-bloat.constants.js";
 import { readSqliteDatabaseBloat } from "./doctor-db-bloat.read.js";

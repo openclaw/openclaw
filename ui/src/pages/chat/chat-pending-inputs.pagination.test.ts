@@ -383,7 +383,7 @@ describe("server-owned pending input pagination", () => {
       for (let index = 0; index < 3; index++) {
         applyChatPendingInputs(host, latestPage);
       }
-      expect(olderReads).toBe(2);
+      await vi.waitFor(() => expect(olderReads).toBe(2));
       expect(getChatPendingInputs(host)?.loading).toBe(false);
       expect(getChatPendingInputs(host)?.before).toBe(2);
       const showLatest = loadChatPendingInputs(host);
@@ -422,6 +422,7 @@ describe("server-owned pending input pagination", () => {
       host.chatMessages = history;
       applyChatPendingInputs(host, page);
       const paging = loadChatPendingInputs(host, 2);
+      await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(1));
       if (change !== "session") {
         applyChatPendingInputs(host, page);
       }

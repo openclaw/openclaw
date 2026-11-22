@@ -15,26 +15,55 @@ export function fitBackgroundResultDependencies(
   serializedBytes: number;
   truncated: boolean;
 } {
-  const placements = new Map<number, string[]>();
+  return fitBackgroundResultDependencyFacts(
+    selected,
+    candidates.map((row) => {
+      const entry = asOptionalRecord(row.event);
+      return {
+        ...row,
+        type: entry?.type,
+        id: entry?.id,
+        pending: entry?.type === "message" && isPendingBackgroundResultMessage(entry.message),
+        placement: readBackgroundResultPlacement(entry)?.resultEntryIds,
+      };
+    }),
+    headerBytes,
+    maxBytes,
+  );
+}
+
+/** The native compaction reader supplies navigation facts, never payload-shaped entries. */
+export function fitBackgroundResultDependencyFacts(
+  selected: readonly { seq: number; serialized_bytes: number }[],
+  candidates: readonly {
+    seq: number;
+    serialized_bytes: number;
+    type: unknown;
+    id: unknown;
+    pending: boolean;
+    placement?: readonly string[];
+  }[],
+  headerBytes: number,
+  maxBytes?: number,
+): {
+  rows: { seq: number; serialized_bytes: number }[];
+  serializedBytes: number;
+  truncated: boolean;
+} {
+  const placements = new Map<number, readonly string[]>();
   const sources = new Map<string, (typeof candidates)[number]>();
   const pending = new Map<string, (typeof candidates)[number]>();
   for (const row of candidates) {
-    const entry = asOptionalRecord(row.event);
-    if (entry?.type === "reset" || entry?.type === "branch_summary") {
+    if (row.type === "reset" || row.type === "branch_summary") {
       pending.clear();
     }
-    if (
-      entry?.type === "message" &&
-      typeof entry.id === "string" &&
-      isPendingBackgroundResultMessage(entry.message)
-    ) {
-      sources.set(entry.id, row);
-      pending.set(entry.id, row);
+    if (row.pending && typeof row.id === "string") {
+      sources.set(row.id, row);
+      pending.set(row.id, row);
     }
-    const placement = readBackgroundResultPlacement(entry);
-    if (placement) {
-      placements.set(row.seq, placement.resultEntryIds);
-      for (const id of placement.resultEntryIds) {
+    if (row.placement) {
+      placements.set(row.seq, row.placement);
+      for (const id of row.placement) {
         pending.delete(id);
       }
     }

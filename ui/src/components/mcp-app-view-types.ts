@@ -1,12 +1,15 @@
+import type { McpAppIdentity } from "../../../src/shared/mcp-app-extensions.js";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import type { McpAppContextState, McpAppHostSandboxCsp } from "./mcp-app-security.ts";
 
 export type McpAppViewPayload = {
+  appIdentity?: McpAppIdentity;
   sandboxUrl: string;
   sandboxPort: number;
   sandboxOrigin?: string;
+  sandboxShellHtml?: string;
   html: string;
   csp?: McpAppHostSandboxCsp;
   toolInput: unknown;
@@ -57,6 +60,11 @@ export type McpAppViewProps = {
   onHeightChange: ((height: number | null, settled?: boolean) => number | undefined) | undefined;
   relaunching: boolean;
   displayMode: "inline" | "fullscreen";
+  sidebar: boolean;
 };
-export type ViewMethods = { teardown(): Promise<void>; restartAfterTeardown(): void };
+export type ViewMethods = {
+  teardown(): Promise<void>;
+  restartAfterTeardown(): void;
+  presentInSidebar(target: HTMLElement): () => void;
+};
 export type McpAppViewElement = SolidBridgeElement<McpAppViewProps, ViewMethods>;

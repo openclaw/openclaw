@@ -1,5 +1,6 @@
 type SessionCompanionAskErrorReason =
   | "busy"
+  | "stopped"
   | "context-unavailable"
   | "rate-limited"
   | "timeout"

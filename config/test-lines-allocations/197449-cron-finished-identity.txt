@@ -1,0 +1,3 @@
+# PR #197449: 32 lines for scheduled finished-event task identity,
+# manual request precedence, and no fabricated session identity.
+32

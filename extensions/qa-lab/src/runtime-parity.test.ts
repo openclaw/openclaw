@@ -14,11 +14,13 @@ import {
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
-  type RuntimeParityCell,
-  type RuntimeParityScenarioExecution,
-  type RuntimeParityToolCall,
 } from "./runtime-parity.js";
 import { createRuntimeParityTranscriptHarness } from "./runtime-parity.test-helper.js";
+import type {
+  RuntimeParityCell,
+  RuntimeParityScenarioExecution,
+  RuntimeParityToolCall,
+} from "./runtime-parity.types.js";
 import { readQaScenarioFile } from "./scenario-catalog.js";
 import { buildQaToolCoverageReport } from "./tool-coverage-report.js";
 
@@ -348,14 +350,7 @@ describe("runtime parity", () => {
     const cell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "pass",
-        steps: [
-          {
-            status: "pass",
-            details: ["happy", "failure"]
-              .map((suffix) => `RUNTIME_PARITY_SESSION_KEY=${prefix}:${suffix}`)
-              .join("\n"),
-          },
-        ],
+        runtimeParitySessionKeys: [`${prefix}:happy`, `${prefix}:failure`],
       },
     });
 
@@ -366,7 +361,7 @@ describe("runtime parity", () => {
     const missingCell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "fail",
-        details: "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:missing:happy",
+        runtimeParitySessionKeys: ["agent:qa:runtime-tool:missing:happy"],
       },
     });
     expect(missingCell.transcriptBytes).toBe("");

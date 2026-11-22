@@ -16,6 +16,7 @@ export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
   needsRebuild: number | null;
   /** The projection writer established all rows, including context eligibility. */
   projectionReady?: true;
+  hasMessages?: boolean;
   /** Absent needs a tail lookup; null is a known empty bounded preview. */
   lastMessagePreview?: string | null;
   lastAssistantMessage?: SessionRowAssistantMessageUpdate;

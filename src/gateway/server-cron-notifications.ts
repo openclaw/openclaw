@@ -9,12 +9,15 @@ import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-ha
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
@@ -68,7 +71,7 @@ type GatewayCronFailureRepairDeps = {
   runCronFailureRepair: NonNullable<CronServiceDeps["runCronFailureRepair"]>;
 };
 
-/** Keeps the scheduler's persisted deadline and the repair turn's timeout identical. */
+/** The owner turn that receives a failing job's notice gets the configured agent timeout. */
 export function createGatewayCronFailureRepair(
   cfg: OpenClawConfig,
   resolveGatewayContext: GatewayContextResolver | undefined,
@@ -137,7 +140,7 @@ async function runGatewayCronFailureRepair(
       receipt.cancel();
       throw error;
     });
-    // A turn that ran settles the repair whatever it concluded; the next run verifies it.
+    // A turn that ran handled the notice whatever it concluded; the next run verifies it.
     if (outcome.status === "cancelled" || !outcome.executionStarted) {
       throw new Error(`Cron failure repair did not run: ${outcome.error ?? outcome.status}`);
     }
@@ -450,12 +453,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     mayHaveReachedRecipient ||= reachedRecipient;
   };
   try {
-    const requestedAgentId =
-      normalizeOptionalString(params.job.agentId) ??
-      normalizeOptionalString(params.routing.defaultAgentId);
-    if (!requestedAgentId) {
-      throw new CronAgentSelectionRequiredError();
-    }
+    const requestedAgentId = resolveCronJobEffectiveAgentId(
+      params.job,
+      params.routing.defaultAgentId,
+    );
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
       if (!params.to) {
@@ -484,23 +485,56 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    const sessionKey = resolveCronDeliverySessionKey(params.job);
+    const payload = {
+      ...params.payload,
+      text: appendCronFailureAlertDetails(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+    };
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
+        const route = {
+          mode: "announce" as const,
+          source: "delivery" as const,
+          requested: true,
+          channel: params.channel,
+          target: params.target,
+          directPolicy: params.directPolicy,
+          to: params.to,
+          accountId: params.accountId,
+          threadId: params.threadId,
+        };
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
-          {
-            channel: params.channel,
-            to: params.to,
-            accountId: params.accountId,
-            threadId: params.threadId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
+          { ...route, sessionKey, sessionTarget: params.job.sessionTarget },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
-          throw resolved.error;
+          // Like its results, a conversation-bound job without an external route is
+          // notified in the conversation that created it.
+          if (
+            requiresExternalCronDelivery(route, resolved) ||
+            params.job.sessionTarget !== "current" ||
+            !sessionKey
+          ) {
+            throw resolved.error;
+          }
+          const committed = await commitCronConversationResult({
+            config: runtimeConfig,
+            agentId,
+            jobId: params.job.id,
+            runStartedAt: params.runAtMs ?? params.job.state.lastRunAtMs ?? Date.now(),
+            idempotencyKey: `cron-failure-alert:${params.job.id}:${params.job.state.lastFailureNotificationId ?? params.runAtMs}`,
+            conversation: { sessionKey },
+            payloads: [payload],
+            signal: abortController.signal,
+            deliveryAttemptFence: null,
+          });
+          if (!committed.ok) {
+            throw new Error(committed.reason);
+          }
+          return { status: "sent" as const };
         }
         return await sendCronAnnouncePayloadStrict({
           deps: params.deps,
@@ -512,14 +546,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           onTranscriptDiagnostic: (message) => {
             params.logger.warn({ jobId: params.job.id }, message);
           },
-          payload: {
-            ...params.payload,
-            text: appendCronFailureAlertDetails(
-              params.payload.text ?? "",
-              params.runAtMs,
-              runtimeConfig,
-            ),
-          },
+          payload,
           inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
             jobId: params.job.id,
             runId:
@@ -570,6 +597,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
   runNotStarted?: boolean;
+  admissionDeferredReason?: "busy" | "active-hours";
   quietTrigger?: boolean;
   resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
@@ -580,6 +608,9 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job &&
     params.resolveCronAgent &&
     !params.quietTrigger &&
+    // Active-hours and idle-only deferrals are scheduled behavior, not a failure to resolve.
+    // In a job's own session the notice would also feed the next run's context.
+    !params.admissionDeferredReason &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
   ) {
     const job = params.job;
@@ -608,11 +639,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
         agentId,
         jobId: job.id,
         runStartedAt: params.evt.runAtMs,
-        conversation: {
-          sessionKey,
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-        },
+        conversation: { sessionKey },
         payloads: [
           {
             text: redactSensitiveText(

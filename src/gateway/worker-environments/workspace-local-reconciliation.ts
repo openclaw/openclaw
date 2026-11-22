@@ -56,7 +56,6 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     const additionalPaths = snapshot.current.baseCommit
       ? await selectLocalWorkspaceCanonicalPaths({
           root: request.localPath,
-          admittedPaths: "[]",
           assertCurrent: () => request.assertCurrent?.(),
         })
       : undefined;

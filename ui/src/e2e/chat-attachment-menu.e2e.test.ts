@@ -307,6 +307,9 @@ suite.define(() => {
       const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
       const panel = page.locator(".agent-chat__capability-menu-panel");
       await trigger.click();
+      // Opening can finish before the lazy menu content has loaded and been measured.
+      await page.getByRole("menuitem", { name: "Skills", exact: true }).waitFor();
+      await expect.poll(() => panel.evaluate((surface) => surface.style.height)).not.toBe("");
       await expect.poll(() => panel.getAttribute("data-phase")).toBe("open");
       await page.keyboard.press("Escape");
       await expect.poll(() => panel.getAttribute("data-phase")).toBe("hidden");
@@ -319,7 +322,7 @@ suite.define(() => {
               const surface = document.querySelector<HTMLElement>(
                 ".agent-chat__capability-menu-panel",
               );
-              if (surface && Number(getComputedStyle(surface).opacity) > 0) {
+              if (surface?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
                 seen.push(getComputedStyle(surface).height);
               }
               if (surface?.dataset.phase === "open") {
