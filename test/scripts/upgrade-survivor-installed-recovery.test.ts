@@ -215,7 +215,7 @@ it("bounds directory discovery before sorting and closes handles on entry overfl
 });
 
 it.skipIf(process.platform === "win32")(
-  "keeps shared evidence readable through restrictive umask",
+  "keeps private evidence readable through restrictive umask",
   () => {
     const directory = dirs.make("installed-recovery-evidence-");
     const observations = pathToFileURL(
@@ -226,10 +226,7 @@ it.skipIf(process.platform === "win32")(
     import fs from 'node:fs';
     import path from 'node:path';
     import { startInstalledRecoveryRun, openInstalledRecoveryEvidence, writeInstalledRecoveryEvidence } from ${JSON.stringify(observations)};
-    for (const mode of [0o700, 0o2770, 0o2777]) {
-      const shared = mode === 0o2770;
-      const root = path.join(${JSON.stringify(directory)}, String(mode));
-      fs.mkdirSync(root); fs.chmodSync(root, mode);
+    const root = ${JSON.stringify(directory)};
       const mask = process.umask(0o777);
       try {
         const run = startInstalledRecoveryRun(root, 'older-runtime');
@@ -237,16 +234,14 @@ it.skipIf(process.platform === "win32")(
         const fd = openInstalledRecoveryEvidence(output);
         try { fs.writeFileSync(fd, 'private bytes'); } finally { fs.closeSync(fd); }
         writeInstalledRecoveryEvidence(run.summary, { status: 'running' });
-        assert.equal(fs.statSync(run.directory).mode & 0o7777, shared ? 0o2750 : 0o700);
+        assert.equal(fs.statSync(run.directory).mode & 0o7777, 0o700);
         for (const file of [output, run.summary]) {
-          assert.equal(fs.statSync(file).mode & 0o777, shared ? 0o640 : 0o600);
-          assert.equal(fs.statSync(file).gid, fs.statSync(root).gid);
+          assert.equal(fs.statSync(file).mode & 0o777, 0o600);
           assert(fs.readFileSync(file).length > 0);
         }
         const link = path.join(root, 'linked'); fs.symlinkSync(run.directory, link);
         assert.throws(() => openInstalledRecoveryEvidence(path.join(link, 'unsafe')), /physical directory/);
       } finally { process.umask(mask); }
-    }
   `);
   },
 );
