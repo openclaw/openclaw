@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { satisfies } from "semver";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -9,7 +10,9 @@ import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { UpdateTarget } from "./target.js";
 
-export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
+export type PreflightResult =
+  | { ok: true; warning?: string }
+  | { ok: false; reason: string; message: string };
 
 /** Enumerate files without opening a database or admitting a schema migration. */
 export async function listStateDatabases(stateDir: string): Promise<string[]> {
@@ -83,21 +86,6 @@ export async function preflight(params: {
   });
   let reason = "unsupported-install";
   try {
-    const containerMarker = await fs.access("/.dockerenv").then(
-      () => true,
-      (error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    );
-    if (containerMarker || env.container || env.DOCKER_CONTAINER || env.OPENCLAW_CONTAINER) {
-      return refuse(
-        "container-install",
-        "This installation belongs to a container image. Update the image instead.",
-      );
-    }
     const ancestor = await existingAncestor(params.prefix);
     const installPath =
       params.target.kind === "git"
@@ -207,7 +195,15 @@ export async function preflight(params: {
         "Free space on the state filesystem must cover a copy of the state databases.",
       );
     }
-    return { ok: true };
+    // A container alone does not show that the image owns this install: a checkout cloned
+    // into a volume, or a devbox, updates like any other. Images ship package installs,
+    // which the update command's own admission already skips (`container-image-install`).
+    return isContainerEnvironment()
+      ? {
+          ok: true,
+          warning: `OpenClaw is running in a container. The update continues, but whatever is not on a mounted volume is reset when the container is recreated from its image. Keep this installation and ${params.stateDir} on volumes, or build the new version into the image.`,
+        }
+      : { ok: true };
   } catch (error) {
     return refuse(reason, formatErrorMessage(error));
   }

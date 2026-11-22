@@ -19,6 +19,13 @@ import { preparePackage } from "./prepare-package.js";
 import { prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
+// The host's container facts would decide which preflight branch every case takes.
+const container = vi.hoisted(() => ({ detected: false }));
+vi.mock("../infra/container-environment.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/container-environment.js")>()),
+  isContainerEnvironment: () => container.detected,
+}));
+
 const exec = promisify(execFile);
 let root: string;
 let bin: string;
@@ -38,24 +45,16 @@ beforeEach(async () => {
   node = path.join(bin, "node");
   await fs.symlink(process.execPath, node);
   vi.stubEnv("PATH", `${bin}${path.delimiter}${originalPath}`);
-  const access = fs.access.bind(fs);
-  vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-    if (file === "/.dockerenv") {
-      throw Object.assign(new Error("No container marker in this fixture"), { code: "ENOENT" });
-    }
-    return access(file, mode);
-  });
-  for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER", "IN_NIX_SHELL"]) {
-    vi.stubEnv(key, "");
-  }
+  vi.stubEnv("IN_NIX_SHELL", "");
 });
 afterEach(async () => {
+  container.detected = false;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function repository(failBuild = false, engine = ">=1") {
+async function repository(failBuild = false, engine = ">=1", entry?: string) {
   const source = path.join(root, "source");
   const bare = path.join(root, "remote.git");
   const checkout = path.join(root, "checkout");
@@ -84,6 +83,9 @@ async function repository(failBuild = false, engine = ">=1") {
     path.join(source, "ui.cjs"),
     "require('node:fs').writeFileSync('dist/ui-built', 'ready');",
   );
+  if (entry) {
+    await fs.writeFile(path.join(source, "openclaw.mjs"), entry);
+  }
   await git("add", ".");
   await git("commit", "-m", "fixture");
   await exec("git", ["clone", "--bare", source, bare]);
@@ -168,8 +170,54 @@ describe("release preparation", () => {
       expect(detail).toContain("fixture build failed");
       expect(detail).not.toContain("\x1b");
       expect(detail?.length).toBeLessThanOrEqual(1024);
+      // Outside a container, preflight passes without a warning.
+      expect(lastRun?.steps.some(({ step }) => step === "warning:preflight")).toBe(false);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = undefined;
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("prepares a checkout cloned inside a container and says what recreating it resets", async () => {
+    container.detected = true;
+    // The release's own `update check-release` and `update plugins` answer as a sound release.
+    const { checkout } = await repository(
+      false,
+      ">=1",
+      [
+        "const [command, sub] = process.argv.slice(2);",
+        "if (command === 'update' && sub === 'check-release') console.log(JSON.stringify({ ok: true, surfaces: [] }));",
+        "if (command === 'update' && sub === 'plugins') console.log(JSON.stringify({ status: 'ok', changed: false, warnings: [], sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] }, npm: { changed: false, outcomes: [] }, integrityDrifts: [] }));",
+      ].join("\n"),
+    );
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("GIT_COMMIT", "");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      await runReleaseUpdateCli({
+        json: false,
+        restart: false,
+        runningRoot: checkout,
+        storedChannel: "dev",
+        timeoutMs: 30_000,
+      });
+      const { lastRun } = await getUpdateRunStatusAsync();
+      expect(lastRun).toMatchObject({ status: "running", phase: "activating" });
+      const warning = lastRun?.steps.find(({ step }) => step === "warning:preflight")?.detail;
+      expect(warning).toContain("running in a container");
+      // The run record keeps paths in their redacted form.
+      expect(warning).toContain("Keep this installation and $OPENCLAW_STATE_DIR on volumes");
+      expect(log).toHaveBeenCalledWith(`Note: ${warning}`);
+      const trial = JSON.parse(
+        await fs.readFile(path.join(stateDir, "git-install", "releases", ".trial"), "utf8"),
+      );
+      expect(trial).toMatchObject({ phase: "pending", runId: lastRun?.runId });
+      expect(process.exitCode).toBe(0);
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -403,21 +451,18 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
   });
 
-  it("refuses a Docker marker without running any preparation", async () => {
-    const access = fs.access.bind(fs);
-    vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (file === "/.dockerenv") {
-        return;
-      }
-      return access(file, mode);
-    });
+  it("keeps refusing a Nix installation inside a container", async () => {
+    container.detected = true;
+    vi.stubEnv("IN_NIX_SHELL", "impure");
+    const target = await repository();
     expect(
       await preflight({
-        kind: "package",
-        target: { kind: "package", spec: "openclaw@2026.11.21", version: "2026.11.21" },
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
         stateDir: root,
+        node,
       }),
-    ).toMatchObject({ ok: false, reason: "container-install" });
+    ).toMatchObject({ ok: false, reason: "nix-install" });
   });
 });

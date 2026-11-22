@@ -194,6 +194,18 @@ export async function prepareUpdate(params: {
     if (!checked.ok) {
       return await fail(checked.reason, checked.message);
     }
+    if (checked.warning) {
+      await recordUpdateRunStepAsync(
+        params.runId,
+        {
+          step: "warning:preflight",
+          status: "completed",
+          endedAtMs: Date.now(),
+          detail: checked.warning,
+        },
+        { env },
+      );
+    }
     staging = await allocateStaging({ kind: install.kind }, prefix);
     const onStep = async (name: string) => {
       await recordUpdateRunStepAsync(

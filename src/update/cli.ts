@@ -192,6 +192,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     );
     return;
   }
+  const preflight = record.steps.find(({ step }) => step === "warning:preflight")?.detail;
+  if (preflight) {
+    defaultRuntime.log(`Note: ${preflight}`);
+  }
   const plugins = record.steps.find(({ step }) => step === "plugins");
   if (plugins?.status === "failed") {
     defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);

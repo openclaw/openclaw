@@ -1608,6 +1608,12 @@ without starting or restarting the Gateway, so its next start selects the releas
 write fails does the update record an owed `service-definition` step. The trial ends once the
 Gateway on the new release is ready.
 
+A checkout inside a container that OpenClaw detects (for example Docker or Podman) updates the
+same way. The update records a `warning:preflight` step, which `openclaw update` prints: whatever is not on a mounted
+volume is reset when the container is recreated from its image, so keep the checkout and the state
+directory on volumes, or build the new version into the image. OpenClaw's own image installs a
+package, not a checkout; `openclaw update` skips it with `container-image-install`.
+
 The launcher knows only its own state directory. A Gateway run for another profile started
 through the same `openclaw` on PATH (`openclaw --profile work gateway`) also counts as a start of
 this install: it selects this install's pending release, and two such failed runs during this
