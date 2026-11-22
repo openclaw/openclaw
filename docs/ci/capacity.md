@@ -6,6 +6,15 @@ read_when:
   - You need the measured timings behind shard packing
 ---
 
+## Release 2026.11.7 qualification allowance
+
+On the release branch, the hosted compact planner permits 128 rows and Node
+qualification jobs receive 120 minutes. This addresses a full-coverage shard
+that reached the previous one-hour limit while still completing tests. The
+native 90-row cap, normal push budget, active workflow concurrency, and test
+assertions remain unchanged. The allowance does not waive incomplete coverage
+or failed assertions.
+
 ## Runner registration budget
 
 The CP10 candidate emits 122 Node rows for its broad PR. At 96 active rows,
@@ -14,7 +23,7 @@ measured-overhead model projects a 13.6-minute workflow wall from that second
 wave. Admitting all selected rows in one wave changes neither their work nor
 the modeled vCPU-minutes. The final PR/main caps remain 130/70, as does the
 5,110-registration arrival envelope, which already budgets all 130 PR rows
-inside five minutes. Current compact limits are 90 native and 96 hosted rows. This is planned admission,
+inside five minutes. The pre-release compact limits were 90 native and 96 hosted rows; see the release allowance above. This is planned admission,
 not proof that the provider supplies 130 runners simultaneously. Naturally occurring runs
 supply the actual wall evidence.
 

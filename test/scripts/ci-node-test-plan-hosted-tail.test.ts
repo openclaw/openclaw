@@ -37,14 +37,14 @@ it.each(["push", "full"] as const)("bounds hosted groups (%s)", (mode) => {
   const workerRows = createNodeWorkerE2eTestShards();
   expect(workerRows).toHaveLength(2);
   expect(workerRows.every((row) => !row.requiresDist && row.planConcurrency === 1)).toBe(true);
-  const totalJobCap = full ? 98 : 70;
+  const totalJobCap = full ? 130 : 70;
   const jobCap = full ? undefined : totalJobCap - workerRows.length;
   const owners = createNodeTestShards(selectedOptions);
   const jobs = createNodeTestShardBundles({ ...selectedOptions, compactNodeJobCap: jobCap });
   expect(jobs.filter((job) => !job.requiresDist).length + workerRows.length).toBeLessThanOrEqual(
     totalJobCap,
   );
-  expect(jobs.length).toBeLessThanOrEqual(full ? 96 : 90);
+  expect(jobs.length).toBeLessThanOrEqual(full ? 128 : 90);
 
   if (!full) {
     const reducedOwners = owners.filter(

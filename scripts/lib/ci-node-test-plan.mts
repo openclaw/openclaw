@@ -363,10 +363,10 @@ const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-commands-doctor", 64],
 ]);
 const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
-// Trusted forks can use the GitHub profile on Blacksmith. Every compact
-// profile must fit the same runner-registration allowance.
+// Trusted forks can use the GitHub profile on Blacksmith. The release branch
+// permits 128 hosted rows; workflow concurrency still bounds active registrations.
 const COMPACT_NODE_TEST_JOB_CAP = 90;
-const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 96;
+const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 128;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 16;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;

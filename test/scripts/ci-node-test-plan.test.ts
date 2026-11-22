@@ -2188,7 +2188,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       includePrExemptRuntimeTests: true,
       includeProofTests: true,
     });
-    expect(jobs.length).toBeLessThanOrEqual(96);
+    expect(jobs.length).toBeLessThanOrEqual(128);
     const gateway = jobs
       .flatMap(jobGroups)
       .filter((group) => /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(group.shard_name));
@@ -2950,14 +2950,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const selected = tooling
       .flatMap(optionalPatterns)
       .filter((file) => !isCiProofTestFile(file))
-      .slice(0, 102);
-    expect(selected).toHaveLength(102);
+      .slice(0, 134);
+    expect(selected).toHaveLength(134);
     vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
     vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
     // Every selected file is now indivisible above the admission cap. Overflow
-    // must retain these 102 files without adding unrelated dist owners or the full suite.
+    // must retain these 134 files without adding unrelated dist owners or the full suite.
     expect(() => selectTests(selected, { runnerBackend: "github" })).toThrow(
-      "exceeds 96 jobs (102 planned)",
+      "exceeds 128 jobs (134 planned)",
     );
   });
 

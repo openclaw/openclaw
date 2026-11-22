@@ -6257,6 +6257,34 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(run));
   });
 
+  it.each([
+    { qualification: "true", event: "workflow_dispatch", dispatch: "", timeout: 30, expected: 120 },
+    {
+      qualification: "false",
+      event: "workflow_dispatch",
+      dispatch: "full-release-validation-123-1-ci",
+      timeout: 30,
+      expected: 120,
+    },
+    { qualification: "true", timeout: undefined, expected: 120 },
+    { qualification: "false", timeout: 90, expected: 90 },
+    { qualification: "false", timeout: undefined, expected: 60 },
+  ])(
+    "preserves timeout scope for $qualification/$timeout",
+    ({ qualification, event, dispatch, timeout, expected }) => {
+      const expression =
+        readCiWorkflow().jobs["checks-node-core-test-nondist-shard"]["timeout-minutes"];
+      expect(
+        evaluateWorkflowExpression(expression, {
+          eventName: event === "workflow_dispatch" ? "workflow_dispatch" : "push",
+          inputs: { dispatch_id: dispatch ?? "" },
+          preflightOutputs: { ci_qualification: qualification },
+          matrix: { timeout_minutes: timeout },
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -6273,7 +6301,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(manifestSource).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestSource).toContain("requires_ripgrep:");
     expect(manifestSource).toContain("src/agents/sessions/tools/index.test.ts");
-    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
+    expect(nodeTestJob["timeout-minutes"]).toBe(
+      "${{ (needs.preflight.outputs.ci_qualification == 'true' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-'))) && 120 || matrix.timeout_minutes || 60 }}",
+    );
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
     );
