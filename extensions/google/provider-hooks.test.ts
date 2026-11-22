@@ -35,6 +35,31 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
       | undefined;
     expect(capturedConfig?.thinkingConfig).toEqual(expected);
   });
+
+  it.each([
+    ["google-interactions", { fastMode: true }, "priority"],
+    ["google-interactions", { fastMode: () => true }, "priority"],
+    ["google-interactions", { fastMode: false }, undefined],
+    ["google-interactions", { fastMode: true, serviceTier: "flex" }, "flex"],
+    ["google-generative-ai", { fastMode: true }, undefined],
+  ] as const)("maps %s Fast params %o to service_tier %s", (api, extraParams, expected) => {
+    const capture = createCapturedThinkingConfigStream();
+    const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+      extraParams,
+      streamFn: capture.streamFn,
+    });
+    const baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+    void wrapped(
+      { api, provider: "google", id: "gemini-2.5-flash", baseUrl } as never,
+      { messages: [] } as never,
+      {},
+    );
+    expect((capture.getCapturedPayload() as { service_tier?: unknown })?.service_tier).toBe(
+      expected,
+    );
+  });
 });
 
 describe("GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason", () => {

@@ -73,7 +73,7 @@ it("offers bundled character presets without a Lobsterdex collection", () => {
 it("previews generation and requires acceptance before replacing identity", async () => {
   const view = mount("  A patient gardener with a watering can  ");
   expect(view.query(".avatar-picker__ghost .lobster-pet__svg")).not.toBeNull();
-  expect(view.text()).toContain("Generating...");
+  expect(view.text()).toContain("Generating…");
   await view.finish();
   await waitForFast(() => expect(view.text()).toContain("Garden keeper"));
   expect(view.query(".avatar-picker__ghost")).toBeNull();
@@ -155,7 +155,7 @@ it.each(["unusable", "too-detailed"] as const)(
     await view.finish();
     await waitForFast(() =>
       expect(view.query('[role="alert"]')?.textContent).toContain(
-        reason === "too-detailed" ? "too detailed" : "That image can't be used",
+        reason === "too-detailed" ? "Couldn’t save that avatar" : "Couldn’t use that image",
       ),
     );
     expect(view.props.onSelect).not.toHaveBeenCalled();
@@ -247,7 +247,7 @@ it("clears a failed preparation while a retry is pending and keeps its controls"
   view.click("Generate");
   expect(view.container.querySelector('[role="alert"]')).toBeNull();
   expect(view.container.querySelector("textarea")).toBe(prompt);
-  expect(view.container.textContent).toContain("Generating...");
+  expect(view.container.textContent).toContain("Generating…");
   retry.resolve(generated);
   await waitForFast(() => expect(view.container.textContent).toContain("Use avatar"));
   expect(view.container.querySelector('[role="alert"]')).toBeNull();

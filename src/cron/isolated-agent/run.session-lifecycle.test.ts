@@ -442,7 +442,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const logSessionStateChangeSpy = vi
       .spyOn(diagnostic, "logSessionStateChange")
       .mockImplementation((params) => {
-        if (params.state === "idle") {
+        if (params.consumeQueuedTurn === true) {
           throw new Error("simulated final lifecycle failure");
         }
         return originalLogSessionStateChange(params);

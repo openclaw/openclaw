@@ -1,7 +1,8 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ModelProvidersData } from "./load.ts";
+import type { ModelProvidersData, ModelProvidersCatalogData } from "./load.ts";
+import type { ModelProviderLogin } from "./login-controller.ts";
 
 export type ModelProvidersRouteData = {
   /** Gateway source that owned the route preload. */
@@ -9,6 +10,8 @@ export type ModelProvidersRouteData = {
   /** Exact Gateway snapshot captured before the preload began. */
   gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
   data: ModelProvidersData;
+  /** Catalog discovery can settle after the authoritative credential rows. */
+  catalog?: { promise: Promise<ModelProvidersCatalogData>; controller: AbortController };
   /** Client the loader fetched from; null when it ran disconnected. */
   client: ApplicationContext["gateway"]["snapshot"]["client"];
   /** Concrete agent whose credential store populated the auth snapshot. */
@@ -17,7 +20,26 @@ export type ModelProvidersRouteData = {
   /** An explicit connection entry from a saved setup link. */
   connect?: boolean;
   provider?: string;
+  pluginId?: string;
 };
+
+export function modelConnectAction(
+  pluginId: string | null,
+  loginBusy: boolean,
+  open: ModelProviderLogin["open"],
+  search: HTMLInputElement | undefined,
+): (() => void) | undefined {
+  if (pluginId) {
+    return loginBusy ? undefined : () => void open(undefined, { pluginId });
+  }
+  if (pluginId === "" && search) {
+    return () => {
+      search.scrollIntoView({ block: "center" });
+      search.focus({ preventScroll: true });
+    };
+  }
+  return undefined;
+}
 
 async function loadModelProvidersRouteData(
   context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
@@ -26,13 +48,21 @@ async function loadModelProvidersRouteData(
   const search = new URLSearchParams(options.location.search);
   const connect = search.get("connect") === "1";
   const provider = search.get("provider")?.trim() ?? "";
+  const pluginId = connect ? search.get("plugin")?.trim() || undefined : undefined;
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
-  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
+  const owner = {
+    gateway,
+    gatewaySnapshot,
+    selectionIntentRevision,
+    connect,
+    provider,
+    ...(pluginId ? { pluginId } : {}),
+  };
   let agentId = selection.state.selectedId;
-  const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
+  const { EMPTY_MODEL_PROVIDERS_DATA, startModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
   // Both awaits can outlive the route or its Gateway/agent owner. Metadata-only
   // snapshot publications preserve the client and hello, so remain valid.
@@ -54,9 +84,15 @@ async function loadModelProvidersRouteData(
       agentId = selection.state.selectedId;
     }
     if (agentId && isCurrent()) {
+      const controller = new AbortController();
+      const read = startModelProvidersData(client, {
+        agentId,
+        signal: AbortSignal.any([options.signal, controller.signal]),
+      });
       return {
         ...owner,
-        data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
+        data: { ...EMPTY_MODEL_PROVIDERS_DATA, ...(await read.auth) },
+        catalog: { promise: read.catalog, controller },
         client,
         agentId,
       };

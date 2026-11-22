@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import {
   normalizeOptionalString,
@@ -5,13 +6,19 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
+import {
+  readBrowserOperatorControl,
+  releaseBrowserOperatorControl,
+  takeBrowserOperatorControl,
+} from "../operator-control.js";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { mintBrowserScreencastToken } from "../screencast/tokens.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileOperationCurrent } from "../server-context.lifecycle.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
+import { registerBrowserOperatorInputRoutes } from "./agent.operator-input.js";
 import { createPlaywrightRouteRegistrar } from "./agent.playwright.js";
 import {
   browserNavigationPolicyForProfile,
@@ -28,7 +35,7 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { toBoolean } from "./utils.js";
+import { getProfileContext, jsonError, toBoolean } from "./utils.js";
 
 function clampScreencastOption(value: unknown, min: number, max: number, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
@@ -105,6 +112,9 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
           return;
         }
         const retainedRequester = req.screencastAuthority?.retainRequester();
+        // The session checks each navigation from a page listener on the shared connection,
+        // which runs in another call's async context. Resolve policy as this minting request.
+        const runInMintingRequest = AsyncLocalStorage.snapshot();
         try {
           const { token, expiresAtMs } = mintBrowserScreencastToken({
             profileName,
@@ -122,12 +132,13 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
             isRequesterCurrent: retainedRequester?.isCurrent ?? req.requester?.isCurrent,
             releaseRequester: retainedRequester?.release,
             assertCurrent,
-            checkNavigationAllowed: async (nextUrl) => {
-              await assertBrowserNavigationResultAllowed({
-                url: nextUrl,
-                ...browserNavigationPolicyForProfile(ctx, profileCtx),
-              });
-            },
+            checkNavigationAllowed: (nextUrl) =>
+              runInMintingRequest(() =>
+                assertBrowserNavigationResultAllowed({
+                  url: nextUrl,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
+                }),
+              ),
           });
           res.json({
             token,
@@ -143,7 +154,9 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
       },
     });
   });
+  registerBrowserControlRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);
+  registerBrowserOperatorInputRoutes(app, ctx);
   const register = createPlaywrightRouteRegistrar(app, ctx, "inspection");
 
   register("get", "/console", "console messages", (input) => {
@@ -223,4 +236,48 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
     };
   });
   registerBrowserAgentStorageRoutes(app, ctx);
+}
+
+/** Operator take-over: the Control UI connection that takes control is the only input source. */
+function registerBrowserControlRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  const withProfile =
+    (
+      run: (
+        profile: ProfileContext["profile"],
+        req: Parameters<Parameters<BrowserRouteRegistrar["get"]>[1]>[0],
+      ) => ReturnType<typeof readBrowserOperatorControl>,
+    ): Parameters<BrowserRouteRegistrar["get"]>[1] =>
+    (req, res) => {
+      const profileCtx = getProfileContext(req, ctx);
+      if ("error" in profileCtx) {
+        return jsonError(res, profileCtx.status, profileCtx.error);
+      }
+      res.json(run(profileCtx.profile, req));
+    };
+  app.get(
+    "/control",
+    withProfile((profile, req) =>
+      readBrowserOperatorControl(ctx.state(), profile, req.requester?.connId),
+    ),
+  );
+  app.post("/control", (req, res) => {
+    const requester = req.requester;
+    if (!requester?.connId || !requester.isCurrent()) {
+      return jsonError(
+        res,
+        400,
+        "Taking control requires a direct Control UI connection to the browser host.",
+      );
+    }
+    const connId = requester.connId;
+    return withProfile((profile) =>
+      takeBrowserOperatorControl(ctx.state(), profile, { ...requester, connId }),
+    )(req, res);
+  });
+  app.delete(
+    "/control",
+    withProfile((profile, req) =>
+      releaseBrowserOperatorControl(ctx.state(), profile, req.requester?.connId),
+    ),
+  );
 }

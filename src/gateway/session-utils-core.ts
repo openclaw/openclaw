@@ -12,17 +12,10 @@ import {
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import {
-  estimateAggregateUsageCost,
-  type ModelCostConfig,
-  resolveModelCostConfig,
-} from "../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
-import {
-  createSessionRowModelCacheKey,
-  type SessionListRowContext,
-} from "./session-utils-contracts.js";
+import type { SessionListRowContext } from "./session-utils-contracts.js";
 
 export function prepareGatewaySessionBackgroundProcessScope(params: {
   cfg: OpenClawConfig;
@@ -92,26 +85,7 @@ export function prepareSessionTitleRead(
   };
 }
 
-function resolveModelCostConfigCached(
-  provider: string | undefined,
-  model: string | undefined,
-  cfg: OpenClawConfig,
-  rowContext?: SessionListRowContext,
-): ModelCostConfig | undefined {
-  if (!rowContext) {
-    return resolveModelCostConfig({ provider, model, config: cfg });
-  }
-  const key = createSessionRowModelCacheKey(provider, model);
-  if (rowContext.modelCostConfigByModelRef.has(key)) {
-    return rowContext.modelCostConfigByModelRef.get(key);
-  }
-  const value = resolveModelCostConfig({ provider, model, config: cfg });
-  rowContext.modelCostConfigByModelRef.set(key, value);
-  return value;
-}
-
 export function resolveEstimatedSessionCostUsd(params: {
-  cfg: OpenClawConfig;
   provider?: string;
   model?: string;
   entry?: Pick<
@@ -142,12 +116,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   ) {
     return undefined;
   }
-  const cost = resolveModelCostConfigCached(
-    params.provider,
-    params.model,
-    params.cfg,
-    params.rowContext,
-  );
+  const cost = params.rowContext?.modelCostPricing?.resolve(params.provider, params.model);
   if (!cost) {
     return undefined;
   }

@@ -235,6 +235,7 @@ async function runDoctorHealthFlowWithResult(
         assertCurrent: writeAuthority?.assertCurrent,
         lendPolicyCustody: writeAuthority?.lendPolicyCustody,
         databaseGenerations: writeAuthority?.databaseGenerations,
+        databaseWriteCapture: writeAuthority?.databaseWriteCapture,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
         beforeStateMutation: createDoctorOriginalCaptureHook({
@@ -559,12 +560,15 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
     const pluginWarnings: string[] = [];
+    let pluginLoadFailed = false;
     if (diagnostics.length > 0) {
       const { collectPluginLoadHealthFindings } =
         await import("../commands/doctor-workspace-status.js");
       const findings = collectPluginLoadHealthFindings(diagnostics);
       renderStructuredHealthFindings(ctx, findings);
       pluginWarnings.push(...findings.map((finding) => `${finding.checkId}: ${finding.message}`));
+      // Advisory notices, such as open tool schemas, come from plugins that still loaded.
+      pluginLoadFailed = findings.some((finding) => finding.severity === "error");
     }
     showDoctorHealthSummary(ctx);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
@@ -596,7 +600,7 @@ async function runDoctorHealthFlowWithResult(
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }
-    if (pluginWarnings.length > 0) {
+    if (pluginLoadFailed) {
       startup.showDoctorOutro("Doctor finished with plugin load errors.");
       if (options.nonInteractive && !updatePhase.isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;
@@ -604,15 +608,20 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
+    const { DoctorHeartbeatMigrationDeferredError } =
+      await import("../commands/doctor-heartbeat-run-recovery.js");
     if (
-      !maintenance &&
+      (!maintenance || error instanceof DoctorHeartbeatMigrationDeferredError) &&
       error instanceof DoctorMaintenanceRefusalError &&
       error.refusal.kind === "deferred" &&
-      doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options))
+      (doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options)) ||
+        (error instanceof DoctorHeartbeatMigrationDeferredError &&
+          updatePhase.isUpdateDoctorLintPass(process.env)))
     ) {
       showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
-      // Admission restored its service before refusing; no migration work has started.
+      // Admission restored its service, or heartbeat conversion rolled back
+      // before its config writer committed. Pending source data remains intact.
       const { recordDeferredUpdateDoctorWarning, recordUpdateDoctorRefusal } =
         await import("../commands/doctor-update-refusal.js");
       recordUpdateDoctorRefusal(error.message);
@@ -709,5 +718,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorOutro("Doctor complete.");
+  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
 }

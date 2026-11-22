@@ -13,6 +13,17 @@ import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "..
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { prepareDeviceTokenBindingLookup } from "./openclaw-id/device-token-binding.js";
+import {
+  openclawIdSubjectRolePolicy,
+  prepareOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
@@ -30,6 +41,7 @@ export type CurrentWebPushTarget = {
   scopes: string[];
   userProfileId: string | null;
   profile: GatewayClient["preparedSessionProfile"];
+  principal: OpenClawIdTunnelPrincipal | undefined;
   preferences: ReturnType<typeof resolveEffectiveWebPushPreferences>;
 };
 
@@ -40,6 +52,8 @@ export type WebPushAuthority = {
   profile: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
   preferences: Map<string, unknown>;
   sessions: Map<string, PreparedSessionMutationFacts>;
+  devicePeer: Awaited<ReturnType<typeof prepareDeviceTokenBindingLookup>>;
+  principal: Awaited<ReturnType<typeof prepareOpenClawIdTunnelPrincipalLookup>>;
 };
 
 /** Resolve current recipients from the pairing owner's prepared authority facts. */
@@ -60,6 +74,12 @@ export function listCurrentWebPushTargets(
     if (!device || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
       return [];
     }
+    const peerKey = params.devicePeer(subscription.deviceId, OPERATOR_ROLE);
+    const principal = peerKey ? params.principal(peerKey) : undefined;
+    if (peerKey && !principal) {
+      // An ID-managed browser never falls back to its linked local profile's grants.
+      return [];
+    }
     const operatorToken = device.tokens?.[OPERATOR_ROLE];
     const approvedScopes = device.approvedScopes ?? device.scopes;
     if (
@@ -77,18 +97,28 @@ export function listCurrentWebPushTargets(
 
     const storedProfileId = subscription.userProfileId;
     const userProfileId = profile?.profileId ?? null;
-    if ((storedProfileId && !userProfileId) || (cfg.gateway?.roles && !userProfileId)) {
+    if (
+      (storedProfileId && !userProfileId) ||
+      (isNamedOperatorRoleEnforcementEnabled(cfg) && !userProfileId)
+    ) {
       return [];
     }
-    const rolePolicy = userProfileId
-      ? resolveOperatorRolePolicyForAssignment(
-          userProfileId,
-          profile?.role ?? null,
-          cfg,
-          profile?.githubLogin ?? null,
-        )
-      : undefined;
-    if (cfg.gateway?.roles && !rolePolicy) {
+    const rolePolicy = openclawIdSubjectRolePolicy(principal, () =>
+      userProfileId
+        ? resolveOperatorRolePolicyForAssignment(
+            userProfileId,
+            profile?.role ?? null,
+            cfg,
+            profile?.githubLogin ?? null,
+            operatorRoleSubject(profile),
+          )
+        : undefined,
+    );
+    if (
+      isOperatorRoleEnforcedFor(cfg, operatorRoleSubject(profile)) &&
+      !rolePolicy &&
+      principal?.kind !== "owner"
+    ) {
       return [];
     }
     const scopesAllowed = (requestedScopes: readonly string[]) =>
@@ -108,15 +138,17 @@ export function listCurrentWebPushTargets(
     }
     // Only targeted callers request extra visibility. Both current authorities must
     // grant it; generic pushes retain their deliberately narrow required scopes.
-    const visibilityScopes = rolePolicy
-      ? (requestedVisibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
-      : [];
+    const visibilityScopes =
+      rolePolicy || principal?.kind === "owner"
+        ? (requestedVisibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
+        : [];
     return [
       {
         subscription,
         scopes: [...new Set([...requiredScopes, ...visibilityScopes])],
         userProfileId,
         profile,
+        principal,
         preferences: resolveEffectiveWebPushPreferences({
           user: userProfileId ? preferences.get(userProfileId) : undefined,
           device: subscription.devicePreferences,
@@ -139,6 +171,10 @@ export async function withCurrentWebPushAuthority<T>(
 ): Promise<T | undefined> {
   const sessions = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
   try {
+    const [devicePeer, principal] = await Promise.all([
+      prepareDeviceTokenBindingLookup(),
+      prepareOpenClawIdTunnelPrincipalLookup(),
+    ]);
     // Session discovery can wait on another store; keep browser registration outside that wait.
     for (const sessionKey of new Set(params.sessionKeys)) {
       const cfg = params.getRuntimeConfig();
@@ -196,6 +232,8 @@ export async function withCurrentWebPushAuthority<T>(
                 const cfg = params.getRuntimeConfig();
                 const action = prepare({
                   cfg,
+                  devicePeer,
+                  principal,
                   subscriptions,
                   pairedDevices,
                   profile,
@@ -260,6 +298,7 @@ export function webPushSessionAccess(authority: WebPushAuthority, client: Gatewa
 export function webPushTargetClient(target: CurrentWebPushTarget): GatewayClient {
   return {
     preparedSessionProfile: target.profile,
+    ...(target.principal ? { internal: { openclawIdPrincipal: target.principal } } : {}),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,

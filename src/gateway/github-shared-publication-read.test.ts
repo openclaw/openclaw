@@ -1,17 +1,22 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GitHubPublicationRow } from "../state/github-publication-read.types.js";
+import { encodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -21,6 +26,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { prepareGitHubPublicationTaskRequester } from "./github-publication-requester.js";
 import * as publicationSource from "./github-publication-source.js";
 import { readGitHubPublicationRequestAsync } from "./github-publication-store-async.js";
 import {
@@ -30,8 +36,10 @@ import {
   insertRepositoryGitHubPublicationFixture,
   readRepositoryGitHubPublicationFixture,
 } from "./github-publication-store.test-support.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
 import {
   BRANCH,
+  createSystemGitHubPublicationRequesterFixture,
   NEW_HEAD,
   OLD_HEAD,
   SESSION_KEY,
@@ -203,6 +211,90 @@ async function createPrivatePublicationSession(sessionKey: string) {
 }
 
 describe("shared worktree receipt observation", () => {
+  it.each(["worktree", "repository"] as const)(
+    "discovers a %s task's receipt from its parent across restart without rebinding that parent",
+    async (kind) => {
+      await persistPublicationTestSession();
+      const workspace = kind === "repository" ? await sharedRepositoryWorkspace() : undefined;
+      const parent = { agentId: "main", sessionKey: "agent:main:dashboard:publication-parent" };
+      const origin = {
+        ...parent,
+        sessionId: "publication-parent",
+        lifecycleRevision: "parent-generation",
+        runId: "parent-publication-run",
+      };
+      await upsertSessionEntryCore(parent, {
+        sessionId: origin.sessionId,
+        lifecycleRevision: origin.lifecycleRevision,
+        updatedAt: 1,
+      });
+      mocks.persistedSessionKeys.add(parent.sessionKey);
+      const sourceEntry = loadSessionEntryReadOnly(session)!;
+      const sourceIdentity = {
+        ...session,
+        lifecycleRevision: sourceEntry.lifecycleRevision ?? null,
+      };
+      await upsertSessionEntryCore(session, {
+        ...sourceEntry,
+        parentSessionKey: parent.sessionKey,
+      });
+      const original = await createSystemGitHubPublicationRequesterFixture(parent);
+      onTestFinished(original.release);
+      const transferred = await prepareGitHubPublicationTaskRequester(
+        original.requester,
+        { agentId: session.agentId, sessionKey: session.sessionKey },
+        origin,
+        getRuntimeConfig,
+      );
+      onTestFinished(transferred.release);
+      const requestId = `parent-${kind}-receipt`;
+      if (workspace) {
+        insertRepositoryReceipt(workspace, {
+          request_id: requestId,
+          status: "published",
+          head_commit: NEW_HEAD,
+          pull_request_url: url,
+          session_lifecycle_revision: sourceIdentity.lifecycleRevision,
+          requester_authority_json: encodeGitHubPublicationRequester(
+            transferred.requester.snapshot,
+          ),
+        });
+      } else {
+        publishWorktree(
+          insertSharedWorktreeReceipt(requestId, {
+            requester: transferred.requester,
+            session: sourceIdentity,
+          }),
+        );
+      }
+      transferred.release();
+      original.release();
+      prohibitPublicationWork();
+      const restarted = sharedPublicationCoordinator();
+      expect((await restarted.sharedStatus(origin, requestId))?.result).toMatchObject({
+        requestId,
+        status: "published",
+      });
+      expect((await restarted.latestPublishedShared(origin, undefined))?.result.requestId).toBe(
+        requestId,
+      );
+      expect((await restarted.latestShared(origin))?.result.requestId).toBe(requestId);
+      expect(await restarted.listUnreportedResultsAsync()).toContainEqual(
+        expect.objectContaining({ origin, result: expect.objectContaining({ requestId }) }),
+      );
+      expect(loadSessionEntryReadOnly(parent)?.worktree).toBeUndefined();
+      await upsertSessionEntryCore(parent, {
+        sessionId: origin.sessionId,
+        lifecycleRevision: "reset-generation",
+        updatedAt: 2,
+      });
+      const resetParent = { ...origin, lifecycleRevision: "reset-generation" };
+      expect(await restarted.sharedStatus(resetParent, requestId)).toBeUndefined();
+      expect(await restarted.latestShared(resetParent)).toBeNull();
+      expectNoPublicationWork();
+    },
+  );
+
   it.each(["memory", "closed-memory", "draft"] as const)(
     "publishes private %s without host session reads; closed admission rejects",
     async (mode) => {
@@ -322,9 +414,12 @@ describe("shared worktree receipt observation", () => {
     };
     const coordinator = sharedPublicationCoordinator();
     const freshEntered = createDeferredCore();
+    const retiredEntered = createDeferredCore();
     const { entered, release, held } = holdObservation((count) => {
       if (count === 2) {
         freshEntered.resolve();
+      } else if (count === 3) {
+        retiredEntered.resolve();
       }
     });
     const observe = () =>
@@ -341,6 +436,7 @@ describe("shared worktree receipt observation", () => {
       expect(held).toHaveBeenCalledTimes(2);
       await deleteRegistryWorktree(process.env, "worktree-1");
       retired = observe();
+      await retiredEntered.promise;
       expect(held).toHaveBeenCalledTimes(3);
       release.resolve();
       expect(await burst).toEqual(
@@ -474,8 +570,22 @@ describe("shared worktree receipt observation", () => {
       );
       expect(await coordinator.latestShared(session)).toBeNull();
       db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run(SESSION_KEY, "worktree-1");
-      insertSharedWorktreeReceipt("current", { createdAtMs: 1_000 });
+      publishWorktree(insertSharedWorktreeReceipt("current", { createdAtMs: 1_000 }));
       expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
+      const reporting = sharedPublicationCoordinator();
+      const reports = await reporting.listUnreportedResultsAsync();
+      expect(reports.map((report) => report.result.requestId).toSorted()).toEqual([
+        "current",
+        "legacy",
+      ]);
+      const legacy = reports.find((report) => report.result.requestId === "legacy")!;
+      const loadRuntime = vi.fn(async () => {
+        throw new Error("A missing lifecycle must fail before transcript access");
+      });
+      await expect(
+        reportGitHubPublicationTranscript(loadRuntime, reporting, legacy),
+      ).rejects.toThrow("GitHub publication transcript lifecycle is unavailable.");
+      expect(loadRuntime).not.toHaveBeenCalled();
       expect(
         db
           .prepare(

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { SidebarSnapshotModel } from "../components/sidebar-snapshot-model.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -21,6 +22,8 @@ type DeletionProbe = Record<"sent" | "received" | "wipes" | "writes", number> & 
     stack?: string;
     value: unknown;
   }>;
+  captured: Promise<void>;
+  settled: Promise<void>;
 };
 declare global {
   interface Window {
@@ -33,6 +36,7 @@ suite.define(() => {
     "retires %s once per tab without wiping the sidebar across churn and reload",
     async (tail) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page, context }) => {
+        await page.clock.install();
         const retained = createControlUiSessionRow(
           "agent:main:chat:retained-snapshot",
           "Retained conversation",
@@ -52,6 +56,7 @@ suite.define(() => {
             : undefined,
         );
         const profileId = "snapshot-operator";
+        const captureNumber = 424242;
         const entries = [
           ...(subagent ? [] : [`session:${deleted.key}`]),
           `session:${retained.key}`,
@@ -69,6 +74,7 @@ suite.define(() => {
               );
             }
             let settle = () => {};
+            let captureReady = () => {};
             const probe: DeletionProbe = {
               sent: 0,
               received: 0,
@@ -79,6 +85,10 @@ suite.define(() => {
               exchanged: new Promise<void>((resolve) => {
                 settle = resolve;
               }),
+              captured: new Promise<void>((resolve) => {
+                captureReady = resolve;
+              }),
+              settled: Promise.resolve(),
             };
             window.openclawDeletionSnapshotProbe = probe;
             const matches = (name: string, value: string | null) =>
@@ -107,13 +117,55 @@ suite.define(() => {
                 changed();
               }
             });
+            const capturesRetained = (value: unknown) => {
+              const record = value as { model?: SidebarSnapshotModel } | undefined;
+              return record?.model?.pinnedSessions.some(
+                (row) =>
+                  row.key === input.retainedKey &&
+                  row.state?.pullRequest?.numbers.includes(input.captureNumber),
+              );
+            };
+            const transactions = new WeakMap<IDBTransaction, { captured: boolean }>();
+            const observeTransaction = (transaction: IDBTransaction) => {
+              const previous = transactions.get(transaction);
+              if (previous) {
+                return previous;
+              }
+              const observed = { captured: false };
+              transactions.set(transaction, observed);
+              const completed = new Promise<void>((resolve, reject) => {
+                transaction.addEventListener(
+                  "complete",
+                  () => {
+                    if (observed.captured) {
+                      captureReady();
+                    }
+                    resolve();
+                  },
+                  { once: true },
+                );
+                for (const event of ["abort", "error"]) {
+                  transaction.addEventListener(
+                    event,
+                    () => reject(new Error("Sidebar snapshot transaction failed")),
+                    { once: true },
+                  );
+                }
+              });
+              probe.settled = Promise.all([probe.settled, completed]).then(() => {});
+              return observed;
+            };
             const observe = <Args extends unknown[], Result>(
               operation: (...args: Args) => Result,
-              counter: "writes" | "wipes",
+              counter?: "writes" | "wipes",
             ) =>
               function (this: IDBObjectStore | IDBCursor, ...args: Args) {
                 const source = this instanceof IDBCursor ? this.source : this;
-                if (source instanceof IDBObjectStore && source.name === "sidebarSnapshots") {
+                const observed =
+                  source instanceof IDBObjectStore && source.name === "sidebarSnapshots"
+                    ? observeTransaction(source.transaction)
+                    : undefined;
+                if (observed && counter) {
                   probe[counter] += 1;
                   probe.operations.push({
                     operation: operation.name,
@@ -123,10 +175,25 @@ suite.define(() => {
                     stack: new Error("Sidebar snapshot operation").stack,
                     value: args[0],
                   });
+                  if (counter === "writes") {
+                    observed.captured = Boolean(capturesRetained(args[0]));
+                  }
                 }
-                return operation.apply(this, args);
+                const result = operation.apply(this, args);
+                if (observed && !counter) {
+                  const request = result as IDBRequest<unknown[]>;
+                  request.addEventListener(
+                    "success",
+                    () => {
+                      observed.captured = request.result.some(capturesRetained);
+                    },
+                    { once: true },
+                  );
+                }
+                return result;
               };
             // oxlint-disable typescript/unbound-method -- observe preserves native receivers and arguments.
+            IDBObjectStore.prototype.getAll = observe(IDBObjectStore.prototype.getAll);
             IDBObjectStore.prototype.delete = observe(IDBObjectStore.prototype.delete, "wipes");
             IDBObjectStore.prototype.put = observe(IDBObjectStore.prototype.put, "writes");
             IDBCursor.prototype.update = observe(IDBCursor.prototype.update, "writes");
@@ -138,6 +205,8 @@ suite.define(() => {
             settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             entries,
             profileId,
+            retainedKey: retained.key,
+            captureNumber,
           },
         );
         const pages = [page, await context.newPage()];
@@ -193,8 +262,34 @@ suite.define(() => {
             .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
             .waitFor();
         }
+        // A saved boot projection can still have a later capture queued. Join a known
+        // live projection's transaction before measuring writes caused by deletion.
         for (const target of pages) {
-          await target.evaluate(() => {
+          await evaluateControlUiContext(
+            target,
+            (app, input) => {
+              app.sessions.setPullRequestSummary(input.key, {
+                state: "open",
+                numbers: [input.number],
+              });
+            },
+            { key: retained.key, number: captureNumber },
+          );
+          await row(target, retained.key)
+            .locator(`[data-pull-request-state="open"][aria-label*="#${captureNumber}"]`)
+            .first()
+            .waitFor();
+          await target.evaluate(() => window.openclawDeletionSnapshotProbe.captured);
+        }
+        await pauseVirtualClock(page);
+        for (const target of pages) {
+          await target.evaluate(async () => {
+            const probe = window.openclawDeletionSnapshotProbe;
+            let accepted: Promise<void>;
+            do {
+              accepted = probe.settled;
+              await accepted;
+            } while (accepted !== probe.settled);
             Object.assign(window.openclawDeletionSnapshotProbe, {
               wipes: 0,
               writes: 0,
@@ -202,8 +297,6 @@ suite.define(() => {
             });
           });
         }
-        await page.clock.install();
-        await pauseVirtualClock(page);
         for (const gateway of gateways) {
           await gateway.setSessionsListResponse({ sessions: [retained] });
           await gateway.emitGatewayEvent("sessions.changed", {
@@ -250,12 +343,12 @@ suite.define(() => {
           ),
         );
         const writes = snapshots.map((snapshot) => snapshot.writes);
+        console.info("deletion-cache-writes-per-two-virtual-minutes", { tail, writes });
         // A subagent deletion also settles its retained parent's child-load targets.
         expect(
           writes.reduce((total, count) => total + count, 0),
           JSON.stringify({ tail, snapshots }, null, 2),
         ).toBeLessThanOrEqual(subagent ? 2 : 1);
-        console.info("deletion-cache-writes-per-two-virtual-minutes", { tail, writes });
         await page.locator("aside.sidebar").screenshot({
           path: `${suite.artifactDir}/${subagent ? "subagent" : "normal"}-live.png`,
         });

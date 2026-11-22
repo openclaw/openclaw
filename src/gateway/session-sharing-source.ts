@@ -23,10 +23,7 @@ import {
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
-import {
-  authorizeOwnSessionMutation,
-  type SessionSharingTarget,
-} from "./session-sharing-policy.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import type { createSessionSharingConsumption } from "./session-sharing-read.js";
 import { captureSessionSharingStore } from "./session-sharing-source-store.js";
@@ -131,10 +128,9 @@ export async function prepareSessionSharingSource(
 export function withPreparedSessionSharingSource(params: {
   targets: AuthorizedSessionMutationTarget[];
   sourceConfig: OpenClawConfig;
-  request: Pick<SessionMutationAuthorizationParams, "client" | "method" | "preparedTargets"> & {
+  request: Pick<SessionMutationAuthorizationParams, "method" | "preparedTargets"> & {
     context: Pick<SessionMutationAuthorizationParams["context"], "getRuntimeConfig">;
   };
-  ownSessionProfileId?: string;
   talk: ReturnType<typeof resolveTalkSessionTargetInput>;
   assertTalkTargetCurrent: (cfg: OpenClawConfig) => PreparedTalkSessionTarget | undefined;
   assertTargetCurrent: (
@@ -152,17 +148,7 @@ export function withPreparedSessionSharingSource(params: {
     NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>
   >();
   const targetChanged = (key: string) => sessionMutationTargetChanged(params.request.method, key);
-  const assertSource = () => {
-    const error = authorizeOwnSessionMutation({
-      client: params.request.client,
-      target: null,
-      expectedProfileId: params.ownSessionProfileId,
-    });
-    if (error) {
-      throw new SessionMutationAuthorizationChangedError(error);
-    }
-    return params.request.context.getRuntimeConfig();
-  };
+  const assertSource = () => params.request.context.getRuntimeConfig();
   const assertCurrent = () => {
     const cfg = assertSource();
     const currentTalkTarget = params.assertTalkTargetCurrent(cfg);
@@ -302,7 +288,6 @@ export function withPreparedSessionSharingSource(params: {
 export function createAdmittedSessionSharingAuthority(params: {
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
-  ownSessionProfileId?: string;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
   assertTargetCurrent: Parameters<
     typeof withPreparedSessionSharingSource
@@ -315,16 +300,17 @@ export function createAdmittedSessionSharingAuthority(params: {
   // The creation recorder owns the absent-to-created handoff; only rollover diverges.
   let admittedTarget = target;
   let isAdoptingEffectActive: (() => boolean) | undefined;
+  let effectTarget: ReturnType<typeof captureSessionTarget> | undefined;
   const bindCurrentEffect = () => {
     if (!target?.resolved) {
       return;
     }
     bindSessionEffectTransition(
-      captureSessionTarget({
+      (effectTarget ??= captureSessionTarget({
         storeScope: target.resolved.storePath,
         sessionKey: target.resolved.canonicalKey,
         agentId: target.resolved.agentId,
-      }),
+      })),
       target,
       ({ previous, current }, isActive) => {
         if (
@@ -367,7 +353,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   const withCurrentSessionSource = target
     ? <T>(
         consume: () => T,
-        assertCurrent = () => params.assertTargetCurrent(target, target, params.getConfig()),
+        assertCurrent = () => assertAdmittedTargetCurrent(target, params.getConfig()),
       ): Promise<T> =>
         params.withStorage(() =>
           withCurrentSessionSharingSource({
@@ -386,7 +372,6 @@ export function createAdmittedSessionSharingAuthority(params: {
           targets: [target],
           sourceConfig: params.getConfig(),
           request: params.request,
-          ownSessionProfileId: params.ownSessionProfileId,
           talk: undefined,
           assertTalkTargetCurrent: () => undefined,
           assertTargetCurrent: (_selected, _expected, cfg, _ensured, prepared) =>

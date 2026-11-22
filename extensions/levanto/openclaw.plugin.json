@@ -44,9 +44,6 @@
     }
   ],
   "modelCatalog": {
-    "discovery": {
-      "levanto": "runtime"
-    },
     "providers": {
       "levanto": {
         "baseUrl": "https://sage.levanto.ai",

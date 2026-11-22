@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #202772: update rollback re-establishes the filesystem WAL journal policy on restored databases (red/green regression: restored DELETE vs restored WAL, credential-store DELETE exclusion) plus WAL-owner injected conversion-failure coverage for credential rebinding and failure reporting.
+74

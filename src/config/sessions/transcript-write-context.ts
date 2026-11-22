@@ -3,7 +3,6 @@
 import path from "node:path";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import {
   assertSessionEntryCohortScope,
@@ -454,18 +453,8 @@ export function getOwnedSessionTranscriptWriterFence(
   }
   const target = context?.sessionTarget;
   const expectedWriterRunId = target?.expectedWriterRunId?.trim();
-  if (expectedWriterRunId) {
-    return { expectedLifecycleRevision: target?.expectedLifecycleRevision, expectedWriterRunId };
-  }
-  // Direct CLI recovery carries its claim in the account-bound capability.
-  // The common transcript fence must retain it across awaited write preparation.
-  const cliWriter = params.sessionTarget && getCliHistoryWriter(params.sessionTarget);
-  cliWriter?.assertCurrent();
-  return cliWriter
-    ? {
-        expectedLifecycleRevision: cliWriter.lifecycleRevision,
-        expectedWriterRunId: cliWriter.runId,
-      }
+  return expectedWriterRunId
+    ? { expectedLifecycleRevision: target?.expectedLifecycleRevision, expectedWriterRunId }
     : undefined;
 }
 

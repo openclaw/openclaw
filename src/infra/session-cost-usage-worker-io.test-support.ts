@@ -63,6 +63,7 @@ if (!isMainThread) {
   }
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
+    const thisDatabase = this;
     const statement = Reflect.apply(prepare, this, [sql]);
     const stats = /^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql);
     const watermark = sql.includes('as "is_cold"') && sql.includes('"transcript_rewrite_watermarks"');
@@ -73,7 +74,7 @@ if (!isMainThread) {
         statement[method] = function(...args) {
           const partitions = cache && args.includes("session-cost-usage-projection-v2");
           const rollup = cache && args.includes("session-cost-usage-rollup-v3");
-          if (partitions) record({ kind: "partitions" });
+          if (partitions) record({ kind: "partitions", plan: Reflect.apply(prepare, thisDatabase, ["EXPLAIN QUERY PLAN " + sql]).all(...args).map(row => row.detail) });
           if (rollup) record({ kind: "cache" });
           if (watermark) record({ kind: "hot-watermark" });
           if (stats) record({ kind: "transcript-stats", bounded: /"seq" > /.test(sql) });
@@ -116,7 +117,8 @@ if (!isMainThread) {
           (line) =>
             JSON.parse(line) as
               | { kind: "transcript-stats"; bounded: boolean }
-              | { kind: "hot-watermark" | "cache" | "partitions" }
+              | { kind: "hot-watermark" | "cache" }
+              | { kind: "partitions"; plan: string[] }
               | { kind: "decompress"; outputLimit: number }
               | {
                   kind: "cache-row" | "partition-row";

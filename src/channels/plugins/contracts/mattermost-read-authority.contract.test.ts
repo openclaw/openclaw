@@ -24,16 +24,18 @@ import { dispatchChannelMessageAction } from "../message-action-dispatch.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 
 const preparation = vi.hoisted(() => ({ afterLookup: undefined as (() => void) | undefined }));
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: async (...args: Parameters<typeof actual.lookup>) => {
       const result = await actual.lookup(...args);
       preparation.afterLookup?.();
       return result;
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const CURRENT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -183,8 +185,6 @@ async function withReadFixture(
           revoke: (authorityOwner) => {
             if (authorityOwner === "plugin") {
               record.enabled = false;
-            } else if (authorityOwner === "run") {
-              releaseAgentRunDelegatedAuthority(delegatedAuthority);
             } else {
               revokeMessageActionTurnCapability(turnCapability);
             }
@@ -201,7 +201,7 @@ async function withReadFixture(
   );
 }
 
-type AuthorityOwner = "plugin" | "run" | "turn";
+type AuthorityOwner = "plugin" | "turn";
 type Revocation = [AuthorityOwner, string, number?];
 async function checkRead(
   options: FixtureOptions,
@@ -240,31 +240,25 @@ describe("Mattermost registered message reads", () => {
       [postsPath(CURRENT)],
     ));
 
-  it.each([false, true])("directory resolution retains authority (revoked=%s)", (revoked) =>
+  it("directory resolution retains authority", () =>
     checkRead(
       { rawTarget: "#allowed" },
       OTHER,
-      revoked
-        ? /no longer active/
-        : {
-            ok: true,
-            channelId: OTHER,
-            hasMore: false,
-            messages: [
-              { ...POST, timestampMs: 1_700_000_000_000, timestampUtc: "2023-11-14T22:13:20.000Z" },
-            ],
-          },
-      revoked
-        ? ["/api/v4/users/me"]
-        : [
-            "/api/v4/users/me",
-            "/api/v4/users/fixture-bot/channels?per_page=200",
-            metadataPath,
-            postsPath(OTHER),
-          ],
-      revoked ? ["run", "/api/v4/users/me"] : undefined,
-    ),
-  );
+      {
+        ok: true,
+        channelId: OTHER,
+        hasMore: false,
+        messages: [
+          { ...POST, timestampMs: 1_700_000_000_000, timestampUtc: "2023-11-14T22:13:20.000Z" },
+        ],
+      },
+      [
+        "/api/v4/users/me",
+        "/api/v4/users/fixture-bot/channels?per_page=200",
+        metadataPath,
+        postsPath(OTHER),
+      ],
+    ));
 
   it("rejects channels outside the allowlist", () =>
     checkRead(
@@ -277,7 +271,6 @@ describe("Mattermost registered message reads", () => {
   it.each<Revocation>([
     ["turn", metadataPath],
     ["plugin", postsPath(OTHER), 200],
-    ["run", postsPath(OTHER), 403],
   ])("fences %s revocation at %s (status=%s)", (owner, at, status?: number) =>
     checkRead(
       {},

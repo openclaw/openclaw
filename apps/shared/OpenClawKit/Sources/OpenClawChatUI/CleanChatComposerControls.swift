@@ -7,6 +7,16 @@ import UIKit
 #endif
 #endif
 
+/// The card takes its natural height, at least the resting height. The draft row stretches, so any
+/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
+struct CleanComposerRestingHeight: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct CleanChatComposerSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
@@ -54,7 +64,7 @@ enum CleanChatComposerMetrics {
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
     static let footerControlGap: CGFloat = 0
-    static let regularModelWidth: CGFloat = 82
+    static let regularModelMaxWidth: CGFloat = 132
     static let compactModelWidth: CGFloat = controlTouchSize
 }
 
@@ -226,7 +236,6 @@ struct OpenClawChatAttachmentsStrip: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
-                        .help("Remove attachment")
                         .accessibilityLabel(String(
                             format: String(localized: "Remove attachment: %@"), attachment.fileName))
                     }
@@ -463,6 +472,6 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     private var helpText: Text {
         if self.control.phase == .listening { return Text("Finish dictation") }
         if self.isPending || self.control.isActive { return Text("Cancel dictation") }
-        return Text("Transcribe speech into the message")
+        return Text("Dictate")
     }
 }

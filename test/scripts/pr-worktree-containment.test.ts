@@ -17,6 +17,10 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -555,13 +559,12 @@ describePosix("scripts/pr worktree containment", () => {
     expectCanonicalCheckoutUnchanged(fixture);
   });
 
-  it("hydrates a cold partial-clone transition before restoring its index and files", () => {
+  it("negotiates missing transition commits before batching cold blobs and checking out", () => {
     git(fixture.root, "checkout", "main");
     const source = fixture.mainSha;
     const files = Object.fromEntries(
       Array.from({ length: 1030 }, (_, index) => [`cold-${index}.txt`, `blob ${index}\n`]),
     );
-    const target = commitFiles(fixture.root, "cold transition target", files);
     git(fixture.root, "config", "uploadpack.allowFilter", "true");
     git(fixture.root, "config", "uploadpack.allowAnySHA1InWant", "true");
     const clone = join(fixture.root, "partial");
@@ -574,15 +577,19 @@ describePosix("scripts/pr worktree containment", () => {
       clone,
     );
     git(clone, "checkout", "--detach", source);
+    const target = commitFiles(fixture.root, "cold transition target", files);
+    const packets = join(fixture.root, "packets");
     const result = runShell(fixture, [
       'pr_git() { if [[ " $* " == *" --stdin "* ]]; then local input; input=$(cat); printf "%s\\n" "$input" | wc -l >> "$fixture_root/fetch-batches"; printf "%s\\n" "$input" | command git "$@"; else command git "$@"; fi; }',
       'cd "$fixture_root/partial"',
-      `write_review_transition_journal 42 ${source} ${target} detached ''`,
-      "GIT_NO_LAZY_FETCH=1 recover_review_transition 42",
+      'canonical_repo_root="$PWD"',
+      `GIT_TRACE_PACKET=${packets} checkout_pr_worktree_target 42 ${target} temp/pr-42`,
       `write_review_transition_journal 42 ${target} ${target} detached ''`,
       "GIT_NO_LAZY_FETCH=1 recover_review_transition 42",
     ]);
     expectSuccess(result);
+    expect(readFileSync(packets, "utf8")).toMatch(/fetch> have /u);
+    expect(readFileSync(packets, "utf8")).toContain("filter blob:none");
     expect(
       readFileSync(join(fixture.root, "fetch-batches"), "utf8").trim().split(/\s+/).map(Number),
     ).toEqual([1024, 6]);
@@ -795,13 +802,12 @@ describePosix("scripts/pr worktree containment", () => {
     const tools = join(fixture.root, "tools");
     const commandLog = join(fixture.root, "git-commands.log");
     mkdirSync(tools);
-    const realGit = spawnSync("bash", ["-c", "command -v git"], {
-      encoding: "utf8",
-    }).stdout.trim();
+    const realGit = resolveGitOutsideFixtures();
     writeFileSync(
       join(tools, "git"),
       [
         "#!/usr/bin/env bash",
+        gitPathShimShellPrelude(),
         'printf "%s\\n" "$1" >> "$GIT_COMMAND_LOG"',
         'if [ "${1:-}" = ls-files ] && [ "${3:-}" = --ignored ]; then',
         '  printf "ignored-query\\n" >> "$GIT_COMMAND_LOG"',

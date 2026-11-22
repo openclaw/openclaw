@@ -196,6 +196,13 @@ JavaScript-only host export; its declarations are excluded from the package.
     preparation. The callback belongs to the caller and expires when the search
     finishes; providers must not replace it or treat its absence as permission.
 
+    Host callers can also pass `modelSelection: { provider, model, authProfileId? }`.
+    This is selection data, not an authorization grant. Model-backed search providers
+    preserve a matching provider's model/profile through their native transport;
+    unrelated search providers keep their own configured selection. An explicit
+    matching credential prevents automatic fallback to another search provider.
+    The agent tool carries this context separately from model-authored arguments.
+
   </Accordion>
   <Accordion title="api.runtime.media">
     Low-level media utilities.

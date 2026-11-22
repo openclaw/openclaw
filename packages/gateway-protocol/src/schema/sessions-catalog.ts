@@ -60,6 +60,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 });
 
 export const SessionCatalogSessionSchema = closedObject({
+  originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
@@ -80,6 +81,10 @@ export const SessionCatalogSessionSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   createdActor: Type.Optional(SessionCreatedActorSchema),
   canContinue: Type.Boolean(),
+  /** Provider-owned next step when this source is temporarily view-only. */
+  continuationUnavailableReason: Type.Optional(Type.String({ minLength: 1, maxLength: 384 })),
+  /** Known gates use client-owned copy so provider explanations can be localized. */
+  continuationUnavailableReasonCode: Type.Optional(stringLiteralUnion(["source-handoff-required"])),
   canArchive: Type.Boolean(),
   canOpenTerminal: Type.Optional(Type.Boolean()),
 });

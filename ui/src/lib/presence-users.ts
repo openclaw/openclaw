@@ -2,6 +2,7 @@ import type { SessionParticipantIdentity } from "../../../packages/gateway-proto
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { userProfileDisplayName } from "../../../src/shared/user-profile-display-name.js";
 import type { PresenceEntry } from "../api/types.ts";
 import {
   readPresenceEntries,
@@ -21,7 +22,7 @@ export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
   return {
     id: profile.id,
     identity: { type: "profile", id: profile.id },
-    name: profile.displayName?.trim() || profile.githubIdentity?.login || undefined,
+    name: userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login),
     avatarUrl: profileAvatarUrl(profile),
     watchedSessions: [],
     entries: [],

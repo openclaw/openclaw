@@ -8,6 +8,7 @@ import {
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -95,11 +96,9 @@ function PageEntries(props: {
             {entry.type === "checkbox" ? <Icon name="eye" /> : entry.icon}
             <span>{plainLabel(entry.label)}</span>
             {entry.type === "checkbox" ? (
-              <span
-                class="session-actions-page__switch"
-                data-checked={entry.checked ? "true" : "false"}
-                aria-hidden="true"
-              />
+              <span class="session-actions-page__switch">
+                <SwitchIndicator checked={Boolean(entry.checked)} size="md" />
+              </span>
             ) : entry.checked ? (
               <Icon name="check" />
             ) : entry.id.startsWith("compact:open-") ? (
@@ -131,10 +130,16 @@ export function createMobileHeaderSessionMenu(options: {
     keyboardSource?: HTMLElement;
   };
   const [pageRequests, setPageRequests] = createSignal<PageRequest[]>([]);
-  const body = (name: "assign-owner" | "group" | "advanced" | "icon" | "open-in") =>
+  const body = (name: "assign-owner" | "group" | "advanced" | "icon") =>
     options.view
       .compact(name)
-      .filter((entry) => !entry.id.startsWith("compact:back") && entry.id !== "back-divider");
+      // This sheet owns its search field; the shared row belongs to regular menus.
+      .filter(
+        (entry) =>
+          !entry.id.startsWith("compact:back") &&
+          entry.id !== "back-divider" &&
+          entry.id !== "groups-search",
+      );
   const select = (item: MenuItem) => {
     // Restore the trigger before pane removal starts its survivor-focus handoff.
     const closeBeforeAction = item.id === "open-command-palette" || item.id === "layout:close-pane";
@@ -260,7 +265,6 @@ export function createMobileHeaderSessionMenu(options: {
                       .filter(
                         (entry) =>
                           !entry.id.includes("copy") &&
-                          !entry.id.includes("open-in") &&
                           !entry.id.startsWith("communication") &&
                           entry.id !== "delete-divider",
                       )
@@ -296,12 +300,6 @@ export function createMobileHeaderSessionMenu(options: {
                     )}
                     select={select}
                   />
-                </div>
-              </section>
-              <section>
-                <h3>{t("sessionsView.openInEditorMenu")}</h3>
-                <div class="session-actions-page__group">
-                  <PageEntries entries={body("open-in")} select={select} />
                 </div>
               </section>
             </>
@@ -367,9 +365,7 @@ export function createMobileHeaderSessionMenu(options: {
     if (!host || !source) {
       return;
     }
-    if (kind === "icon") {
-      options.view.appearance.prepare();
-    }
+    options.view.prepareView(kind);
     const page: HeaderSessionMenuPage = {
       key:
         kind === "assign-owner"

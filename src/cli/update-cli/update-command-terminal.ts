@@ -12,7 +12,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { automaticallyCleanUpdateRecovery, failedBeforeActivation } from "./automatic-cleanup.js";
+import { automaticallyCleanUpdateRecovery, failedUpdateCanCleanUp } from "./automatic-cleanup.js";
 import { prepareResult, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -30,6 +30,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 import {
   recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
   withMutableUpdateTerminalSettlement,
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -97,7 +98,7 @@ export function deferUpdateCommandTerminalPreparation(
   let expectedFailure: unknown;
   registerUpdateCommandTerminalPreparation(fence, run.runId, async (failure) => {
     expectedFailure = failure;
-    prepared = await prepare(failure);
+    prepared = await runMutableUpdateRecovery(() => prepare(failure));
   });
   // A release/identity failure cannot fall back to reading newer mutable state.
   const pending = (cause: unknown) =>
@@ -337,9 +338,6 @@ async function settleUpdateCommandTerminalResult<T>(
   if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
     throw outcome.error;
   }
-  await run?.sourceArtifactLock?.release().catch((error: unknown) => {
-    defaultRuntime.error(`Warning: Artifact lock release failed: ${formatErrorMessage(error)}`);
-  });
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -741,7 +739,7 @@ export async function prepareUpdateCommandTerminalResult(
       (result.status === "ok" ||
         (result.status === "skipped" && result.reason === "already-current") ||
         (result.status === "error" &&
-          failedBeforeActivation(params.opts.run.runId, params.opts.run.env)))
+          failedUpdateCanCleanUp(params.opts.run.runId, params.opts.run.env)))
         ? await automaticallyCleanUpdateRecovery(params.opts.run.runId, params.opts.run.env)
         : undefined;
     emit(cleanup ? [cleanup] : []);

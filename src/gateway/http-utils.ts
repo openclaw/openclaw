@@ -9,6 +9,7 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -169,7 +170,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
-  const defaultProvider = defaultModelRef.provider;
+  const defaultProvider = defaultModelRef?.provider ?? DEFAULT_PROVIDER;
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
     config: cfg,
@@ -304,6 +305,7 @@ export async function authorizeOpenAiCompatibleHttpSession(params: {
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.requestAuth.operatorRoleActor,
+    openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });

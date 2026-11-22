@@ -1,6 +1,7 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -11,6 +12,35 @@ import {
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
 registerSkillsBrowserEnglish();
+
+/** A skill's own mark: its image, else its emoji, else the default skill icon. */
+export function SkillTile(props: {
+  emoji?: string;
+  imageUrl?: string;
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
+}) {
+  return (
+    <span
+      class={[
+        "skill-tile",
+        props.class,
+        { "skill-tile--default": !props.imageUrl && !props.emoji },
+      ]}
+      aria-hidden="true"
+    >
+      <Show
+        when={props.imageUrl}
+        fallback={
+          <Show when={props.emoji} fallback={<Icon name="bookOpenText" />}>
+            {props.emoji}
+          </Show>
+        }
+      >
+        {(url) => <img src={url()} alt="" loading="lazy" />}
+      </Show>
+    </span>
+  );
+}
 
 export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBadge?: boolean }) {
   return (
@@ -27,6 +57,15 @@ export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBa
       </Show>
     </div>
   );
+}
+
+/** The registry reference an installed ClawHub skill was added from, as search results name it. */
+export function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
 }
 
 export function verdictForSkill(
@@ -96,29 +135,15 @@ function skillStateStatus({ skill, verdict }: SkillStateProps) {
   };
 }
 
-/** The list row form: the state's word beside its dot, with the details on hover and focus. */
-export function SkillRowStatus(props: SkillStateProps) {
-  const status = createMemo(() => skillStateStatus(props));
-  return (
-    <span
-      class="skill-row-status"
-      role="img"
-      tabindex="0"
-      aria-label={status().tooltip}
-      title={status().tooltip}
-    >
-      <SettingsStatus kind={status().tone} label={status().label} />
-    </span>
-  );
-}
-
-export function SkillStateStatus(props: SkillStateProps) {
+export function SkillStateStatus(props: SkillStateProps & { showLabel?: boolean }) {
   const status = createMemo(() => skillStateStatus(props));
   return (
     <span
       class={[
-        "plugin-catalog-card__status settings-status",
+        "settings-status",
         {
+          "plugin-catalog-card__status": !props.showLabel,
+          "skill-row-status": props.showLabel,
           "settings-status--danger": status().tone === "danger",
           "settings-status--warn": status().tone === "warn",
           "settings-status--muted": status().tone === "muted",
@@ -131,7 +156,11 @@ export function SkillStateStatus(props: SkillStateProps) {
       title={status().tooltip}
     >
       <span class="settings-status__dot" aria-hidden="true" />
-      <span class="plugin-catalog-card__status-label">{status().label}</span>
+      {props.showLabel ? (
+        status().label
+      ) : (
+        <span class="plugin-catalog-card__status-label">{status().label}</span>
+      )}
     </span>
   );
 }

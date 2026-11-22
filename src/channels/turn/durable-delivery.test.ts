@@ -22,7 +22,10 @@ import { createExecutionIdentityAdmissionToken } from "../../audit/execution-ide
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import { createReplyToModeFilterForChannel } from "../../auto-reply/reply/reply-threading.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
@@ -184,5 +187,25 @@ describe("durable inbound reply delivery", () => {
     });
     expect(error).not.toHaveProperty("visibleReplySent");
     expect(error).not.toHaveProperty("sentBeforeError");
+  });
+
+  it.each([
+    ["held", true],
+    ["released", undefined],
+    [undefined, undefined],
+  ] as const)("reports queue custody %s of an unsent failure", async (custody, retained) => {
+    const error = new OutboundDeliveryError("flood refusal", {
+      cause: new PlatformMessageNotDispatchedError("429", { cause: new Error("429") }),
+    });
+    if (custody) {
+      error.queueCustody = custody;
+    }
+    mocks.send.mockResolvedValueOnce({ status: "failed", error });
+    expect(await deliver()).toEqual({
+      status: "failed",
+      error,
+      sentBeforeError: false,
+      ...(retained ? { retainedForRecovery: true } : {}),
+    });
   });
 });

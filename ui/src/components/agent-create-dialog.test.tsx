@@ -162,8 +162,8 @@ it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
         failure === "rejected conversion"
           ? "Image conversion failed"
           : failure === "too-detailed"
-            ? "too detailed"
-            : "That image can't be used",
+            ? "Couldn’t save that avatar"
+            : "Couldn’t use that image",
       );
       expect(create.disabled).toBe(false);
       expect(view.container.querySelector('input[name="name"]')).toBe(name);

@@ -8,12 +8,19 @@ description: Resolve and enrich Knowledge people, companies, projects, and conce
 Find who or what an entity is before asking, decide whether it deserves a page,
 then write a sourced profile, its source note and links. Read a reference only when
 its step needs it. Shared references are identical across Knowledge skills; if
-another Knowledge skill brought you here, don't reread ones you already read.
+another Knowledge skill brought you here, don't reread ones you already read,
+and don't reread any after compaction unless you are about to use it again.
 
 - [setup](references/setup.md): always, first (status, ontology, search)
 - [identity](references/identity.md): resolving an entity; whether to create a page
 - [enrichment](references/enrichment.md): tiers, what to extract, external lookups, bulk runs
-- [profiles](references/profiles.md): page structure, creating or updating
+- [subject pages](references/profiles.md): page rules, creating or updating
+- the layout for the entity's type, and only that one:
+  [project](references/layout-project.md), [person](references/layout-person.md),
+  [company](references/layout-company.md), [concept](references/layout-concept.md)
+- [retire dated sections](references/retire-dated.md): only when the page has a
+  written Timeline or a section named for a date or source
+- [source notes](references/source-notes.md): the entity's relationship with the source
 - [writing](references/writing.md): before writing page prose
 - [sources](references/sources.md): retaining sources and citing them
 - [assertions](references/assertions.md): claims and relationships about the entity
@@ -32,6 +39,8 @@ another Knowledge skill brought you here, don't reread ones you already read.
 - Scale effort to importance. When in doubt, don't create a page.
 - Never overwrite user-written assessments; flag contradictions with both
   citations.
+- Leave a current page alone apart from the new facts. Route each fact to the
+  most specific existing page it is about.
 
 ## Steps
 
@@ -62,22 +71,24 @@ citation, or a reason it has none.
 
 ### 4. Write
 
-- **Create:** introduction and State, plus only the optional sections the
-  evidence supports ([profiles](references/profiles.md)). No Timeline section.
+- **Create:** introduction and State, plus only the sections of its type's
+  layout that the evidence supports ([subject pages](references/profiles.md#create-or-update-a-page)).
+  No Timeline section and no dated headings.
 - **Source note:** one `attended` or `discusses` relationship between the entity
   and the source, with a one-sentence body
-  ([source notes](references/profiles.md#source-notes)). It is the entity's row
+  ([source notes](references/source-notes.md)). It is the entity's row
   in its derived Timeline.
-- **Update:** edit a State topic only when its meaning changed; use
-  `knowledge_edit_body` for local edits. Retire a written Timeline section when
-  the page still has one
-  ([retire a written Timeline](references/profiles.md#retire-a-written-timeline)).
+- **Update:** rewrite a State topic or type section in place only when its
+  meaning changed; never append a section per source or date, and keep every
+  existing citation ([update an existing page](references/profiles.md#create-or-update-a-page)).
+  Use `knowledge_edit_body` for local edits. Retire a written Timeline or dated
+  section when the page still has one ([retire dated sections](references/retire-dated.md)).
 - Use declared ontology fields only; omit unknown values.
 - Page bodies have a size budget, smaller for hub pages
   ([page budgets](references/publish.md#page-budgets)). When a write is
-  rejected, retire a written Timeline section first; otherwise give the subject
-  that outgrew its section its own page with `knowledge_extract_section`. Never
-  truncate.
+  rejected, follow the order there: retire a written Timeline and dated
+  sections first, and only then give a clearly separate subject that outgrew its
+  section its own page with `knowledge_extract_section`. Never truncate.
 - Create claims and evidenced relationships for independently useful
   assertions ([assertions](references/assertions.md)). Markdown links don't
   create relationships.

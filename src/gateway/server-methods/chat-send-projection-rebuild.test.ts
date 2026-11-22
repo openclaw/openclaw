@@ -89,7 +89,7 @@ async function createRebuildingFixture() {
 function expectRebuildingResponse(respond: ReturnType<typeof vi.fn<RespondFn>>) {
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
     code: "UNAVAILABLE",
-    message: "session transcript is rebuilding; retry shortly",
+    message: "Chat history is rebuilding. Try again shortly.",
     details: { method: "chat.send" },
     retryable: true,
     retryAfterMs: 250,

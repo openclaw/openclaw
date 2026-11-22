@@ -7,11 +7,11 @@
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -131,12 +131,7 @@ async function measure(variant: (typeof variants)[number], pair: number, order: 
   const inspector = new Session();
   let sampledBytes: number | undefined;
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpu = process.threadCpuUsage();
   const started = performance.now();
@@ -146,9 +141,7 @@ async function measure(variant: (typeof variants)[number], pair: number, order: 
   const memoryAfter = process.memoryUsage();
   if (values.allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-    sampledBytes = sum(profile.head);
+    sampledBytes = sumSampledHeapBytes(profile.head);
     inspector.disconnect();
   }
   assert.equal(JSON.stringify(variant.project(scopes, methods)), expectedJson);

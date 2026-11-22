@@ -3,14 +3,9 @@ import {
   skipWhitespaceGraphemes,
   trimEndWhitespaceGraphemes,
 } from "@openclaw/normalization-core/grapheme";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeChunkLimit } from "../../packages/markdown-core/src/chunk-text.js";
 
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
-
-export function normalizeChunkLimit(limit: number): number {
-  // String slicing truncates fractional indexes, so positive limits need an integer progress step.
-  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
 
 function findWhitespaceBreak(window: string): number {
   for (let index = window.length - 1; index >= 0; index--) {

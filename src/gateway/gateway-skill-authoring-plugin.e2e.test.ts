@@ -13,7 +13,8 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setTestEnvValue } from "../test-utils/env.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { isRecord } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -43,7 +44,6 @@ const OTHER_PLUGIN_ID = "skill-authoring-other";
 // Declares no agentSkillsDir, so it has no skills root to author.
 const NOROOT_PLUGIN_ID = "skill-authoring-noroot";
 const NOROOT_TOOL = "noroot_skill_write";
-const WORKSHOP_ROOT_PLUGIN_ID = "workshop-root-fixture";
 const SKILL_NAME = "proof-learned";
 const REVOKED_SKILL = "proof-revoked";
 const SKILL_DESCRIPTION = "PROOF_SKILL_DESCRIPTION use when proving plugin skill authoring";
@@ -200,30 +200,27 @@ function skillRefreshShape(
   const nextTurn = withLeadingSystemMessage(raw[3]);
   // Within the write's turn the cacheable prefix stays byte-identical; history only appends.
   assertStableProviderPrefix(before, sameTurn, { label: "same turn after skill write" });
-  // The next turn keeps tools, cache key and every earlier history item byte-identical...
-  // The latest turn's runtime-context message is turn-scoped and never replayed (existing
-  // contract), so the replayed prefix is the write turn's history without it.
-  const replayed = turnEnd.history.filter(
-    (item) => !item.includes('"text":"OpenClaw runtime context:'),
-  );
-  expect(turnEnd.history.length - replayed.length).toBe(1);
-  assertStableProviderPrefix({ ...turnEnd, history: replayed, system: nextTurn.system }, nextTurn, {
-    label: "next turn after skill write",
-  });
-  // ...and the system prompt changes only by the new skill's skills-list entry.
-  const next = nextTurn.system;
-  const at = next.indexOf(description);
-  const entryStart = next.lastIndexOf("<skill>", at);
-  const entryEnd = next.indexOf("</skill>", at) + "</skill>".length;
-  // Entries are newline-indented; in JSON bytes the separator reads as an escaped newline.
-  const separator = "\\n  ";
-  const withoutEntry = [
-    next.slice(0, entryStart) + next.slice(entryEnd + separator.length),
-    next.slice(0, entryStart - separator.length) + next.slice(entryEnd),
-  ];
+  // Refreshes append instructions without rewriting the admitted system or history.
+  assertStableProviderPrefix(turnEnd, nextTurn, { label: "next turn after skill write" });
+  const updates = nextTurn.history
+    .slice(turnEnd.history.length)
+    .filter((item) => item.includes("System prompt update.") && item.includes(description));
+  expect(updates).toHaveLength(1);
+  const update = updates[0]!;
+  const catalog = (item: string) => item.match(/<available_skills>(.*?)<\/available_skills>/)?.[1];
+  const entries = (item: string) =>
+    [...(catalog(item)?.matchAll(/<skill>.*?<\/skill>/g) ?? [])].map(([entry]) => entry);
+  const previous = [turnEnd.system, ...turnEnd.history].findLast((item) => catalog(item));
+  const previousEntries = previous ? entries(previous) : [];
+  const nextEntries = entries(update);
+  const added = nextEntries.filter((entry) => entry.includes(description));
+  expect(added).toHaveLength(1);
   return {
-    onlyEntryAdded: at > 0 && withoutEntry.includes(turnEnd.system),
-    entry: next.slice(entryStart, entryEnd),
+    onlyEntryAdded:
+      nextEntries.length === previousEntries.length + 1 &&
+      JSON.stringify(nextEntries.filter((entry) => entry !== added[0])) ===
+        JSON.stringify(previousEntries),
+    entry: added[0]!,
   };
 }
 
@@ -263,13 +260,10 @@ it(
       { agentSkillsDir: "other-skills" },
       `export default { id: ${JSON.stringify(OTHER_PLUGIN_ID)}, register() {} };\n`,
     );
-    // Bundled plugins are off in this harness; this fixture contributes the bundled Skill
-    // Workshop manifest's `workshop-skills` folder so core Workshop skills load as in production.
-    await writePlugin(
-      WORKSHOP_ROOT_PLUGIN_ID,
-      { agentSkillsDir: "workshop-skills" },
-      `export default { id: ${JSON.stringify(WORKSHOP_ROOT_PLUGIN_ID)}, register() {} };\n`,
-    );
+    // The bundled skill-workshop plugin owns skill_workshop and its `workshop-skills` folder;
+    // this harness turns bundled plugins off, so enable a bundled root holding its source.
+    deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    await shareCoreWithWorkshopPluginForTest();
     await writePlugin(
       NOROOT_PLUGIN_ID,
       { contracts: { tools: [NOROOT_TOOL] } },
@@ -377,7 +371,7 @@ it(
           },
           entries: { main: {} },
         },
-        plugins: { allow: [PLUGIN_ID, OTHER_PLUGIN_ID, NOROOT_PLUGIN_ID, WORKSHOP_ROOT_PLUGIN_ID] },
+        plugins: { allow: [PLUGIN_ID, OTHER_PLUGIN_ID, NOROOT_PLUGIN_ID, "skill-workshop"] },
         tools: {
           profile: "full",
           alsoAllow: [TOOL, NOROOT_TOOL, "skill_workshop"],
@@ -525,7 +519,8 @@ it(
         await expect(
           fs.stat(path.join(agentDir, "proof-skills", REVOKED_SKILL)),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        // Core Workshop keeps its own source; the revoked write added no event.
+        // Workshop is a plugin author too (accepted cutover change); the revoked write added no
+        // event.
         const allEvents = (await fs.readFile(eventsFile, "utf8"))
           .trim()
           .split("\n")
@@ -533,7 +528,7 @@ it(
         expect(allEvents.map(({ name, source, pluginId }) => ({ name, source, pluginId }))).toEqual(
           [
             { name: SKILL_NAME, source: "plugin", pluginId: PLUGIN_ID },
-            { name: WORKSHOP_SKILL, source: "workshop", pluginId: undefined },
+            { name: WORKSHOP_SKILL, source: "plugin", pluginId: "skill-workshop" },
           ],
         );
       } finally {

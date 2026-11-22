@@ -22,7 +22,7 @@ const inView = (element: Element | null, viewport: Element) => {
   return box.top >= port.top - 1 && box.top < port.bottom;
 };
 
-it("reveals a Recent selection after its report reloads and returns focus to its replacement row", async () => {
+it("retains a session row during detail loading and returns focus when details close", async () => {
   const { page: browser } = await import("vitest/browser");
   await browser.viewport(390, 844);
   const snapshot = cacheSnapshot("fresh");
@@ -54,13 +54,6 @@ it("reveals a Recent selection after its report reloads and returns focus to its
     page.querySelector<HTMLButtonElement>(".session-detail-close")!.click();
     await settleUsagePage(page);
   }
-  usageButton(page, "Recently viewed").click();
-  await settleUsagePage(page);
-  expect([...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent)).toEqual([
-    "Second",
-    "First",
-  ]);
-
   const originalButton = rowButton("First");
   const originalRow = originalButton.closest<HTMLElement>(".session-bar-row")!;
   originalRow.scrollIntoView({ block: "center" });
@@ -69,8 +62,8 @@ it("reveals a Recent selection after its report reloads and returns focus to its
   originalButton.click();
   await waitForSolid(() => {
     expect(page.usageLoading).toBe(true);
-    expect(originalRow.isConnected).toBe(false);
-    expect(page.querySelector(".usage-grid")).toBeNull();
+    expect(originalRow.isConnected).toBe(true);
+    expect(page.querySelector(".usage-grid")).not.toBeNull();
   });
   expect(
     request.mock.calls.findLast(
@@ -78,7 +71,6 @@ it("reveals a Recent selection after its report reloads and returns focus to its
     )?.[1],
   ).toMatchObject({
     selectedSessions: ["agent:main:First"],
-    recentKeys: ["agent:main:First", "agent:main:Second"],
   });
 
   scroller.scrollTop = 0;
@@ -90,7 +82,7 @@ it("reveals a Recent selection after its report reloads and returns focus to its
   });
   const replacementButton = rowButton("First");
   const replacementRow = replacementButton.closest<HTMLElement>(".session-bar-row")!;
-  expect(replacementButton).not.toBe(originalButton);
+  expect(replacementButton).toBe(originalButton);
   scroller.scrollTop += 400;
   page.querySelector<HTMLButtonElement>(".session-detail-close")!.click();
   await waitForSolid(() => {

@@ -57,9 +57,9 @@ it("hydrates persisted profile attribution on every read without changing the ac
     for (const [index, name] of ["Current owner", "Renamed owner"].entries()) {
       const directoryEmail = `directory-only-${index}@example.test`;
       const directoryOnly = ensureProfileForEmail(directoryEmail);
-      const directoryName = `Directory profile ${index}`;
-      expect(setName(directoryOnly.id, directoryName)).toMatchObject({
-        displayName: directoryName,
+      const clearedDirectoryProfile = setName(directoryOnly.id, null);
+      expect(clearedDirectoryProfile).toMatchObject({
+        displayName: null,
         githubIdentity: null,
       });
       setName(id, name);
@@ -69,7 +69,12 @@ it("hydrates persisted profile attribution on every read without changing the ac
         owner: { id, label: name, identity: { type: "profile", id } },
         identities: expect.arrayContaining([
           expect.objectContaining({ id, label: name }),
-          expect.objectContaining({ id: directoryOnly.id, label: directoryName }),
+          expect.objectContaining({
+            id: directoryOnly.id,
+            label: "Person " + directoryOnly.id.slice(0, 8),
+            avatarUrl:
+              "/api/users/" + directoryOnly.id + "/avatar?v=" + clearedDirectoryProfile.updatedAt,
+          }),
         ]),
         role: "owner",
       });

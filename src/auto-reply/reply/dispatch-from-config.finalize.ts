@@ -10,6 +10,7 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
 import { resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
@@ -91,6 +92,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   const explicitFollowupQueued =
     queueAdmission?.status === "accepted" && queueAdmission.reason === "explicit-followup";
+  const durableDropOutcome = Boolean(state.params.replyOptions?.turnAdoptionLifecycle?.onDropped);
+  const explicitFollowup = isExplicitFollowupCommandTurn(ctx);
+  const isPolicyDrop = () => {
+    const disposition = state.replyOperationRunState.followupQueueDisposition;
+    return disposition === "queue-cap-old" || disposition === "queue-cap-new";
+  };
   let queuedRequesterNotice: ReplyPayload | undefined;
   if (queueAdmission?.status === "accepted" && queueAdmission.mode === "followup") {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
@@ -148,17 +155,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Progress and earlier final deliveries can wait while a later input evicts this followup.
-      if (
-        reply === queuedRequesterNotice &&
-        state.replyOperationRunState.followupQueueDisposition === "queue-cap-old"
-      ) {
-        reply.text =
-          "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
-        setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
-      } else if (reply === queuedRequesterNotice && !explicitFollowupQueued) {
-        // Automatic fallback is an implementation detail. Only explicit commands
-        // acknowledge queueing; a real overflow still needs the actionable notice above.
-        continue;
+      if (reply === queuedRequesterNotice) {
+        if (isPolicyDrop() && (!durableDropOutcome || explicitFollowup)) {
+          reply.text =
+            "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress." +
+            (durableDropOutcome || explicitFollowup
+              ? ""
+              : " Please send it again after the current response finishes.");
+          setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
+        } else if (isPolicyDrop() || !explicitFollowupQueued) {
+          continue;
+        }
       }
       const laneSuppressed =
         (reply.isReasoning === true && !finalReasoningEnabled) ||
@@ -406,6 +413,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
   const replyCompletion = () => {
+    if (isPolicyDrop() && durableDropOutcome && !explicitFollowup) {
+      return resolveReplyCompletion("optional", "silent");
+    }
     const delivery = turnLedger.resolveTerminalDelivery();
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
@@ -452,12 +462,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !replyAcceptedByActiveRun;
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
-  if (noVisibleReplyFallbackAllowed()) {
+  if (noVisibleReplyFallbackAllowed() || (explicitSilence && queuedFinal)) {
     // Only a turn that still looks empty pays for settlement: pending admissions
     // must resolve (beforeDeliver cancellation, pre-transport failure) before the
-    // silence verdict. Turns with settled visibility or a policy-suppressed
-    // fallback skip the wait, so deliveries that legitimately outlive the turn
-    // (queued same-session mirroring) cannot deadlock the gate on themselves.
+    // silence verdict. A silent turn that still queued an earlier steered answer
+    // also waits, so that send starts before this dispatch's plugin scope closes.
+    // Turns with settled visibility or a policy-suppressed fallback skip the wait,
+    // so deliveries that legitimately outlive the turn (queued same-session
+    // mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
   if (queuedSettleResult === "settled") {
@@ -488,7 +500,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     try {
       throwIfDispatchOperationAborted();
       const fallbackPayload: ReplyPayload = queueCapRejected
-        ? { text: QUEUE_CAP_REJECTION_TEXT }
+        ? {
+            text:
+              explicitFollowup || (isPolicyDrop() && durableDropOutcome)
+                ? "This message was not queued because the session queue is full."
+                : QUEUE_CAP_REJECTION_TEXT,
+          }
         : createMissingReplyNotice();
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),

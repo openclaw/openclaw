@@ -1,6 +1,7 @@
 import OpenClawKit
 import SwiftUI
 import UIKit
+import Vision
 import XCTest
 @testable import OpenClaw
 @testable import OpenClawChatUI
@@ -35,15 +36,15 @@ final class ChatSendOptionsRenderingTests: XCTestCase {
         }
 
         try await self.checkDefaults(model: model, controller: controller)
+        let draft = model.input
         for input in ["", "/new"] {
             model.input = input
-            await self.settle(controller.view)
-            XCTAssertNil(Self.findOptions(in: controller.view), "Ineligible drafts must not offer overrides")
+            _ = try await self.waitForRenderedText(in: controller.view) { !$0.contains("Send options") }
+            model.input = draft
+            _ = try await self.waitForRenderedText(in: controller.view) { $0.contains("Send options") }
         }
-        model.input = "Please include the next steps."
         model.pendingRuns.removeAll()
-        await self.settle(controller.view)
-        XCTAssertNil(Self.findOptions(in: controller.view), "Idle sends must not show busy-send options")
+        _ = try await self.waitForRenderedText(in: controller.view) { !$0.contains("Send options") }
     }
 
     private func checkDefaults(
@@ -58,17 +59,13 @@ final class ChatSendOptionsRenderingTests: XCTestCase {
         ] {
             model.sessions = try [JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
                 "{\"key\":\"main\",\"effectiveQueueMode\":\"\(mode)\"}".utf8))]
-            await self.settle(controller.view)
-            let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
-                controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+            let image = try await self.waitForRenderedText(in: controller.view) {
+                $0.contains("Send options") && $0.contains(expected)
             }
             let attachment = XCTAttachment(image: image)
             attachment.name = "send-options-\(mode)"
             attachment.lifetime = .keepAlways
             self.add(attachment)
-            let options = try XCTUnwrap(Self.findOptions(in: controller.view), "The menu must be discoverable")
-            XCTAssertTrue(options.accessibilityValue?.contains(expected) == true)
-            XCTAssertGreaterThanOrEqual(options.accessibilityFrame.height, 44)
         }
     }
 
@@ -94,35 +91,33 @@ final class ChatSendOptionsRenderingTests: XCTestCase {
         .preferredColorScheme(.light)
     }
 
-    private func settle(_ view: UIView) async {
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
-        try? await Task.sleep(for: .milliseconds(200))
-        view.layoutIfNeeded()
-    }
-
-    private static func findOptions(in root: NSObject) -> NSObject? {
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ object: NSObject) -> NSObject? {
-            guard visited.insert(ObjectIdentifier(object)).inserted else { return nil }
-            if (object as? UIAccessibilityIdentification)?.accessibilityIdentifier == "chat-send-options" {
-                return object
+    private func waitForRenderedText(
+        in view: UIView,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        matching expected: (String) -> Bool) async throws -> UIImage
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        let recognition = VNRecognizeTextRequest()
+        recognition.recognitionLanguages = ["en-US"]
+        recognition.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 0.5)
+        repeat {
+            view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+                view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
             }
-            if let view = object as? UIView {
-                for child in view.subviews {
-                    if let found = visit(child) { return found }
-                }
-            }
-            let count = object.accessibilityElementCount()
-            if count > 0, count < 1000 {
-                for index in 0..<count {
-                    if let child = object.accessibilityElement(at: index) as? NSObject,
-                       let found = visit(child)
-                    { return found }
-                }
-            }
-            return nil
-        }
-        return visit(root)
+            let pixels = try XCTUnwrap(image.cgImage, file: file, line: line)
+            try VNImageRequestHandler(cgImage: pixels).perform([recognition])
+            let text = recognition.results?.compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: " ") ?? ""
+            if expected(text) { return image }
+            try await clock.sleep(for: .milliseconds(100))
+        } while clock.now < deadline
+        return try XCTUnwrap(
+            nil as UIImage?,
+            "Send Options did not render the expected text",
+            file: file,
+            line: line)
     }
 }

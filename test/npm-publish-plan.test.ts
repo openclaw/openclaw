@@ -238,6 +238,19 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
   });
 
+  it("retries a request write EPIPE before any registry response", async () => {
+    const packument = { versions: {} };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("fetch failed", { cause: { code: "EPIPE" } }))
+      .mockResolvedValueOnce(registryResponse({ body: JSON.stringify(packument) }));
+    const result = await fetchPackument({ fetchImpl, sleep: async () => {} });
+    expect([result, fetchImpl.mock.calls.length]).toEqual([
+      { status: 200, ok: true, packument },
+      2,
+    ]);
+  });
+
   it.each([
     ["invalid JSON", "returned invalid JSON"],
     ["certificate failure", new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } })],

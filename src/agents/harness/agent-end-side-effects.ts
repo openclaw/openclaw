@@ -1,4 +1,3 @@
-import { getRuntimeConfig } from "../../config/config.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
@@ -6,16 +5,11 @@ import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/tran
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  scheduleSkillExperienceReview,
-  scheduleDailyWorkshopMaintenance,
-} from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
 import {
   completedTurnMessageAnchor,
   type CompletedTurnMessageAnchor,
 } from "../sessions/session-manager-message-anchor.js";
-import { SKILL_WORKSHOP_TOOL_NAME } from "../skill-workshop-prompt.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -91,7 +85,7 @@ function prepareAgentEnd(params: AgentEndSideEffectsParams): AgentEndSideEffects
     event: loadMessages ? bindAgentHarnessHookMessages(event, loadMessages) : event,
     ctx:
       ctx.toolNames === undefined && skillWorkshopAvailable === true
-        ? { ...ctx, toolNames: [SKILL_WORKSHOP_TOOL_NAME] }
+        ? { ...ctx, toolNames: ["skill_workshop"] }
         : ctx,
   };
 }
@@ -158,45 +152,11 @@ function withCompletedTurn(
     : params;
 }
 
-function runCoreAgentEndSideEffects(
-  params: AgentEndSideEffectsParams,
-  anchor: TranscriptEntryAnchor | undefined,
-): void {
-  const foregroundPromptContext = params.ctx.foregroundPromptContext;
-  if (!foregroundPromptContext) {
-    return;
-  }
-  // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
-  const config = params.ctx.config ?? getRuntimeConfig();
-  try {
-    scheduleDailyWorkshopMaintenance(config, foregroundPromptContext.agentId);
-    // CLI hook contexts omit toolNames, so isEligibleContext rejects them.
-    if (!anchor) {
-      return;
-    }
-    const { foregroundPromptContext: _turn, completedTurn: _completed, ...hookCtx } = params.ctx;
-    scheduleSkillExperienceReview({
-      event: params.event,
-      ctx: {
-        ...hookCtx,
-        agentId: foregroundPromptContext.agentId,
-        trigger: params.ctx.trigger ?? foregroundPromptContext.trigger,
-      },
-      config,
-      source: anchor,
-    });
-  } catch (error) {
-    warnSideEffectFailure(error);
-  }
-}
-
 async function prepareWithCompletedTurn(
   params: AgentEndSideEffectsParams,
 ): Promise<AgentEndSideEffectsParams> {
   const prepared = prepareAgentEnd(params);
-  const anchor = await readCompletedTurn(prepared);
-  runCoreAgentEndSideEffects(prepared, anchor);
-  return withCompletedTurn(prepared, anchor);
+  return withCompletedTurn(prepared, await readCompletedTurn(prepared));
 }
 
 /** @deprecated Await runAgentEndSideEffectsAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -207,9 +167,7 @@ export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void 
     replacement: "await runAgentEndSideEffectsAsync",
   });
   const prepared = prepareAgentEnd(params);
-  const anchor = readCompletedTurnNative(prepared);
-  runCoreAgentEndSideEffects(prepared, anchor);
-  runAgentHarnessAgentEndHook(withCompletedTurn(prepared, anchor));
+  runAgentHarnessAgentEndHook(withCompletedTurn(prepared, readCompletedTurnNative(prepared)));
 }
 
 /** Keep the turn lease through anchor preparation, then start plugin hooks without waiting. */

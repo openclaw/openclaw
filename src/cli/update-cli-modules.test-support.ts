@@ -5,7 +5,7 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 const { initializeExistingUpdateProfile } =
   await import("./update-cli-state-snapshot.test-support.js");
-const { updateGitCheckout } = await import("../infra/update-runner-git.js");
+const { updateGitRelease } = await import("../infra/update-runner-git-release.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
 const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
@@ -126,7 +126,7 @@ export {
   updateCliShared,
   updateCommand,
   updateFinalizeCommand,
-  updateGitCheckout,
+  updateGitRelease,
   updateStatusCommand,
   updateWizardCommand,
 };

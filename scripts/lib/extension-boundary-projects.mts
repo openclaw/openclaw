@@ -15,7 +15,7 @@ import {
   LOCAL_SDK_ROOT,
 } from "./extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
-import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
+import { createNativeTypeScriptConfigReader } from "./native-typescript-config.mts";
 import { createNativeTypeScriptProjectAsync } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
 
@@ -28,6 +28,9 @@ function exportTargets(value: unknown): string[] {
 
 /** Build-only leaf projects retain the shared package config and its SDK aliases. */
 export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: string[]) {
+  if (extensionIds.length === 0) {
+    return [];
+  }
   const inventory = new Map(
     collectBundledPluginBuildEntries({
       cwd: rootDir,
@@ -35,6 +38,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       includeExternalSourceEntries: true,
     }).map((entry) => [entry.id, entry]),
   );
+  using configReader = createNativeTypeScriptConfigReader({ cwd: rootDir });
   return extensionIds.map((extensionId) => {
     const entry = inventory.get(extensionId);
     if (!entry) {
@@ -49,10 +53,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       matches.add(source);
       candidates.set(key, matches);
     };
-    const parsed = readNativeTypeScriptConfig({
-      cwd: rootDir,
-      configFileName: path.join(pluginRoot, "tsconfig.json"),
-    });
+    const parsed = configReader.read(path.join(pluginRoot, "tsconfig.json"));
     const declarations = parsed.fileNames.filter((source) => /\.d\.[cm]?ts$/u.test(source));
     for (const source of sources) {
       const relative = portableRelativePath(pluginRoot, source);
@@ -134,7 +135,9 @@ export async function resolveExtensionBoundaryPreparation(
   const pluginOutput = boundary.assert(LOCAL_PLUGIN_ROOT);
   const producerIds = new Set<string>(BOUNDARY_PLUGIN_UNITS.map(([id]) => id));
   const sdkRoots = new Set<string>();
-  const pluginIds = new Set<string>();
+  // A selected public producer must emit its full config even when no selected
+  // packaged entry consumes its declarations. Discover its inputs in the same queue.
+  const pluginIds = new Set(extensionIds.filter((id) => producerIds.has(id)));
   const dependencies = new Map<string, Set<string>>();
   const within = (root: string, file: string) =>
     file === root || file.startsWith(`${root}${path.sep}`);
@@ -194,6 +197,9 @@ export async function resolveExtensionBoundaryPreparation(
     boundary.root,
     extensionIds,
   ).map(({ config }) => ({ config }));
+  for (const producerId of pluginIds) {
+    queue.push({ config: `extensions/${producerId}/tsconfig.json`, producerId });
+  }
   const visited = new Set<string>();
   for (const { config: candidate, producerId } of queue) {
     const config = boundary.assert(candidate);

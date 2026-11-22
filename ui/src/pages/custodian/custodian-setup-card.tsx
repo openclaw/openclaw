@@ -161,16 +161,14 @@ export function CustodianSetupCard(props: {
               </button>
             </Show>
           </Show>
-          <Show when={!setup().pending && result()?.status === "needs-sign-in"}>
-            <p>{t("custodian.autoSetup.signInBody")}</p>
+          <Show when={!setup().pending && !setup().ready && result()?.signIn}>
             <Show when={!busy()}>
               <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
                 {t("custodian.autoSetup.signIn")}
               </button>
             </Show>
           </Show>
-          <Show when={!setup().pending && result()?.status === "unavailable"}>
-            <p>{t("custodian.autoSetup.unavailableBody")}</p>
+          <Show when={!setup().pending && !setup().ready}>
             <Show when={result()?.attempts.length}>
               <ul class="custodian-setup__attempts">
                 <For each={result()?.attempts}>
@@ -182,6 +180,9 @@ export function CustodianSetupCard(props: {
                 </For>
               </ul>
             </Show>
+          </Show>
+          <Show when={!setup().pending && result()?.status === "unavailable"}>
+            <p>{t("custodian.autoSetup.unavailableBody")}</p>
             <Show
               when={native()?.openAiSetup}
               fallback={

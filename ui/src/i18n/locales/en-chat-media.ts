@@ -5,7 +5,7 @@ const enChatMedia = {
   chat: {
     imageLightbox: {
       loadingDetail: "Loading sharper image…",
-      detailFailed: "Preview shown. Sharper image could not load.",
+      detailFailed: "Couldn’t load a sharper image. Try again.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
@@ -15,9 +15,9 @@ const enChatMedia = {
       openOriginal: "Open in new tab",
       copy: "Copy image",
       download: "Download image",
-      copyFailed: "Could not copy this image. Check clipboard access and try again.",
-      downloadFailed: "Could not download this image. Try again.",
-      loadFailed: "Could not load this image. Try again.",
+      copyFailed: "Couldn’t copy this image. Check clipboard access and try again.",
+      downloadFailed: "Couldn’t download this image. Try again.",
+      loadFailed: "Couldn’t load this image. Try again.",
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
       resetZoom: "Reset zoom",

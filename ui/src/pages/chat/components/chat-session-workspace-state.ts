@@ -413,6 +413,7 @@ export function refreshSessionWorkspaceState(
       void loadSessionWorkspaceArtifacts(state, true, role === "assistant" ? role : undefined);
     }
   }
+  workspace.fileLinksRevision = (workspace.fileLinksRevision ?? 0) + 1;
   workspace.directories = Object.create(null);
   directoryLoads.delete(workspace);
   fileLoads.delete(workspace);
@@ -658,7 +659,8 @@ export async function requestCloseSessionWorkspacePreview(
     } else {
       try {
         const choice = await showConfirmChoiceDialog({
-          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          title: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          message: t("chat.detailPanel.discardBody"),
           confirmLabel: t("common.save"),
           alternativeLabel: t("chat.detailPanel.discard"),
           cancelLabel: t("common.cancel"),
@@ -677,7 +679,7 @@ export async function requestCloseSessionWorkspacePreview(
       } catch (error) {
         if (current()) {
           reveal();
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
         return false;
       }

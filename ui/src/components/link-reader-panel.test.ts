@@ -143,7 +143,7 @@ describe("Plugin link reader panel", () => {
       open(panel);
       await expectTitle(panel, "Item 1");
       button(panel, "Refresh item").click();
-      await waitForFast(() => expect(panel.textContent).toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).toContain("Couldn’t refresh"));
       expect(panel.textContent).toContain(
         section === "checks" ? "Build passed" : section === "files" ? "kept.ts" : "Comment text",
       );
@@ -153,7 +153,7 @@ describe("Plugin link reader panel", () => {
       [...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button")]
         .find((node) => node.textContent?.startsWith(name))!
         .click();
-      await waitForFast(() => expect(panel.textContent).not.toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).not.toContain("Couldn’t refresh"));
       expect(request).toHaveBeenCalledTimes(4);
       expect(request).toHaveBeenLastCalledWith(
         "forge.item",
@@ -245,7 +245,9 @@ describe("Plugin link reader panel", () => {
       await panel.updateComplete;
       await panel.updateComplete;
       await waitForFast(() =>
-        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item"),
+        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe(
+          "Couldn’t load this item",
+        ),
       );
       expect(document.activeElement).toBe(composer);
       const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
@@ -725,7 +727,7 @@ describe("Plugin link reader panel", () => {
     await waitForFast(() =>
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain(message),
     );
-    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item");
+    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Couldn’t load this item");
     expect(panel.querySelector('[role="alert"]')?.textContent).not.toContain(
       "This item may be private or deleted",
     );

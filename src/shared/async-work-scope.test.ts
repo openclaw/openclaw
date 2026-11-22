@@ -304,7 +304,7 @@ describe("async work resources", () => {
     const output = execNodeEvalSync(
       `import assert from "node:assert/strict";
        import { setImmediate as nextTurn } from "node:timers/promises";
-       import { queryObjects } from "node:v8";
+       import { forceFullGc } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
        import { runWithAsyncWorkResources, runWithTrackedCancellation } from ${JSON.stringify(new URL("./async-work-resources.ts", import.meta.url).href)};
        import { AsyncWorkScope, trackAsyncWork } from ${JSON.stringify(new URL("./async-work-scope.ts", import.meta.url).href)};
 
@@ -343,7 +343,7 @@ describe("async work resources", () => {
            );
            const control = new WeakRef({});
            await nextTurn();
-           queryObjects(WeakRef);
+           forceFullGc();
            assert.equal(control.deref(), undefined, mode + " GC control");
            assert.equal(references.input.deref(), undefined, mode + " producer data");
            assert.equal(references.output.deref(), undefined, mode + " settled result");
@@ -357,6 +357,7 @@ describe("async work resources", () => {
        }
        console.log("foreground data released");`,
       {
+        execArgv: ["--expose-gc"],
         imports: ["./scripts/tsx.mjs"],
         timeout: 10_000,
       },

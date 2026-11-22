@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { readSkillLibrary, saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
-import { listWorkshopChanges, recordWorkshopChange } from "../../skills/workshop/changes.js";
-import type { WorkshopChange } from "../../skills/workshop/changes.kernel.js";
+import {
+  listWorkshopChanges,
+  recordWorkshopChange,
+} from "../../skills/workshop-changes/changes.js";
+import type { WorkshopChange } from "../../skills/workshop-changes/changes.kernel.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";

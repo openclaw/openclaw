@@ -56,7 +56,7 @@ export async function seedProvisioningPlacement(
   });
 }
 
-export async function seedSyncingPlacement(
+async function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,

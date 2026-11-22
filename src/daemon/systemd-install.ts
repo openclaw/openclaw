@@ -208,6 +208,7 @@ async function writeSystemdUnit(
     description,
     definitionTransaction,
     warn,
+    beforeRecovery,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
@@ -284,7 +285,21 @@ async function writeSystemdUnit(
                         await run(["enable", "--runtime", unit]);
                       }
                     }
-                    if (restartAttempted) {
+                    if (restartAttempted && beforeRecovery) {
+                      // The hook runs only once the replacement has stopped, before the
+                      // previous unit starts; a failing hook never skips the restart.
+                      await run(["stop", unit]);
+                      const hook = await beforeRecovery().then(
+                        () => undefined,
+                        (error: unknown) => ({ error }),
+                      );
+                      if (running) {
+                        await run(["start", unit]);
+                      }
+                      if (hook) {
+                        throw hook.error;
+                      }
+                    } else if (restartAttempted) {
                       await run([running ? "restart" : "stop", unit]);
                     }
                   },
@@ -321,7 +336,10 @@ async function writeSystemdUnit(
         }
         for (const [rawKey, value] of Object.entries(environment ?? {})) {
           // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
-          if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
+          if (
+            typeof value !== "string" ||
+            (!value.trim() && rawKey !== "NODE_OPTIONS" && rawKey !== "MALLOC_ARENA_MAX")
+          ) {
             continue;
           }
           const key = normalizeServiceEnvKey(rawKey);
@@ -405,7 +423,8 @@ async function writeSystemdUnit(
             return (
               !(hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) &&
               !generated &&
-              value.trim() !== stateDirDotEnvVars.get(key)?.trim()
+              // glibc reads this at exec time, and inline defaults let operator drop-ins win.
+              (key === "MALLOC_ARENA_MAX" || value.trim() !== stateDirDotEnvVars.get(key)?.trim())
             );
           }),
         );
@@ -531,6 +550,8 @@ export async function stageSystemdService({
   ...args
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
   const { unitPath, backedUp } = await writeSystemdUnit(args);
+  // Reloading the manager changes the next start's ExecStart without stopping a running unit.
+  await reloadSystemdUserManager(args.env, undefined, args.assertCurrent);
   reportSystemdServicePublication(stdout, "Staged systemd service", unitPath, backedUp);
   return { unitPath };
 }

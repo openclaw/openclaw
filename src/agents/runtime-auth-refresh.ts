@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import type { CommandQueueTaskDeadline } from "../process/command-queue.types.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 /** Bound caller-owned exchanges; native OAuth owners retain durable refresh settlement. */
 export function createRuntimeAuthDeadline(params: {
   provider: string;
@@ -15,18 +16,22 @@ export function createRuntimeAuthDeadline(params: {
     : authAbort.signal;
   const timeoutMs = params.timeoutMs;
   const startupDeadline =
-    timeoutMs < MAX_TIMER_TIMEOUT_MS
-      ? { kind: "bounded" as const, deadlineAtMs: Date.now() + timeoutMs }
-      : { kind: "unlimited" as const };
+    timeoutMs < MAX_TIMER_TIMEOUT_MS ? monotonicDeadlineAfter(timeoutMs) : undefined;
   const withAuthDeadline = <T>(
     step: string,
     operation: (signal: AbortSignal) => Promise<T>,
     requestSignal?: AbortSignal,
   ): Promise<T> => {
     const signal = requestSignal ? AbortSignal.any([authSignal, requestSignal]) : authSignal;
-    const deadline = params.getDeadline?.() ?? startupDeadline;
-    const remainingMs =
-      deadline.kind === "bounded" ? deadline.deadlineAtMs - Date.now() : undefined;
+    // Command-queue deadlines are epochs; only our startup budget is process-local.
+    const deadline = params.getDeadline?.();
+    const remainingMs = deadline
+      ? deadline.kind === "bounded"
+        ? deadline.deadlineAtMs - Date.now()
+        : undefined
+      : startupDeadline === undefined
+        ? undefined
+        : remainingMonotonicMs(startupDeadline);
     const expire = () => {
       const error = createAbortError(
         `${params.provider} ${step} timed out at the run deadline (${timeoutMs}ms). Check the provider's authentication service and retry the run.`,

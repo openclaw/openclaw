@@ -1,3 +1,5 @@
+require "tempfile"
+
 # Opt-in phase and incident evidence. Resource sampling belongs to ios-resource-timeline.mjs.
 class ScreenshotDiagnostics
   attr_reader :events
@@ -28,6 +30,41 @@ class ScreenshotDiagnostics
       event["startup"] = startup_facts(log_path) if log_path
       persist
     end
+  end
+
+  def retain_mermaid_trace(udid, app_identifier, log_path)
+    # One bounded query after capture; no streaming process competes with XCTest.
+    Tempfile.create("openclaw-mermaid-container-") do |output|
+      pid = Process.spawn("xcrun", "simctl", "get_app_container", udid, app_identifier, "data",
+        out: output, err: File::NULL, pgroup: true)
+      child = Process.detach(pid)
+      unless child.join(10)
+        begin
+          Process.kill("KILL", -pid)
+        rescue Errno::ESRCH
+          nil
+        end
+        child.join
+        return
+      end
+      return unless child.value.success?
+
+      output.rewind
+      trace = File.join(output.read(4096).strip, "tmp", "mermaid-renderer.log")
+      return unless File.file?(trace)
+
+      File.open(trace, "rb") do |file|
+        offset = [file.size - 64 * 1024, 0].max
+        file.seek(offset)
+        records = file.read(64 * 1024)
+        records = records.partition("\n").last if offset.positive?
+        return if records.empty?
+
+        File.binwrite(log_path, records)
+      end
+    end
+  rescue StandardError
+    FastlaneCore::UI.important("Could not retain the optional Mermaid screenshot trace.")
   end
 
   private

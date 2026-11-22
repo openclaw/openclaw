@@ -72,6 +72,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             return String(localized: "Session settings were not captured. Review and retry this message.")
         case self.outboxSettingsChangedError:
             return String(localized: "Session settings changed. Review and retry this message.")
+        case self.outboxExpiredError:
+            return String(localized: "Queued for more than 48 hours")
         default:
             break
         }
@@ -83,11 +85,11 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     private var sendOwnership: OpenClawChatSendOwnership?
     private var pendingEnqueues = 0
-    private let databases: OpenClawClientDatabases
+    let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
-    private var isRetired = false
+    private(set) var isRetired = false
     private var hasRecoveredInterruptedSends = false
-    private nonisolated var outboxChangeHub: OutboxChangeHub {
+    nonisolated var outboxChangeHub: OutboxChangeHub {
         self.databases.outboxChangeHub
     }
 
@@ -470,6 +472,15 @@ extension OpenClawChatSQLiteTranscriptCache {
     }
 
     public func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
+        await self.enqueueCommand(command, consumingComposerDraft: nil)
+    }
+
+    /// The consumed draft clears in the outbox insert's transaction, so a crash
+    /// cannot leave both a queued message and the draft that produced it.
+    func enqueueCommand(
+        _ command: OpenClawChatOutboxCommand,
+        consumingComposerDraft consumption: OpenClawChatComposerDraftConsumption?) async -> Bool
+    {
         let scope = OpenClawChatSendOwnership.Scope(
             sessionKey: command.deliverySessionKey, agentID: command.agentID, routingContract: command.routingContract)
         let ownership = self.sendOwnership
@@ -535,6 +546,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                     ])
                 try OpenClawClientDatabases.insertOutboxAttachments(
                     command.attachments, in: db, gatewayID: gatewayID, commandID: command.id)
+                if let consumption {
+                    try Self.consumeComposerDraft(consumption, in: db, gatewayID: gatewayID)
+                }
                 return true
             }
         } catch {
@@ -557,6 +571,33 @@ extension OpenClawChatSQLiteTranscriptCache {
             }
         } catch {
             cacheLogger.error("outbox read failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    public func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        guard !self.isRetired else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.applyOutboxStaleness(db, gatewayID: gatewayID)
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT client_uuid, status FROM outbox_commands
+                    WHERE gateway_id = ? ORDER BY created_at, enqueue_sequence
+                    """,
+                    arguments: [gatewayID])
+                return try rows.map { row in
+                    let statusRaw: String = row["status"]
+                    guard let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) else {
+                        throw DatabaseError(message: "unknown outbox status")
+                    }
+                    return (id: row["client_uuid"], status: status)
+                }
+            }
+        } catch {
+            cacheLogger.error("outbox status read failed \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -807,25 +848,10 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     public func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         guard !self.isRetired else { return .unavailable }
-        let messageKey = "\(id):user"
         let gatewayID = self.gatewayID
-        let proofHub = self.canonicalMessageProofHub
         do {
-            let (deleted, isProven) = try await databases.stateQueue.writeWithoutTransaction { db in
-                let isProven = proofHub.lockProofDecision(for: messageKey)
-                defer { proofHub.unlockProofDecision() }
-                var deleted = false
-                try db.inTransaction(.immediate) {
-                    try db.execute(
-                        sql: """
-                        DELETE FROM outbox_commands
-                        WHERE gateway_id = ? AND client_uuid = ? AND status IN ('queued', 'failed')
-                        """,
-                        arguments: [gatewayID, id])
-                    deleted = db.changesCount > 0
-                    return .commit
-                }
-                return (deleted, isProven)
+            let (deleted, isProven) = try await self.decideAgainstCanonicalProof(commandID: id) { db, _ in
+                try Self.deleteRemovableCommand(db, gatewayID: gatewayID, id: id)
             }
             guard deleted else { return isProven ? .confirmed : .missing }
             if isProven {
@@ -837,6 +863,39 @@ extension OpenClawChatSQLiteTranscriptCache {
         } catch {
             return .unavailable
         }
+    }
+
+    /// Runs `body` in one immediate transaction while canonical proof for the
+    /// command's user turn cannot change, so a user removal never hides or
+    /// copies back a turn history already proved delivered.
+    func decideAgainstCanonicalProof<T: Sendable>(
+        commandID id: String,
+        _ body: @escaping @Sendable (Database, _ isProven: Bool) throws -> T) async throws -> (T, isProven: Bool)
+    {
+        let messageKey = "\(id):user"
+        let proofHub = self.canonicalMessageProofHub
+        return try await self.databases.stateQueue.writeWithoutTransaction { db in
+            let isProven = proofHub.lockProofDecision(for: messageKey)
+            defer { proofHub.unlockProofDecision() }
+            var outcome: T?
+            try db.inTransaction(.immediate) {
+                outcome = try body(db, isProven)
+                return .commit
+            }
+            guard let outcome else { throw DatabaseError(message: "outbox proof decision did not run") }
+            return (outcome, isProven)
+        }
+    }
+
+    /// Removal succeeds only before a sender claims the row.
+    nonisolated static func deleteRemovableCommand(_ db: Database, gatewayID: String, id: String) throws -> Bool {
+        try db.execute(
+            sql: """
+            DELETE FROM outbox_commands
+            WHERE gateway_id = ? AND client_uuid = ? AND status IN ('queued', 'failed')
+            """,
+            arguments: [gatewayID, id])
+        return db.changesCount > 0
     }
 
     public func confirmCommand(

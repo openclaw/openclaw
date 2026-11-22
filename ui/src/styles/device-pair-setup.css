@@ -36,8 +36,8 @@
   opacity: 0.7;
 }
 
-.device-pair-setup__access input {
-  margin-top: 2px;
+.device-pair-setup__access .oc-radio {
+  margin-top: 1px;
 }
 
 .device-pair-setup__access span {
@@ -71,8 +71,6 @@
   width: 18px;
   height: 18px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }
@@ -133,6 +131,10 @@
   gap: var(--space-2);
 }
 
+.device-pair-setup__command > p {
+  margin: 0;
+}
+
 .device-pair-setup .login-gate__command {
   min-width: 0;
 }
@@ -185,7 +187,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.device-pair-setup__code > .device-pair-setup__fallback > summary {
+.device-pair-setup__fallback > summary {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -210,7 +212,7 @@
   transform: rotate(90deg);
 }
 
-.device-pair-setup__fallback code {
+.device-pair-setup__fallback > code {
   display: block;
   max-height: 110px;
   margin-top: var(--space-2);

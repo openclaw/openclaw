@@ -146,11 +146,40 @@ describe("Ollama app-guided setup HTTP discovery", () => {
         };
         const result = await setup.prepare(setupContext(baseUrl, model.id, provider));
         expect(result?.defaultModel).toBe(`ollama/${model.id}`);
-        const expected = { id: model.id, maxTokens: 262_144, contextTokens: 32_768 };
+        const expected = { id: model.id, maxTokens: 8192, contextTokens: 32_768 };
         expect(result?.configPatch?.models?.providers?.ollama).toMatchObject({
           ...provider,
           models: [otherModel, expect.objectContaining(expected)],
         });
+      },
+    );
+  });
+
+  it.each([
+    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
+    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 262_144 },
+    { name: "local", tag: {}, expected: 16_384 },
+    {
+      name: "authored remote cap",
+      tag: { remote_model: "upstream-model" },
+      cap: 4096,
+      expected: 4096,
+    },
+    { name: "authored local cap", tag: {}, cap: 4096, expected: 4096 },
+  ])("preserves the $name output budget", async ({ tag, cap, expected }) => {
+    const id = "bare-alias";
+    await withOllamaServer(
+      { models: [{ name: id, ...tag }], loaded: cap === undefined ? [id] : [] },
+      async (baseUrl) => {
+        const result = await setup.prepare(
+          setupContext(baseUrl, id, {
+            models: cap === undefined ? [] : [{ ...model, id, maxTokens: cap }],
+          }),
+        );
+        expect(result?.defaultModel).toBe(`ollama/${id}`);
+        expect(result?.configPatch?.models?.providers?.ollama?.models?.[0]?.maxTokens).toBe(
+          expected,
+        );
       },
     );
   });

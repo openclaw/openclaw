@@ -55,6 +55,50 @@ export function recordTaskOwnership(
   return owner === false ? undefined : taskId;
 }
 
+/** Holds this input's background tasks; a task's answer is owed until its notification. */
+export function acquireBackgroundTaskHolds(
+  session: {
+    taskOwners: ReadonlyMap<string, string | false>;
+    runningDescendants: ReadonlyMap<string, string | undefined>;
+  },
+  input: {
+    inputUuid: string;
+    pendingBackgroundTaskIds: Set<string>;
+    foregroundTaskIds: ReadonlySet<string>;
+  },
+  snapshot: readonly Record<string, unknown>[],
+): void {
+  // Resolve to a fixed point: snapshots can list arbitrarily deep descendants before roots.
+  // Each productive pass acquires a new hold, so cycles without a held ancestor terminate.
+  let acquiredHold: boolean;
+  do {
+    acquiredHold = false;
+    for (const task of snapshot) {
+      const id = task.task_id;
+      if (
+        typeof id !== "string" ||
+        session.taskOwners.get(id) !== input.inputUuid ||
+        input.pendingBackgroundTaskIds.has(id)
+      ) {
+        continue;
+      }
+      const parentTaskId = session.runningDescendants.get(id);
+      if (
+        // Only children of held background work extend the input; foreground
+        // descendants still retire with their parent turn.
+        (parentTaskId === undefined || input.pendingBackgroundTaskIds.has(parentTaskId)) &&
+        (task.task_type === "local_agent" ||
+          task.task_type === "local_workflow" ||
+          (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
+      ) {
+        // Disappearing from a snapshot does not acknowledge the queued answer.
+        input.pendingBackgroundTaskIds.add(id);
+        acquiredHold = true;
+      }
+    }
+  } while (acquiredHold);
+}
+
 /** Agents and workflows make their own tool calls; subagent-owned work can resume its Agent. */
 function isDescendantTask(task: Record<string, unknown>): boolean {
   return (

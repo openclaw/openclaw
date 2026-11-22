@@ -7,6 +7,7 @@ import {
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
 import {
@@ -22,7 +23,6 @@ import {
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
-  McpToolCatalog,
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
   SessionMcpRuntimeManager,
@@ -506,7 +506,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         pluginGeneration:
           (store.configReload?.pluginGeneration ?? 0) + (reload.reloadPlugins ? 1 : 0),
       };
-      catalogs.clear();
+      catalogs.clear("sessions");
       lifecycle.pruneSessionBookkeeping();
       for (const runtime of store.runtimesBySessionId.values()) {
         const slot = store.runtimeSlots.get(runtime);
