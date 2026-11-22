@@ -12,6 +12,7 @@ import type {
 } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import { resolveProcessRuntimeWorkerFile } from "./runtime-worker-process-generation.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -99,7 +100,7 @@ export function createCpuTrackedWorker(
 ): Worker {
   const worker = runWithMainThreadTask(
     `worker:${workerScriptName(filename, options?.eval)}`,
-    () => new Worker(filename, options),
+    () => new Worker(options?.eval ? filename : resolveProcessRuntimeWorkerFile(filename), options),
   );
   trackNativeWorkerForCpu(worker, filename, options?.eval);
   Object.assign(trackedWorkers.workers.get(worker)!, { internalMessages: true, requestClass });

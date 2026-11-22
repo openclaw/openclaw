@@ -3,6 +3,7 @@ import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { setProcessRuntimeWorkerResolver } from "./runtime-worker-process-generation.js";
 
 export type RuntimeWorkerGeneration = {
   resolve(url: URL): URL;
@@ -97,6 +98,8 @@ export async function withRuntimeWorkerGeneration<T>(
     try {
       outcome = {
         value: await operation((resolve) => {
+          // Detached and pre-existing process owners spawn outside this scope.
+          setProcessRuntimeWorkerResolver(resolve);
           current.generation = Object.freeze({
             resolve,
             retain(owner: object, settle: Parameters<RuntimeWorkerGeneration["retain"]>[1]) {
@@ -121,6 +124,7 @@ export async function withRuntimeWorkerGeneration<T>(
       throw error;
     } finally {
       unregister();
+      setProcessRuntimeWorkerResolver(undefined);
     }
     if ("error" in outcome) {
       throw outcome.error;
