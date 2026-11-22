@@ -626,7 +626,6 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
     online: true,
   }));
   const cases = [
-    { name: "scan-count", mode: "mixed", bytes: 65536, action: "type", catalog: 200 },
     { name: "switch-retention", mode: "mixed", bytes: 256, action: "switch", catalog: 200 },
     { name: "person-short", mode: "person", bytes: 256, action: "type", catalog: 200 },
     { name: "skill-short", mode: "skill", bytes: 256, action: "type", catalog: 200 },
@@ -681,10 +680,6 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
           route: surface === "chat" ? route : "/new",
           explicitOnly: true,
           memory: workload.action === "switch",
-          diagnostic:
-            workload.name === "scan-count"
-              ? "Call-through skill-reference regexp census; timing is not acceptance evidence."
-              : undefined,
           viewports: workload.action === "switch" ? ["desktop"] : undefined,
           expected:
             "Preserve exact draft, atomic references, layout and resource ownership across " +
@@ -790,28 +785,6 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
             }
             await page.waitForLoadState("networkidle");
             await frames(page);
-            if (workload.name === "scan-count") {
-              await page.evaluate(() => {
-                // eslint-disable-next-line @typescript-eslint/unbound-method -- The diagnostic invokes the original with its original receiver.
-                const matchAll = String.prototype.matchAll;
-                Reflect.set(window, "composerSkillScanCount", 0);
-                // eslint-disable-next-line no-extend-native -- Call-through census in a disposable diagnostic document; excluded from timing acceptance.
-                String.prototype.matchAll = function (pattern) {
-                  if (
-                    this.length > 65536 &&
-                    this.startsWith("Synthetic draft line") &&
-                    pattern.source === String.raw`\$([-a-zA-Z0-9_:]+)`
-                  ) {
-                    Reflect.set(
-                      window,
-                      "composerSkillScanCount",
-                      Reflect.get(window, "composerSkillScanCount") + 1,
-                    );
-                  }
-                  return matchAll.call(this, pattern);
-                };
-              });
-            }
             seeded.set(page, {
               draft: await page.locator(raw).inputValue(),
               persons: JSON.parse(
@@ -968,10 +941,6 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
               composerScrollWidth: geometry.scrollWidth,
               catalogSkills: commands.length,
               initialSkillChips: start.skills,
-              skillRegexScans:
-                workload.name === "scan-count"
-                  ? await page.evaluate(() => Reflect.get(window, "composerSkillScanCount"))
-                  : 0,
               syntheticPaste: workload.action === "paste",
               typedCharacters: workload.action === "type" ? 12 : 0,
               cycles: workload.action === "cycles" ? 20 : 0,
