@@ -559,6 +559,22 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 0 0 auto;
 }
 
+/* Schema section help is a row action: keep its touch box inside the scrolling panel. */
+@media (pointer: coarse), (max-width: 640px) {
+  #config-section-panel
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+    > .settings-section__copy {
+      align-self: center;
+    }
+
+    > .settings-section__copy + .settings-section__actions .settings-section__help-button {
+      margin-block: 0;
+    }
+  }
+}
+
 .settings-section__docs {
   display: inline-flex;
   align-items: center;
