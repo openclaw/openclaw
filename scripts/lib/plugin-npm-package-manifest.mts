@@ -205,6 +205,17 @@ function listPackageRuntimeDependencyNames(packageJson: PluginPackageJson) {
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Runtime dependencies that may be bundled automatically. Optional dependencies stay
+ * out: npm picks the platform-matching variant at install time, so bundling only the
+ * build host's copy (for example one @lancedb/lancedb-* package) breaks every other
+ * platform with "Cannot find native binding".
+ */
+function listAutoBundledDependencyNames(packageJson: PluginPackageJson) {
+  const optional = new Set(Object.keys(packageJson.optionalDependencies ?? {}));
+  return listPackageRuntimeDependencyNames(packageJson).filter((name) => !optional.has(name));
+}
+
 function listConfiguredBundledDependencyNames(packageJson: PluginPackageJson) {
   const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
   if (Array.isArray(configured)) {
@@ -890,7 +901,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
       ...new Set([
         ...listConfiguredBundledDependencyNames(packageJson),
         ...(shouldBundleDependencies(params.bundleDependencies, plan.packageJson)
-          ? listPackageRuntimeDependencyNames(packageJson)
+          ? listAutoBundledDependencyNames(packageJson)
           : (params.patchedDependencies ?? []).map(({ name }) => name)),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
