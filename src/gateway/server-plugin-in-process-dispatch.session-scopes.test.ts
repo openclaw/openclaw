@@ -481,9 +481,7 @@ describe("hosted session tool narrow scope projection", () => {
           await release.promise;
         });
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
-        const rejected = expect(request).rejects.toThrow(
-          "agent tool caller authority is no longer active",
-        );
+        const rejected = expect(request).rejects.toThrow("original native source revoked");
         try {
           await Promise.race([entered.promise, request]);
           expect(fixture.handler).toHaveBeenCalledOnce();
