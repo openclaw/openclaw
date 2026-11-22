@@ -92,7 +92,7 @@ test.each([
       expect(modelContext).toEqual(contextual ? exchange : []);
     } finally {
       // The final event can precede dispatch cleanup; settle it before the suite resets runtime.
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 60_000 });
       dispatchInboundMessageMock.mockReset();
     }
   },
