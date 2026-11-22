@@ -238,8 +238,13 @@ suite.define(() => {
     },
   );
 
-  it("config.set stages skill changes from the inherited allowlist", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it.each(["switch", "phone name"])("edits inherited skills via %s", async (target) => {
+    const options = createControlUiE2eContextOptions();
+    const context =
+      target === "switch"
+        ? options
+        : { ...options, viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
+    await suite.withPage(context, async ({ page }) => {
       const config = { agents: { defaults: { skills: ["github"] }, entries: { main: {} } } };
       const skill = (name: string, blockedByAgentFilter: boolean) =>
         createSkill({
@@ -277,10 +282,21 @@ suite.define(() => {
       await gateway.waitForRequest("skills.status");
 
       await gateway.deferNext("config.set");
-      await page
-        .locator(".agent-skill-row", { hasText: "github skill" })
-        .getByRole("switch")
-        .click();
+      const row = page.locator(".agent-skill-row", { hasText: "github skill" });
+      const toggle = row.getByRole("switch", { name: "github", exact: true });
+      if (target === "phone name") {
+        const title = row.locator(".settings-row__title");
+        await title.scrollIntoViewIfNeeded();
+        const [text, control] = await Promise.all([title.boundingBox(), toggle.boundingBox()]);
+        if (!text || !control) {
+          throw new Error("Expected the skill name and switch to be visible");
+        }
+        expect(control.x).toBeGreaterThanOrEqual(text.x + text.width);
+        expect(Math.abs(control.y + control.height / 2 - text.y - text.height / 2)).toBeLessThan(1);
+        await title.tap();
+      } else {
+        await toggle.click();
+      }
 
       const params = await saveParams(gateway);
       expect(JSON.parse(String(params.raw))).toEqual({

@@ -943,6 +943,23 @@
   }
 }
 
+/* Keep the switch with the skill it changes, not below its status and requirements. */
+.agent-skill-row {
+  display: block;
+}
+
+.agent-skill-row__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: var(--cursor-action);
+}
+
+.agent-skill-row__heading:has(input:disabled) {
+  cursor: not-allowed;
+}
+
 .agent-skills-groups {
   display: grid;
   gap: 16px;
