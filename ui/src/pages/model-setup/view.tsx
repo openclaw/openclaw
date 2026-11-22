@@ -3,7 +3,6 @@ import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } fro
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -281,36 +280,6 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
   );
 }
 
-function NativeSessionDiscovery(
-  props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
-) {
-  return (
-    <Show
-      when={
-        props.result.nativeSessionCatalogPreferenceRequired === true &&
-        props.result.nativeSessionCatalogs?.length
-      }
-    >
-      <section class="settings-section model-setup__native-discovery">
-        <SettingsSectionHeader
-          title={t("modelSetup.nativeDiscovery.title")}
-          description={t("modelSetup.nativeDiscovery.body")}
-        />
-        <p>{props.result.nativeSessionCatalogs?.map((option) => option.label).join(", ")}</p>
-        <label>
-          <Checkbox
-            checked={props.nativeSessionCatalogsEnabled === true}
-            disabled={props.actionsDisabled}
-            onChange={(event) => props.onNativeSessionCatalogsChange?.(event.currentTarget.checked)}
-          />
-          {t("modelSetup.nativeDiscovery.enable")}
-        </label>
-        <p class="muted">{t("modelSetup.nativeDiscovery.decline")}</p>
-      </section>
-    </Show>
-  );
-}
-
 function renderSetupAccessWarning(canAdmin: boolean) {
   return (
     <InlineAlert tone="warning" role="note">
@@ -334,7 +303,6 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
         when={props.canAdmin && !props.gatewayTooOld}
         fallback={renderSetupAccessWarning(props.canAdmin)}
       >
-        <NativeSessionDiscovery {...props} />
         <EmptyState {...props} />
         <Show when={props.nativeModels}>{(owner) => <NativeModelSetupView owner={owner()} />}</Show>
         <CandidateRows {...props} />
