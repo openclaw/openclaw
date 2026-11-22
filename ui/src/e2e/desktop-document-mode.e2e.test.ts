@@ -473,6 +473,42 @@ suite.define(() => {
     });
   });
 
+  it("identifies a focused Desktop source before connecting on a phone", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const prefix = "node:" + "a".repeat(63);
+      const devices = ["Mac Studio", "Mac Studio", "Review laptop", undefined].map(
+        (label, index) => ({
+          ...makeEnvironment(prefix + index),
+          label,
+        }),
+      );
+      const { gateway, panel } = await openDesktopDocument(page, "focus/desktop", {
+        environments: [gatewayEnvironment, ...devices],
+      });
+      const rows = panel.locator(".desktop-environment");
+      await rows.nth(4).waitFor();
+      expect(await rows.nth(0).locator(".desktop-environment__id").innerText()).toBe(
+        "This computer",
+      );
+      for (const [index, device] of devices.entries()) {
+        const row = rows.nth(index + 1);
+        const name = row.locator(".desktop-environment__id");
+        const expected =
+          index < 2 ? [device.label, device.id].join("\n") : (device.label ?? device.id);
+        expect(await name.innerText()).toBe(expected);
+        expect(await row.getByRole("button").getAttribute("aria-describedby")).toBe(
+          await name.getAttribute("id"),
+        );
+        const visible = await name.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth + 1,
+        );
+        expect(visible).toBe(true);
+      }
+      await rows.nth(2).getByRole("button").press("Enter");
+      await expectObserve(gateway, devices[1]!.id);
+    });
+  });
+
   it("renders a full-bleed shell-free picker", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { panel } = await openDesktopDocument(page, "focus/desktop");

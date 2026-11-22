@@ -780,12 +780,15 @@ openclaw-desktop-panel {
     gap: 5px;
   }
   .desktop-environment__id {
-    overflow: hidden;
+    overflow-wrap: anywhere;
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+  .desktop-environment__qualifier {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
   }
   .desktop-environment__meta,
   .desktop-environment__sessions {
