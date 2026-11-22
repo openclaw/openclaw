@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
-import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { openChatModelPicker, revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { openFromForeground, scenario } from "./command-palette.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
@@ -8,6 +10,72 @@ import { installMockGateway } from "./new-session-page.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "command palette model memory" });
 
 suite.define(() => {
+  it.each(["session", "palette"])(
+    "prefers recommended models in %s picker search",
+    async (surface) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+        async ({ page }) => {
+          const opus = "clawrouter/anthropic/claude-opus-5-5";
+          const gpt = "openai/gpt-5.5";
+          const fixture = scenario();
+          await installMockGateway(page, {
+            ...fixture,
+            featureMethods: [...(fixture.featureMethods ?? []), "sessions.patch"],
+            agentModel: gpt,
+            models: [
+              { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", contextWindow: 1_000_000 },
+              {
+                provider: "openai",
+                id: "gpt-5.5-pro",
+                name: "GPT-5.5 Pro",
+                contextWindow: 1_000_000,
+              },
+              {
+                provider: "clawrouter",
+                id: "anthropic/claude-opus-5-5",
+                name: "Claude Opus 5.5 via ClawRouter",
+                contextWindow: 1_000_000,
+                recommended: true,
+              },
+            ],
+          });
+          const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+          if (surface === "palette") {
+            await palette.getByRole("tab", { name: "Compose", exact: true }).click();
+          } else {
+            await input.press("Escape");
+            await palette.waitFor({ state: "hidden" });
+          }
+          const scope =
+            surface === "palette" ? palette : page.locator(".agent-chat__input").first();
+          await openChatModelPicker(scope);
+          const menu = scope.locator(".chat-controls__model-menu");
+          const search = menu.locator("[data-chat-model-search]");
+          const selectedResult = () =>
+            menu
+              .locator('[data-chat-model-option][data-chat-model-rank="0"]')
+              .getAttribute("data-chat-model-option");
+          await search.fill("5.5");
+          const options = menu.locator("[data-chat-model-option]:visible");
+          await expect.poll(() => options.count()).toBe(3);
+          if (process.env.OPENCLAW_PICKER_RANKING_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              menu,
+              [search, ...(await options.all())],
+              { animations: "disabled" },
+            );
+            await writeFile(`${suite.artifactDir}/${surface}.png`, frame.png);
+          }
+          expect.soft(await selectedResult()).toBe(opus);
+          await search.fill("gpt-5.5");
+          await expect.poll(selectedResult).toBe(gpt);
+        },
+      );
+    },
+  );
+
   it.each(["last-used", "configured"] as const)(
     "saves the selected model without placement settings and honors %s defaults",
     async (policy) => {

@@ -108,14 +108,18 @@ type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
 
-export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry) {
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  directChat = entry?.resumeAfterRestart?.directChat === true,
+) {
   if (isCronSessionKey(sessionKey)) {
     return "cron";
   }
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
+  if (isSubagentSessionKey(sessionKey) || (entry?.createdVia === "spawn" && !directChat)) {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {

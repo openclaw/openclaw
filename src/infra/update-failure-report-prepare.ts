@@ -49,7 +49,11 @@ import {
   updateRunReportInputFromResult,
 } from "./update-run-report.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
-import { isFailedUpdateStep, updateRunWarningMessages } from "./update-run-step.js";
+import {
+  isFailedUpdateStep,
+  projectUpdateRunResultSteps,
+  updateRunWarningMessages,
+} from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -465,10 +469,9 @@ export async function prepareUpdateFailureReport(
           return `Plugin convergence (${code})${pluginId ? `; plugin ${pluginId}` : ""}: ${diagnostic}`;
         }),
       )),
-      ...updateRunWarningMessages([
-        ...(recordedRun?.steps ?? []),
-        ...updateRunReportInputFromResult(input.result).steps,
-      ])
+      ...updateRunWarningMessages(
+        projectUpdateRunResultSteps({ steps: recordedRun?.steps ?? [] }, input.result.steps).steps,
+      )
         .slice(-3)
         .map((message) => redactPublicSupportDiagnosticLine(message, context)),
     ]),

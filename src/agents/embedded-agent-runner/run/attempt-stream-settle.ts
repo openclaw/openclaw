@@ -1,4 +1,8 @@
-import { PROVIDER_DEFERRED_TOOL_NAMES, PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
@@ -543,6 +547,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
       ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>

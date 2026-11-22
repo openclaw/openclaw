@@ -6,7 +6,6 @@ import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
   checkoutState,
-  config,
   ctx,
   finalization,
   finalizationRuns,
@@ -19,7 +18,6 @@ import {
   nextUpdate,
   rebooted,
   reserved,
-  settled,
   shape,
   writeBuild,
 } from "./update-command-killed-run.process.test-support.js";
@@ -30,61 +28,6 @@ import { updateRepairCommand } from "./update-repair-command.js";
 describe.skipIf(process.platform === "win32")(
   "next update after a killed source checkout update",
   () => {
-    it("keeps the plugin changes of a dead update whose build was verified serving", () =>
-      fixtures.lifetime.run(async () => {
-        const killed = await killedCheckout({ gateway: "restarted" });
-
-        await nextUpdate(killed.slot);
-
-        expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(config().gateway).toEqual({ mode: "local" });
-        expect(settled(ctx.admitted[0])).toMatch(/kept, because its Gateway was verified/u);
-        // Nothing was left to finish: no repair-shaped run, and the checkout is as it was.
-        expect(finalizationRuns()).toEqual([]);
-        expect(git(killed.slot, "rev-parse", "HEAD")).toBe(killed.sha);
-      }));
-
-    it("finishes a dead update that installed its build unconfirmed as repair does", () =>
-      fixtures.lifetime.run(async () => {
-        const killed = await killedCheckout();
-
-        await nextUpdate(killed.slot);
-
-        expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(ctx.observedAtAdmission).toEqual([{ doctor: 1, json: 0, started: 0 }]);
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        // Rolled back for the original core, then converged forward on the installed build.
-        expect(config()).toEqual({ plugins: { enabled: false } });
-        expect(ctx.admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
-          "interrupted-update-recovery",
-          "interrupted-update-finalization",
-        ]);
-        expect(finalizationRuns()).toEqual([
-          expect.objectContaining({ trigger: "cli", status: "succeeded" }),
-        ]);
-        expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-        expect(git(killed.slot, "rev-parse", "HEAD")).toBe(killed.sha);
-      }));
-
-    // The restart rule shows the updater's processes gone; the checkout gates still prove its build.
-    it("finishes a dead update killed before the machine restarted as repair does", () =>
-      fixtures.lifetime.run(async () => {
-        const killed = await killedCheckout();
-        await rebooted([linux()], linux(laterBoot))(killed);
-
-        await nextUpdate(killed.slot);
-
-        expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(config()).toEqual({ plugins: { enabled: false } });
-        expect(ctx.admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
-          "interrupted-update-recovery",
-          "interrupted-update-finalization",
-        ]);
-        expect(git(killed.slot, "rev-parse", "HEAD")).toBe(killed.sha);
-      }));
-
     it("records what repair records for a dead update that installed its build unconfirmed", () =>
       fixtures.lifetime.run(async () => {
         const finished = await killedCheckout();

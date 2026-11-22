@@ -12,7 +12,7 @@ import {
   type SessionMenuAction,
   type SessionMenuWork,
 } from "../../components/session-menu-solid.tsx";
-import { sessionPlacementAction } from "../../components/session-placement-action.ts";
+import { sessionMenuPlacementAction } from "../../components/session-placement-action.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
@@ -66,7 +66,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
     return {
       session: {
         label: normalizeOptionalString(row.label) ?? row.key,
-        placementAction: sessionPlacementAction(row),
+        placementAction: sessionMenuPlacementAction(row, context.agents.state.agentsList),
         target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
         isChild:

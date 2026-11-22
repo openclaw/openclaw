@@ -276,6 +276,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The contention probe forwards the native SQLite receiver and restores both methods.
+        "scripts/perf/update-bookkeeping-contention.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.
         "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
         // Node worker ports have no browser target origin.
@@ -419,9 +421,9 @@ describe("production lint suppressions", () => {
         "src/plugins/provider-login-options.ts|unicorn/no-array-sort|2",
         "src/plugins/provider-registry-selection.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
-        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         // Admission records original factory identities; executable views bind their receivers.
-        "src/plugins/registry-registrars.ts|typescript/unbound-method|1",
+        "src/plugins/registry-registrars-memory.ts|typescript/unbound-method|1",
+        "src/plugins/registry-registrars-providers.ts|typescript/unbound-method|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         // Indexed adoption scans avoid per-row iterator allocation on frozen catalog snapshots.
         "src/plugins/session-catalog.ts|typescript/prefer-for-of|1",

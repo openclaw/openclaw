@@ -8,7 +8,7 @@ import {
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
+import { resolveNativeOwnedRuntimeModel, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -95,7 +95,7 @@ export async function prepareModelChoice(params: {
         const selection = {
           cfg: owner.config,
           agentId: params.agentId,
-          defaultProvider: defaults.provider,
+          defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
           defaultModel: defaults,
           catalog: owner.modelCatalog.entries,
           manifestPlugins: owner.metadataSnapshot.plugins,

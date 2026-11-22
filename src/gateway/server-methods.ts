@@ -48,13 +48,11 @@ import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
 } from "./server-methods/core-handlers.js";
-import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
-  captureGatewayRequestOperatorGuard,
   readGatewayRequestMutationAuthority,
   withSessionMutationCommitGuard,
 } from "./server-methods/session-mutation-guards.js";
@@ -392,13 +390,6 @@ export async function handleGatewayRequest(
     try {
       entry?.assertOpen();
       const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
-      // Post-hello hydration may supply the first profile. Once selected, the same
-      // caller must survive every awaited row read and authorization retry.
-      let capturedOperatorGuard = isGatewayClientProfilePending(client)
-        ? undefined
-        : captureGatewayRequestOperatorGuard(opts);
-      const assertOperatorCurrent = () =>
-        (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
       const requestFacts = {
         method: req.method,
         requestParams: req.params,
@@ -415,13 +406,11 @@ export async function handleGatewayRequest(
         assertInvocationCurrent: () => {
           runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
-          assertOperatorCurrent();
           requestMutationAuthority.assertCurrent();
         },
         assertPreparationCurrent: () => {
           runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
-          assertOperatorCurrent();
           requestMutationAuthority.assertPreparationCurrent();
         },
       });
@@ -457,12 +446,10 @@ export async function handleGatewayRequest(
           admitted: true,
           assertInvocationCurrent: () => {
             runtimeAuthority?.assertCurrent();
-            assertOperatorCurrent();
             requestMutationAuthority.assertCurrent();
           },
           assertPreparationCurrent: () => {
             runtimeAuthority?.assertCurrent();
-            assertOperatorCurrent();
             requestMutationAuthority.assertPreparationCurrent();
           },
           consumeSessionTurn: {
@@ -486,16 +473,10 @@ export async function handleGatewayRequest(
         authorization.sessionMutationAuthorization,
         composeSessionSourceAssertion([
           runtimeAuthority?.assertCurrent,
-          assertOperatorCurrent,
           requestMutationAuthority.assertCurrent,
         ]),
         profileBinding?.assertCurrent,
-        requestMutationAuthority.assertAdmittedInputCurrent
-          ? () => {
-              assertOperatorCurrent();
-              requestMutationAuthority.assertAdmittedInputCurrent?.();
-            }
-          : undefined,
+        requestMutationAuthority.assertAdmittedInputCurrent,
       );
       const respondAuthorized: GatewayRequestOptions["respond"] =
         authorization.sessionScope === "operator.sessions.read"
@@ -599,7 +580,6 @@ export async function handleGatewayRequest(
         };
         bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         handlerOptions.sessionMutationCommitGuard?.();
-        assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
         entry?.assertOpen();
         observationSignal?.throwIfAborted();
@@ -626,7 +606,6 @@ export async function handleGatewayRequest(
               return dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
                 runtimeAuthority?.assertCurrent();
                 profileBinding?.assertCurrent();
-                assertOperatorCurrent();
                 requestMutationAuthority.assertCurrent();
                 authorization.sessionAccessAuthority?.assertCurrent();
                 sessionMutationAuthorization?.assertCurrent();

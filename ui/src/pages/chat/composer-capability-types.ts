@@ -9,7 +9,8 @@ export type ChatComposerPlusMenuView =
   | "skills"
   | "connectors"
   | "libraries"
-  | `library:${string}`;
+  | `library:${string}`
+  | `plugin:${string}`;
 
 export type ChatComposerMenuSkill = {
   key: string;

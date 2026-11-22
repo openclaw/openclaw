@@ -54,18 +54,22 @@ struct OnboardingWizardView: View {
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
+    @State private var showNewUserGuide: Bool = false
     let allowSkip: Bool
+    let offersNewUserGuide: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
     let onComplete: () -> Void
 
     init(
         allowSkip: Bool,
+        offersNewUserGuide: Bool,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
         onClose: @escaping () -> Void,
         onComplete: @escaping () -> Void)
     {
         self.allowSkip = allowSkip
+        self.offersNewUserGuide = offersNewUserGuide
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         self.onComplete = onComplete
@@ -220,6 +224,9 @@ struct OnboardingWizardView: View {
             content: {
                 self.qrScannerSheet
             })
+        .sheet(isPresented: self.$showNewUserGuide) {
+            OnboardingNewUserGuideSheet()
+        }
         .sheet(isPresented: self.$showGatewayProblemDetails) {
             if let currentProblem = self.currentProblem {
                 GatewayProblemDetailsSheet(
@@ -428,7 +435,8 @@ struct OnboardingWizardView: View {
                 self.invalidateSetupAttempt()
                 self.statusLine = ""
                 self.navigate(to: .mode)
-            })
+            },
+            onShowNewUserGuide: self.offersNewUserGuide ? { self.showNewUserGuide = true } : nil)
     }
 
     @ViewBuilder

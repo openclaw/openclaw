@@ -138,8 +138,6 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
-        let nativeSessionCatalogs: [NativeSessionCatalog]?
-        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let utilityModel: String?
         let setupModel: String?
@@ -305,16 +303,6 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
-    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
-        let pluginId: String
-        let label: String
-        let detail: String?
-
-        var id: String {
-            self.pluginId
-        }
-    }
-
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -400,10 +388,6 @@ extension OnboardingAISetupModel {
         return false
     }
 
-    var nativeSessionCatalogSummary: String {
-        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
-    }
-
     var busyReason: String? {
         // Every connection attempt must make quitting mid-setup confirmable.
         if self.phase == .testing || self.manualTesting ||
@@ -421,6 +405,12 @@ extension OnboardingAISetupModel {
 
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
+            self.pendingActivationVerification
+    }
+
+    /// A choice the person started while discovery ran; late results must not replace it.
+    var hasSetupAttemptInFlight: Bool {
+        self.phase == .testing || self.manualTesting || self.activeAuthOption != nil ||
             self.pendingActivationVerification
     }
 
@@ -467,7 +457,7 @@ extension OnboardingAISetupModel {
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) || self.discovering ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
             self.pendingActivationVerification
     }

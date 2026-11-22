@@ -14,7 +14,7 @@ import { makeProviderModelFixture } from "../src/agents/test-helpers/provider-mo
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { publishOperatorRoleConfigChange } from "../src/gateway/operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../src/gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../src/gateway/operator-run-authority.js";
 import { createOperatorClient } from "../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import type { EmbeddedRunAttemptParamsV2 } from "../src/plugin-sdk/agent-harness-runtime.js";
 import { createAgentHarnessHostCapabilitiesForTest } from "../src/plugin-sdk/plugin-test-runtime.js";
@@ -101,7 +101,7 @@ it.each([
       const profile = ensureProfileForEmail("codex-authority@example.test");
       setUserProfileRole(profile.id, "proof");
       const authorityContext = { getRuntimeConfig: () => config };
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client: createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
         context: authorityContext,
       });

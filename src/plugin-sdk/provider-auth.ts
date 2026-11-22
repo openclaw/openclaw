@@ -17,6 +17,12 @@ export type {
   OAuthCredential,
 } from "../agents/auth-profiles/types.js";
 
+export {
+  ProviderAuthFailure,
+  providerAuthFailureFromOAuthError,
+  type ProviderAuthFailureReason,
+  type ProviderAuthRecovery,
+} from "../plugins/provider-auth-failure.js";
 export { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
 
@@ -66,8 +72,8 @@ export {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
   promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
+export { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 export { normalizeApiKeyConfig } from "../agents/models-config.providers.secret-helpers.js";
 export {
   buildTokenProfileId,

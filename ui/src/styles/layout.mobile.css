@@ -472,13 +472,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
 }
 
-/* The drawer has nothing to collapse into, so the desktop controls go. Search is
-   the exception, and only where nothing else is left to carry it: merged chat
-   chrome hides the topbar above, so the drawer is the last surface standing.
-   Everywhere else the topbar keeps its own search - including every native host,
-   which never merges the chat chrome - and a drawer copy would show two. */
-.shell--mobile-nav .sidebar-brand__desktop-control:not(.sidebar-brand__search),
-.shell--mobile-nav:not(.shell--merged-chat-chrome) .sidebar-brand__search {
+.shell--mobile-nav .sidebar-rail .sidebar-brand__desktop-control {
   display: none;
 }
 
@@ -684,6 +678,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
 
+    /* A standalone intro shares the page gutter; hub tabs and nested headers own theirs. */
+    .content-header--intro:not(.settings-page *),
     .settings-page {
       padding-inline: 0;
     }
@@ -795,10 +791,10 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-width: 200px;
   }
 
-  .session-details-panel,
+  /* The Sessions drawer owns the inline inset for its headings, fields, and facts. */
   .session-details-panel__hero,
   .session-details-section {
-    padding: 12px;
+    padding-block: var(--space-3);
   }
 
   .session-details-panel__title {

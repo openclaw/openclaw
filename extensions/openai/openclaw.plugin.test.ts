@@ -103,19 +103,14 @@ it.each([
 });
 
 it("labels and orders OpenAI authentication choices", () => {
-  expect(choice("openai")).not.toHaveProperty("deprecatedChoiceIds");
+  expect(choice("openai")?.deprecatedChoiceIds).toEqual(["openai-device-code"]);
   const group = {
     groupId: "openai",
     groupLabel: "OpenAI",
     groupHint: "Codex login, Sign in with ChatGPT, or API key",
   };
   for (const [id, choiceLabel, choiceHint] of [
-    ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
-    [
-      "openai-device-code",
-      "Codex login (device code)",
-      "Use a browser code when OpenClaw runs on a remote VM",
-    ],
+    ["openai", "Codex login", "Sign in with your ChatGPT account using a one-time code"],
     ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
     [
       "openai-token-sharing",
@@ -125,11 +120,8 @@ it("labels and orders OpenAI authentication choices", () => {
   ] as const) {
     expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });
   }
-  for (const id of ["openai", "openai-device-code"]) {
-    expect(choice(id)).not.toHaveProperty("assistantVisibility");
-  }
-  expect(choice("openai-device-code")?.onboardingFeatured).toBe(true);
-  expect(choice("openai")?.onboardingFeatured).not.toBe(true);
+  expect(choice("openai")).not.toHaveProperty("assistantVisibility");
+  expect(choice("openai")?.onboardingFeatured).toBe(true);
   expect(choices.find((entry) => entry.provider === "openai" && entry.method === "api-key")).toBe(
     choice("openai-api-key"),
   );
@@ -137,7 +129,7 @@ it("labels and orders OpenAI authentication choices", () => {
     choices
       .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
       .map((entry) => entry.choiceId),
-  ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
+  ).toEqual(["openai", "openai-token-sharing", "openai-api-key"]);
 });
 
 it("keeps Spark suppression conditional on direct OpenAI API rows", () => {

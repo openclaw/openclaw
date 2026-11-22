@@ -78,6 +78,7 @@ export async function executeSessionPatchMutations(params: {
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
+  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
@@ -292,10 +293,17 @@ export async function executeSessionPatchMutations(params: {
               const first = group[0]!;
               const storage = preparation.storage.get(first.index);
               const groupTiming = params.diagnostics?.scope("snapshot");
-              const runtimeSelectionReleases: Array<() => void> = [];
+              const runtimeSelections: Array<{
+                validate?: () => ErrorShape | undefined;
+                release?: () => void;
+              }> = [];
+              const commitGuards = new Set<() => ErrorShape | undefined>();
               const releaseRuntimeSelections = () => {
-                for (const release of runtimeSelectionReleases.splice(0)) {
-                  release();
+                for (const selection of runtimeSelections.splice(0)) {
+                  if (selection.validate) {
+                    commitGuards.delete(selection.validate);
+                  }
+                  selection.release?.();
                 }
               };
               try {
@@ -310,7 +318,6 @@ export async function executeSessionPatchMutations(params: {
                 const createdSessions: Parameters<
                   NonNullable<SessionMutationAuthorization["recordCreatedSession"]>
                 >[0][] = [];
-                const commitGuards = new Set<() => ErrorShape | undefined>();
                 const originalGuards = group.map(({ index }) =>
                   expectDefined(originalCommitGuards[index], "original patch guard"),
                 );
@@ -475,15 +482,7 @@ export async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push(runtimeSelection);
                         continue;
                       }
-                      if (runtimeSelection.release) {
-                        const release = runtimeSelection.release;
-                        runtimeSelectionReleases.push(() => {
-                          if (runtimeSelection.validate) {
-                            commitGuards.delete(runtimeSelection.validate);
-                          }
-                          release();
-                        });
-                      }
+                      runtimeSelections.push(runtimeSelection);
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;
                       const sandboxChanged =
@@ -502,6 +501,7 @@ export async function executeSessionPatchMutations(params: {
                             ).prepareSessionPatchExecutionPermissionChange({
                               client,
                               context: params.context,
+                              readSessionSharing: params.readSessionSharing,
                               patch: target.fullPatch,
                               existingEntry,
                               entry: projected.entry,
@@ -516,6 +516,7 @@ export async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push(executionPermissions);
                         continue;
                       }
+                      runtimeSelections.push(executionPermissions);
                       target.permissionChange = executionPermissions.change;
                       const authorizationFailure = mutationTargets[target.index]!.commitGuard();
                       if (authorizationFailure) {

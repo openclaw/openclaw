@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { resolveAgentModelPrimary } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -82,6 +83,7 @@ export function createModelProviders(
   let profilesVisible = false;
   let readAccess = false;
   let stopCatalog: (() => void) | undefined;
+  let catalogSearch: HTMLInputElement | undefined;
 
   /** Client the current data was loaded from; a new client means stale data. */
   let dataClient: GatewayBrowserClient | null = null;
@@ -104,8 +106,10 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
-    reload: () => supplemental.loadUsage(),
+    // Route readiness gates automatic work; this page only consumes the provider lane.
+    isSessionLoading: () => loaderPending || !routeDataObserved,
+    isProviderLoading: () => supplemental.loading,
+    reload: ({ provider }) => (provider && readAccess ? supplemental.loadUsage() : undefined),
     onIncompleteUsageExhausted: notify,
   });
   const supplemental = new ModelProviderSupplementalLoader(notify, {
@@ -151,7 +155,7 @@ export function createModelProviders(
         readAccess = canRead;
       }
       installedAgents.synchronize();
-      login.synchronizePresentation();
+      login.synchronize();
       if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
         void refresh("replacement");
       }
@@ -245,10 +249,6 @@ export function createModelProviders(
       };
     },
     canStart: canMutate,
-    onDiscover: () => {
-      setMessage("connection", null);
-      discovery.open();
-    },
     onApiKey: (provider) => {
       state.addProviderId = provider;
       state.addProviderKey = "";
@@ -312,6 +312,7 @@ export function createModelProviders(
     if (loaderChanged && !pending) {
       ensureInitialData();
       supplemental.resume();
+      void refreshPolicy.flushPending();
     }
     notify();
   }
@@ -334,9 +335,11 @@ export function createModelProviders(
         return;
       }
       syncConfig();
-      if (pendingConnection && state.data && canMutate() && !core.loading) {
+      // A connect link lands on the page's provider catalog, ready to search.
+      if (pendingConnection && state.data && canMutate() && !core.loading && catalogSearch) {
         pendingConnection = false;
-        void login.open();
+        catalogSearch.scrollIntoView({ block: "center" });
+        catalogSearch.focus({ preventScroll: true });
       }
       if (pendingCredentialInvalidation && !loginBusy) {
         void refresh("replacement");
@@ -358,7 +361,7 @@ export function createModelProviders(
       discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
-      login.synchronizePresentation();
+      login.synchronize();
     };
     const cleanups = [
       context.router.subscribe((next) => {
@@ -509,7 +512,6 @@ export function createModelProviders(
     }
     const client = gateway.client;
     if (!gateway.connected || !readAccess || !client) {
-      refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     // Another client's write is outside the selected owner, so reconcile every provider.
@@ -631,11 +633,8 @@ export function createModelProviders(
     };
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
-    const pageLogin = login.pageActions;
     const props = {
-      installedAgents: undefined,
       providerQuery: providerQuery(),
-      onConnectProvider: () => void login.connectProvider(values.configuredModels),
       accountUsage:
         !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
           ? {
@@ -654,6 +653,7 @@ export function createModelProviders(
       onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
       basePath: context.basePath,
       credentialAgentLabel: agentLabel,
+      agentModelRef: resolveAgentModelPrimary(mutations.configObject(), state.selectedAgentId),
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
       catalogReceipt: core.catalogReceipt,
@@ -699,17 +699,20 @@ export function createModelProviders(
       ...configActions.addProviderActions,
       ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
       onCatalogRetry: () => retryCatalog(),
+      onDiscover: () => {
+        setMessage("connection", null);
+        discovery.open();
+      },
+      catalogSearchRef: (element: HTMLInputElement) => {
+        catalogSearch = element;
+      },
       ...login.providerActions,
     };
     return {
       props,
       cards,
       installedAgentsAvailable: installedAgents.available(),
-      scope: {
-        onConnect: pageLogin.onConnect,
-        connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
-      },
-      loginMessage: state.messages.connection ?? pageLogin.loginMessage,
+      loginMessage: state.messages.connection ?? login.pageActions.loginMessage,
       discovery: {
         agentLabel,
         credentialChoices:

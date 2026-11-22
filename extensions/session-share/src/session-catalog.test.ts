@@ -12,7 +12,7 @@ import {
   type SessionCatalogProvider,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
 
 const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
@@ -518,4 +518,68 @@ it.each([
   } else {
     await expect(f.read()).rejects.toThrow("Invalid OpenClaw chat history");
   }
+});
+
+describe("optional source-link command", () => {
+  const linkedCommand = "openclaw.sessions.list-with-links.v1";
+  const originalPath = "/chat/main/shared";
+  const configure = () => {
+    f.configure({
+      plugins: {
+        entries: {
+          "session-share": {
+            config: {
+              nodes: {
+                alpha: { controlUiOrigin: "https://source.example", controlUiBasePath: "/control" },
+              },
+            },
+          },
+        },
+      },
+    });
+  };
+  const linkedNode = { nodeId: "alpha", connected: true, commands: [...commands, linkedCommand] };
+
+  it("uses the advertised variant and strips private path metadata from catalog rows", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
+    expect((await f.host())?.sessions).toEqual([
+      {
+        ...nativeSession,
+        originalUrl: "https://source.example/control/chat/main/shared",
+      },
+    ]);
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: linkedCommand }),
+    );
+  });
+
+  it("keeps an old source readable with visible unavailable navigation", async () => {
+    configure();
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: commands[0] }),
+    );
+  });
+
+  it("withdraws an in-flight linked snapshot when the command is removed without reconnecting", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    const gate = createDeferred<unknown>();
+    f.invoke.mockImplementationOnce(() => gate.promise);
+    const publication = await f.watch();
+    await vi.advanceTimersByTimeAsync(2);
+    f.nodes("alpha");
+    await f.begin();
+    gate.resolve({ sessions: [{ ...nativeSession, originalPath }] });
+    await publication.done();
+    expect(publication.onHost.mock.calls.flatMap(([host]) => host.sessions)).toEqual([]);
+    f.invoke.mockResolvedValue({ sessions: [nativeSession] });
+    await f.expectSessions();
+    expect(f.invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      linkedCommand,
+      commands[0],
+    ]);
+  });
 });

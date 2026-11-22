@@ -510,17 +510,20 @@ async function resolveTrustedToolsEffectiveContext(
   const delivery = deliveryContextFromSession(loaded.entry);
   const origin = sessionDeliveryOrigin(loaded.entry);
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
-  const agentRuntime = resolveEffectiveAgentRuntime({
-    cfg: loaded.cfg,
-    provider: resolvedModel.provider,
-    modelId: resolvedModel.model,
-    agentScope: { kind: "prepared", agentId: sessionAgentId },
-    sessionKey: canonicalKey,
-    sessionEntry: loaded.entry,
-  });
+  const agentRuntime =
+    resolvedModel &&
+    resolveEffectiveAgentRuntime({
+      cfg: loaded.cfg,
+      provider: resolvedModel.provider,
+      modelId: resolvedModel.model,
+      agentScope: { kind: "prepared", agentId: sessionAgentId },
+      sessionKey: canonicalKey,
+      sessionEntry: loaded.entry,
+    });
   // Listing describes the brokered surface, never current publication authority.
   const githubPublicationAvailable =
     !params.localEmbedded &&
+    agentRuntime !== undefined &&
     agentHarnessExposesOpenClawTools(agentRuntime) &&
     !(await readAcpSessionMetaForEntryAsync({
       cfg: loaded.cfg,
@@ -543,8 +546,8 @@ async function resolveTrustedToolsEffectiveContext(
     pluginRegistryVersion: getActivePluginRegistryVersion(),
     channelRegistryVersion: getActivePluginChannelRegistryVersion(),
     nodePluginToolsVersion: getConnectedNodePluginToolsVersion(),
-    modelProvider: resolvedModel.provider,
-    modelId: resolvedModel.model,
+    modelProvider: resolvedModel?.provider,
+    modelId: resolvedModel?.model,
     messageProvider: delivery?.channel ?? origin?.provider,
     agentRuntime,
     accountId: delivery?.accountId ?? origin?.accountId,

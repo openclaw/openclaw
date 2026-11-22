@@ -9,7 +9,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
+import { AccountLimits, createAccountUsage, type AccountUsageScope } from "./account-usage.tsx";
 
 registerSettingsEnglish();
 
@@ -33,7 +33,10 @@ function mount(request: ReturnType<typeof createGatewayRequestMock>) {
     agentId: "main",
     revision: 0,
   });
-  const view = mountSolid(() => <AccountLimits scope={scope()} profileId="openai:account" />);
+  const view = mountSolid(() => {
+    const read = createAccountUsage(scope, () => "openai:account");
+    return <AccountLimits read={read} />;
+  });
   return { container: view.container, scope, setScope };
 }
 

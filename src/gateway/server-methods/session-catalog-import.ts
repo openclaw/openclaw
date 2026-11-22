@@ -11,7 +11,7 @@ import {
 } from "../../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { buildSessionCatalogImportKey } from "../session-create-key.js";
 import { createGatewaySession } from "../session-create-service.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -121,7 +121,7 @@ export async function importAuthorizedSessionCatalog(params: {
     );
     const commitGuard = authorization?.assertCurrent;
     await using operatorCapture = {
-      preparation: captureGatewayOperatorRunAuthority({
+      preparation: prepareGatewayOperatorRunAuthority({
         client,
         context,
         invocationAuthority: { assertCurrent: () => commitGuard?.() },

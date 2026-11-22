@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -73,15 +74,12 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: { ...options?.workerData, testWorktreeWriteGate: writerGate.buffer },
-      });
+      return actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
+          testWorktreeWriteGate: writerGate.buffer,
+        }),
+      );
     },
   };
 });

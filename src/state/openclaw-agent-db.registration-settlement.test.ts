@@ -3,6 +3,7 @@ import path from "node:path";
 import { MessagePort, type Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { withWorkerPreload } from "../../test/helpers/runtime-preload.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
@@ -52,19 +53,13 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      const worker = actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: {
-          ...options?.workerData,
+      const worker = actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
           registrationReceiptAgent: lostReceipt.agentId,
           registrationReceiptControl: lostReceipt.control,
-        },
-      });
+        }),
+      );
       worker.once("exit", (code) => {
         if (code === 37) {
           lostReceipt.events.push("native-exit");

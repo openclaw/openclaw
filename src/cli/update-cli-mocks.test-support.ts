@@ -246,9 +246,9 @@ vi.mock("../infra/update-triage.js", async (importOriginal) => {
   };
 });
 
-// Keep CLI orchestration on the canonical Git updater boundary.
-vi.mock("../infra/update-runner-git.js", () => ({
-  updateGitCheckout: vi.fn(),
+// mock-isolation: the real runner builds Git worktrees; CLI orchestration tests own only its result.
+vi.mock("../infra/update-runner-git-release.js", () => ({
+  updateGitRelease: vi.fn(),
 }));
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({
@@ -577,6 +577,19 @@ vi.mock("../daemon/service.js", async () => {
       stop: (...args: unknown[]) => serviceStop(...args),
       restart: (...args: unknown[]) => serviceRestart(...args),
     })),
+  };
+});
+
+// Service fixtures model the Gateway; no node service is installed beside it.
+vi.mock("../daemon/node-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/node-service.js")>();
+  return {
+    ...actual,
+    resolveNodeService: () => ({
+      ...actual.resolveNodeService(),
+      readCommand: async () => null,
+      readRuntime: async () => ({ status: "stopped" }),
+    }),
   };
 });
 

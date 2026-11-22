@@ -70,9 +70,9 @@ it("retains the ordinary CLI final authority after sharing acquisition reads", a
       f.records().filter((row) => row.kind === "request" && row.invocation === phase).length,
     ]),
   );
-  // Direct FRV manifest acquisition omits the redundant parent workflow-view read.
+  // Preview also acquires the immutable qualification waiver policy.
   expect(counts).toEqual({
-    preview: 52,
+    preview: 53,
     consume: 25,
     authorize: 22,
     "consume-beta": 25,

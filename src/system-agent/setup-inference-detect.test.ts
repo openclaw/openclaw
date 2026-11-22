@@ -7,7 +7,10 @@ import type { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
-import { detectSetupInference } from "./setup-inference-detect.js";
+import {
+  detectSetupInference,
+  listManualSetupInferenceDetection,
+} from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
@@ -188,6 +191,32 @@ function pendingProbe<T>() {
 }
 
 describe("setup inference discovery concurrency", () => {
+  it("lists known choices and the configured model without running discovery", async () => {
+    fixture.config = {
+      agents: {
+        entries: { main: {} },
+        defaults: { workspace: "/fixture/workspace", model: "fixture/configured" },
+      },
+    };
+    // A scan that never answers must not delay choices known from config and manifests.
+    fixture.detectInferenceBackends.mockImplementation(() => new Promise(() => {}));
+    fixture.loadAuthProfileStore.mockImplementation(() => new Promise(() => {}));
+
+    const known = await listManualSetupInferenceDetection("main");
+
+    expect(known).toMatchObject({
+      candidates: [],
+      unavailableCandidates: [],
+      recommendedInstalls: [],
+      configuredModel: "fixture/configured",
+      setupComplete: true,
+      manualProviders: [expect.objectContaining({ id: choice.choiceId })],
+    });
+    expect(fixture.detectInferenceBackends).not.toHaveBeenCalled();
+    expect(fixture.loadAuthProfileStore).not.toHaveBeenCalled();
+    expect(fixture.resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
   it("probes provider services during CLI detection", async () => {
     const cli = pendingProbe<InferenceBackendCandidate[]>();
     const hook = pendingProbe<ProviderAppGuidedSetupCandidate | null>();

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
@@ -460,7 +460,7 @@ it.each(["pin", "source", "provider", "session", "authority"] as const)(
     });
     const sessionStore = { [sessionKey]: entry };
     let current = true;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "operator",
       scopes: ["operator.write"],
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
