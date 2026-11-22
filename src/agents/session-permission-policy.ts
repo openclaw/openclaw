@@ -29,6 +29,7 @@ export async function prepareRunSessionPermissionPolicy(params: {
   return {
     root: params.root,
     mode: SESSION_PERMISSION_BY_EXEC_MODE[exec.mode],
+    sourceMode: params.mode,
     execPolicy: {
       security: exec.security,
       ask: exec.ask,

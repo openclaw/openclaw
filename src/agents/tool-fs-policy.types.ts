@@ -4,6 +4,8 @@ import type { ExecPolicyCeiling } from "../infra/exec-policy.js";
 export type PreparedSessionPermissionPolicy = Readonly<{
   root: string;
   mode: SessionPermissionMode;
+  /** Stored session mode before participant clamping; undefined retains configured defaults. */
+  sourceMode?: SessionPermissionMode;
   /** Retain exact participant defaults when the permission label is lossy (for example allowlist). */
   execPolicy?: ExecPolicyCeiling;
 }>;
