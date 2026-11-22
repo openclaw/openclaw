@@ -19,6 +19,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import "./device.css";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
