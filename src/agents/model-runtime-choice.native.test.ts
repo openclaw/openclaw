@@ -192,20 +192,7 @@ it("keeps a retained keyless OpenClaw pin usable for required worker inference o
     baseUrl: "https://custom.invalid/v1",
   };
   const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native test",
-      authBootstrap: "harness",
-      executionEnvironment: "host-only",
-      supports: () => ({ supported: true }),
-      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
-      runAttempt: vi.fn(),
-    },
-  });
+  const registry = nativeTestRegistry();
   const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
     pluginRegistry: registry,
     modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
@@ -256,20 +243,7 @@ it("keeps an unpinned session usable for required worker inference on re-selecti
     baseUrl: "https://custom.invalid/v1",
   };
   const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native test",
-      authBootstrap: "harness",
-      executionEnvironment: "host-only",
-      supports: () => ({ supported: true }),
-      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
-      runAttempt: vi.fn(),
-    },
-  });
+  const registry = nativeTestRegistry();
   const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
     pluginRegistry: registry,
     modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
@@ -683,16 +657,7 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   expect(choice.validate()).toContain("not available");
 });
 
-it("does not silently switch from a stored openclaw preference pinned while signed out to a signed-in native runtime", async () => {
-  const apiEntry: ModelCatalogEntry = {
-    provider: "fixture",
-    id: "model",
-    name: "Model",
-    reasoning: false,
-    api: "openai-completions",
-    baseUrl: "https://custom.invalid/v1",
-  };
-  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+function nativeTestRegistry() {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "native-test",
@@ -707,6 +672,20 @@ it("does not silently switch from a stored openclaw preference pinned while sign
       runAttempt: vi.fn(),
     },
   });
+  return registry;
+}
+
+it("does not silently switch from a stored openclaw preference pinned while signed out to a signed-in native runtime", async () => {
+  const apiEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+  const registry = nativeTestRegistry();
   const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
     pluginRegistry: registry,
     // Prepared snapshots publish the native row as primary; picker catalogs
@@ -734,6 +713,28 @@ it("does not silently switch from a stored openclaw preference pinned while sign
   });
 });
 
+it("validates a stored openclaw preference against the runtime the model's config declares", async () => {
+  // Live: Muse models declare agentRuntime "muse" in config; no catalog row carries nativeRuntime.
+  const cfg = {
+    agents: { defaults: { models: { "fixture/model": { agentRuntime: { id: "native-test" } } } } },
+  } as OpenClawConfig;
+  const entry: ModelCatalogEntry = { provider: "fixture", id: "model", name: "Model" };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+    pluginRegistry: nativeTestRegistry(),
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+  });
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    ...request,
+    cfg,
+    catalog: [entry],
+    sessionEntry: { agentRuntimeOverride: "openclaw" },
+    thinkingPolicyRequired: false,
+  });
+  expect(selection).toMatchObject({ status: "rejected", reason: "invalid-runtime" });
+});
+
 // Session rows written by earlier releases can carry the "no preference" runtime
 // values, unnormalized spellings, legacy aliases, or no runtime at all. Re-selection
 // must read each one with the meaning it had when it was stored.
@@ -756,20 +757,7 @@ it.each([
       baseUrl: "https://custom.invalid/v1",
     };
     const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "native-test",
-      source: "fixture",
-      harness: {
-        id: "native-test",
-        label: "Native test",
-        authBootstrap: "harness",
-        executionEnvironment: "host-only",
-        supports: () => ({ supported: true }),
-        readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
-        runAttempt: vi.fn(),
-      },
-    });
+    const registry = nativeTestRegistry();
     const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
       pluginRegistry: registry,
       modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
@@ -815,20 +803,7 @@ it("keeps a stored openclaw preference when its route is still signed in", async
     baseUrl: "https://custom.invalid/v1",
   };
   const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native test",
-      authBootstrap: "harness",
-      executionEnvironment: "host-only",
-      supports: () => ({ supported: true }),
-      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
-      runAttempt: vi.fn(),
-    },
-  });
+  const registry = nativeTestRegistry();
   const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
     pluginRegistry: registry,
     modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },

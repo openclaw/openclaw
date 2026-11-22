@@ -177,9 +177,16 @@ export async function prepareModelSelectionRuntime(params: {
         entry.nativeRuntime !== undefined &&
         entry.nativeRuntime !== "openclaw",
     );
+    // A model or provider runtime set in config (live: Muse models declare
+    // agentRuntime "muse") must still validate a stored openclaw pin that
+    // shadows it; otherwise the pin wins and the chat cannot run the model.
+    const configuredRuntime =
+      (policy.runtimeSource === "model" || policy.runtimeSource === "provider") &&
+      policy.runtime !== "openclaw";
     needsRuntimeChoice = Boolean(
       selected?.nativeRuntime ||
       hasNativeVariant ||
+      configuredRuntime ||
       effectiveRuntime !== "openclaw" ||
       inheritedCliRuntime ||
       (policy.forcedByEnvironment && policy.runtime !== "openclaw"),
