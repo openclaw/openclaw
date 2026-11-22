@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions/session-entry-current-check.js";
 import { isUnboundProjectSession } from "../config/sessions/session-project-eligibility.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
@@ -72,14 +73,7 @@ export async function moveSessionIntoProject(params: {
   };
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
   const assertUnbound = (current: InternalSessionEntry | undefined) => {
-    if (
-      !current ||
-      current.sessionId !== entry.sessionId ||
-      current.lifecycleRevision !== entry.lifecycleRevision
-    ) {
-      throw new Error("The conversation changed while preparing its checkout; retry the move.");
-    }
-    if (!isUnboundProjectSession(current, target.agentId, workspaceDir)) {
+    if (!current || !isUnboundProjectSession(current, target.agentId, workspaceDir)) {
       throw new Error(
         "This conversation already has a project or workspace, and a conversation moves into a project only once. Start a new session in the project instead (sessions_spawn with visible=true and projectId); nothing was moved.",
       );
@@ -130,7 +124,17 @@ export async function moveSessionIntoProject(params: {
     signal,
     assertCurrent,
     run: async () => {
-      assertUnbound(await readSessionEntryReadOnlyInWorker(target, assertCurrent));
+      using resources = new DisposableStack();
+      const selected = await captureSessionEntryCurrentCheckAsyncInternal({
+        ...target,
+        expected: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+        // Workspace eligibility needs the full row.
+        fields: [],
+        errorMessage: "The conversation changed while preparing its checkout; retry the move.",
+      });
+      resources.defer(selected.release);
+      assertCurrent();
+      assertUnbound(selected.entry);
       const project = await resolveRequesterProject(cfg, params.projectId, access, { fresh: true });
       if (!project || project.source === "workspace") {
         throw new Error(`Project ${params.projectId} is not available to you; nothing was moved.`);
@@ -157,12 +161,11 @@ export async function moveSessionIntoProject(params: {
       }
       assertCurrent();
       const source = params.carrySource;
-      using carryResources = new DisposableStack();
       const carried = params.checkout
         ? await importCarriedWork({
             source:
               typeof source === "function"
-                ? carryResources.use(
+                ? resources.use(
                     await source({ assertCurrent, skillsSnapshot: entry.skillsSnapshot }),
                   ).source
                 : source,
@@ -214,7 +217,7 @@ export async function moveSessionIntoProject(params: {
           },
           target,
           signal,
-          assertCurrent,
+          assertCurrent: composeSessionSourceAssertion([assertCurrent, selected.source]),
           assertEntry: (current) => {
             assertUnbound(current);
             oldFiles.assertCurrent(context.getRuntimeConfig(), current);
