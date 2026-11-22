@@ -366,6 +366,7 @@
 }
 
 .logbook-stats__app {
+  overflow-wrap: anywhere;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
