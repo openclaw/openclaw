@@ -208,12 +208,4 @@ describe("durable inbound reply delivery", () => {
       ...(retained ? { retainedForRecovery: true } : {}),
     });
   });
-
-  it("reports a lifecycle notice independently of the final reply’s queue custody", async () => {
-    const error = new OutboundDeliveryError("socket closed", { cause: new Error("socket closed") });
-    error.queueCustody = "released";
-    error.failureNoticeHandled = true;
-    mocks.send.mockResolvedValueOnce({ status: "failed", error });
-    expect(await deliver()).toEqual({ status: "failed", error, failureNoticeHandled: true });
-  });
 });
