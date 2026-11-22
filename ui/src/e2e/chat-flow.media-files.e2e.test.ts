@@ -128,7 +128,19 @@ suite.define(() => {
     const link = card.locator(".chat-assistant-attachment-card__download");
     await link.waitFor({ state: "visible", timeout: 10_000 });
     expect(await link.getAttribute("href")).toBe(mediaUrl);
-    await card.hover();
+    const open = card.locator(".chat-assistant-attachment-card__expand");
+    const actionColor = (action: Locator) =>
+      action.evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+        return getComputedStyle(element).color;
+      });
+    expect(await actionColor(link)).toBe(await actionColor(open));
+
+    await open.hover();
+    const openHoverColor = await actionColor(open);
+    await link.hover();
+    expect(await actionColor(link)).toBe(openHoverColor);
+
     const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
     expect(await download.failure()).toBeNull();
 

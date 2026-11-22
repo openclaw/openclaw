@@ -1,5 +1,5 @@
 import { createMemo } from "solid-js";
-import type { CronJob } from "../../../api/types.ts";
+import type { CronJob } from "../../api/types.ts";
 import { nonCronSessionAutomationSchedule } from "./session-automation-schedule-non-cron.ts";
 
 /** Share one formatter read across rows, loading the cron grammar only when displayed. */

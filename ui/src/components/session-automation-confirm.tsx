@@ -1,10 +1,14 @@
+import { For } from "solid-js";
 import type { CronCompactJob, CronJobsListResult } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { automationCardSchedule } from "../lib/cron/session-automation-schedule.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveUiConversationIdentity } from "../lib/sessions/session-key.ts";
+import { AutomationCard, AutomationCardClock } from "./automation-card.tsx";
 import type { ConfirmDialogOptions } from "./confirm-dialog.ts";
+import "./session-automation-confirm.css";
 
 registerSessionOrganizationEnglish();
 
@@ -22,7 +26,7 @@ type SessionAutomationTarget = {
 export type BoundAutomationNotice = {
   action: "archive" | "delete";
   message: string;
-  details?: string;
+  jobs?: readonly CronCompactJob[];
   automationCount: number;
 };
 
@@ -86,11 +90,12 @@ async function readBoundAutomationNotice(
       automationCount: targets.length,
     };
   }
-  const lines = jobs.slice(0, LISTED_AUTOMATION_LIMIT).map((job) => job.name + " (" + job.id + ")");
-  if (total > lines.length) {
-    lines.push(t("sessionsView.automationPauseMore", { count: String(total - lines.length) }));
-  }
-  return { action: params.action, message, details: lines.join("\n"), automationCount: total };
+  return {
+    action: params.action,
+    message,
+    jobs: jobs.slice(0, LISTED_AUTOMATION_LIMIT),
+    automationCount: total,
+  };
 }
 
 // Reads each flagged conversation's enabled bound jobs, deduplicated by job ID.
@@ -155,15 +160,45 @@ export function withBoundAutomationNotice<T extends ConfirmDialogOptions>(
   options: T,
   notice: BoundAutomationNotice,
 ): T {
+  const jobs = notice.jobs;
   return {
     ...options,
     skipPreference: undefined,
     message: options.message ? options.message + "\n\n" + notice.message : notice.message,
-    ...(notice.details ? { details: notice.details } : {}),
+    ...(jobs
+      ? { details: () => <BoundAutomationCards jobs={jobs} total={notice.automationCount} /> }
+      : {}),
     confirmLabel: t(
       notice.action === "archive" ? "sessionsView.archiveAnyway" : "sessionsView.deleteAnyway",
     ),
   };
+}
+
+function BoundAutomationCards(props: { jobs: readonly CronCompactJob[]; total: number }) {
+  return (
+    <AutomationCard>
+      <ul class="bound-automation-cards__list" role="list">
+        <For each={props.jobs}>
+          {(job) => (
+            <li class="bound-automation-cards__row">
+              <AutomationCardClock tile />
+              <div class="automation-card__copy">
+                <strong>{job.displayName ?? job.name}</strong>
+                {job.schedule ? <small>{automationCardSchedule(job.schedule)}</small> : undefined}
+              </div>
+            </li>
+          )}
+        </For>
+      </ul>
+      {props.total > props.jobs.length ? (
+        <p class="bound-automation-cards__more">
+          {t("sessionsView.automationPauseMore", {
+            count: String(props.total - props.jobs.length),
+          })}
+        </p>
+      ) : undefined}
+    </AutomationCard>
+  );
 }
 
 // Counts only; job names and session labels stay out of the console record.

@@ -1,10 +1,10 @@
-import { resolveExactDurationParts } from "../../../../../src/infra/format-time/format-duration-exact.ts";
-import type { CronJob } from "../../../api/types.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { registerCronScheduleEnglish } from "../../../i18n/locales/en-cron-schedule.ts";
-import { formatDateMs, formatTimeMs, formatUnit } from "../../../lib/format.ts";
-import { formatCronSchedule } from "../../../lib/presenter.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { resolveExactDurationParts } from "../../../../src/infra/format-time/format-duration-exact.ts";
+import type { CronJob } from "../../api/types.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerCronScheduleEnglish } from "../../i18n/locales/en-cron-schedule.ts";
+import { formatDateMs, formatTimeMs, formatUnit } from "../format.ts";
+import { formatCronSchedule } from "../presenter.ts";
+import { registerEnglishCatalog, t } from "../reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 // Next-run wording lives in the lazy schedule catalog, outside the Chat boot chunks.
