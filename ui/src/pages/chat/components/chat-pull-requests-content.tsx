@@ -119,7 +119,7 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
     const parts = visible()
       .toSorted((left, right) => left.url.localeCompare(right.url))
       .flatMap((entry) => {
-        const checks = entry.details?.checks;
+        const checks = entry.request?.checks;
         return checks
           ? [
               t("chat.pullRequests.ciSummaryItem", {
@@ -281,7 +281,10 @@ function PullRequestRow(props: {
   owner: ChatPullRequestsProps;
   published: boolean;
 }) {
-  const details = () => props.entry.details;
+  const details = () => {
+    const request = props.entry.request;
+    return request?.state !== undefined ? request : undefined;
+  };
   let row: HTMLElement | undefined;
   const dismissLabel = () => t("chat.pullRequests.dismiss", { reference: props.entry.reference });
   const disabled = () => props.published && props.owner.publication?.activity !== null;
@@ -289,7 +292,7 @@ function PullRequestRow(props: {
     if (props.published) {
       void props.owner.publication?.onNewAction?.();
     }
-    const pullRequest = details();
+    const pullRequest = props.entry.request;
     if (pullRequest) {
       props.owner.onDismiss(pullRequest);
     }
@@ -356,7 +359,9 @@ function PullRequestRow(props: {
           >
             <HoverMarquee
               class="chat-pr__title"
-              content={details()?.title ?? `${props.entry.reference} · ${props.entry.branch}`}
+              content={
+                props.entry.request?.title ?? `${props.entry.reference} · ${props.entry.branch}`
+              }
               options={{
                 host: () => (row?.closest(".chat-details[data-desktop]") ? row : undefined),
                 stationaryWithoutHost: true,

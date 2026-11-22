@@ -218,6 +218,17 @@ it("replaces the People activation owner while retaining the mobile host content
   expect(releaseReplacement).toHaveBeenCalledOnce();
 });
 
+it("links a task PR without claiming an unverified GitHub state", async () => {
+  const request = pullRequest();
+  const { query, navigate } = await mountMobileHost(
+    details({ displayPullRequests: [{ ...request, state: undefined }] }),
+  );
+  const link = query('[data-details-page="root"] a.chat-pr-mobile__row');
+  expect(link?.getAttribute("href")).toBe(request.url);
+  expect(link?.hasAttribute("data-state")).toBe(false);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
 it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {
   const request = pullRequest({
     title: "Current PR",
