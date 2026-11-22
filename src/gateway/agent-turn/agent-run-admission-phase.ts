@@ -464,8 +464,18 @@ export async function prepareAgentRunDispatch(
       throw new Error("agent input admission no longer owns this run");
     }
   };
+  const operatorRun = {
+    ...params,
+    lifecycleStorePath,
+    assertInputCurrent: assertInputOwnerCurrent,
+    entry: activeRunAbort.entry,
+  };
   try {
     assertInputAdmissionCurrent?.();
+    if (params.privateCompletion) {
+      // Admit before input persistence yields; retain this same decision below.
+      capturedOperator = await retainAgentTurnOperatorRun(operatorRun);
+    }
     userTurn = await prepareAgentRunUserTurn({
       ...params,
       assertCurrent: () => {
@@ -531,8 +541,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     const context = params.context.resolveGatewayContext?.();
-    // Provenance is caller-supplied on public RPC. Only the host's system principal
-    // may resolve a session owner; explicitly requester-bound calls keep that requester.
+    // Only host System input may resolve a session owner; public provenance never grants it.
     const systemTurn =
       context &&
       params.canUseInternalRuntimeHandoff &&
@@ -556,23 +565,7 @@ export async function prepareAgentRunDispatch(
             },
           }
         : undefined;
-    // Accepted work retains this caller's continuation for the turn's whole lifetime.
-    capturedOperator = await retainAgentTurnOperatorRun({
-      ...params,
-      lifecycleStorePath,
-      assertInputCurrent: assertInputOwnerCurrent,
-      systemTurn,
-      entry: activeRunAbort.entry,
-      abortSession: params.resolvedSessionKey
-        ? {
-            cfg: params.cfg,
-            storePath: params.lifecycleStorePath,
-            entry: params.sessionEntry,
-            canonicalKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-          }
-        : undefined,
-    });
+    capturedOperator ??= await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;

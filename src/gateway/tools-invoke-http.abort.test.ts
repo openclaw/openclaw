@@ -260,7 +260,7 @@ describe("POST /tools/invoke request cancellation", () => {
     );
   });
 
-  it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
+  it("retains each child's admitted authority after HTTP completion and grant revocation", async () => {
     const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
     await withOpenClawTestState(stateOptions, async () => {
       const cfg: OpenClawConfig = {
@@ -359,11 +359,9 @@ describe("POST /tools/invoke request cancellation", () => {
         const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
         expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
         originalGrant.abort(new Error("Original guest grant ended"));
-        expect(originalAuthority?.signal?.aborted).toBe(true);
-        expect(() => originalAuthority?.assertCurrent()).toThrow("Original guest grant ended");
-        expect(() => readAdmittedRunOperatorAuthority(original.admitted)).toThrow(
-          "no longer active",
-        );
+        expect(originalAuthority?.signal?.aborted).toBe(false);
+        expect(() => originalAuthority?.assertCurrent()).not.toThrow();
+        expect(readAdmittedRunOperatorAuthority(original.admitted)).toBe(originalAuthority);
         expect(replacementAuthority?.signal?.aborted).toBe(false);
         expect(() => replacementAuthority?.assertCurrent()).not.toThrow();
         expect(readAdmittedRunOperatorAuthority(replacement.admitted)).toBe(replacementAuthority);
@@ -413,7 +411,7 @@ describe("POST /tools/invoke request cancellation", () => {
         resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
         // Replace only the test transport attribution; authentication and scope decisions are real.
-        lifecycle.authorize.mockImplementationOnce(async ({ req, res }) => {
+        lifecycle.authorize.mockImplementation(async ({ req, res }) => {
           markGatewayIngressTransport(req, {
             kind: "openclaw-id-tunnel",
             peerKey: principal.peerKey,
@@ -464,7 +462,10 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(() => authority?.assertCurrent()).not.toThrow();
         membership.delete(principal.peerKey);
         expect(() => authority?.assertCurrent()).not.toThrow();
-        expect(() => authority?.reauthorize?.()).toThrow();
+        const next = await invokeAbortProbe();
+        expect(next.status).toBe(401);
+        await next.arrayBuffer();
+        expect(lifecycle.execute).toHaveBeenCalledOnce();
         admission?.close();
         expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
       } finally {

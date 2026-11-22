@@ -200,7 +200,7 @@ export async function withGoalChatPlacement(
 export function createChatSendGoalCommitGuard(
   params: Pick<
     GatewayRequestHandlerOptions,
-    "client" | "context" | "sessionMutationAuthorization" | "sessionMutationCommitGuard"
+    "client" | "context" | "sessionMutationAuthorization"
   > & {
     admission: {
       initialSessionEntry?: SessionEntry;
@@ -222,14 +222,7 @@ export function createChatSendGoalCommitGuard(
 ): Pick<SessionTranscriptTurnMutation, "assertCurrent" | "routingPredicate"> & {
   assertCurrent: () => void;
 } {
-  const {
-    admission,
-    session,
-    client,
-    context,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = params;
+  const { admission, session, client, context, sessionMutationAuthorization } = params;
   const routingPredicate = admission.initialSessionEntry
     ? {
         config: structuredClone(context.getRuntimeConfig()),
@@ -273,7 +266,10 @@ export function createChatSendGoalCommitGuard(
       throw new Error("Goal admission changed before commit; refresh and retry.");
     }
   };
-  const sources = [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent];
+  const sources = [
+    sessionMutationAuthorization?.assertAdmittedInputCurrent ??
+      sessionMutationAuthorization?.assertCurrent,
+  ];
   const assertCurrent = admission.codexGoalAdmission
     ? composeSessionSourceAssertion(sources, check)
     : () => check(() => sources.forEach((source) => source?.()));

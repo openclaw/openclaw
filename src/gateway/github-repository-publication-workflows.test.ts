@@ -16,10 +16,7 @@ import {
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
-import {
-  observeRepositoryCommands,
-  type RepositoryPublicationSourceHistory,
-} from "./github-repository-publication.test-support.js";
+import type { RepositoryPublicationSourceHistory } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const mocks = githubPublicationTestMocks();
@@ -195,7 +192,6 @@ describe("repository checkpoint workflow authority", () => {
     "paged-duplicate",
     "commit-budget",
     "boundary-budget",
-    "boundary-revoked",
   ] as const)("inherits target workflows only with verified ancestry (%s)", async (history) => {
     let ancestor = "";
     let left = "";
@@ -204,16 +200,12 @@ describe("repository checkpoint workflow authority", () => {
     const ambiguous = history === "crisscross" || history === "paged-crisscross";
     const incomplete = history === "paged-empty" || history === "paged-duplicate";
     const limited = history === "commit-budget" || history === "boundary-budget";
-    const revoked = history === "boundary-revoked";
     const f = await createFixture({ [workflow]: definition }, "topic", (base, tree, git) => {
       ancestor = base;
       const commit = (parents: string[], message: string) =>
         git(["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])], message);
       if (history === "linear" || history === "previous-head") {
         return commit([base], "source-only feature\n");
-      }
-      if (revoked) {
-        return commit([base, git(["rev-parse", base + "^"])], "redundant source merge\n");
       }
       if (history === "boundary-budget") {
         const parents = [base];
@@ -286,9 +278,6 @@ describe("repository checkpoint workflow authority", () => {
         }
         if (source !== baseCommit && source !== comparisonHead) {
           boundaryReads++;
-          if (revoked) {
-            await f.revoke();
-          }
         }
         return json({
           sha:
@@ -302,13 +291,11 @@ describe("repository checkpoint workflow authority", () => {
     await capture("feature checkpoint\n", "refreshed", { [workflow]: updated });
     const writesBefore = writes().length;
     const result = await f.publish("refreshed");
-    const expected = revoked
-      ? identityChanged
-      : incomplete
-        ? { status: "failed", code: "unavailable" }
-        : ambiguous || limited
-          ? rejected
-          : published;
+    const expected = incomplete
+      ? { status: "failed", code: "unavailable" }
+      : ambiguous || limited
+        ? rejected
+        : published;
     expect(result, JSON.stringify(result)).toMatchObject(expected);
     const paged = history.startsWith("paged-");
     expect(sourcePages).toEqual(history === "previous-head" ? [1, 1] : paged ? [1, 2] : [1]);
@@ -317,7 +304,7 @@ describe("repository checkpoint workflow authority", () => {
         ? [comparisonHead, baseCommit]
         : sourcePages.map(() => comparisonHead),
     );
-    if (ambiguous || incomplete || limited || revoked) {
+    if (ambiguous || incomplete || limited) {
       expect(writes()).toHaveLength(writesBefore);
     } else {
       expect(git(["show", runtime.head + ":" + workflow])).toBe(updated.trim());
@@ -326,12 +313,9 @@ describe("repository checkpoint workflow authority", () => {
     if (history === "boundary-budget") {
       expect(boundaryReads).toBe(0);
     }
-    if (revoked) {
-      expect(boundaryReads).toBe(1);
-    }
   });
 
-  it.each(["foreign", "stale", "diverged", "caller-revoked", "publisher-revoked"] as const)(
+  it.each(["foreign", "stale", "diverged", "publisher-revoked"] as const)(
     "does not exempt an inherited checkpoint with %s target or authority facts",
     async (failure) => {
       const f = await createFixture({ [workflow]: definition });
@@ -381,9 +365,7 @@ describe("repository checkpoint workflow authority", () => {
         }
         const result = await transport(args, options);
         if (args.some((arg: string) => arg.endsWith("/git/trees/" + target.workspaceTree))) {
-          if (failure === "caller-revoked") {
-            await f.revoke();
-          } else if (failure === "publisher-revoked") {
+          if (failure === "publisher-revoked") {
             mocks.matchesIdentity.mockReturnValue(false);
           }
         }
@@ -443,23 +425,6 @@ describe("repository checkpoint workflow authority", () => {
       expect(writes()).toEqual([]);
     },
   );
-
-  it("rechecks workflow authority after a blob response before writing the tree or branch", async () => {
-    const f = await createFixture();
-    await f.repository.capture("accepted code\n", "authority-change", { [workflow]: definition });
-    observeRepositoryCommands(async (args) => {
-      if (args.some((arg: string) => arg.endsWith("/git/blobs"))) {
-        await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-        invalidateOperatorRolePolicy(f.maintainerProfile);
-      }
-    });
-    expect(await f.publish("authority-change", f.maintainer)).toMatchObject(identityChanged);
-    expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
-    expect(f.repository.runtime.effects).toEqual([]);
-    expect(writes().every(([args]) => args.some((arg: string) => arg.endsWith("/git/blobs")))).toBe(
-      true,
-    );
-  });
 
   it("rechecks the publisher after workflow authorization at the ref update boundary", async () => {
     const f = await createFixture();

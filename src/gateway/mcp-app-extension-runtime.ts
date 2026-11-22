@@ -24,7 +24,7 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveMcpAppRequesterId } from "./mcp-app-host-files.js";
 import { requestMcpAppToolApproval } from "./mcp-app-tool-approval.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -112,7 +112,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     const preparationOwner: {
       access?: ReturnType<typeof access.retain>;
       setup?: Awaited<ReturnType<typeof prepareAgentHarnessSessionRuntime>>;
-      source?: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      source?: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     } = {};
     let preparing:
       | Promise<import("../agents/harness/types.js").AgentHarnessSessionPreparationV1>
@@ -151,7 +151,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
           signal.throwIfAborted();
         };
         assertPreparationCurrent();
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client: options.client,
           context: options.context,
           hasCurrentClientAuthority: options.hasCurrentClientAuthority,

@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { OperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.types.js";
 
@@ -132,7 +132,7 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
   }
   const capturedOperator =
     scope?.client && context
-      ? await captureGatewayOperatorRunAuthority({
+      ? await prepareGatewayOperatorRunAuthority({
           client: scope.client,
           context,
           hasCurrentClientAuthority: scope.hasCurrentClientAuthority,

@@ -16,7 +16,7 @@ import {
   drainSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../../test-utils/session-state-cleanup.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
@@ -154,7 +154,7 @@ describe("visible session placement and authority", () => {
       });
 
       const participants = createReplyTurnParticipants({
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+        operatorAuthority: createTestOperatorAuthority({
           profileId: request.user,
           scopes: ["operator.write"],
           assertCurrent: () => {},

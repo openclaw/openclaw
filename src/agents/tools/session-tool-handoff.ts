@@ -132,15 +132,10 @@ export async function handoffSessionTool(
       );
       const run = params.run;
       continuation = captured;
-      runDeferred = captured
-        ? (scope) =>
-            params.retainRequester
-              ? captured.runWithRequester(() => run(scope))
-              : captured.run(() => run(scope))
-        : undefined;
+      runDeferred = captured ? (scope) => captured.runWithRequester(() => run(scope)) : undefined;
       enqueueDeferred = captured
         ? (text, options) =>
-            captured.run(() =>
+            captured.runWithRequester(async () =>
               runOutsidePluginRuntimeRegistryScope(() => enqueueSessionEventForHost(text, options)),
             )
         : undefined;

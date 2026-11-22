@@ -34,7 +34,7 @@ import {
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   createGatewaySession,
   SessionCreationNotCommittedError,
@@ -306,7 +306,7 @@ export async function copySessionCatalogToGateway(params: {
     throw new Error("catalog cannot copy this session to the Gateway");
   }
   await using operatorCapture = {
-    preparation: captureGatewayOperatorRunAuthority({
+    preparation: prepareGatewayOperatorRunAuthority({
       client: params.client,
       context: params.context,
       hasCurrentClientAuthority: params.hasCurrentClientAuthority,
