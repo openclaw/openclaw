@@ -204,11 +204,14 @@ export async function prepareAgentContentPhase(params: {
     );
     const model = params.modelOverride
       ? (resolvePersistedOverrideModelRef({
-          defaultProvider: params.providerOverride ?? baseModel.provider,
+          defaultProvider: params.providerOverride ?? baseModel?.provider,
           overrideProvider: params.providerOverride,
           overrideModel: params.modelOverride,
         }) ?? baseModel)
-      : { provider: params.providerOverride ?? baseModel.provider, model: baseModel.model };
+      : baseModel && {
+          provider: params.providerOverride ?? baseModel.provider,
+          model: baseModel.model,
+        };
     const isConfirmedAcpSession =
       params.request.acpTurnSource === "manual_spawn" &&
       params.requestedSessionKeyRaw !== undefined &&

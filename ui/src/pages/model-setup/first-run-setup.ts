@@ -316,7 +316,9 @@ export class FirstRunSetup {
     ) {
       return;
     }
-    const receipt = readFirstRunActivationReceipt(context);
+    const stored = readFirstRunActivationReceipt(context);
+    // A Models sign-in record belongs to its login dialog, not to first-run activation.
+    const receipt = stored?.kind === "provider-login" ? null : stored;
     if (this.pending?.receipt && receipt?.owner !== this.pending.receipt.owner) {
       this.pending = null;
     }

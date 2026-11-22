@@ -502,9 +502,7 @@ function drainCronQueueInDatabase(
       );
       continue;
     }
-    const checksCondition =
-      job.trigger !== undefined &&
-      (context.mode === "scheduled" || context.evaluateTrigger === true);
+    const checksCondition = job.trigger !== undefined;
     if (
       input.preparingAgentIds?.includes(agentId) ||
       (timed && input.busyConversationJobIds?.includes(job.id))

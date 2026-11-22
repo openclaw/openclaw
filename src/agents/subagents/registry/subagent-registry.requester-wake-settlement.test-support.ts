@@ -605,7 +605,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     expect([activeDescendants(), activeDescendants("main")]).toEqual([1, 0]);
   });
 
-  it("wakes a yielded parent once after one running child is stopped", async () => {
+  it("reports a stopped child and its finished sibling to a yielded parent once each", async () => {
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(createGatewayContext);
     const requesterTurnRunId = "requester-stopped-pair";
@@ -625,24 +625,24 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       data: { phase: "end", endedAt: Date.now(), aborted: true, stopReason: "aborted" },
     });
     await flushOwnedWork();
-    expect(getRequesterWakeCalls()).toHaveLength(0);
-    expect(readRun(stopped.runId)).toMatchObject({
-      endedReason: "subagent-killed",
-      suppressCompletionDelivery: true,
-    });
+    // The stop is a settled outcome; the parent hears it while the sibling still works.
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    const stopWake = String(getRequesterWakeCalls()[0]?.params?.message);
+    expect(stopWake).toMatch(
+      /run-stopped\n<\/prompt-data>\nstatus: cancelled[^\n]*\n[^\n]*\n<prompt-data>\n\(no output\)/,
+    );
+    expect(stopWake).toContain("still working: run-finished");
 
     emitCompleted(finished.runId, finished.childSessionKey, "finished sibling findings");
     await flushOwnedWork();
-    expect(getRequesterWakeCalls()).toHaveLength(1);
-    const wake = String(getRequesterWakeCalls()[0]?.params?.message);
+    expect(getRequesterWakeCalls()).toHaveLength(2);
+    const wake = String(getRequesterWakeCalls()[1]?.params?.message);
     expect(wake).toContain("finished sibling findings");
-    expect(wake).toMatch(
-      /run-stopped\n<\/prompt-data>\nstatus: cancelled[^\n]*\n[^\n]*\n<prompt-data>\n\(no output\)/,
-    );
+    expect(wake).not.toContain("run-stopped");
     await vi.advanceTimersByTimeAsync(60_000);
     await registry.testing.sweepOnceForTests();
     await flushOwnedWork();
-    expect(getAgentCalls()).toHaveLength(1);
+    expect(getAgentCalls()).toHaveLength(2);
     expect(readRun(finished.runId)?.requesterSettleWake).toBeUndefined();
     expect(readRun(stopped.runId)).toBeUndefined();
   });

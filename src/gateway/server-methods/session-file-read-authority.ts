@@ -86,9 +86,10 @@ export function sessionFileWorkspaceMatches(
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
     previous?.worktree?.id === current?.worktree?.id &&
     isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
+    // A first turn records its empty selection; absent and empty both select no library skills.
     isDeepStrictEqual(
-      previous?.skillsSnapshot?.librarySelections,
-      current?.skillsSnapshot?.librarySelections,
+      previous?.skillsSnapshot?.librarySelections ?? [],
+      current?.skillsSnapshot?.librarySelections ?? [],
     )
   );
 }

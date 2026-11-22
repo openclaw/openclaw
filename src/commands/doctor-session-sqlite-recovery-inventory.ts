@@ -41,6 +41,7 @@ import {
   readCompletedUpdateHistory,
 } from "./update-capture-cleanup.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
+import { collectUpdateDatabaseSnapshots } from "./update-database-snapshot-cleanup.js";
 import {
   classifyDisplacedDatabases,
   scanDisplacedDatabases,
@@ -617,6 +618,7 @@ function readUpdateCleanupInventory(params: {
     scan: params.scan,
     readHistory: params.readHistory,
   });
+  const snapshots = collectUpdateDatabaseSnapshots(params);
   const displaced = classifyDisplacedDatabases(families, inventory.ownership);
   if (params.scan?.incomplete) {
     for (const item of displaced.artifacts) {
@@ -629,11 +631,16 @@ function readUpdateCleanupInventory(params: {
   }
   return {
     ...inventory,
-    captureIdentities: captures.identities,
+    captureIdentities: new Map([...captures.identities, ...snapshots.identities]),
     displacedRetirement: displaced.retirement,
     report: summarizeRecoveryCleanup(
       inventory.report.stateDir,
-      [...inventory.report.artifacts, ...captures.artifacts, ...displaced.artifacts],
+      [
+        ...inventory.report.artifacts,
+        ...captures.artifacts,
+        ...snapshots.artifacts,
+        ...displaced.artifacts,
+      ],
       "preview",
       inventory.report.missingOriginals,
     ),

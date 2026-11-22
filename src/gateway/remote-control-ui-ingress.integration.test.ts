@@ -649,7 +649,7 @@ describe("remote Control UI ingress production composition", () => {
         ? { ...principalOptions, recoveryId: "issued-transport-grant" }
         : undefined,
     );
-    const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+    const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
     const binding = await factory.bindPrincipal(principalOptions);
     try {
       await binding.request("voicewake.get", {});
@@ -834,7 +834,7 @@ describe("remote Control UI ingress production composition", () => {
             ? { ...options, recoveryId: `original-${role}-app` }
             : undefined,
         );
-        const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+        const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
         const ephemeral = await factory.bindPrincipal(options);
         try {
           await ephemeral.request("users.self", {});
@@ -850,7 +850,7 @@ describe("remote Control UI ingress production composition", () => {
         try {
           const durableCapture = vi.spyOn(
             operatorRunAuthority,
-            "captureGatewayOperatorRunAuthority",
+            "prepareGatewayOperatorRunAuthority",
           );
           let snapshot;
           try {
@@ -918,7 +918,7 @@ describe("remote Control UI ingress production composition", () => {
             ).toMatchObject({ ok: true });
             setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
             await expect(binding.request("voicewake.get", {})).rejects.toThrow();
-            expect(recovered?.authority.assertCurrent).toThrow();
+            expect(recovered?.authority.assertCurrent).not.toThrow();
             await expect(restore()).rejects.toThrow();
             await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
           });

@@ -24,7 +24,6 @@ import type {
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
-import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -113,7 +112,6 @@ function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) 
         <Show
           when={section().id.startsWith("catalog:")}
           fallback={
-            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
             <Show
               when={
                 !(section().id === "work" && section().totalRowCount === 0) &&
@@ -268,7 +266,6 @@ export function renderSessionListFrame(
       {renderSessionListError(host())}
       {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
-      <PersonalSessionGroups host={host()} />
       {bodyFirst ? undefined : body}
     </section>
   );

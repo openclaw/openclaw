@@ -187,7 +187,6 @@ export function createHostChannelInboundEventContextBuilder<
                 ...prepared.operatorProfile,
                 recoveryReference: prepared.recoveryReference,
                 getRuntimeConfig: () => gateway.getRuntimeConfig(),
-                signal: prepared.signal,
                 assertCurrent: () => {
                   if (!operatorIsCurrent()) {
                     throw new CommandOwnerRevokedError(

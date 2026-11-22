@@ -44,7 +44,6 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
-import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
@@ -58,6 +57,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
@@ -205,7 +205,8 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
+    // Chat reply: the app or `/login` recovers it, never a terminal command.
+    recoveryHint: "Open Models in the OpenClaw app to sign in again or choose another login.",
   });
 }
 
@@ -241,6 +242,32 @@ export function buildExternalRunFailureReply(
   if (removedCredential) {
     return {
       text: `⚠️ ${removedCredential.userMessage(options?.includeAuthProfileId)}`,
+      isGenericRunnerFailure: false,
+    };
+  }
+  // A typed sign-in failure names its own recovery; chat never shows a terminal command.
+  const providerAuthFailure = readProviderAuthFailure(error);
+  if (providerAuthFailure) {
+    const recovery = buildProviderLoginRecovery({
+      provider: isProviderAuthError(error)
+        ? error.provider
+        : (options?.failoverFacts ?? resolveReplyFailoverFacts(error, normalizedMessage)).provider,
+      providerAuthFailure,
+    });
+    const next = recovery
+      ? recovery.hint
+      : {
+          wait: "Please try again in a few minutes.",
+          admin: "Ask your administrator to allow this account.",
+          other: "Open Models in the OpenClaw app to check the connection.",
+        }[
+          providerAuthFailure.recovery === "wait" || providerAuthFailure.recovery === "admin"
+            ? providerAuthFailure.recovery
+            : "other"
+        ];
+    return {
+      text: `⚠️ ${providerAuthFailure.message} ${next}`,
+      ...(recovery ? { presentation: recovery.presentation } : {}),
       isGenericRunnerFailure: false,
     };
   }
@@ -319,25 +346,20 @@ export function buildExternalRunFailureReply(
     authMode: failoverFacts.authMode,
   });
   if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
-      profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
-    });
-    const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
-    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
-    const retryLoginHint = providerLoginRecovery
-      ? "send `/login` from a private chat or the OpenClaw app to choose a provider, or re-auth"
-      : "re-auth";
-    if (oauthRefreshFailure.reason) {
+    // A reason means the sign-in was refused; without one the refresh may succeed on retry.
+    if (oauthRefreshFailure.reason && providerLoginRecovery) {
       return {
-        text: providerLoginRecovery
-          ? `⚠️ ${providerLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
-          : `⚠️ Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`,
-        ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
+        text: `⚠️ ${providerLoginRecovery.hint}`,
+        presentation: providerLoginRecovery.presentation,
         isGenericRunnerFailure: false,
       };
     }
+    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
+      surface: "chat",
+    });
     return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, send ${formatInlineCodeSpan(loginCommand)} from a private chat or the OpenClaw app.`,
       isGenericRunnerFailure: false,
     };
   }

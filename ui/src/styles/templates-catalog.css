@@ -409,13 +409,15 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .template-package-row small,
 .template-preview header h2,
 .template-preview .settings-row__desc,
+.template-plugin-name,
 .template-creator--detail h2,
 .agents-home__template-identity h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.template-preview .settings-row__desc {
+.template-preview .settings-row__desc,
+.template-plugin-name {
   display: block;
 }
 

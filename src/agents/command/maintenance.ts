@@ -176,7 +176,8 @@ async function runCommandPreflightMaintenance(
     cfg: prepared.cfg,
     followupRun,
     promptForEstimate: prepared.body,
-    defaultModel: modelSelection.defaultModel,
+    // Without a configured model, the selected run model is the session's only model.
+    defaultModel: modelSelection.defaultModel ?? modelSelection.model,
     sessionStore: prepared.sessionStore,
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,

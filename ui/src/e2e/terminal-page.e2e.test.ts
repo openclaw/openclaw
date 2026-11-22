@@ -10,6 +10,58 @@ import { nativeAuth, terminalSession } from "./workspace-terminal.test-support.t
 const suite = createControlUiE2eSuite({ name: "main terminal page" });
 
 suite.define(() => {
+  it("returns to the sessions button on a phone and keeps the desktop picker on resize", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        const current = terminalSession("workspace", {
+          title: "Workspace",
+          cwd: "/workspace/site",
+        });
+        const other = terminalSession("preview", { title: "Preview", cwd: "/workspace/preview" });
+        const gateway = await installMockGateway(page, {
+          terminalEnabled: true,
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+          methodResponses: {
+            "terminal.open": current,
+            "terminal.list": {
+              sessions: [
+                { ...current, attached: true, createdAtMs: 1 },
+                { ...other, attached: false, createdAtMs: 2 },
+              ],
+            },
+            "terminal.attach": { ...other, buffer: "Preview ready.\r\n", seq: 16 },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}terminal`);
+        const terminal = page.locator("openclaw-terminal-page");
+        await gateway.waitForRequest("terminal.open");
+        const sessions = terminal.getByRole("button", { name: "Terminal sessions", exact: true });
+        const picker = terminal.getByRole("region", { name: "Terminal sessions" });
+        const back = picker.getByRole("button", { name: "Back", exact: true });
+        await sessions.click();
+        await picker.getByText("Preview", { exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+        expect(await picker.isVisible()).toBe(false);
+        expect(await sessions.evaluate((el) => el === document.activeElement)).toBe(true);
+        await sessions.click();
+        await back.click();
+        expect(await sessions.evaluate((el) => el === document.activeElement)).toBe(true);
+        await sessions.click();
+        await picker.getByRole("button", { name: /Preview/ }).click();
+        expect((await gateway.waitForRequest("terminal.attach")).params).toMatchObject({
+          sessionId: other.sessionId,
+        });
+        await terminal.getByRole("tab", { name: "Preview", selected: true }).waitFor();
+        expect(await picker.isVisible()).toBe(false);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await sessions.click();
+        await picker.locator("summary").waitFor();
+        expect(await back.count()).toBe(0);
+        expect(await gateway.getRequests("terminal.input")).toHaveLength(0);
+      },
+    );
+  });
   it("keeps the initial connection distinct from terminal unavailability", async () => {
     await suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },

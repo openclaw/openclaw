@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { MemoryHealth } from "../../plugins/memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const SKIPPED_MEMORY_EMBEDDING_PROBE = {
@@ -36,10 +36,10 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
       throw new Error("Memory status authority is no longer active");
     }
   };
-  let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>> = undefined;
+  let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>> = undefined;
   let provider: Awaited<ReturnType<typeof getActiveMemoryProviderCore>>["provider"] = null;
   try {
-    captured = await captureGatewayOperatorRunAuthority({
+    captured = await prepareGatewayOperatorRunAuthority({
       client: params.client,
       context: params.context,
       hasCurrentClientAuthority: params.hasCurrentClientAuthority,

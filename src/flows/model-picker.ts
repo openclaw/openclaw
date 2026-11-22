@@ -5,7 +5,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultAgentDir,
 } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { loadPreparedModelCatalogView } from "../agents/model-catalog-view.js";
 import {
@@ -413,7 +413,6 @@ export async function promptDefaultModel(
   const cfg = params.config;
   const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
   const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg);
-  const allowKeep = params.allowKeep ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
   const browseCatalogOnDemand = params.browseCatalogOnDemand ?? false;
@@ -424,10 +423,11 @@ export async function promptDefaultModel(
   const resolved = resolveConfiguredModelRef({
     cfg: pickerConfig,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: useStaticModelNormalization ? false : undefined,
   });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  // Nothing configured leaves nothing to keep.
+  const allowKeep = (params.allowKeep ?? true) && resolved !== undefined;
+  const resolvedKey = resolved ? modelKey(resolved.provider, resolved.model) : "";
   const configuredKey = configuredRaw ? resolvedKey : "";
   const promptManual = async (allowBlank = allowKeep): Promise<PromptDefaultModelResult> => {
     const modelInput = await params.prompter.text({
@@ -457,8 +457,8 @@ export async function promptDefaultModel(
     return literalPrefixProvidersCache;
   };
   const resolveConfiguredDisplayLabel = async () => {
-    const providerId = normalizeProviderId(resolved.provider);
-    if (!providerId) {
+    const providerId = resolved && normalizeProviderId(resolved.provider);
+    if (!resolved || !providerId) {
       return configuredRaw || resolvedKey;
     }
     const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
@@ -474,7 +474,7 @@ export async function promptDefaultModel(
     loadCatalog &&
     browseCatalogOnDemand &&
     allowKeep &&
-    (!preferredProvider || normalizeProviderId(resolved.provider) === preferredProvider);
+    (!preferredProvider || normalizeProviderId(resolved?.provider ?? "") === preferredProvider);
 
   if (offerCatalogBrowse || !loadCatalog) {
     const configuredLabel = await resolveConfiguredDisplayLabel();
@@ -622,12 +622,14 @@ export async function promptDefaultModel(
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
   // for providers that set preserveLiteralProviderPrefix, so the user sees the
   // same ref they'll pick from the catalog rows. Config itself stays canonical.
-  const configuredLabel = formatModelRefLabel({
-    provider: resolved.provider,
-    model: resolved.model,
-    key: configuredRaw || resolvedKey,
-    literalPrefixProviders,
-  });
+  const configuredLabel = resolved
+    ? formatModelRefLabel({
+        provider: resolved.provider,
+        model: resolved.model,
+        key: configuredRaw || resolvedKey,
+        literalPrefixProviders,
+      })
+    : configuredRaw;
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
@@ -680,7 +682,7 @@ export async function promptDefaultModel(
     allowKeep &&
     firstPreferredModelKey &&
     preferredProvider &&
-    !matchesPreferredProvider?.(resolved.provider)
+    !matchesPreferredProvider?.(resolved?.provider ?? "")
   ) {
     initialValue = firstPreferredModelKey;
   }
@@ -745,27 +747,24 @@ export async function promptModelAllowlist(params: {
   const configuredRaw = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const preferredProvider = normalizeProviderId(params.preferredProvider ?? "") || undefined;
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const resolved = resolveConfiguredModelRef({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const resolvedKey = resolved ? modelKey(resolved.provider, resolved.model) : "";
+  const resolvedProvider = resolved?.provider ?? DEFAULT_PROVIDER;
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
   const fallbackAliasIndex =
-    resolved.provider === DEFAULT_PROVIDER
+    resolvedProvider === DEFAULT_PROVIDER
       ? aliasIndex
       : buildModelAliasIndex({
           cfg,
-          defaultProvider: resolved.provider,
+          defaultProvider: resolvedProvider,
         });
   const fallbackKeys = resolveFallbackModelKeys({
     cfg,
     rawFallbacks: resolveAgentModelFallbackValues(cfg.agents?.defaults?.model),
-    defaultProvider: resolved.provider,
+    defaultProvider: resolvedProvider,
     aliasIndex: fallbackAliasIndex,
   });
   const initialSeeds = normalizeModelKeys([
@@ -1005,12 +1004,9 @@ export function applyModelFallbacksFromSelection(
     return cfg;
   }
 
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const resolved = resolveConfiguredModelRef({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const resolvedKey = resolved ? modelKey(resolved.provider, resolved.model) : "";
+  const resolvedProvider = resolved?.provider ?? DEFAULT_PROVIDER;
   const includesResolvedPrimary = normalized.includes(resolvedKey);
   if (!includesResolvedPrimary && !scopeKeySet && !opts.fallbacksOnly) {
     return cfg;
@@ -1033,12 +1029,12 @@ export function applyModelFallbacksFromSelection(
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
-    defaultProvider: resolved.provider,
+    defaultProvider: resolvedProvider,
   });
   const existingFallbacks = resolveFallbackModelKeys({
     cfg,
     rawFallbacks: resolveAgentModelFallbackValues(existingModel),
-    defaultProvider: resolved.provider,
+    defaultProvider: resolvedProvider,
     aliasIndex,
   });
   const existingFallbackSet = new Set(existingFallbacks);

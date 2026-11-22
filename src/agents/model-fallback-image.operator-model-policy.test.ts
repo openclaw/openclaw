@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
@@ -20,7 +20,7 @@ const cfg: OpenClawConfig = {
 };
 
 function operator(assertCurrent: () => void = () => {}) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "image-reader",
     scopes: ["operator.write"],
     assertCurrent,
@@ -57,7 +57,7 @@ describe("operator model policy on image fallback", () => {
       run.mockResolvedValueOnce("answer");
       const authority = restricted
         ? operator()
-        : createAdmittedRunOperatorAuthority({
+        : createTestOperatorAuthority({
             profileId: "staff-reader",
             scopes: ["operator.write"],
             assertCurrent: () => {},

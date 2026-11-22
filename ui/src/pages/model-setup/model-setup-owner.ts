@@ -664,7 +664,7 @@ export function createModelSetup(
   };
   const synchronizeCurrentGateway = () => {
     synchronizeGateway(routeData());
-    login.synchronizePresentation();
+    login.synchronize();
     notify();
   };
   createEffect(

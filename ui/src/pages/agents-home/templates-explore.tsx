@@ -102,7 +102,7 @@ function TemplateCard(
             class="installed-plugins-card__art plugin-catalog-card__art template-art agents-home__template-art"
             aria-hidden="true"
           >
-            <TemplateArtwork src={props.entry.iconUrl} />
+            <TemplateArtwork src={props.entry.iconUrl} packageName={props.entry.packageName} />
           </span>
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row agents-home__template-identity">

@@ -469,6 +469,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
                 authorization.authorization,
                 assertAdmittedCurrent,
                 assertRequestCurrent,
+                assertAdmittedCurrent,
               );
               if (chatAuthorization) {
                 chatAuthorization = retainForwardedSessionMutationAuthorization(

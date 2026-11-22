@@ -148,10 +148,13 @@ export async function resolveDiscordNativeChoiceContext(params: {
       sessionEntry,
       loadSessionEntry,
       sessionKey: route.sessionKey,
-      defaultProvider: fallback.provider,
+      defaultProvider: fallback?.provider,
     });
-    const provider = override?.provider || fallback.provider;
-    const model = override?.model || fallback.model;
+    const provider = override?.provider || fallback?.provider;
+    const model = override?.model || fallback?.model;
+    if (!provider || !model) {
+      return { agentId: route.agentId };
+    }
     return {
       provider,
       model,
@@ -175,20 +178,23 @@ export async function resolveDiscordModelPickerCurrentModel(params: {
   route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
   sessionEntry: SessionEntry | undefined;
-}): Promise<string> {
-  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+}): Promise<string | undefined> {
+  const resolvedDefault = params.data.resolvedDefault;
+  const fallback = resolvedDefault
+    ? `${resolvedDefault.provider}/${resolvedDefault.model}`
+    : undefined;
   try {
     const loadSessionEntry = createDiscordModelPickerSessionReader(params, "latest");
     const override = await resolveStoredModelOverrideAsync({
       sessionEntry: params.sessionEntry,
       loadSessionEntry,
       sessionKey: params.route.sessionKey,
-      defaultProvider: params.data.resolvedDefault.provider,
+      defaultProvider: resolvedDefault?.provider,
     });
     if (!override?.model) {
       return fallback;
     }
-    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    const provider = (override.provider || resolvedDefault?.provider || "").trim();
     if (!provider) {
       return fallback;
     }
@@ -226,11 +232,11 @@ export async function replyWithDiscordModelPickerProviders(params: {
     scope: resolveDiscordModelPickerPreferenceScope(params),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
   });
-  const parsedCurrentRef = splitDiscordModelRef(currentModel);
+  const parsedCurrentRef = currentModel ? splitDiscordModelRef(currentModel) : null;
   const initialProvider =
     parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
       ? parsedCurrentRef.provider
-      : (data.providers[0] ?? data.resolvedDefault.provider);
+      : (data.providers[0] ?? data.resolvedDefault?.provider ?? "");
   const initialResolved =
     parsedCurrentRef && parsedCurrentRef.provider === initialProvider
       ? resolveDiscordModelPickerPageForModel({
