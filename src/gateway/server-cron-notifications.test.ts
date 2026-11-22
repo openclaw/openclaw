@@ -616,19 +616,12 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     vi.useFakeTimers();
     const senderEntered = createVoidDeferred();
     mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
-      ({
-        onTransportDispatched,
-        onDeliveryAttempt,
-      }: {
-        onTransportDispatched?: () => void;
-        onDeliveryAttempt?: (reachedRecipient: boolean) => void;
-      }) =>
+      ({ onTransportDispatched }: { onTransportDispatched?: () => void }) =>
         new Promise<void>(() => {
-          // The adapter dispatched and its result is pending, but the ack never
-          // reached the callback: the provider may still complete the send, so
-          // non-delivery is unproven.
+          // The adapter dispatched and its result is pending, but no recipient
+          // evidence and no complete ack exist yet: only the dispatch observer may
+          // make the deadline unknown, so this regression fails without it.
           onTransportDispatched?.();
-          onDeliveryAttempt?.(true);
           senderEntered.resolve();
         }),
     );
