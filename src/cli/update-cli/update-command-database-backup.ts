@@ -360,6 +360,7 @@ export async function restoreFailedUpdateDatabases(params: {
     const pair = params.backup.pluginCohortRecovery
       ? undefined
       : loadPluginCohortRecovery(params.runId, { env: params.env });
+    const journalReconciliationFailures: string[] = [];
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
       pluginCohortRecovery:
@@ -368,6 +369,9 @@ export async function restoreFailedUpdateDatabases(params: {
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
       onLiveMutation: () => {
         liveMutationStarted = true;
+      },
+      onJournalReconciliationFailures: (failures) => {
+        journalReconciliationFailures.push(...failures);
       },
     });
     if (migratedPaths === null) {
@@ -386,6 +390,10 @@ export async function restoreFailedUpdateDatabases(params: {
         `Restored pre-migration databases from ${params.backup.directory}.`,
         ...migratedPaths.map(
           (file) => `Migrated database file retained for manual recovery: ${file}`,
+        ),
+        ...journalReconciliationFailures.map(
+          (failure) =>
+            `Journal policy re-establishment failed (recoverable; while no process holds the files run PRAGMA journal_mode=WAL): ${failure}`,
         ),
       ],
     };
