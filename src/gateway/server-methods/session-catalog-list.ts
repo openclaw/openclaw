@@ -164,7 +164,9 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                   {
                     ...host,
                     ...(host.profileRelation ? { profileRelation: request.profileRelation } : {}),
-                    ...(relationError && catalog.capabilities.profileRelation
+                    ...(relationError &&
+                    catalog.capabilities.profileRelation &&
+                    (!host.error || host.error.code === "FILTER_PARTIAL")
                       ? {
                           error: {
                             code: "FILTER_PARTIAL",

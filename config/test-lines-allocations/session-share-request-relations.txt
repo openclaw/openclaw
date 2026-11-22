@@ -2,4 +2,4 @@
 # source relation and cursor boundaries, slow cached pages, partial-row retention,
 # older-Gateway capability checks, and both browser navigation/links fixtures.
 # Exact measured net test-line growth minus the standard 400-line allowance.
-737
+757

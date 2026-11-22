@@ -97,3 +97,23 @@ it("keeps local catalogs available when a shared relationship cannot resolve", a
   expect(sharedList).toHaveBeenCalledOnce();
   expect(sharedList.mock.calls[0]?.[0]).not.toHaveProperty("profileRelation");
 });
+
+it.each(["NODE_OFFLINE", "NODE_INVOKE_FAILED", "CATALOG_LOADING"])(
+  "does not mask %s with an unresolved relationship warning",
+  async (code) => {
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: catalogProvider("shared", {
+          supportsProfileRelation: true,
+          list: async () => [catalogHost({ error: { code, message: "Source unavailable" } })],
+        }),
+      },
+    ];
+    expectCatalog(
+      await call("sessions.catalog.list", {
+        profileRelation: { relationship: "involving", target: { type: "me" } },
+      }),
+      { hosts: [expect.objectContaining({ error: { code, message: "Source unavailable" } })] },
+    );
+  },
+);
