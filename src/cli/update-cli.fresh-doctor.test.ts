@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
 import {
