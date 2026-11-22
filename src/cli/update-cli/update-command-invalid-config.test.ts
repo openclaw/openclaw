@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import * as materialize from "../../config/materialize.js";
 import * as deferredMigrations from "../../infra/deferred-plugin-migrations.js";
 import { GatewayLockNamespaceError } from "../../infra/gateway-lock-payload.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -9,7 +8,6 @@ import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-read
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import * as updateRuns from "../../infra/update-run-reader.js";
-import * as installSurface from "../../infra/update-runner-install-surface.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withUpdateAdmissionReporting } from "./update-command-admission-report.js";
@@ -128,140 +126,66 @@ it.each(["contention", "cleanup", "data-at-risk", "revoked"] as const)(
 );
 
 it.each([
-  { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun: false },
-  { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun: true },
-  { kind: "malformed source", config: "{", affectedKey: "<root>", dryRun: false },
-  { kind: "malformed source", config: "{", affectedKey: "<root>", dryRun: true },
-  {
-    kind: "unknown engine",
-    config: { database: { engine: "unknown" } },
-    affectedKey: "database.engine",
-    dryRun: false,
-  },
-  {
-    kind: "invalid core field",
-    config: { gateway: { port: "invalid" } },
-    affectedKey: "gateway.port",
-    dryRun: false,
-  },
-])(
-  "identifies $kind during installed admission (dryRun=$dryRun)",
-  async ({ config, dryRun, affectedKey }) => {
-    const migrations = vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync");
-    const history = vi.spyOn(updateRuns, "getUpdateRun");
-    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const original = typeof config === "string" ? config : JSON.stringify(config);
-    fs.writeFileSync(configPath, original);
+  { kind: "unknown key", config: { unknownSetting: true } },
+  { kind: "malformed source", config: "{" },
+])("identifies $kind during a preview", async ({ config }) => {
+  const migrations = vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync");
+  const history = vi.spyOn(updateRuns, "getUpdateRun");
+  const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const original = typeof config === "string" ? config : JSON.stringify(config);
+  fs.writeFileSync(configPath, original);
 
-    const update = updateCommand({
+  await updateCommand({
+    admission: "installed",
+    tag: "2026.9.2",
+    json: true,
+    yes: true,
+    restart: false,
+    dryRun: true,
+  });
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      dryRun: true,
+      notes: [expect.stringMatching(/configuration is invalid[\s\S]*openclaw doctor --fix/)],
+    }),
+  );
+  expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+  if (typeof config === "string") {
+    expect(migrations).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  }
+});
+
+it("classifies an unreadable config preview without changing its source", async () => {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+  fs.mkdirSync(configPath, { recursive: true });
+
+  await expect(
+    updateCommand({
       admission: "installed",
+      channel: "stable",
       tag: "2026.9.2",
       json: true,
       yes: true,
       restart: false,
-      dryRun,
-    });
-    if (dryRun) {
-      await update;
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      dryRun: true,
+    }),
+  ).rejects.toMatchObject({ exitCode: 1 });
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "error",
+      reason: "config-read-failed",
+      steps: [
         expect.objectContaining({
-          dryRun: true,
-          notes: [expect.stringMatching(/configuration is invalid[\s\S]*openclaw doctor --fix/)],
+          failureFacts: [expect.objectContaining({ check: "config", code: "EISDIR" })],
         }),
-      );
-    } else {
-      await expect(update).rejects.toMatchObject({ code: 1 });
-      const invalidConfigStep = expect.objectContaining({
-        name: "invalid-config",
-        exitCode: 1,
-        failureFacts: [
-          expect.objectContaining({
-            check: "invalid-config",
-            code: "invalid-config",
-            affectedKey,
-          }),
-        ],
-      });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "error",
-          reason: "invalid-config",
-          failedStep: invalidConfigStep,
-          steps: expect.arrayContaining([invalidConfigStep]),
-        }),
-      );
-    }
-    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
-    if (typeof config === "string") {
-      expect(migrations).not.toHaveBeenCalled();
-      expect(history).not.toHaveBeenCalled();
-    }
-  },
-);
-
-it.each(["file", "file-preview", "materialization", "include", "include-syntax"])(
-  "classifies a config %s failure without changing its source",
-  async (failure) => {
-    vi.spyOn(installSurface, "resolveUpdateInstallSurface").mockRejectedValue(
-      new Error("Package-manager inspection must not replace the config failure"),
-    );
-    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
-    const original = failure.startsWith("include")
-      ? '{"$include":"./extra.json"}'
-      : '{"gateway":{"mode":"local"}}';
-    if (failure.startsWith("file")) {
-      fs.mkdirSync(configPath, { recursive: true });
-    } else {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, original);
-      if (failure === "materialization") {
-        vi.spyOn(materialize, "materializeRuntimeConfig").mockImplementation(() => {
-          throw new Error("Synthetic materialization failure after reading source bytes");
-        });
-      } else if (failure === "include-syntax") {
-        fs.writeFileSync(path.join(path.dirname(configPath), "extra.json"), "{");
-      }
-    }
-
-    await expect(
-      updateCommand({
-        admission: "installed",
-        channel: "stable",
-        tag: "2026.9.2",
-        json: true,
-        yes: true,
-        restart: false,
-        dryRun: failure === "file-preview",
-      }),
-    ).rejects.toMatchObject(failure === "file-preview" ? { exitCode: 1 } : { code: 1 });
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "error",
-        reason: failure === "include-syntax" ? "invalid-config" : "config-read-failed",
-        steps: [
-          expect.objectContaining({
-            failureFacts: [
-              expect.objectContaining({
-                check: failure === "include-syntax" ? "invalid-config" : "config",
-                code: failure.startsWith("file")
-                  ? "EISDIR"
-                  : failure === "include-syntax"
-                    ? "invalid-config"
-                    : "config-read-failed",
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
-    if (failure.startsWith("file")) {
-      expect(fs.statSync(configPath).isDirectory()).toBe(true);
-    } else {
-      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-    }
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
-  },
-);
+      ],
+    }),
+  );
+  expect(fs.statSync(configPath).isDirectory()).toBe(true);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+});

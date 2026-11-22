@@ -15,7 +15,8 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -54,11 +55,17 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
       profileName: `completion-pair-${id}-${index}`,
       scopes: ["operator.write"],
     });
+    client.internal = { authenticatedOperator: true };
+    client.authPolicy = captureGatewayAuthPolicy(context.getRuntimeConfig(), {
+      role: "operator",
+      authMethod: "token",
+    });
     const source = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: {
+          gatewayAccessGrant: null,
           signal: revoked.signal,
           assertCurrent: () => revoked.signal.throwIfAborted(),
         },

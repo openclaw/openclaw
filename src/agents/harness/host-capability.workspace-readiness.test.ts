@@ -70,6 +70,31 @@ beforeEach(() => {
 
 describe("agent harness workspace readiness and boundaries", () => {
   it.each(["host", "admission"] as const)(
+    "retires local scratch preparation with its %s owner",
+    async (owner) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-exec-scratch-"));
+      const { attempt, admission } = await admittedAttempt("local-scratch");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      try {
+        const retained = host.capabilities.prepareLocalExecScratch;
+        const env = await retained?.({ cwd: root });
+        const scratch = path.join(fs.realpathSync(root), ".openclaw/tmp");
+        expect(env).toEqual({ TMPDIR: scratch, TMP: scratch, TEMP: scratch });
+        expect(fs.statSync(scratch).isDirectory()).toBe(true);
+        if (owner === "host") {
+          host.close();
+        } else {
+          admission.close();
+        }
+        expect(() => retained?.({ cwd: root })).toThrow();
+      } finally {
+        host.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["host", "admission"] as const)(
     "retires continuation retry preparation with its %s owner",
     async (owner) => {
       const prepare = vi.fn();

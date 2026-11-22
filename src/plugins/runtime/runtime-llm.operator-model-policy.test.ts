@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as modelsConfigState from "../../agents/models-config-state.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type * as CompletionRuntime from "../../agents/simple-completion-runtime.js";
@@ -60,6 +58,7 @@ const cfg: OpenClawConfig = {
 };
 const selection = { provider: "test-provider", modelId: "allowed", agentDir: "/tmp/model-policy" };
 const operatorSource = {
+  canonicalIdentity: null,
   profileId: "model-reader",
   scopes: ["operator.write"],
   assertCurrent() {},
@@ -121,7 +120,7 @@ function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     ...operatorSource,
     assertCurrent,
     retain,
@@ -540,21 +539,16 @@ describe("operator model policy on plugin completions", () => {
   );
 
   it.each(["restricted", "unrestricted"] as const)(
-    "aborts only a removed in-flight model from an initially %s source",
+    "preserves admitted models and siblings from an initially %s source while denying the next start",
     async (initial) => {
       let policy =
         initial === "restricted"
           ? preparePolicy(["test-provider/model-a", "test-provider/model-b"])
           : undefined;
-      const observers = new Set<() => void>();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         get modelPolicy() {
           return policy;
-        },
-        onModelPolicyChanged: (listener) => {
-          observers.add(listener);
-          return () => observers.delete(listener);
         },
       });
       const firstStarted = createDeferredCore();
@@ -590,22 +584,27 @@ describe("operator model policy on plugin completions", () => {
       });
       const work = new AsyncWorkScope();
       const llm = completion();
-      const run = (model: string) =>
-        work.track(() =>
-          asOperator(authority, () => llm.complete({ ...request("direct"), model })),
-        );
+      const run = (model: string, source = authority) =>
+        work.track(() => asOperator(source, () => llm.complete({ ...request("direct"), model })));
       const first = run("model-a");
       // Vitest's manual mock loader shares import callstacks; overlap provider work after import.
       const second = waitForWork(firstStarted.promise, first).then(() => run("model-b"));
       try {
         await waitForWork(started.promise, Promise.all([first, second]));
         policy = preparePolicy(["test-provider/model-b"]);
-        observers.forEach((listener) => listener());
-        expect(signals.get("model-a")?.aborted).toBe(true);
+        expect(signals.get("model-a")?.aborted).toBe(false);
         expect(signals.get("model-b")?.aborted).toBe(false);
         expect(() => authority.assertCurrent()).not.toThrow();
+        const nextAuthority = createTestOperatorAuthority({
+          ...operatorSource,
+          modelPolicy: policy,
+        });
+        await expectDenied(
+          run("model-a", nextAuthority),
+          expect.stringContaining("cannot use this model"),
+        );
         finishA.resolve();
-        await expectDenied(first, expect.stringContaining("cannot use this model"));
+        await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
         finishB.resolve();
         await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
       } finally {
@@ -614,7 +613,6 @@ describe("operator model policy on plugin completions", () => {
         await Promise.allSettled([first, second]);
         await work.drain();
       }
-      expect(observers.size).toBe(0);
     },
   );
   it.each([
@@ -737,7 +735,7 @@ describe("operator model policy on plugin completions", () => {
       const controller = new AbortController();
       const revocation = new Error("source revoked");
       const started = createDeferredCore();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         ...operatorSource,
         signal: controller.signal,
       });

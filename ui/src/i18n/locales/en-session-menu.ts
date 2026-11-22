@@ -6,8 +6,6 @@ const sharedSessions = registerSessionOrganizationSharedEnglish.catalog.sessions
 
 const catalog = {
   sessionsView: {
-    personalGroupAdd: sharedSessions.personalGroupAdd,
-    personalGroupNew: sharedSessions.personalGroupNew,
     advanced: "Advanced",
     searchGroups: "Search groups",
     noGroupsMatch: "No groups match your search.",
@@ -97,6 +95,8 @@ const catalog = {
     openNewWindow: "New window",
     openPullRequest: "Open PR",
     stopWorker: sharedSessions.stopWorker,
+    stopWorkerConfirm: sharedSessions.stopWorkerConfirm,
+    stopWorkerDescription: sharedSessions.stopWorkerDescription,
     stopWorkerConfirmAction: sharedSessions.stopWorkerConfirmAction,
     stopCloudWorker: sharedSessions.stopCloudWorker,
     stopCloudWorkerDescription: sharedSessions.stopCloudWorkerDescription,
@@ -131,6 +131,7 @@ const catalog = {
     groupMenu: en.sessionsView.groupMenu,
     groupDefaultsMenu: "New session defaults",
     renameGroupMenu: "Rename group",
+    archiveGroupMenu: "Archive all",
     deleteGroupMenu: "Delete group",
   },
 } satisfies TranslationMap;

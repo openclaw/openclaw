@@ -10,12 +10,10 @@ import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.
 import {
   providerRequiresSignedThinking,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveTurns,
-  validateAnthropicTurns,
-  validateGeminiTurns,
+  validateReplayTurnsForPolicy,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { annotateInterSessionUserMessages } from "../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../replay-provenance.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -99,7 +97,7 @@ export async function sanitizeSessionHistory(
 ): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy = resolveReplayPolicy(params);
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const withCrossSessionMarkers = annotateCrossSessionMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
@@ -130,7 +128,7 @@ export async function sanitizeSessionHistory(
     : snapshotState.latestSwitchTimestamp;
   let messages = await sanitizeGenericReplayHistory(
     {
-      messages: withInterSessionMarkers,
+      messages: withCrossSessionMarkers,
       allowedToolNames: params.allowedToolNames,
       policy,
       imageLimits: resolveImageSanitizationLimits(params.config),
@@ -223,11 +221,5 @@ export async function validateReplayTurns(
     messages = context.messages;
   }
 
-  const validatedGemini = policy.validateGeminiTurns ? validateGeminiTurns(messages) : messages;
-  return policy.validateAnthropicTurns
-    ? validateAnthropicTurns(validatedGemini, {
-        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),
-        mergeConsecutiveUserTurns: !params.preserveUserTurns,
-      })
-    : validatedGemini;
+  return validateReplayTurnsForPolicy(messages, policy, params.modelApi, params.preserveUserTurns);
 }

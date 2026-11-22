@@ -24,21 +24,19 @@ describe("OpenAI setup auth provider", () => {
       ).toString("base64url")}.signature`,
     });
     const credential = credentialFor("alice");
-    for (const methodId of ["oauth", "device-code"]) {
-      const method = buildOpenAISetupProvider().auth.find((entry) => entry.id === methodId);
-      expect(method?.matchesPersonalAccount).toBeTypeOf("function");
-      expect(method?.matchesPersonalAccount?.(credential, credentialFor("alice"))).toBe(true);
-      expect(method?.matchesPersonalAccount?.(credential, credentialFor("bob"))).toBe(false);
-    }
+    const method = buildOpenAISetupProvider().auth.find((entry) => entry.id === "oauth");
+    expect(method?.matchesPersonalAccount).toBeTypeOf("function");
+    expect(method?.matchesPersonalAccount?.(credential, credentialFor("alice"))).toBe(true);
+    expect(method?.matchesPersonalAccount?.(credential, credentialFor("bob"))).toBe(false);
   });
-  it("offers Codex browser login as the default OpenAI auth path while keeping API key explicit", () => {
+  it("offers Codex login as the default OpenAI auth path while keeping API key explicit", () => {
     const provider = buildOpenAISetupProvider();
     const oauth = provider.auth.find((method) => method.id === "oauth");
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
     expect(provider.id).toBe("openai");
-    expect(authMethodIds(provider)).toEqual(["oauth", "device-code", "siwc", "api-key"]);
-    expect(oauth?.label).toBe("Codex login (browser)");
+    expect(authMethodIds(provider)).toEqual(["oauth", "siwc", "api-key"]);
+    expect(oauth?.label).toBe("Codex login");
     expect(oauth?.wizard?.choiceId).toBe("openai");
     expect(apiKey?.label).toBe("OpenAI API Key");
     expect(apiKey?.wizard?.choiceId).toBe("openai-api-key");

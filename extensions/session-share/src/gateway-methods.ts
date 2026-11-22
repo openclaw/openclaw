@@ -2,7 +2,7 @@ import { prepareGatewayPublicationReaderV1 } from "openclaw/plugin-sdk/gateway-r
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   sessionShareGatewayDeviceIds,
-  sessionShareGatewayEnabled,
+  sessionShareGatewaySourceEnabled,
   sessionShareSelection,
 } from "./config.js";
 import {
@@ -23,8 +23,9 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
       async (request: Request) => {
         try {
           const reader = await prepareGatewayPublicationReaderV1(request);
-          const configAtStart = api.runtime.config.current();
-          const selectionAtStart = JSON.stringify(sessionShareSelection(configAtStart));
+          const selectionAtStart = JSON.stringify(
+            sessionShareSelection(api.runtime.config.current()),
+          );
           const assertCurrent = () => {
             request.signal?.throwIfAborted();
             request.client?.connectionSignal?.throwIfAborted();
@@ -33,10 +34,9 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
             const config = api.runtime.config.current();
             const selection = sessionShareSelection(config);
             if (
-              config !== configAtStart ||
               JSON.stringify(selection) !== selectionAtStart ||
               !sessionShareGatewayDeviceIds(config).includes(reader.deviceId) ||
-              !sessionShareGatewayEnabled(config) ||
+              !sessionShareGatewaySourceEnabled(config) ||
               !selection?.involvingProfileId
             ) {
               throw new Error("Session Share source access is unavailable");

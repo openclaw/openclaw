@@ -23,7 +23,7 @@ import {
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
-  CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  CLI_LIVE_SESSION_REFUSAL_TEXT,
   MODEL_CHAT_REJECTED_CODE,
   MODEL_CHAT_REJECTED_TEXT,
   MODEL_CHAT_UNSUPPORTED_TEXT,
@@ -62,9 +62,7 @@ export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
           ? RATE_LIMIT_ERROR_USER_MESSAGE
           : code === "refresh_contention"
             ? OAUTH_REFRESH_CONTENTION_USER_TEXT
-            : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
-              ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
-              : undefined;
+            : CLI_LIVE_SESSION_REFUSAL_TEXT.get(code);
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =

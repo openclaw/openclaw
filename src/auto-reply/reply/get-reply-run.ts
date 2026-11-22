@@ -28,6 +28,10 @@ import {
 export async function runPreparedReply(
   inputParams: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  if (inputParams.opts?.scheduledAutomation?.beforeModelRun?.(inputParams.provider) === false) {
+    inputParams.typing.cleanup();
+    return undefined;
+  }
   return withPluginRetentionOwner(
     { agentId: inputParams.agentId, sessionKey: inputParams.sessionKey },
     () => runPreparedReplyWithOwner(inputParams),

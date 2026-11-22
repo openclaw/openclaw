@@ -341,10 +341,11 @@ describe("requester settle dispatch deadline", () => {
       throw error;
     });
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
-    // The committed input is delivered once; the interrupted turn shows its own error.
+    // Consumption prevents replay; retained settlement owns the visible fallback.
     await expect(run()).resolves.toBe(true);
     expect(completeBatch).toHaveBeenCalledOnce();
-    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+    expect(completeBatch.mock.calls[0]?.[2]).toEqual(await deliver.mock.results[0]?.value);
+    expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
     expect(child.requesterSettleWake).toBeUndefined();
     await expect(run()).resolves.toBe(false);
     expect(startTurn).toHaveBeenCalledOnce();
@@ -762,6 +763,7 @@ describe("requester settle dispatch deadline", () => {
 
   it.each([
     ["removed", "managed worktree was removed: /synthetic/requester", true],
+    ["removed session", "This session's worktree was removed by cleanup or deletion.", true],
     ["removing", "managed worktree removal is in progress: /synthetic/requester", false],
   ] as const)(
     "settles a worktree refusal only when permanent: %s",
@@ -997,7 +999,8 @@ describe("requester settle dispatch deadline", () => {
         } else {
           expect(acceptedSignal?.aborted).toBe(true);
           expect(completeBatch).toHaveBeenCalledOnce();
-          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+          expect(completeBatch.mock.calls[0]?.[2]).toEqual(await deliver.mock.results[0]?.value);
+          expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: false });
         }
         const later = vi.fn();
         let laterClaim: ReturnType<typeof getCurrentSessionControllerClaim>;

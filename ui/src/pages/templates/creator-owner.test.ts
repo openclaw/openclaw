@@ -123,11 +123,11 @@ it("keeps a pending review quiet without starting it before config is known", as
   expect(f.request).not.toHaveBeenCalled();
 });
 
-it.each(["Labs", "role"])(
+it.each(["configuration", "role"])(
   "explains a chat review blocked by %s without touching its draft",
   async (reason) => {
     const f = await fixture();
-    if (reason === "Labs") {
+    if (reason === "configuration") {
       Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
         sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
       });
@@ -143,12 +143,11 @@ it.each(["Labs", "role"])(
     expect(f.owner.loading).toBe(false);
     expect(f.request).not.toHaveBeenCalled();
     const notice = toast.mock.calls[0]?.[0];
-    expect(notice?.message).toContain(reason === "Labs" ? "Settings → Labs" : "administrator");
+    expect(notice?.message).toContain(
+      reason === "configuration" ? "Gateway configuration" : "administrator",
+    );
     expect(notice?.message).toContain("private draft");
-    if (reason === "Labs") {
-      notice!.onAction!();
-      expect(f.context.navigate).toHaveBeenCalledWith("labs");
-    }
+    expect(notice?.onAction).toBeUndefined();
   },
 );
 
@@ -355,4 +354,34 @@ it("shows a rejected import and retries the latest connection's clicked target",
   action!.onAction!();
   await vi.waitFor(() => expect(f.context.navigate).toHaveBeenCalledOnce());
   expect(f.request).toHaveBeenCalledWith("templates.drafts.create", { agentId: "reviewer" });
+});
+
+it("retries a failed share as the same request, and only on its original connection", async () => {
+  const f = await fixture();
+  f.request.mockRejectedValueOnce(new Error("gateway busy"));
+  const { shareAgentAsTemplate } = await import("./creator-owner.ts");
+  await shareAgentAsTemplate(f.context, "research");
+  expect(f.context.navigate).not.toHaveBeenCalled();
+  expect(toast).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ severity: "error", message: "gateway busy" }),
+  );
+  const retry = toast.mock.calls[0]?.[0].onAction;
+  retry?.();
+  await vi.waitFor(() => expect(f.context.navigate).toHaveBeenCalledOnce());
+  const send = [
+    "chat.send",
+    expect.objectContaining({
+      sessionKey: "agent:research:main",
+      message: "Create a shareable template of yourself",
+      idempotencyKey: expect.any(String),
+    }),
+  ];
+  expect(f.request.mock.calls).toEqual([send, send]);
+  expect(f.request.mock.calls[1]).toEqual(f.request.mock.calls[0]);
+
+  f.connect();
+  retry?.();
+  await Promise.resolve();
+  expect(f.request).toHaveBeenCalledTimes(2);
+  expect(f.context.navigate).toHaveBeenCalledOnce();
 });
