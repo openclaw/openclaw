@@ -208,3 +208,28 @@ it("persists verified router facts and refreshes unknown fields without replacin
     },
   );
 });
+
+it("discovers the total parameter count from a recorded /v1/models response", async () => {
+  await withDiscovery(
+    ({ url }) =>
+      url?.endsWith("/models")
+        ? {
+            object: "list",
+            data: [
+              {
+                id: "qwen3-8b-q8_0",
+                object: "model",
+                owned_by: "llamacpp",
+                meta: { n_ctx_train: 40960, n_params: 8190735360, size: 8703561728 },
+              },
+            ],
+          }
+        : {},
+    async (baseUrl) => {
+      await expect(discoverLlamaServer({ baseUrl: `${baseUrl}/v1` })).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "qwen3-8b-q8_0", parameterCount: 8_190_735_360 } }],
+      });
+    },
+  );
+});

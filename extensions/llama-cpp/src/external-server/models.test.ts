@@ -88,3 +88,71 @@ it("keeps explicit model rows ahead of discovered rows", () => {
   expect(provider.models[0]).toMatchObject(explicit);
   expect(provider.models[1]?.id).toBe("other");
 });
+
+// One data[] row recorded from a llama-server /v1/models response (Qwen3-8B Q8_0).
+const recordedQwen8bRow = {
+  id: "qwen3-8b-q8_0",
+  aliases: ["qwen3-8b-q8_0"],
+  tags: [],
+  object: "model",
+  architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+  created: 1795369134,
+  owned_by: "llamacpp",
+  meta: {
+    vocab_type: 2,
+    n_vocab: 151936,
+    n_ctx: 32768,
+    n_ctx_train: 40960,
+    n_embd: 4096,
+    n_params: 8190735360,
+    size: 8703561728,
+    ftype: "Q8_0",
+  },
+};
+
+it("takes the total parameter count from the llama-server model metadata", () => {
+  expect(mapLlamaServerModel(recordedQwen8bRow)?.config.parameterCount).toBe(8_190_735_360);
+});
+
+it.each([0, -5, 1.5, "8190735360", null, Number.MAX_SAFE_INTEGER + 2])(
+  "ignores the unusable n_params value %s",
+  (nParams) => {
+    const mapped = mapLlamaServerModel({ ...recordedQwen8bRow, meta: { n_params: nParams } });
+    expect(mapped?.config).not.toHaveProperty("parameterCount");
+  },
+);
+
+it("leaves parameterCount unset when the row has no metadata", () => {
+  expect(mapLlamaServerModel(row("model"))?.config).not.toHaveProperty("parameterCount");
+});
+
+it("passes the discovered count to a configured row on the same route only", () => {
+  const discovered = mapLlamaServerModel(recordedQwen8bRow);
+  if (!discovered) {
+    throw new Error("expected the recorded row to map");
+  }
+  const configured = {
+    id: "qwen3-8b-q8_0",
+    name: "Qwen3 8B",
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768,
+    maxTokens: 2048,
+  };
+
+  const sameRoute = buildLlamaServerProviderConfig({
+    configured: { baseUrl: "http://localhost:8080/v1", models: [configured] },
+    discoveredModels: [discovered],
+  });
+  const otherRoute = buildLlamaServerProviderConfig({
+    configured: {
+      baseUrl: "http://localhost:8080/v1",
+      models: [{ ...configured, baseUrl: "http://localhost:9090/v1" }],
+    },
+    discoveredModels: [discovered],
+  });
+
+  expect(sameRoute.models[0]?.parameterCount).toBe(8_190_735_360);
+  expect(otherRoute.models[0]).not.toHaveProperty("parameterCount");
+});

@@ -72,8 +72,10 @@ requests; cleanup failures still stop preparation and report the error.
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
-replying. Setup does not enable lean mode. Normal chats still
-include your agent's instructions. On CPU-only hosts, the first reply can take
+replying. Setup does not enable lean mode. Select
+`agents.defaults.agentProfileId: "openclaw/small"` when you want bounded
+workspace context and a smaller capability set. Normal chats still include your
+agent's instructions. On CPU-only hosts, the first reply can take
 several minutes even after setup verification succeeds.
 
 ### Model recommendations
