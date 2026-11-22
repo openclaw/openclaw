@@ -191,6 +191,7 @@ function makeStarterParams(params?: { entry?: unknown; sessionKey?: string; stor
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
+      resolvedSessionModel: { provider: "openai", model: "test-model" },
       sessionKey,
       storePath: params?.storePath ?? "",
     },

@@ -6,8 +6,8 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -57,6 +57,7 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
@@ -422,11 +423,7 @@ async function resolveReplyFromConfig(
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
           ...workspaceContext,
-          activeModel: {
-            provider,
-            model,
-            api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
-          },
+          activeModel: resolveActiveMediaModel(provider, model, preparedModelCatalog?.entries),
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
@@ -808,6 +805,10 @@ async function resolveReplyFromConfig(
     const queueModeOverride = inlineActionResult.queueModeOverride;
     const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
     abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+    // Commands and directives ran above without a model; an agent turn is the first step that needs one.
+    if (!model) {
+      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
+    }
     const runAutoFallbackPrimaryProbe =
       directives.hasModelDirective ||
       (autoFallbackPrimaryProbe &&
@@ -851,7 +852,7 @@ async function resolveReplyFromConfig(
         }
         throw error;
       }
-      if (runModelState.operatorModelOverride) {
+      if (runModelState.operatorModelOverride && runModelState.model) {
         runProvider = runModelState.provider;
         runModel = runModelState.model;
       }
@@ -955,7 +956,8 @@ async function resolveReplyFromConfig(
           : requestedRouteResolution,
         typing,
         opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
-        defaultModel,
+        // The runner falls back to this model id; without a configured model the run's own applies.
+        defaultModel: defaultModel ?? runModel,
         timeoutMs,
         isNewSession,
         resetTriggered,

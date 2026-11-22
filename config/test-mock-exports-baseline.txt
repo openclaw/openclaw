@@ -3981,7 +3981,6 @@
 ["src/cron/isolated-agent.mocks.ts","../agents/subagents/announce/subagent-announce.js","0242a2b6dff9cb194e33d35f7dbc732b8eb2ddda1ca572683f763d1b55f19e43",1]
 ["src/cron/isolated-agent.mocks.ts","../browser-lifecycle-cleanup.js","a15f6b686117caa464a53ef59fb9b0055b2c9f3ae40ed4c2bc6a0070c8fe360a",1]
 ["src/cron/isolated-agent.mocks.ts","../gateway/call.js","cd5bf9fda710a7159c583df8249b4658a5a31bd68929a055ac06f721a10d2b93",1]
-["src/cron/isolated-agent.model-formatting.test.ts","./isolated-agent/run-model-selection.runtime.js","97aa93a59a7be67b7954c22c943b2238da226b436be95c8d75bdb7bc5f338460",1]
 ["src/cron/isolated-agent/channel-output-policy.test.ts","../../channels/plugins/index.js","47fb35be28de110430978dcb512a0b30c33930917870ebc8a827835ae8c2d947",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../agents/agent-bundle-mcp-tools.js","86f7c2f2cb90c3611e934302a75e8fc96fc04e0cb053cb741d627d214a0d4264",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","../../agents/subagents/registry/subagent-registry-read.js","d42f393f218a4be4f1e2c1110a257cb1fc4e5469087b0e7ad42a0af98e793204",1]
