@@ -256,35 +256,20 @@ describe("followup retained session authorization", () => {
     }
   });
 
-  it.each(["access", "archive"] as const)(
-    "latches %s revocation after the row recovers",
-    async (change) => {
-      const changedKey = change === "access" ? "legacy-worker-alias" : input.targetSessionKey;
-      const preparedTarget = target().target!;
-      preparedTarget.storeKeys.push(changedKey);
-      const request = await prepare();
-      const assertRevoked = () =>
-        expect(() => request.custody.assertCurrent()).toThrow(
-          change === "access" ? "revoked" : "archived",
-        );
-      expect(() => request.custody.assertCurrent()).not.toThrow();
-      if (change === "access") {
-        target().membership = new Set();
-      } else {
-        preparedTarget.entry.archivedAt = 2;
-      }
-      sessionChanges.emit({ sessionKey: changedKey });
-      expect(request.custody.signal.aborted).toBe(true);
-      assertRevoked();
-      if (change === "access") {
-        target().membership = new Set(["requester"]);
-      } else {
-        delete preparedTarget.entry.archivedAt;
-      }
-      sessionChanges.emit({ sessionKey: changedKey });
-      assertRevoked();
-    },
-  );
+  it("retains admitted access after membership changes", async () => {
+    const request = await prepare();
+    target().membership = new Set();
+    sessionChanges.emit({ sessionKey: input.targetSessionKey });
+    expect(request.custody.signal.aborted).toBe(false);
+    expect(() => request.custody.assertCurrent()).not.toThrow();
+  });
+
+  it("refuses delivery to an archived conversation", async () => {
+    const request = await prepare();
+    target().target!.entry.archivedAt = 2;
+    sessionChanges.emit({ sessionKey: input.targetSessionKey });
+    expect(() => request.custody.assertCurrent()).toThrow("Followup conversation changed.");
+  });
   it("refuses missing captured authority rather than selecting a System caller", async () => {
     mocks.capture.mockReturnValue(undefined);
     await expect(prepareSessionsSendFollowup(input)).rejects.toThrow("in-process caller custody");

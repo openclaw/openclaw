@@ -1,5 +1,6 @@
 /** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
+import { slackFields } from "./scribe-slack-fields.js";
 import {
   CONVERSATIONS_SCHEDULE,
   defaultOptions,
@@ -64,7 +65,8 @@ const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) =>
 
 /**
  * Button that opens the plugin's page under Plugins, where it is installed, turned on and signed
- * in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads again.
+ * in to; a channel plugin connects its account on its own page (Channels for Slack). It leaves the
+ * Knowledge page; the Scribes tab reads the new state when it loads again.
  */
 export function pluginButton(
   basePath: string,
@@ -72,7 +74,10 @@ export function pluginButton(
   readiness: Exclude<PluginReadiness, "ready">,
   className = "knowledge-button knowledge-primary knowledge-small",
 ) {
-  const href = `${basePath}/plugins/${plugin.catalogPath}`;
+  const href =
+    readiness === "needs-sign-in" && plugin.channel
+      ? `${basePath}/${plugin.channel.accountPath}`
+      : `${basePath}/plugins/${plugin.catalogPath}`;
   return button(
     PLUGIN_ACTION[readiness](plugin.name),
     () => window.location.assign(href),
@@ -83,8 +88,8 @@ export function pluginButton(
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
-// Modal frame shared by both dialogs: head with close, body, feedback line and actions.
-function dialogFrame(title: string, lead?: HTMLElement) {
+/** Modal frame shared by the scribe dialogs: head with close, body, feedback line and actions. */
+export function dialogFrame(title: string, lead?: HTMLElement) {
   const dialog = el("dialog", undefined, "knowledge-store-dialog knowledge-surface scribe-dialog");
   // SAFETY: only focus() is called on it, which every focusable HTML or SVG element implements.
   const previousFocus = document.activeElement as HTMLElement | null;
@@ -119,8 +124,8 @@ function dialogFrame(title: string, lead?: HTMLElement) {
   return { dialog, body, feedback, footer, close };
 }
 
-// Open inside the page so its styles apply; the modal top layer handles stacking.
-function show(dialog: HTMLDialogElement) {
+/** Open inside the page so its styles apply; the modal top layer handles stacking. */
+export function show(dialog: HTMLDialogElement) {
   (document.querySelector(".knowledge-page") ?? document.body).append(dialog);
   dialog.showModal();
 }
@@ -543,6 +548,12 @@ export function openStartDialog(input: StartDialogInput) {
     const fields = granolaFields(changed);
     frame.body.append(...fields.nodes);
     mode = fields.mode;
+    options = fields.options;
+  } else if (scribe.id === "slack") {
+    const fields = slackFields(input.detection, changed);
+    frame.body.append(...fields.nodes);
+    mode = fields.mode;
+    valid = fields.valid;
     options = fields.options;
   } else if (scribe.id === "claim-consolidation") {
     const fields = reviewFields(changed);

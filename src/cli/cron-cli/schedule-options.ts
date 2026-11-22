@@ -13,7 +13,7 @@ import {
   parseCronStreamCommandArgv,
   parseCronTimezoneOption,
   parsePositiveCronDurationMs,
-} from "./shared.js";
+} from "./input-options.js";
 
 type ScheduleOptionInput = {
   at?: unknown;

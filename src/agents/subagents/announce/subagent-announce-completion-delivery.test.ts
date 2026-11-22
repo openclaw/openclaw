@@ -21,7 +21,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -155,7 +155,7 @@ it.each([
   "revalidates a %s continuation caller immediately before dispatch",
   async (_name, current) => {
     const route = Object.freeze({ channel: "discord", to: "channel:continuation" });
-    const ambientAuthority = createAdmittedRunOperatorAuthority({
+    const ambientAuthority = createTestOperatorAuthority({
       profileId: "previous-requester",
       scopes: ["operator.read"],
       assertCurrent() {},

@@ -324,7 +324,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Decisions HTTP replaces the unshipped OpenAI executor: +3 net (#195641).
       // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
       // +6: expose the existing model-request hook (#193550) and metric (#198455) types through plugin-entry.
-      3894,
+      // +2: owner-approved stored-session Control UI path resolver and parser on session-discussion (#203044).
+      3896,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -381,7 +382,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same appendReplyMediaFailures receipt formatter (#186751).
       // +7 net: the callable subset of the same source-audited feature-cut exports.
       // Harness +2, transcript replay +1, binding inspection +1, Decisions +1 net, Gateway +2.
-      2243,
+      // +2: the same stored-session Control UI path resolver and parser (#203044).
+      2245,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

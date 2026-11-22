@@ -1,159 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import type { Page } from "./page-context.js";
 import { defaultOptions, repairPrompt, scribeSetup, setupPrompt } from "./scribes-catalog.js";
 import type { ScribeJob } from "./scribes-state.js";
-import { scribes } from "./scribes-view.js";
-
-type Call = [string, Record<string, unknown> | undefined];
-const reviewJob = {
-  id: "job-review",
-  declarationKey: "knowledge:scribe:claim-consolidation",
-  enabled: true,
-  configRevision: "rev-7",
-  sessionTarget: "session:s-review",
-  schedule: { kind: "cron", expr: "45 3 * * 0" },
-  failureAlert: { after: 2 },
-  state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
-};
-
-let gateways = 0;
-// A fake page host: Gateway reads answer from `world`; writes are recorded.
-function fixture(world: {
-  sessions?: Record<
-    string,
-    { key: string; sessionId?: string; displayName: string; archived?: boolean; status?: string }
-  >;
-  jobs?: unknown[];
-  history?: Record<string, unknown[]>;
-  runs?: unknown[];
-  canWrite?: boolean;
-  /** plugins.inspect answer for the Granola plugin; absent reads as not installed. */
-  granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
-}) {
-  // HTMLDialogElement is incomplete in jsdom.
-  Object.assign(HTMLDialogElement.prototype, {
-    showModal(this: HTMLDialogElement) {
-      this.open = true;
-    },
-    close(this: HTMLDialogElement) {
-      this.open = false;
-    },
-  });
-  const calls: Call[] = [];
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    calls.push([method, params]);
-    switch (method) {
-      case "cron.list":
-        return { jobs: world.jobs ?? [], hasMore: false, nextOffset: null };
-      case "sessions.list": {
-        if (typeof params?.search === "string") {
-          const row = world.sessions?.[params.search];
-          return { sessions: row ? [row] : [] };
-        }
-        return { sessions: [], count: 1, totalCount: params?.archived ? 1204 : 148 };
-      }
-      case "sessions.describe":
-        return {
-          session:
-            Object.values(world.sessions ?? {}).find((row) => row.key === params?.key) ?? null,
-        };
-      case "chat.history":
-        return {
-          messages:
-            typeof params?.sessionKey === "string"
-              ? (world.history?.[params.sessionKey] ?? [])
-              : [],
-        };
-      case "cron.runs":
-        return {
-          entries: world.runs ?? [
-            {
-              ts: 1_793_000_000_000,
-              status: "ok",
-              summary: "Filed claims.\nScribe status: on — 9 filed · 2 pages created",
-              model: "anthropic/claude",
-            },
-          ],
-        };
-      case "agents.files.list":
-        return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
-      case "cron.run":
-        return { ok: true, enqueued: true, runId: "run-1" };
-      case "plugins.inspect": {
-        const plugin = world.granola ?? { installed: false, enabled: false };
-        return {
-          plugin,
-          ...(plugin.installed && plugin.enabled
-            ? {
-                mcpAuth: [
-                  {
-                    serverName: "granola",
-                    state: plugin.authorized ? "authorized" : "requires-authorization",
-                  },
-                ],
-              }
-            : {}),
-        };
-      }
-      default:
-        return { ok: true };
-    }
-  });
-  const create = vi.fn(async () => "agent:main:dock:new");
-  const open = vi.fn();
-  const connection = { connected: true, canRead: true, canWrite: world.canWrite ?? true };
-  // Gateway events the page listens to, by name.
-  const events = new Map<string, () => void>();
-  const onEvent = vi.fn((name: string, listener: () => void) => {
-    events.set(name, listener);
-    return () => events.delete(name);
-  });
-  // Update state is kept per Gateway, by base path: each fixture is its own Gateway.
-  const basePath = `/gateway-${++gateways}`;
-  const host = { request, connection, sessions: { create, open }, basePath, onEvent };
-  const load = vi.fn(async () => true);
-  const scribesTab = document.createElement("button");
-  const ui = {
-    s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
-    live: () => true,
-    viewedAgent: () => "main",
-    displayName: (id: string) => (id === "main" ? "Main" : id),
-    announce: vi.fn(),
-    errorText: (error: unknown) => String(error),
-    load,
-    scribesTab,
-  } as unknown as Page;
-  const page = document.createElement("section");
-  page.className = "knowledge-page";
-  document.body.append(page);
-  const render = async () => {
-    const target = document.createElement("div");
-    await scribes(ui, 1, target);
-    page.replaceChildren(target);
-    return target;
-  };
-  return { ui, calls, request, create, open, load, render, page, scribesTab, events };
-}
-const reviewSetup = scribeSetup(
-  "claim-consolidation",
-  "ongoing",
-  { schedule: "45 3 * * 0" },
-  "America/Los_Angeles",
-);
-const reviewSession = {
-  "Scribe · Knowledge Consolidation": {
-    key: "s-review",
-    displayName: "Scribe · Knowledge Consolidation",
-  },
-};
-const buttonNamed = (root: ParentNode, text: string) =>
-  [...root.querySelectorAll("button")].find((b) => b.textContent === text)!;
-const flush = () =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+import {
+  buttonNamed,
+  fixture,
+  flush,
+  reviewJob,
+  reviewSession,
+  reviewSetup,
+} from "./scribes-view.test-support.js";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -165,7 +22,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
   const view = await render();
   expect([...view.querySelectorAll(".knowledge-eyebrow")].map((n) => n.textContent)).toEqual([
     "On · 1",
-    "Available · 3",
+    "Available · 4",
   ]);
   expect(view.textContent).toContain("148 active · 1,204 archived conversations on Main");
   expect(view.textContent).toContain("Found Memory on Main · MEMORY.md 8 KB");
@@ -1059,4 +916,70 @@ it("keeps failed run-history reads distinct from an empty history and recovers o
     "9 filed · 2 pages created",
   );
   expect(calls.some(([method]) => method === "cron.run")).toBe(false);
+});
+
+it("changes a scribe's schedule through a turn in its conversation", async () => {
+  const runMessage =
+    setupPrompt(reviewSetup).match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+  const job = {
+    ...reviewJob,
+    sessionTarget: "current",
+    sessionKey: "s-review",
+    schedule: { kind: "cron", expr: "45 3 * * 0", tz: "America/Los_Angeles" },
+    payload: { kind: "agentTurn", message: runMessage, model: "provider/model" },
+  };
+  const { render, ui, calls, page } = fixture({ sessions: reviewSession, jobs: [job] });
+  ui.s.scribe = "claim-consolidation";
+  buttonNamed(await render(), "Change…").click();
+  const dialog = page.querySelector("dialog")!;
+  const save = buttonNamed(dialog, "Save schedule");
+  // The current schedule is picked, so there is nothing to save yet.
+  expect(dialog.querySelector<HTMLInputElement>("input:checked")?.id).toBe(
+    "scribe-schedule-45-3-0",
+  );
+  expect(save.disabled).toBe(true);
+  dialog.querySelector<HTMLInputElement>("#scribe-schedule-45-3-")!.click();
+  expect(dialog.textContent).toContain("New schedule: Daily, 3:45 AM · America/Los_Angeles.");
+  const zone = [...dialog.querySelectorAll("select")].at(-1)!;
+  expect([...zone.options].some((option) => option.value === "UTC")).toBe(true);
+  save.click();
+  // Editing a field while the save is sent doesn't allow a second one.
+  zone.value = "UTC";
+  zone.dispatchEvent(new Event("change"));
+  expect(save.disabled).toBe(true);
+  await vi.waitFor(() => expect(dialog.open).toBe(false));
+
+  // The page never edits the automation; the conversation re-declares it with the new schedule.
+  expect(calls.some(([method]) => method === "cron.update")).toBe(false);
+  const sent = calls.filter(([method]) => method === "chat.send");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]![1]).toMatchObject({
+    sessionKey: "s-review",
+    idempotencyKey: expect.stringMatching(
+      /^knowledge:scribe:claim-consolidation:schedule:45 3 \* \* \*:America\/Los_Angeles:job-review:rev-7:[0-9a-f-]{36}$/,
+    ),
+  });
+  const prompt = String(sent[0]![1]!.message);
+  expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
+  expect(prompt).toContain("Settings, kept from its current automation except the new schedule:");
+  expect(prompt).toContain("- Runs nightly at 3:45 AM America/Los_Angeles (cron `45 3 * * *`).");
+  expect(prompt).not.toContain("leave it as it is");
+  expect(prompt).toContain("Leave `enabled` out");
+  expect(prompt).toContain('exactly as written: `{"model":"provider/model","failureAlert"');
+  // The generated run message follows the nightly run amounts.
+  expect(prompt).toContain("- Each run: retire 10 written Timelines and review 5 pages.");
+
+  // Updating until a read has the new schedule; another revision alone is not enough.
+  Object.assign(job, { configRevision: "rev-8" });
+  const updating = await render();
+  expect(updating.querySelector(".scribe-update")?.textContent).toContain("Updating");
+  expect(buttonNamed(updating, "Change…").disabled).toBe(true);
+  Object.assign(job, {
+    configRevision: "rev-9",
+    schedule: { kind: "cron", expr: "45 3 * * *", tz: "America/Los_Angeles" },
+  });
+  const done = await render();
+  expect(done.querySelector(".scribe-update")).toBeNull();
+  expect(done.textContent).toContain("Daily, 3:45 AM · America/Los_Angeles");
+  expect(ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: updated.");
 });

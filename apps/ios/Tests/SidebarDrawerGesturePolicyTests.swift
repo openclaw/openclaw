@@ -139,9 +139,14 @@ struct SidebarDrawerGesturePolicyTests {
         }
         let show = RootTabs.sidebarShowButtonAccessibilityIdentifier
         let hide = RootTabs.sidebarHideButtonAccessibilityIdentifier
-        #expect(ChatProTab(headerSidebarAction: header(show), openSettings: {}) ==
-            ChatProTab(headerSidebarAction: header(show), openSettings: {}))
-        #expect(ChatProTab(headerSidebarAction: header(show), openSettings: {}) !=
-            ChatProTab(headerSidebarAction: header(hide), openSettings: {}))
+        let showTab = ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: nil)
+        #expect(showTab == ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: nil))
+        #expect(showTab != ChatProTab(headerSidebarAction: header(hide), openSettings: {}, startFirstGatewaySetup: nil))
+        let firstRunTab = ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: {})
+        #expect(showTab != firstRunTab)
+        #expect(firstRunTab == ChatProTab(
+            headerSidebarAction: header(show),
+            openSettings: {},
+            startFirstGatewaySetup: {}))
     }
 }

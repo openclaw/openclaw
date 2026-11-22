@@ -169,6 +169,7 @@ it.each([
   );
   if (remote) {
     vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      agents: { defaults: { model: { primary: "openai/gpt-5" } } },
       gateway: { mode: "remote" },
     });
   }
@@ -177,6 +178,7 @@ it.each([
 
   if (remote) {
     expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
+    expect(jsonResult()).not.toHaveProperty("configWarnings");
   } else if (json) {
     expect(jsonResult()).toMatchObject({
       lastGatewayInstallationReplacement: { reason, completedAtMs },
@@ -694,7 +696,7 @@ it.each([undefined, "work"])("abandoned history stays read-only (profile=%s)", a
   const cli = `openclaw${profile ? " --profile work" : ""}`;
   expectOutput(
     "Abandoned update detected;",
-    `Stop the Gateway first (${cli} gateway stop)`,
+    `Stop the Gateway first (${cli} gateway stop --force)`,
     `${cli} update repair`,
   );
   expect(outputText()).not.toContain("update in progress:");

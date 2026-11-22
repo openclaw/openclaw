@@ -1,5 +1,6 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
+  TranscriptsGetResult,
   TranscriptSessionSummary,
   TranscriptUtterance as TranscriptUtteranceWire,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
@@ -33,4 +34,15 @@ export type TranscriptSessionDescriptor = SchemaContract<
 > & {
   source: TranscriptSourceLocator;
   metadata?: Record<string, unknown>;
+};
+
+type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
+
+export type TranscriptsSummary = SchemaContract<
+  Omit<TranscriptSummaryWire, "markdown" | "source">
+> & {
+  sessionId: string;
+  title: string;
+  source: NonNullable<TranscriptSummaryWire["source"]>;
+  transcript: string[];
 };

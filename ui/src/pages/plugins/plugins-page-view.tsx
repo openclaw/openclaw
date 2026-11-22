@@ -15,7 +15,6 @@ import {
   pathForPluginSettings,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsLoadingSkeleton,
@@ -24,7 +23,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
-import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -43,11 +41,6 @@ import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
 import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
-import {
-  pluginAdvancedSchema,
-  pluginConfigSchema,
-  pluginHostControlsSchema,
-} from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginSkillPreview, renderPluginSkillsSection } from "./skill-preview.tsx";
@@ -107,7 +100,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
   }));
-  const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
+  const onOpenSkill = (
+    request: PluginsSkillsReadParams,
+    identity: { description?: string; publisher?: string },
+  ) => void page().skillPreview.open(request, identity);
   const actions = {
     openPluginSettings: (pluginId: string | null) => {
       page().context.navigate("plugin-settings", {
@@ -162,8 +158,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return staticAsk ? () => void staticAsk() : undefined;
   });
   const configState = () => page().context.runtimeConfig.state;
-  const rawConfigSchema = createMemo(() => configState().configSchema);
-  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()), { lazy: true });
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
@@ -180,8 +174,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     if (!staticCatalog || !version || !staticCatalog.detail.skills.length) {
       return undefined;
     }
-    const onOpen = (skillName: string) =>
-      onOpenSkill({ source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName });
+    const onOpen = (skill: { name: string; description?: string }) =>
+      onOpenSkill(
+        { source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName: skill.name },
+        {
+          description: skill.description,
+          publisher: staticCatalog.detail.author?.handle ?? staticCatalog.plugin.catalog.author,
+        },
+      );
     return renderPluginSkillsSection(staticCatalog.detail.skills, onOpen);
   };
   const shared = createMemo(() => ({
@@ -207,6 +207,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     configValue: configState().configForm,
     configHints: configState().configUiHints,
     configSchemaLoading: configState().configSchemaLoading,
+    rawConfigSchema: configState().configSchema,
+    settingsContext: page().context,
     onIconError: (pluginId: string) => page().icons.installed.handleError(pluginId),
     onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) =>
       void page().consent.mutateInstalledPlugin(pluginId, enabled ? "enable" : "disable", rowKey),
@@ -214,7 +216,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
-    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
@@ -242,12 +243,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         loading={inventoryProps.loading}
         tab={page().settingsTab()}
         query={query()}
-        advancedSchema={
-          page().settingsTab() === "advanced" ? pluginAdvancedSchema(configAnalysis().schema) : null
-        }
-        configUnsupportedPaths={
-          page().settingsTab() === "advanced" ? configAnalysis().unsupportedPaths : []
-        }
         onTabChange={actions.selectSettingsTab}
         onQueryChange={setQuery}
         pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
@@ -272,7 +267,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         <PluginSettingsDetail
           {...shared()}
           promptBusy={page().recommendedPrompts.pending}
-          configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
           inspection={page().state.detail?.inspection ?? null}
@@ -303,23 +297,20 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }
           skillsSection={
             skills().length
-              ? renderPluginSkillsSection(skills(), (skillName) =>
-                  onOpenSkill({
-                    source: "installed",
-                    pluginId: detailProps.pluginId,
-                    skillName,
-                  }),
+              ? renderPluginSkillsSection(skills(), (skill) =>
+                  onOpenSkill(
+                    { source: "installed", pluginId: detailProps.pluginId, skillName: skill.name },
+                    {
+                      description: skill.description,
+                      publisher: page().state.detail?.catalog?.detail.author?.handle,
+                    },
+                  ),
                 )
               : !components()
                 ? catalogSkillsSection()
                 : undefined
           }
           settingsHref={`${settingsLocation().pathname ?? ""}${settingsLocation().search}`}
-          configSchema={pluginConfigSchema(configAnalysis().schema, detailProps.pluginId)}
-          hostControlsSchema={pluginHostControlsSchema(
-            configAnalysis().schema,
-            detailProps.pluginId,
-          )}
           backHref={
             settings()
               ? `${overviewLocation().pathname ?? ""}${overviewLocation().search}`
@@ -403,8 +394,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
+                    preview={page().state.catalogDetail?.preview}
                     result={page().state.catalogDetail?.result ?? null}
-                    read={page().detailRead}
+                    error={page().state.catalogDetail?.error}
                     backHref={pathForRoute("plugins", page().context.basePath)}
                     onBack={() => page().closeCatalogDetail()}
                     onRetry={() =>
@@ -497,7 +489,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           </Errored>
         )}
       </SettingsWorkspace>
-      <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
+      <PluginSkillPreview
+        preview={props.page.skillPreview}
+        state={props.page.skillPreview.read()}
+      />
       <WizardLogin
         controller={props.page.mcpLogin.dialog}
         signInIcon={

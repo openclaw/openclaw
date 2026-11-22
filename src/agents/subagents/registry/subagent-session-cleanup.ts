@@ -1,6 +1,6 @@
 import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import type { SessionsDeleteParams } from "../../../../packages/gateway-protocol/src/index.js";
-import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import { isSessionLifecycleChangedGatewayError } from "../../../config/sessions/lifecycle.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -114,7 +114,7 @@ export async function deleteSubagentSessionForCleanup(params: {
     };
     // Provisional cleanup already carries its admitted Gateway in the request scope.
     // Cleanup retains its captured Gateway and child authority, not the parent's cancelled turn.
-    await runOutsideAdmittedGenerationScopes(() =>
+    await runOutsideAdmittedTurnScopes(() =>
       runWithSessionControllerCleanup(() =>
         params.gatewayBinding
           ? withPluginRuntimeGatewayContextResolver(

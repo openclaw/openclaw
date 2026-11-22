@@ -16,7 +16,7 @@ import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { SessionCatalogEntrySnapshot } from "../../src/plugins/session-catalog.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -109,12 +109,7 @@ function run(count: number) {
 run(100);
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const cpu = process.threadCpuUsage();
 const start = performance.now();

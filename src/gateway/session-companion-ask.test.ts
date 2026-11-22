@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
@@ -179,7 +179,7 @@ function queueSeed() {
 }
 
 function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "companion-reader",
     scopes: ["operator.read"],
     assertCurrent() {},

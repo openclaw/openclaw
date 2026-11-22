@@ -25,6 +25,11 @@ async function mountLearningPage(
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
+  // The learning session starts from the header gear's menu.
+  const gear = await waitForSolid(() =>
+    mounted.getByRole<HTMLButtonElement>("button", { name: "Skill Workshop learning mode" }),
+  );
+  gear.click();
   const button = await waitForSolid(() =>
     mounted.getByRole<HTMLButtonElement>("button", { name: "Learn from history" }),
   );

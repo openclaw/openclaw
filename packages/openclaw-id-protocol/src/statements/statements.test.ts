@@ -18,6 +18,7 @@ import {
   type MembershipSnapshotBody,
   type SignedStatement,
 } from "./types.js";
+import { verifyClawUnlink, verifyClawUnlinkForPin } from "./unlink.js";
 import { parseStatement } from "./validate.js";
 import {
   verifyInviteRedemptionSignature,
@@ -34,6 +35,10 @@ const owners = new Map(vectors.owners.map((owner) => [owner.device_pub, owner.ca
 const options: VerifyOptions = { now: vectors.now, owners: (key) => owners.get(key) };
 const binding = vectors.valid.find((entry) => entry.statement.type === "ServerBinding")!
   .statement as SignedStatement<"ServerBinding">;
+// The claw's current binding (seq 2): what Discovery checks a ClawUnlink against.
+const binding2 = vectors.valid.find(
+  (entry) => entry.name === "root signs server binding seq 2 (new server key)",
+)!.statement as SignedStatement<"ServerBinding">;
 
 // Runs the verifier a vector names and returns ok or the failure code.
 async function verify(
@@ -56,11 +61,13 @@ async function verify(
                 statement as SignedStatement<"RootReset">,
                 binding.body,
               )
-            : await verifyOwnerStatement(
-                statement as SignedStatement<"OwnerDeviceCert">,
-                anchor,
-                options,
-              );
+            : verifier === "unlink"
+              ? await verifyClawUnlink(statement as SignedStatement<"ClawUnlink">, binding2.body)
+              : await verifyOwnerStatement(
+                  statement as SignedStatement<"OwnerDeviceCert">,
+                  anchor,
+                  options,
+                );
   return result.ok ? "ok" : result.code;
 }
 
@@ -129,6 +136,14 @@ describe("statement vectors", () => {
       expect(result.ok ? { ok: true, pin: result.pin } : { ok: false, error: result.code }).toEqual(
         entry.expected,
       );
+    },
+  );
+
+  it.each(vectors.unlink_pins.map((entry) => [entry.name, entry] as const))(
+    "unlink pin: %s",
+    async (_name, entry) => {
+      const result = await verifyClawUnlinkForPin(entry.statement, entry.pin);
+      expect(result.ok ? { ok: true } : { ok: false, error: result.code }).toEqual(entry.expected);
     },
   );
 });

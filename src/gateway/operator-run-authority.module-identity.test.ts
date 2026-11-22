@@ -10,7 +10,7 @@ const reloadedIssuer = await import("../agents/admitted-run-context.js");
 
 function inherit(authority: AdmittedRunOperatorAuthority, scopes: string[]) {
   const connect = createOperatorClient({ profileId: "module-owner", scopes }).connect;
-  return consumer.captureGatewayOperatorRunAuthority({
+  return consumer.prepareGatewayOperatorRunAuthority({
     client: { connect, internal: { operatorRunAuthority: authority } },
     context: { getRuntimeConfig: () => ({}) },
   });
@@ -25,6 +25,7 @@ it.each(["assertion", "abort"] as const)(
     let current = true;
     let holds = 0;
     const original = issue({
+      canonicalIdentity: null,
       profileId: "module-owner",
       scopes: ["operator.read", "operator.write"],
       signal: controller.signal,
@@ -79,7 +80,13 @@ it.each(["assertion", "abort"] as const)(
 
 it.each(["unissued", "spread", "json"] as const)("rejects %s before callbacks", async (copy) => {
   const [assertCurrent, retain] = [vi.fn(), vi.fn(() => () => {})] as const;
-  const source = { profileId: "module-owner", scopes: ["operator.read"], assertCurrent, retain };
+  const source = {
+    canonicalIdentity: null,
+    profileId: "module-owner",
+    scopes: ["operator.read"],
+    assertCurrent,
+    retain,
+  };
   const issued = issue(source);
   const unissued: AdmittedRunOperatorAuthority =
     copy === "unissued"

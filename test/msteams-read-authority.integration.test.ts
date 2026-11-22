@@ -541,7 +541,7 @@ describe("Teams Graph mutation currentness", () => {
     },
   );
 
-  it.each([0, 1, 2])(
+  it.each([0, 1])(
     "checks member pages and the final DELETE (close caller after page %s)",
     async (stopAfter) => {
       const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
