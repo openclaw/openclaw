@@ -124,6 +124,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+  "tools.exec.claudeCliHost":
+    'Where Claude CLI (claude-cli) runs start: "gateway" (default) or "node". "node" runs every claude-cli turn of the agent on the paired node named by tools.exec.node (its node id), as a per-session execNode does; a run that cannot be placed there is refused instead of starting on the Gateway. The node must enable nodeHost.agentRuns.claude.',
   "agents.entries.*.tools.agentToAgent":
     "Outbound-only agent messaging policy. Explicit send destinations do not grant session reads or status access, and remain bounded by global agent-to-agent participation and sandbox restrictions.",
   "agents.entries.*.tools.agentToAgent.send":

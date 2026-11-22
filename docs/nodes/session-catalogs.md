@@ -258,6 +258,10 @@ Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
 
+To place every Claude CLI turn of an agent on one such node without binding each
+session, set `tools.exec.claudeCliHost: "node"` and `tools.exec.node`; see
+[CLI backends](/gateway/cli-backends).
+
 ## OpenCode and Pi sessions
 
 The bundled OpenCode and ACPX plugins also discover read-only native session

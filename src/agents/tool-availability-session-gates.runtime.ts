@@ -11,6 +11,7 @@ import {
   sessionDeliveryRoute,
 } from "../utils/delivery-context.read.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { applyConfiguredClaudeCliPlacement } from "./cli-runner/configured-node-placement.js";
 import { detectNodeClaudePlacement } from "./cli-runner/prepare-claude.js";
 import { selectAgentHarness } from "./harness/selection.js";
 import { agentHarnessExposesOpenClawTools } from "./harness/tool-surface.js";
@@ -66,11 +67,17 @@ export function resolveRunToolSurfaceBlock(params: {
         fix: "Use a model route that runs on the OpenClaw harness, or a CLI backend with bundled MCP.",
       };
     }
+    const placedEntry = applyConfiguredClaudeCliPlacement({
+      config: params.config,
+      agentId: params.agentId,
+      backendId: cliBackend.id,
+      sessionEntry: entry,
+    });
     if (
       detectNodeClaudePlacement({
         backendId: cliBackend.id,
-        execHost: entry?.execHost,
-        execNode: entry?.execNode,
+        execHost: placedEntry?.execHost,
+        execNode: placedEntry?.execNode,
       })
     ) {
       return {

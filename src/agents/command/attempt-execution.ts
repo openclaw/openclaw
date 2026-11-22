@@ -25,6 +25,7 @@ import {
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
+import { applyConfiguredClaudeCliPlacement } from "../cli-runner/configured-node-placement.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
@@ -223,7 +224,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   });
   const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
     resolveCompletionToolPolicy({
-      run: params,
+      // The CLI runner applies a configured Claude node placement; decide on the same entry.
+      run: {
+        opts: params.opts,
+        sessionEntry: isCliExecutionProvider
+          ? applyConfiguredClaudeCliPlacement({
+              config: params.cfg,
+              agentId: params.sessionAgentId,
+              backendId: cliExecutionProvider,
+              sessionEntry: params.sessionEntry,
+            })
+          : params.sessionEntry,
+      },
       trustedSubagentAnnounceHandoff,
       isSubagentAnnounceHandoff,
       isRawModelRun,

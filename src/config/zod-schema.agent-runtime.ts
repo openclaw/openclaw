@@ -272,6 +272,8 @@ const ToolExecBaseShape = {
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   /** Default node binding for exec.host=node (node id/name). */
   node: z.string().optional(),
+  /** Where claude-cli runs start: "node" places every run on tools.exec.node (default: gateway). */
+  claudeCliHost: z.enum(["gateway", "node"]).optional(),
   /** Directories to prepend to PATH when running exec (gateway/sandbox). */
   pathPrepend: z.array(z.string()).optional(),
   /** Safe stdin-only binaries that can run without allowlist entries. */
