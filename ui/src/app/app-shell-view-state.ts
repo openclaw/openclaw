@@ -370,7 +370,11 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };
+  const registeredPluginTitle = () => pluginPageLabel(context, host.routeState.location);
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
+    get embeddedPluginTitle() {
+      return nativeEmbed && activeRoute === "plugin" ? registeredPluginTitle() : undefined;
+    },
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
     activeRouteId: activeRoute,
     pluginTabs: gatewaySnapshot.hello?.controlUiTabs?.filter((tab) => tab.placement === "settings"),
@@ -444,8 +448,10 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
-            pluginPageLabel(context, host.routeState.location),
+        : pageTitleForRoute(
+            activeRoute,
+            context.nativeDeviceSettings?.snapshot,
+            registeredPluginTitle,
           );
     },
     get navCollapsed() {

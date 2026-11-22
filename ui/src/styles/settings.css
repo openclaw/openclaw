@@ -1959,9 +1959,22 @@ openclaw-approvals-page .data-table-pagination__info {
   color: var(--muted);
 }
 
+/* The translated pending label must not narrow the command or move the history below it. */
 .standing-grants__revoke {
+  display: inline-grid;
   grid-area: 1 / 2 / span 3;
   align-self: start;
+  place-items: center;
+}
+
+.standing-grants__revoke::before,
+.standing-grants__revoke > span {
+  grid-area: 1 / 1;
+}
+
+.standing-grants__revoke::before {
+  content: attr(data-alternate-label);
+  visibility: hidden;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */

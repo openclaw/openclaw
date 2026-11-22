@@ -428,14 +428,17 @@ export async function handleControlUiAssistantMediaRequest(
       );
       await byteStream.close();
       await publishResponse(() => {
-        res.setHeader("Content-Type", "image/webp");
-        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Content-Type", thumbnail.mimeType);
+        res.setHeader("Content-Length", String(thumbnail.data.byteLength));
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader(
           "Content-Disposition",
-          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
+          buildAssistantMediaContentDisposition(
+            `${filename}-preview${thumbnail.extension}`,
+            thumbnail.mimeType,
+          ),
         );
-        res.end(req.method === "HEAD" ? undefined : thumbnail);
+        res.end(req.method === "HEAD" ? undefined : thumbnail.data);
       });
       return true;
     }

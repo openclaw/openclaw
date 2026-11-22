@@ -494,6 +494,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               />
             </Show>
             <CommandPaletteInput
+              mode={current().mode}
               onAutofocusRef={(element) => {
                 initialInput = element;
               }}
@@ -505,7 +506,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                     : "palette.composePlaceholder"
                   : "palette.searchPlaceholder",
               )}
-              maxLines={hideSearch() ? 8 : 3}
               onInputRef={current().onInputRef}
               onValueChange={current().onQueryChange}
               onBeforeInput={current().onBeforeInput}

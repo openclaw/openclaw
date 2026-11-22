@@ -90,6 +90,71 @@ async function searchDashboards(gallery: Locator, query: string) {
   await field.fill(query);
 }
 suite.define(() => {
+  it("keeps enlarged read failures legible inside a dashboard grid preview", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await seedChatSettings(page, suite.server.baseUrl, { textScale: 140 });
+        const sessions = [{ ...dashboardRows[0]!, hasBoard: true }];
+        await installMockGateway(page, {
+          sessions,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                responseCase(
+                  { hasBoard: true },
+                  {
+                    ts: now,
+                    path: "",
+                    count: 1,
+                    defaults: { contextTokens: null, model: null, modelProvider: null },
+                    sessions,
+                  },
+                ),
+              ],
+            },
+            "board.get": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Dashboard storage is temporarily unavailable",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "dashboards");
+        const card = page.locator("[data-dashboard-session]").first(),
+          notice = card.locator(".board-document__state--error");
+        await notice.waitFor();
+        expect(await notice.textContent()).toBe("Dashboard storage is temporarily unavailable");
+        const inside = await notice.evaluate((el) => {
+          const preview = el.closest(".dashboard-preview")!.getBoundingClientRect(),
+            sheet = el.closest(".dashboard-preview__sheet")!.getBoundingClientRect(),
+            range = document.createRange();
+          range.selectNodeContents(el);
+          const rects = [...range.getClientRects()];
+          return (
+            rects.length > 0 &&
+            rects.every(
+              (r) =>
+                r.left >= sheet.left &&
+                r.right <= sheet.right &&
+                r.top >= sheet.top &&
+                r.bottom <= Math.min(sheet.bottom, preview.bottom),
+            )
+          );
+        });
+        expect(inside).toBe(true);
+        await card.getByRole("link", { name: "Release health" }).focus();
+        expect(
+          await card
+            .getByRole("link", { name: "Release health" })
+            .evaluate((el) => el === document.activeElement),
+        ).toBe(true);
+      },
+    );
+  });
+
   it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     const emptyKey = "agent:main:dashboard:empty";

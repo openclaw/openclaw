@@ -501,6 +501,40 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
+  it("keeps long Template names and publishers readable beside Add on a phone", async () => {
+    const entry = {
+      ...workflowOperator,
+      packageName: "@international-travel-ops/departures",
+      displayName: "International Travel Operations · Departures",
+      ownerHandle: "international-travel-ops",
+      channel: "community" as const,
+      official: false,
+    };
+    const { page } = await fixture({ width: 390, height: 844 }, entry);
+    const card = page.locator("[data-templates-featured] [data-templates-entry]").first();
+    await card.waitFor();
+    await page.evaluate(() => document.fonts.ready.then(() => {}));
+    const readable = await card.evaluate((row) => {
+      const add = row.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+      return [...row.querySelectorAll("h3, .plugin-card-author")].every((label) => {
+        const bounds = label.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(label);
+        const lines = [...text.getClientRects()];
+        return (
+          lines.length > 0 &&
+          lines.every(
+            (line) =>
+              line.left >= bounds.left - 1 &&
+              line.right <= bounds.right + 1 &&
+              line.right <= add.left,
+          )
+        );
+      });
+    });
+    expect(readable, "the name and publisher both fit before Add").toBe(true);
+  });
+
   it("reads and collapses the full SOUL.md when its excerpt already fits", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.detail", {

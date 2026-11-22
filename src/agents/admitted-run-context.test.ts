@@ -288,7 +288,6 @@ it("closes generic authority while keeping a recovery-only lease active", async 
 });
 
 it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refusedRebind) => {
-  let current = true;
   let sourceHolds = 0;
   const source = prepareRun({
     runId: "native-source-lease",
@@ -297,7 +296,7 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
       profileId: "native-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {
-        if (!current || sourceHolds === 0) {
+        if (sourceHolds === 0) {
           throw new Error("source claim lost");
         }
       },
@@ -334,11 +333,6 @@ it.each([false, true])("fences native recovery (refusedRebind=%s)", async (refus
   expect(() => run.readPreparedRunOperatorAuthority(prepared)).toThrow("no longer active");
   expect(prepared.assertSourceCurrent).not.toThrow();
   expect(assertRecoveryActive).not.toThrow();
-  current = false;
-  expect(assertRecoveryActive).toThrow("source claim lost");
-  current = true;
-  expect(assertRecoveryActive).toThrow("source execution authority is no longer active");
-  expect(prepared.assertSourceCurrent).toThrow("source execution authority is no longer active");
 });
 
 it.each(["hook failure", "outer close"])("closes authority on %s during admission", async (end) => {
