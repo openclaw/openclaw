@@ -331,16 +331,16 @@
 }
 
 .logbook-stats__categories {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  gap: 5px 8px;
 }
 
 .logbook-stats__category {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 8px;
   font-size: 11px;
 }
 
@@ -365,6 +365,7 @@
 }
 
 .logbook-stats__category-time {
+  justify-self: end;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
