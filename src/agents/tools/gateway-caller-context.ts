@@ -173,37 +173,87 @@ type AdmittedGatewayToolCallerParams = {
 
 function composeReceiptAuthority(
   ...predicates: Array<ReceiptAuthority | undefined>
-): ReceiptAuthority | undefined {
-  const sources = predicates
-    .filter(
-      (predicate, index): predicate is ReceiptAuthority =>
-        predicate !== undefined && predicates.indexOf(predicate) === index,
-    )
-    .map((predicate) => captureGatewayToolReceiptAssertion(predicate));
-  return sources.length === 0
+): ((() => boolean) & ReceiptAuthority) | undefined {
+  const checks = predicates.filter(
+    (predicate, index): predicate is ReceiptAuthority =>
+      predicate !== undefined && predicates.indexOf(predicate) === index,
+  );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
+  return checks.length === 0
     ? undefined
-    : Object.assign(composeSessionSourceAssertion(sources), {
-        assertScopeCurrent: () => {
-          for (const source of sources) {
-            (source.assertScopeCurrent ?? source)();
+    : Object.assign(
+        () => {
+          let active = true;
+          for (const check of checks) {
+            try {
+              active = check() !== false && active;
+            } catch {
+              active = false;
+            }
           }
+          return active;
         },
-      });
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
+      );
 }
 
-/** Admission checked authority; a started receipt keeps only its owners' session fences. */
+/** Preserve boolean refusal across the receipt owner's prepared assertion. */
 export function captureGatewayToolReceiptAssertion(
   receipt: ReceiptAuthority,
-  _message?: string,
+  message = "agent tool caller authority is no longer active",
 ): SessionSourceAssertion {
-  return Object.assign(() => void receipt(), {
+  const assertAllowed = (result: boolean | void) => {
+    if (result === false) {
+      throw new Error(message);
+    }
+  };
+  const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
+  return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
-    prepareSessionSource: receipt.prepareSessionSource?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
-    prepareSessionSourceEffect: receipt.prepareSessionSourceEffect?.bind(receipt),
     prepareSessionSourceStorageEffect: receipt.prepareSessionSourceStorageEffect?.bind(receipt),
+    ...(prepareEffect
+      ? {
+          async prepareSessionSourceEffect() {
+            const prepared = await prepareEffect();
+            return {
+              ...prepared,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              release: prepared.release?.bind(prepared),
+            };
+          },
+        }
+      : {}),
+    ...(prepare
+      ? {
+          async prepareSessionSource() {
+            const prepared = await prepare();
+            const release = prepared.release?.bind(prepared);
+            const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
+            return {
+              ...prepared,
+              nativeSource: prepared.nativeSource,
+              opaqueCommitGuard: prepared.opaqueCommitGuard,
+              checks: prepared.checks,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              ...(assertPrepared
+                ? { assertPreparedCurrent: () => assertAllowed(assertPrepared()) }
+                : {}),
+              ...(release ? { release } : {}),
+            };
+          },
+        }
+      : {}),
   });
 }
 
