@@ -109,6 +109,37 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
+  it("keeps a long supporting-file path and its editor inside the phone dialog", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const path =
+        "references/release_engineering/regional_rollout/service_compatibility_verification_checklist.md";
+      await libraryGateway(page, {
+        "skills.library.read": {
+          ...own,
+          files: [{ path, encoding: "utf8", content: "Compare versions.", executable: false }],
+        },
+      });
+      await openSkillSettings(page);
+      await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
+      await page.getByLabel("File", { exact: true }).selectOption(path);
+      const editor = page.getByLabel(path, { exact: true });
+      expect(await editor.inputValue()).toBe("Compare versions.");
+      const fits = await editor.evaluate((el) => {
+        const body = el.closest(".oc-dialog__body")!;
+        const field = el.closest("label")!;
+        const range = document.createRange();
+        range.selectNodeContents(field.querySelector("span")!);
+        return (
+          body.scrollWidth <= body.clientWidth + 1 &&
+          Array.from(range.getClientRects()).every(
+            (rect) => rect.right <= el.getBoundingClientRect().right + 1,
+          )
+        );
+      });
+      expect(fits).toBe(true);
+    });
+  });
+
   it("closes an existing skill without a discard warning after its edit is reverted", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US" },

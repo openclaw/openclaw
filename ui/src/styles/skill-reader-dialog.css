@@ -1,3 +1,9 @@
+/* A selected path can be longer than the dialog. Keep its label and source in the field column. */
+.skill-library-dialog .oc-dialog__body > .field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .skill-library-dialog__source {
   min-width: 0;
   max-width: 100%;
