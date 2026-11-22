@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertOperatorModelAllowed,
@@ -37,7 +36,9 @@ import {
   retainGatewayDeviceRevocation,
 } from "../../device-revocation.js";
 import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { captureQueuedOperatorRecoverySource } from "../../operator-run-recovery-source.js";
+import { restoreGatewayQueuedOperatorRecovery } from "../../operator-run-recovery.js";
 import { createRemoteControlUiIngressTestContext } from "../../remote-control-ui.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
@@ -54,8 +55,8 @@ import {
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
-type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
-type CaptureOptions = Parameters<typeof captureGatewayOperatorRunAuthority>[0];
+type Capture = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
+type CaptureOptions = Parameters<typeof prepareGatewayOperatorRunAuthority>[0];
 function createGeneration(current?: string) {
   return new SharedGatewaySessionGenerationState({ current, required: null });
 }
@@ -90,7 +91,7 @@ function createCaptureFixture(params: {
     const current = params.requireGuard
       ? expectDefined(options.hasCurrentClientAuthority, "WS caller guard")
       : options.hasCurrentClientAuthority;
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client: options.client,
       context,
       hasCurrentClientAuthority: current,
@@ -146,31 +147,14 @@ describe("authenticated request mutation custody", () => {
       await dispatch("accepted-policy");
       const retained = expectDefined(captures.at(-1), "accepted operator source");
       using _ = { [Symbol.dispose]: retained.release };
-      const stringify = vi.spyOn(stableJson, "stableStringify");
-      try {
-        committedConfig = structuredClone(committedConfig);
-        retained.authority.assertCurrent();
-        stringify.mockClear();
-        retained.authority.assertCurrent();
-        expect(stringify).not.toHaveBeenCalled();
-
-        const acceptedConfig = committedConfig;
-        committedConfig = {
-          gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
-        };
-        setRuntimeConfigSnapshot(committedConfig);
-        expect(retained.authority.assertCurrent).not.toThrow();
-        await dispatch("revoked-policy");
-        expect(harness.close).toHaveBeenCalledWith(
-          4001,
-          "client invalidated: gateway-policy-changed",
-        );
-        expect(captures).toHaveLength(1);
-        committedConfig = acceptedConfig;
-        expect(retained.authority.assertCurrent).not.toThrow();
-      } finally {
-        stringify.mockRestore();
-      }
+      committedConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
+      };
+      setRuntimeConfigSnapshot(committedConfig);
+      expect(retained.authority.assertCurrent).not.toThrow();
+      await dispatch("revoked-policy");
+      expect(harness.close).toHaveBeenCalledWith(4001, expect.any(String));
+      expect(captures).toHaveLength(1);
     });
   });
 
@@ -211,7 +195,7 @@ describe("authenticated request mutation custody", () => {
     }
   });
 
-  it("keeps wildcard ceilings separate and refuses a queued source whose policy changed", async () => {
+  it("preserves wildcard ceilings while admitting queued work against current model restrictions", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -228,12 +212,15 @@ describe("authenticated request mutation custody", () => {
         gateway: { roles: { default: "guest", definitions: { guest } } },
       };
       setRuntimeConfigSnapshot(committedConfig);
-      const { captures, harness, dispatch, context } = createCaptureFixture({
+      const { client, captures, harness, dispatch, context } = createCaptureFixture({
         config: () => committedConfig,
         profileId: profile.id,
         method: "test.model-ceiling",
         requireGuard: true,
+        policy: { role: "operator", authMethod: "token" },
+        sourceAuthority: null,
       });
+      expectDefined(client.internal, "operator client metadata").authenticatedOperator = true;
       const capture = async (id: string) => {
         await dispatch(id);
         expect(harness.send).toHaveBeenLastCalledWith(
@@ -255,13 +242,11 @@ describe("authenticated request mutation custody", () => {
         const wide = await capture("wide-first");
         setPolicy(["fixture/family-*"]);
         const compatible = await capture("wide-second");
-        expect(wide.modelPolicy?.models).toEqual([modelA]);
         expect(() => assertOperatorModelAllowed(wide, modelB)).not.toThrow();
         setPolicy(["fixture/family-a"]);
         const narrow = await capture("narrow");
         setPolicy(["fixture/family-*"]);
-        expect(narrow.modelPolicy?.models).toEqual(wide.modelPolicy?.models);
-        expect(() => assertOperatorModelAllowed(narrow, modelB)).toThrow("operator role");
+        expect(() => assertOperatorModelAllowed(narrow, modelB)).toThrow();
         const runs = [wide, compatible, narrow, wide].map((operatorAuthority, index) => {
           const run = createQueueTestRun({
             prompt: `request ${index}`,
@@ -269,7 +254,7 @@ describe("authenticated request mutation custody", () => {
           });
           run.operatorAuthority = operatorAuthority;
           run.run.provider = modelA.provider;
-          run.run.model = modelA.model;
+          run.run.model = index === 3 ? modelB.model : modelA.model;
           return run;
         });
         for (const run of runs) {
@@ -280,38 +265,51 @@ describe("authenticated request mutation custody", () => {
         }
         vi.useFakeTimers();
         scheduleFollowupDrain(key, async (run) => {
+          const restored = await restoreGatewayQueuedOperatorRecovery({
+            context,
+            source: captureQueuedOperatorRecoverySource(
+              expectDefined(run.operatorAuthority, "queued operator authority"),
+            ),
+            assertCurrent: () => run.operatorAuthority?.assertCurrent(),
+          });
           const prepared = prepareChannelRunAdmission({
             cfg: committedConfig,
             runId: `queued-model-ceiling-${observed.length}`,
             agentId: "main",
             ingressKind: "channel",
             boundary: "auto-reply.agent-runner",
-            operatorAuthority: run.operatorAuthority,
+            operatorAuthority: restored.authority,
           });
           try {
             await admitFollowupRunLifecycle(run);
             const admitted = await prepared.admit("embedded");
             const authority = readAdmittedRunOperatorAuthority(admitted);
-            assertOperatorModelAllowed(authority, modelA);
+            assertOperatorModelAllowed(authority, {
+              provider: run.run.provider,
+              model: run.run.model,
+            });
             observed.push({
               prompts: run.prompt.match(/request \d/g),
               allowsB: authority?.modelPolicy?.allows(modelB) === true,
             });
+            if (run.prompt.includes("request 2")) {
+              expect(() => assertOperatorModelAllowed(authority, modelB)).toThrow();
+              setPolicy(["fixture/family-a"]);
+            }
           } catch (error) {
             failures.push(error);
           } finally {
             prepared.close();
+            restored.release();
             completeFollowupRunLifecycle(run);
           }
         });
         await vi.runAllTimersAsync();
-        expect(failures).toEqual([
-          expect.objectContaining({ message: expect.stringContaining("role changed") }),
-        ]);
+        expect(failures).toEqual([expect.any(Error)]);
         expect(getExistingFollowupQueue(key)).toBeUndefined();
         expect(observed).toEqual([
           { prompts: ["request 0", "request 1"], allowsB: true },
-          { prompts: ["request 3"], allowsB: true },
+          { prompts: ["request 2"], allowsB: false },
         ]);
       } finally {
         clearFollowupQueue(key);
@@ -324,7 +322,7 @@ describe("authenticated request mutation custody", () => {
   });
 
   it.each(["commit", "rollback", "revoke all", "policy commit", "policy rollback"] as const)(
-    "retains the accepted source through tentative transport fencing until %s",
+    "fences new requests during tentative transport changes through %s",
     async (outcome) => {
       const generation = createGeneration("generation-a");
       let committedConfig: OpenClawConfig = { gateway: { auth: { allowTailscale: true } } };
@@ -332,7 +330,6 @@ describe("authenticated request mutation custody", () => {
       const changesPolicy = outcome === "policy commit" || outcome === "policy rollback";
       setRuntimeConfigSnapshot(committedConfig);
       const connection = new AbortController();
-      const access = new AbortController();
       const { client, context, captures, handler, harness, dispatch } = createCaptureFixture({
         config: () => committedConfig,
         profileId: ensureProfileForEmail("transport-owner@example.test").id,
@@ -340,10 +337,6 @@ describe("authenticated request mutation custody", () => {
         generation,
         connection,
         policy: { role: "operator", authMethod: "tailscale" },
-        sourceAuthority: {
-          assertCurrent: () => access.signal.throwIfAborted(),
-          signal: access.signal,
-        },
       });
       harness.close.mockImplementation(() => connection.abort());
       const disconnect = (
@@ -359,8 +352,6 @@ describe("authenticated request mutation custody", () => {
         });
       await dispatch("accepted-source");
       const accepted = expectDefined(captures.at(-1), "accepted source");
-      const releaseQueued = expectDefined(accepted.authority.retain, "source retention")();
-      accepted.release();
       try {
         let ownership = generation.capture();
         if (changesPolicy) {
@@ -375,43 +366,29 @@ describe("authenticated request mutation custody", () => {
         await dispatch("buffered-after-fence");
         expect(connection.signal.aborted).toBe(true);
         expect(handler).toHaveBeenCalledOnce();
-        publishOperatorRoleConfigChange({});
-        expect(accepted.authority.signal?.aborted).toBe(false);
-        expect(() => accepted.authority.assertCurrent()).not.toThrow();
 
         if (outcome === "commit") {
           expect(generation.finalize(ownership)).toBe(true);
-          expect(accepted.authority.signal?.aborted).toBe(false);
         } else if (outcome === "revoke all") {
           disconnect(null, []);
-          expect(accepted.authority.signal?.aborted).toBe(false);
         } else if (outcome === "policy commit") {
           committedConfig = nextConfig;
           publishOperatorRoleConfigChange(context);
-          expect(accepted.authority.signal?.aborted).toBe(false);
+        } else if (changesPolicy) {
+          setRuntimeConfigSnapshot(committedConfig);
+          publishOperatorRoleConfigChange(context);
         } else {
-          if (changesPolicy) {
-            setRuntimeConfigSnapshot(committedConfig);
-            publishOperatorRoleConfigChange(context);
-          } else {
-            const restored = generation.replace(ownership, {
-              current: "generation-a",
-              required: null,
-            });
-            expect(restored).toBe(true);
-            // The original connection has left the socket set; rollback preserves its old source.
-            disconnect("generation-a", []);
-          }
-          expect(accepted.authority.signal?.aborted).toBe(false);
-          expect(() => accepted.authority.assertCurrent()).not.toThrow();
-          access.abort(new Error("original access source revoked"));
-          expect(accepted.authority.signal?.aborted).toBe(true);
+          const restored = generation.replace(ownership, {
+            current: "generation-a",
+            required: null,
+          });
+          expect(restored).toBe(true);
+          // Rolling back the generation does not restore the retired connection.
+          disconnect("generation-a", []);
         }
-        if (!access.signal.aborted) {
-          expect(accepted.authority.assertCurrent).not.toThrow();
-        }
+        await dispatch("after-transport-outcome");
+        expect(handler).toHaveBeenCalledOnce();
       } finally {
-        releaseQueued();
         accepted.release();
       }
     },

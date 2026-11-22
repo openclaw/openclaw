@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -506,7 +506,7 @@ describe("session resource admission", () => {
     setActivePluginRegistry(registry);
     test.context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(registry.gatewayMethodDescriptors, registry);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "alice",
       scopes: ["operator.sessions.write"],
       assertCurrent: () => test.grant.signal.throwIfAborted(),

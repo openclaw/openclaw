@@ -52,10 +52,34 @@ export function createProviderModelSelection(options: {
     get choosing() {
       return choosing;
     },
-    update(available: ModelCatalogEntry[]) {
-      models = available;
+    updateCatalog(
+      catalogModels: readonly ModelCatalogEntry[],
+      authProviderId: string | undefined,
+      activating: boolean,
+      verifiedModelRef: string | undefined,
+    ) {
+      const available = (model: ModelCatalogEntry) =>
+        canonicalModelAuthProviderId(model.provider) === authProviderId &&
+        model.available === true &&
+        model.manualSelectionAllowed !== false;
       const selected = options.getModel();
-      select(selected ? models.find((model) => modelRef(model) === modelRef(selected)) : undefined);
+      if (authProviderId && !activating) {
+        models = catalogModels.filter(available);
+        select(
+          selected ? models.find((model) => modelRef(model) === modelRef(selected)) : undefined,
+        );
+        return;
+      }
+      select(
+        selected
+          ? (catalogModels.find(
+              (model) => model.provider === selected.provider && model.id === selected.id,
+            ) ?? selected)
+          : (catalogModels.find((model) => available(model) && model.recommended === true) ??
+              catalogModels.find(
+                (model) => available(model) && modelRef(model) === verifiedModelRef,
+              )),
+      );
     },
     clear() {
       models = [];

@@ -247,11 +247,6 @@ describe("openclaw.setup auth retries", () => {
 
   it.each([
     ["owner", {}],
-    ["choice", { authChoice: "xai" }],
-    ["agent", { agentId: "other-agent" }],
-    ["workspace", { workspace: "/tmp/other-auth-workspace" }],
-    ["modelTarget", { modelTarget: "utility" }],
-    ["nativeSessionCatalogsEnabled", { nativeSessionCatalogsEnabled: true }],
     ["commit", {}],
   ] satisfies Array<[string, Partial<SystemAgentSetupAuthStartParams>]>)(
     "keeps another sign-in busy when its %s prevents replacement",

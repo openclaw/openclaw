@@ -250,7 +250,9 @@ async function runChannelProviderLogin(
       choice,
       loginResult.authRefresh,
       switchResult === "failed",
-      nextProfileId ? { model: commandParams.model, profileId: nextProfileId } : undefined,
+      nextProfileId && commandParams.model
+        ? { model: commandParams.model, profileId: nextProfileId }
+        : undefined,
     );
     return {
       text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),

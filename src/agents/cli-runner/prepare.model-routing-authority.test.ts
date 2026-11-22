@@ -7,12 +7,12 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -159,10 +159,10 @@ describe("CLI model-routing receipt authority", () => {
     },
   );
 
-  it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
+  it("checks the logical model initially and preserves admitted dispatch across policy changes", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };
     let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
-    const source = createAdmittedRunOperatorAuthority({
+    const source = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
       assertCurrent: () => {},
@@ -209,7 +209,7 @@ describe("CLI model-routing receipt authority", () => {
         policy: { allow: [] },
         manifestPlugins: [],
       });
-      expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
+      expect(context.params.assertCurrent).not.toThrow();
     } finally {
       admission.close();
     }

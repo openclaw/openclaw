@@ -26,6 +26,7 @@ import {
   loginProviderAccounts,
   resolveLoginSelection,
 } from "./login-providers.ts";
+import { createLoginSignIn } from "./login-sign-in.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
@@ -72,9 +73,6 @@ export function createModelProviderLogin(options: {
   let presentationReady: (() => void) | undefined;
   let refreshWarning: string | null = null;
   let message: ModelProviderRowMessage | undefined;
-  let loginMode: "auth" | "activate" | "access" = "auth";
-  let authProviderId: string | undefined;
-  let authProviderLabel: string | undefined;
   let completionModel: ModelCatalogEntry | undefined;
   let verifiedModelRef: string | undefined;
 
@@ -85,10 +83,11 @@ export function createModelProviderLogin(options: {
     onPresentationChange: () => presentationReady?.(),
     onAnswer: (value, includeValue) => void run(() => runner.answer(value, includeValue)),
     onBackgroundCompletion: (completion) => run(() => Promise.resolve(completion), true),
+    onStart: (method, intent) => signIn.onStart(method, intent),
     requestFailedMessage: () => t("modelProviders.requestFailed"),
     sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
     recovery: {
-      onRetry: () => restartSignIn?.(),
+      onRetry: () => signIn.restart(),
       onOpenSettings: () => {
         reset();
         options.getScope().context.navigate("connection");
@@ -96,8 +95,14 @@ export function createModelProviderLogin(options: {
     },
   });
   const runner = wizard.runner;
-  // The last started sign-in, so a typed failure can offer to start it again.
-  let restartSignIn: (() => void) | undefined;
+  const signIn = createLoginSignIn(options, {
+    runner,
+    run,
+    reset,
+    synchronizePresentation: () => presentation.synchronize(),
+    allowSetup: () => Boolean(options.onManualProvider) || !selection().modelRef,
+    loginProviders,
+  });
   const modelSelection = createProviderModelSelection({
     canChoose: () => !chat.busy && runner.state.phase === "done" && options.canContinue(),
     getModel: () => completionModel,
@@ -105,26 +110,13 @@ export function createModelProviderLogin(options: {
     notify,
   });
   const completionCatalog = new ModelCatalogReader(notify, {
-    onResult: (catalog) => {
-      const available = (model: ModelCatalogEntry) =>
-        canonicalModelAuthProviderId(model.provider) === authProviderId &&
-        model.available === true &&
-        model.manualSelectionAllowed !== false;
-      if (authProviderId && loginMode !== "activate") {
-        modelSelection.update(catalog.models.filter(available));
-        return;
-      }
-      const selected = completionModel;
-      completionModel = selected
-        ? (catalog.models.find(
-            (model) => model.provider === selected.provider && model.id === selected.id,
-          ) ?? selected)
-        : (catalog.models.find((model) => available(model) && model.recommended === true) ??
-          catalog.models.find(
-            (model) => available(model) && `${model.provider}/${model.id}` === verifiedModelRef,
-          ));
-      notify();
-    },
+    onResult: (catalog) =>
+      modelSelection.updateCatalog(
+        catalog.models,
+        signIn.authProviderId,
+        signIn.mode === "activate",
+        verifiedModelRef,
+      ),
   });
   const view = projectSource(null, {
     read: () => null,
@@ -196,7 +188,7 @@ export function createModelProviderLogin(options: {
     // Keep the unavailable pin until the existing activation owner verifies and
     // commits the explicit replacement; clearing it could select another account.
     currentPicker = null;
-    loginMode = "activate";
+    signIn.mode = "activate";
     message = undefined;
     refreshWarning = null;
     const kind = `saved-auth:${encodeURIComponent(profileId)}` as const;
@@ -330,9 +322,6 @@ export function createModelProviderLogin(options: {
     presentationReady = undefined;
     refreshWarning = null;
     message = undefined;
-    loginMode = "auth";
-    authProviderId = undefined;
-    authProviderLabel = undefined;
     modelSelection.clear();
     completionModel = undefined;
     verifiedModelRef = undefined;
@@ -340,6 +329,7 @@ export function createModelProviderLogin(options: {
     // Cleanup addresses the original connection and wizard only. Late replies
     // cannot publish credentials or errors into another agent's view.
     wizard.reset();
+    signIn.forget();
     notify();
   }
 
@@ -354,14 +344,19 @@ export function createModelProviderLogin(options: {
       }
     }
   }
-  onSettled(() => () => {
-    presentation.dispose();
-    publish = undefined;
-    generation += 1;
-    chat.reset();
-    inventoryRequest?.controller.abort();
-    inventoryRequest?.result.resolve(null);
-    completionCatalog.clear();
+  onSettled(() => {
+    // A suspended or recorded sign-in continues once config admits it again.
+    const stopConfig = options.getScope().context.runtimeConfig.subscribe(signIn.synchronize);
+    return () => {
+      stopConfig();
+      presentation.dispose();
+      publish = undefined;
+      generation += 1;
+      chat.reset();
+      inventoryRequest?.controller.abort();
+      inventoryRequest?.result.resolve(null);
+      completionCatalog.clear();
+    };
   });
 
   function doneAction() {
@@ -381,7 +376,7 @@ export function createModelProviderLogin(options: {
   function pickerView(authStatus?: ModelAuthStatusResult | null) {
     view.read();
     const picker = currentPicker;
-    if (!picker) {
+    if (!picker || wizard.state().phase !== "idle") {
       return null;
     }
     const canSelect = () => currentPicker === picker && Boolean(authStatus) && picker.isCurrent();
@@ -455,22 +450,9 @@ export function createModelProviderLogin(options: {
           options.onManualProvider?.(selected.id);
           return;
         }
-        authProviderId = canonicalModelAuthProviderId(selected.authProvider);
-        authProviderLabel = selected.kind === "secret" ? undefined : selected.groupLabel;
         currentPicker = null;
-        // Browser and device sign-ins can select a model; a pasted secret only saves. A
-        // credential-only sign-in still succeeds when its account offers no usable model.
-        const selectingModel = picker.allowSetup && selected.kind !== "secret";
-        loginMode = selected.requiresSetup ? (selectingModel ? "activate" : "access") : "auth";
         refreshWarning = null;
-        const { id, kind, label, brandId } = selected;
-        restartSignIn = () => {
-          runner.prepareSignIn(kind, label, brandId);
-          void run(() =>
-            runner.start(id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
-          );
-        };
-        restartSignIn();
+        signIn.choose(selected, picker.allowSetup);
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -515,7 +497,7 @@ export function createModelProviderLogin(options: {
     completionModel = verifiedStarterModel(
       readAgentModelCatalog(context.gateway.snapshot.client, agentId),
       modelRef,
-      authProviderId,
+      signIn.authProviderId,
       completion.modelActivation?.modelName,
     );
     notify();
@@ -525,15 +507,15 @@ export function createModelProviderLogin(options: {
     const { context, agentId } = options.getScope();
     const client = context.gateway.snapshot.client;
     const currentGeneration = generation;
-    const providerId = authProviderId;
-    const activating = loginMode === "activate";
+    const providerId = signIn.authProviderId;
+    const activating = signIn.mode === "activate";
     if (activating && !completion.modelActivation) {
       runner.fail(t("modelSetup.errors.activationFailed"));
       return;
     }
     verifiedModelRef = completion.modelActivation?.modelRef;
     const label = runner.state.authLabel;
-    if (activating && !authProviderId) {
+    if (activating && !signIn.authProviderId) {
       runner.close();
     }
     message = {
@@ -543,7 +525,7 @@ export function createModelProviderLogin(options: {
         : [
             label,
             t(
-              loginMode === "access"
+              signIn.mode === "access"
                 ? "modelProviders.login.nativeDone"
                 : "modelProviders.login.done",
             ),
@@ -704,9 +686,9 @@ export function createModelProviderLogin(options: {
     },
     get wizardViewProps() {
       view.read();
-      const connectedLabel = authProviderLabel ?? runner.state.authLabel;
+      const connectedLabel = signIn.authProviderLabel ?? runner.state.authLabel;
       const current = wizard.viewProps({
-        mode: loginMode === "access" ? "auth" : loginMode,
+        mode: signIn.mode === "access" ? "auth" : signIn.mode,
         busy: mutationActive,
         refreshWarning,
         doneMessage: connectedLabel
@@ -729,7 +711,7 @@ export function createModelProviderLogin(options: {
       view.read();
       return modelSelection.picker();
     },
-    synchronizePresentation: presentation.synchronize,
+    synchronize: signIn.synchronize,
     recoveryView,
     pickerView,
     setSearchInput(element: HTMLInputElement) {
@@ -743,7 +725,7 @@ export function createModelProviderLogin(options: {
     },
     open,
     invalidateInventory,
-    reset,
+    reset: () => (signIn.active ? signIn.synchronize() : reset()),
   };
 }
 

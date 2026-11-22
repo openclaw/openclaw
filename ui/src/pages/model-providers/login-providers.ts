@@ -14,7 +14,7 @@ import { buildModelProviderCards } from "./data.ts";
 
 registerModelSetupEnglish();
 
-type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
+export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
   authProvider: string;
 };

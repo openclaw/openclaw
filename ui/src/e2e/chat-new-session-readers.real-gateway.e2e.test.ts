@@ -11,7 +11,6 @@ import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { assertServedUi, chatControls, pairFixture } from "./chat-lifecycle.test-support.ts";
 import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
@@ -76,34 +75,65 @@ suite.define(() => {
     suite.runScenario(test, {
       retainedState: () => instance.stateDir,
       run: () =>
-        // Wide enough for session Details, whose Processes section reads with the chat.
+        // Wide enough for session Details, whose Processes section reads with the chat. The
+        // service worker serves a reload's shell before the Gateway answers, as for users.
         suite.withPage(
-          { ...createControlUiE2eContextOptions(), viewport: { width: 1600, height: 900 } },
+          {
+            ...createControlUiE2eContextOptions(),
+            serviceWorkers: "allow",
+            viewport: { width: 1600, height: 900 },
+          },
           async ({ page }) => {
             const pending = new Map<string, RequestFrame>();
             const responses: { method: string; response: ResponseFrame }[] = [];
-            page.on("websocket", (socket) => {
-              socket.on("framesent", ({ payload }) => {
-                const frame: GatewayFrame = JSON.parse(String(payload));
+            // Holds history answers while set, like a slow Gateway, so Details mounts before
+            // the chat learns whether its session exists.
+            let historyHold: Promise<void> | undefined;
+            await page.routeWebSocket(`ws://127.0.0.1:${instance.port}/**`, (socket) => {
+              const server = socket.connectToServer();
+              socket.onMessage((message) => {
+                const frame: GatewayFrame = JSON.parse(String(message));
                 if (frame.type === "req") {
                   pending.set(frame.id, frame);
                 }
+                server.send(message);
               });
-              socket.on("framereceived", ({ payload }) => {
-                const frame: GatewayFrame = JSON.parse(String(payload));
+              server.onMessage(async (message) => {
+                const frame: GatewayFrame = JSON.parse(String(message));
                 const request = frame.type === "res" ? pending.get(frame.id) : undefined;
                 if (frame.type === "res" && request) {
                   responses.push({ method: request.method, response: frame });
+                  if (historyHold && request.method === "sessions.messages.subscribe") {
+                    await historyHold;
+                  }
                 }
+                socket.send(message);
               });
             });
             const succeeded = (method: string) =>
               responses.some((rpc) => rpc.method === method && rpc.response.ok);
             await pairFixture(page, instance);
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main", "chat"));
+            await page.goto(new URL("chat/main", suite.server.baseUrl).href);
             await waitForControlUiGatewayReady(page);
             await assertServedUi(page, suite.server.baseUrl);
             const { pane, composer, send } = chatControls(page);
+            const historyAnswers = () =>
+              responses.filter((rpc) => rpc.method === "sessions.messages.subscribe").length;
+            await expect.poll(historyAnswers).toBeGreaterThan(0);
+            await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+            // A full page load of the unstarted chat, from its saved shell, while history is slow.
+            const answered = historyAnswers();
+            const release = Promise.withResolvers<void>();
+            historyHold = release.promise;
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
+            await expect.poll(historyAnswers).toBeGreaterThan(answered);
+            await page
+              .locator("openclaw-chat-details-session")
+              .first()
+              .waitFor({ state: "attached" });
+            historyHold = undefined;
+            release.resolve();
             await composer.fill("Hello for the first time");
             await send.click();
             await pane
