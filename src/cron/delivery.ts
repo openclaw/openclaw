@@ -187,13 +187,13 @@ export async function sendCronAnnouncePayloadStrict(params: {
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
-          // The platform send start is the real transport boundary: the queue
-          // executor has already persisted its pre-send state and sets its own
-          // platform-send flag right after this returns, so a send request is
-          // genuinely under way. The adapter-admission handoff callback fires
-          // earlier, before channel-side preparation that can still abort
-          // without ever starting a request.
-          onPlatformSendStart: async () => {
+          // The platform send dispatch is the actual transport boundary: the
+          // channel turn has established delivery custody and invokes the
+          // adapter immediately after this callback, so the send request is
+          // genuinely under way. The adapter-admission handoff fires earlier,
+          // before channel-side preparation (e.g. resolving an unresolved chat
+          // id) that can still abort without ever starting a request.
+          onPlatformSendDispatch: async () => {
             params.onProviderHandoff?.();
           },
           onDeliveredPayload: ({ hookContent, ...payload }) => {
