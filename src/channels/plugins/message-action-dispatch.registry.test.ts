@@ -233,6 +233,7 @@ describe("official plugin read-only authority", () => {
       { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
     ]);
     fixture.plugin.directory = { listGroups };
+    fixture.register();
     const context: Context = {
       ...fixture.context,
       params: { channelId: fixture.plugin.id },
