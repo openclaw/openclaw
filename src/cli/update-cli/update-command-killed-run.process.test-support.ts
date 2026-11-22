@@ -213,6 +213,8 @@ export type Updater = {
   installed?: "previous" | "candidate";
   trigger?: "cli" | "api";
   gateway?: "untouched" | "stopped" | "restarted";
+  /** The install path the update ran from, when it links to the installation key. */
+  root?: string;
   checkout?: {
     sha: string;
     buildId: string;
@@ -269,6 +271,35 @@ export async function installation(name = "prefix") {
   const slot = path.join(ctx.root, name, "lib", "node_modules", "openclaw");
   await writePackageRoot(slot, "2026.11.3");
   return slot;
+}
+/**
+ * A pnpm-style installation: the install path links to the package's own directory,
+ * whose real path the update records as its installation key.
+ */
+export async function linkedInstallation(name = "prefix") {
+  const slot = path.join(ctx.root, name, "lib", "node_modules", "openclaw");
+  const previous = path.join(ctx.root, `${name}-packages`, "previous", "openclaw");
+  await writePackageRoot(previous, "2026.11.3");
+  fs.mkdirSync(path.dirname(slot), { recursive: true });
+  fs.symlinkSync(previous, slot, "dir");
+  return { slot, key: fs.realpathSync(previous) };
+}
+/**
+ * What pnpm's activation does: the candidate gets its own directory, the previous one leaves.
+ * `version` installs a later build instead, as `pnpm add -g` of a fixed build does.
+ */
+export async function replacePackageDirectory(
+  { slot, key }: { slot: string; key: string },
+  { keepPrevious = false, version = candidate } = {},
+) {
+  const next = path.join(path.dirname(path.dirname(key)), version, "openclaw");
+  await writePackageRoot(next, version);
+  fs.rmSync(slot);
+  fs.symlinkSync(next, slot, "dir");
+  if (!keepPrevious) {
+    fs.rmSync(path.dirname(key), { recursive: true });
+  }
+  return fs.realpathSync(next);
 }
 export const git = (slot: string, ...args: string[]) =>
   execFileSync("git", ["-C", slot, "-c", "user.name=OpenClaw Test", "-c", "user.email=", ...args], {
