@@ -73,7 +73,15 @@ export function collectActiveSessionWorkAdmissionKeys(params: {
 /** Prepare storage-backed providers before workers acquire their transaction permit. */
 export async function prepareSessionMaintenancePreservation(
   storePath: string,
-  options: { native?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    native?: boolean;
+    env?: NodeJS.ProcessEnv;
+    /**
+     * Refuse pins changed while providers prepare. Agent deletion retries once on that
+     * refusal; automatic maintenance must not be refused, so it never sets this.
+     */
+    refusePinChangesDuringPreparation?: true;
+  } = {},
 ): Promise<PreparedSessionMaintenancePreservation> {
   const target = resolveExplicitIncognitoAgentSqliteTarget(storePath, { env: options.env });
   // Pins and providers read the maintained store's state, never the process's ambient root.
@@ -82,6 +90,9 @@ export async function prepareSessionMaintenancePreservation(
     env: target?.env ?? options.env,
     memory: target !== undefined,
   };
+  const pinsBeforeProviders = options.refusePinChangesDuringPreparation
+    ? await preparePersonalSessionPins({ env: store.env })
+    : undefined;
   const registrations = [...preserveKeysProviders];
   const prepared: PreparedSessionMaintenancePreserveKeys[] = [];
   let disposed = false;
@@ -109,6 +120,9 @@ export async function prepareSessionMaintenancePreservation(
     for (const registration of registrations) {
       prepared.push(await registration.prepare(store));
       assertProvidersCurrent();
+    }
+    if (pinsBeforeProviders && !pinsBeforeProviders.isCurrent()) {
+      throw new SqliteSessionMutationConflictError("personal session pins changed");
     }
     // Providers may wait on storage; read pins last so that wait cannot outdate the snapshot.
     const personalPins = await preparePersonalSessionPins({ env: store.env });

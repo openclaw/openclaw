@@ -1,9 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../io.js";
@@ -191,6 +194,69 @@ it.each([false, true])(
           expect(f.read(oldKey)).toMatchObject({ archiveReason: "active-session-cap" });
           expect(f.read("agent:main:survivor")).toEqual(previous[2]);
         }
+      } finally {
+        unregister();
+      }
+    }),
+);
+
+it.each(["while a provider prepares", "after the pins snapshot"] as const)(
+  "refuses the purge attempt when pins change %s and protects the new pin on retry",
+  (window) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = fixture(state.statePath("shared.sqlite"));
+      const oldKey = "agent:main:maintenance-old";
+      replaceSessionEntrySync(
+        { ...f.scope, agentId: "main", sessionKey: oldKey },
+        { sessionId: "maintenance-old", updatedAt: Date.now() - 86_400_000 },
+      );
+      const cfg = {
+        ...f.cfg,
+        session: {
+          ...f.cfg.session,
+          maintenance: { mode: "enforce", maxEntries: 1, preserveRecent: false },
+        },
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const profile = await ensureCanonicalUserProfileForEmail("purge-pins@example.test", {
+        env: state.env,
+      });
+      let pinned: Promise<unknown> | undefined;
+      const pin = () =>
+        (pinned ??= setCanonicalUserPreferences(
+          profile.id,
+          { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session:${oldKey}`] },
+          { env: state.env },
+        ));
+      const read = () => [f.read(), f.read(oldKey), f.transcript("current")];
+      const previous = read();
+      const retried: unknown[] = [];
+      let preparations = 0;
+      const unregister = registerSessionMaintenancePreserveKeysProvider(async () => {
+        if (preparations++ > 0) {
+          retried.push(read());
+        } else if (window === "while a provider prepares") {
+          await pin();
+        }
+        return {
+          capture: () => {
+            // Every capture follows the attempt's pins snapshot.
+            if (window === "after the pins snapshot") {
+              void pin();
+            }
+            return [];
+          },
+          dispose() {},
+        };
+      });
+      try {
+        await f.purge();
+        expect(await pinned).toMatchObject({ ok: true });
+        // One bounded second preparation, and the refused attempt committed nothing.
+        expect(retried).toEqual([previous]);
+        expect(f.read()).toBeUndefined();
+        expect(f.read(oldKey)).toEqual(previous[1]);
       } finally {
         unregister();
       }

@@ -114,6 +114,7 @@ export async function purgeDeletedAgentSessionEntries(
           const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
             native,
             env: resolved.env,
+            refusePinChangesDuringPreparation: true,
           });
           const assertCurrent = () => {
             execution?.assertCurrent();
