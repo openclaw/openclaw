@@ -194,9 +194,9 @@ suite.define(() => {
             "desktop.observe": observe("sizing"),
           });
           await page.addInitScript(
-            ({ key, locale, textScale }) => {
-              localStorage.setItem("openclaw.i18n.locale", locale);
-              localStorage.setItem(key, JSON.stringify({ textScale }));
+            ({ key, locale: selectedLocale, textScale: selectedScale }) => {
+              localStorage.setItem("openclaw.i18n.locale", selectedLocale);
+              localStorage.setItem(key, JSON.stringify({ textScale: selectedScale }));
             },
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), locale, textScale },
           );
@@ -222,10 +222,10 @@ suite.define(() => {
               width: select.clientWidth,
               remaining:
                 select.getBoundingClientRect().width -
-                parseFloat(style.borderLeftWidth) -
-                parseFloat(style.borderRightWidth) -
-                parseFloat(style.paddingLeft) -
-                parseFloat(style.paddingRight) -
+                Number.parseFloat(style.borderLeftWidth) -
+                Number.parseFloat(style.borderRightWidth) -
+                Number.parseFloat(style.paddingLeft) -
+                Number.parseFloat(style.paddingRight) -
                 context.measureText(label).width,
             };
           });
