@@ -680,6 +680,7 @@ describe("already-current update", () => {
         channel: "dev",
         sha,
         node,
+        acceptCapabilities: expected.name === "a change",
       });
       expect(outcome).toMatchObject({ status: "current", pluginsChanged: expected.changed });
       expect(
@@ -692,6 +693,7 @@ describe("already-current update", () => {
         "dev",
         "--timeout",
         expect.stringMatching(/^\d+$/),
+        ...(expected.name === "a change" ? ["--accept-capabilities"] : []),
       ]);
       const record = await getUpdateRunAsync(run.runId);
       expect(record).toMatchObject({ status: "skipped", reason: "already-current" });

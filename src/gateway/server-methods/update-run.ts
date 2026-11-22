@@ -42,7 +42,7 @@ import { updateHandlers as legacyUpdateHandlers } from "./update.js";
 export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const { respond, client, context } = request;
   const installed = await readInstallStatus();
-  const params = await admitGatewayUpdateRequest(request);
+  const params = await admitGatewayUpdateRequest(request, installed.root ?? installed.status.root);
   if (!params) {
     return;
   }
@@ -189,6 +189,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     sha,
     tag,
     timeoutMs: params.timeoutMs,
+    acceptCapabilities: params.acceptCapabilities,
     restartDelayMs: params.restartDelayMs,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),
@@ -207,6 +208,7 @@ async function runUpdateInBackground(
     tag?: string;
     /** The requester's overall budget (`timeoutMs`). */
     timeoutMs?: number;
+    acceptCapabilities?: boolean;
     /** The requester's `restartDelayMs`, as the package route honors it. */
     restartDelayMs?: number;
     sessionKey?: string;
@@ -228,6 +230,7 @@ async function runUpdateInBackground(
       sha: options.sha,
       tag: options.tag,
       timeoutMs: options.timeoutMs,
+      acceptCapabilities: options.acceptCapabilities,
     });
     const restart = {
       reason: "update.run",
