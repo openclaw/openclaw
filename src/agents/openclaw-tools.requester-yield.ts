@@ -131,8 +131,12 @@ export function createRequesterYieldCallback(params: {
     if (completionClaimed) {
       // Recheck at commit: a command that exited meanwhile already reported its exit.
       const execs = listYieldAwaitableExecs(requesterChat);
-      if (runtimeClaim === true || registryClaimed || execs.length > 0) {
+      if (execs.length > 0) {
         awaitExecsForYield(execs);
+        // The armed exit wake is this turn's continuation; report it so the runner sees it.
+        return { execWakeArmed: true };
+      }
+      if (runtimeClaim === true || registryClaimed) {
         return true;
       }
     }

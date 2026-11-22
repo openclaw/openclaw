@@ -89,8 +89,7 @@ function registerNodeToolElicitation(
   signal?: AbortSignal,
 ) {
   const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
-  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
+  if (!caller?.operationalRunInstance || caller.sessionKey !== sessionKey) {
     return undefined;
   }
   const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
@@ -98,19 +97,18 @@ function registerNodeToolElicitation(
   if (!registry || !node) {
     return undefined;
   }
-  assertCurrent();
+  const stopSignal = AbortSignal.any([
+    ...(caller.approvalSignals ?? []),
+    ...(signal ? [signal] : []),
+  ]);
+  stopSignal.throwIfAborted();
   const id = randomUUID();
   const handle = createMcpClientElicitationHandler({
     sessionKey,
     agentId: caller.agentId,
-    assertCurrent,
+    assertCurrent: () => stopSignal.throwIfAborted(),
   });
-  const release = registry.mcpElicitation.register({
-    id,
-    node,
-    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
-    handle,
-  });
+  const release = registry.mcpElicitation.register({ id, node, signal: stopSignal, handle });
   return { id, [Symbol.dispose]: release };
 }
 

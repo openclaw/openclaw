@@ -6,7 +6,6 @@ import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
-  bindActiveCronAuthorityCurrentness,
   bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
@@ -39,7 +38,6 @@ export function finalizeCliMcpGrant(
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
-  const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
   const withCronManagementToolConstruction = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
@@ -52,7 +50,6 @@ export function finalizeCliMcpGrant(
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
-    ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     ...(withCronManagementToolConstruction ? { withCronManagementToolConstruction } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,

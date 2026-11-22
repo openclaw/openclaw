@@ -485,6 +485,8 @@ export type EmbeddedRunAttemptResult = {
   yieldAcknowledgment?: string;
   /** The registry accepted this attempt's explicit incoming-message wait. */
   yieldMessageWaitRegistered?: boolean;
+  /** This attempt's sessions_yield armed background commands whose exit resumes the session. */
+  yieldExecWakeArmed?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is
