@@ -397,6 +397,7 @@ it.each(["authority", "stop", "scope", "git-target"])(
           false,
           undefined,
           expect.objectContaining({
+            code: "INVALID_REQUEST",
             message: "This OCM version does not support an explicit Git update target.",
           }),
         );
