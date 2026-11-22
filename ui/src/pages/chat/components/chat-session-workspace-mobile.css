@@ -280,7 +280,9 @@
 }
 
 .chat-workspace-mobile__extension {
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-workspace-mobile__directory {

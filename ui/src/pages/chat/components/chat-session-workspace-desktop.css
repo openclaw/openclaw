@@ -230,8 +230,8 @@
 }
 
 .workspace-desktop__filename > :last-child {
-  white-space: normal;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workspace-breadcrumb__overflow {

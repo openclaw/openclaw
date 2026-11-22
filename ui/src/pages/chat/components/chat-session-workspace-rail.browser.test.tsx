@@ -580,7 +580,7 @@ it.each([400, 820, 1280])(
 );
 
 it.each(["mobile", "desktop"] as const)(
-  "keeps both filename parts readable inside a narrow %s Files rail",
+  "keeps the filename stem visible and truncates a long extension on one line in a narrow %s Files rail",
   async (presentation) => {
     const { page } = await import("vitest/browser");
     await page.viewport(390, 844);
@@ -615,12 +615,17 @@ it.each(["mobile", "desktop"] as const)(
     const suffix = long.lastElementChild!;
     expect(stem.clientWidth).toBeGreaterThan(0);
     expect(stem.scrollWidth).toBeLessThanOrEqual(stem.clientWidth + 1);
-    const range = document.createRange();
-    range.selectNodeContents(suffix);
-    expect(range.getClientRects().length).toBeGreaterThan(1);
-    for (const rect of range.getClientRects()) {
-      expect(rect.right).toBeLessThanOrEqual(long.getBoundingClientRect().right + 1);
-    }
+    expect(suffix.scrollWidth).toBeGreaterThan(suffix.clientWidth);
+    expect(getComputedStyle(suffix).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(suffix).overflowX).toBe("hidden");
+    expect(getComputedStyle(suffix).whiteSpace).toBe("nowrap");
+    expect(suffix.getBoundingClientRect().right).toBeLessThanOrEqual(
+      long.getBoundingClientRect().right + 1,
+    );
+    expect(long.getBoundingClientRect().height).toBeCloseTo(
+      label(ordinary).getBoundingClientRect().height,
+      0,
+    );
     const short = label(ordinary);
     expect(short.lastElementChild!.textContent).toBe(".ts");
     expect(short.firstElementChild!.scrollWidth).toBeGreaterThan(
