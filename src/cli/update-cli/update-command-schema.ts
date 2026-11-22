@@ -3,6 +3,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveNodeService } from "../../daemon/node-service.js";
 import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -608,11 +609,47 @@ export async function assertPendingMigrationsAdmitted(params: {
   if (!owner) {
     return;
   }
-  const stores = params.pendingMigrations
-    .map(({ path: file, expected, found }) => `${file} (schema ${found} -> ${expected})`)
-    .join(", ");
   throw new UpdatePreMutationError(
     "database-migration-owner-live",
-    `This update must migrate ${stores}, which needs exclusive access to the state, but a Gateway (PID ${owner.pid}) still owns it and this update does not stop that Gateway. Stop it through its service manager, or press Ctrl+C in its terminal, then rerun ${formatCliCommand("openclaw update", params.env)}. No package replacement was attempted.`,
+    `This update must migrate ${formatPendingMigrations(params.pendingMigrations)}, which needs exclusive access to the state, but a Gateway (PID ${owner.pid}) still owns it and this update does not stop that Gateway. Stop it through its service manager, or press Ctrl+C in its terminal, then rerun ${formatCliCommand("openclaw update", params.env)}. No package replacement was attempted.`,
   );
+}
+
+/** Updates stop Gateways, not node services; a running node keeps its state connection open. */
+export async function assertPendingMigrationsReleasedByNodeService(params: {
+  pendingMigrations: ReadonlyArray<{ path: string; expected: number; found: number | null }>;
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}): Promise<void> {
+  if (!params.pendingMigrations.length) {
+    return;
+  }
+  const service = resolveNodeService();
+  const options = { timeoutMs: params.timeoutMs };
+  // Unreadable service state leaves the decision to Doctor's own admission.
+  const [command, runtime] = await Promise.all([
+    service.readCommand(params.env, options).catch(() => null),
+    service.readRuntime(params.env, options).catch(() => undefined),
+  ]);
+  if (
+    !command ||
+    runtime?.status !== "running" ||
+    path.resolve(resolveStateDir({ ...params.env, ...command.environment })) !==
+      path.resolve(resolveStateDir(params.env))
+  ) {
+    return;
+  }
+  const pid = runtime.pid ? ` (PID ${runtime.pid})` : "";
+  throw new UpdatePreMutationError(
+    "database-migration-owner-live",
+    `This update must migrate ${formatPendingMigrations(params.pendingMigrations)}, which needs exclusive access to the state, but the node host service${pid} keeps it open and updates do not stop node services. Run ${formatCliCommand("openclaw node stop", params.env)}, rerun ${formatCliCommand("openclaw update", params.env)}, then run ${formatCliCommand("openclaw node start", params.env)}. Nothing was stopped or replaced.`,
+  );
+}
+
+function formatPendingMigrations(
+  pendingMigrations: ReadonlyArray<{ path: string; expected: number; found: number | null }>,
+): string {
+  return pendingMigrations
+    .map(({ path: file, expected, found }) => `${file} (schema ${found} -> ${expected})`)
+    .join(", ");
 }

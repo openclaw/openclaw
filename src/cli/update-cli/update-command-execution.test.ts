@@ -310,6 +310,52 @@ describe("mutable update execution", () => {
     },
   );
 
+  it.each([
+    { migrating: true, node: "running", sameState: true },
+    { migrating: true, node: "running", sameState: false },
+    { migrating: true, node: "stopped", sameState: true },
+    { migrating: false, node: "running", sameState: true },
+  ] as const)(
+    "refuses before the Gateway stops while a node service keeps the migrating state open (migrating=$migrating, node=$node, same state=$sameState)",
+    async ({ migrating, node, sameState }) => {
+      await withTestDir({ prefix: "migration-node-" }, async (state) => {
+        // #203457: the node host keeps openclaw.sqlite open, so Doctor cannot take exclusion.
+        vi.stubEnv("OPENCLAW_STATE_DIR", state);
+        const shared = path.join(state, "state", "openclaw.sqlite");
+        vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
+          { path: shared, userVersion: migrating ? 14 : 15 },
+        ]);
+        mocks.checkCandidate.mockResolvedValue({
+          ...readyCandidate([]),
+          candidateSchemaVersions: { state: 15, agent: 19 },
+        });
+        mocks.nodeServiceCommand.mockResolvedValue({
+          programArguments: ["node", "openclaw.mjs", "node", "run"],
+          environment: { OPENCLAW_STATE_DIR: sameState ? state : path.join(state, "other") },
+        });
+        mocks.nodeServiceRuntime.mockResolvedValue({ status: node, pid: 5151 });
+        mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
+        const params = executionParams("package");
+        params.opts.restart = params.shouldRestart = false;
+
+        const execution = await execute(params);
+
+        if (migrating && node === "running" && sameState) {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "database-migration-owner-live" },
+          });
+          expect(JSON.stringify(execution?.result)).toContain(
+            `${shared} (schema 14 -> 15), which needs exclusive access to the state, but the node host service (PID 5151) keeps it open`,
+          );
+        } else {
+          expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
+        }
+        expect(mocks.serviceStopped).toBe(!(migrating && node === "running" && sameState));
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps plugin availability advisory (incompatible=%s)",
     async (incompatible) =>
