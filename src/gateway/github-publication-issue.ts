@@ -80,13 +80,7 @@ export async function createSessionGitHubIssue(
   const assertSessionCurrent = () => {
     authority.assertCurrent();
     const latest = selected.readCurrent().entry;
-    if (
-      !latest ||
-      latest.sessionId !== entry.sessionId ||
-      latest.lifecycleRevision !== entry.lifecycleRevision ||
-      latest.projectId !== entry.projectId ||
-      latest.archivedAt !== undefined
-    ) {
+    if (!latest || latest.projectId !== entry.projectId || latest.archivedAt !== undefined) {
       throw unavailable;
     }
   };
