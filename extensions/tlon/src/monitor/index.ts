@@ -245,23 +245,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     return normalizeShip(ship) === settingsState.effectiveOwnerShip;
   }
 
-  /** DM ingress allowlist for one chat event; club claims only match as their club-scoped id. */
+  /** Club authors are unverified; only explicit owner approval may admit their message. */
   function resolveChatAllowFrom(params: {
     ownerDm: boolean;
     isClubMessage: boolean;
     senderShip: string;
-    senderId: string;
   }): string[] {
     if (params.ownerDm) {
       return [params.senderShip];
     }
-    if (!params.isClubMessage) {
-      return settingsState.effectiveDmAllowlist;
-    }
-    const claimedShipAllowed = settingsState.effectiveDmAllowlist.some(
-      (ship) => normalizeShip(ship) === params.senderShip,
-    );
-    return claimedShipAllowed ? [params.senderId] : [];
+    return params.isClubMessage ? [] : settingsState.effectiveDmAllowlist;
   }
 
   const processMessage = async (params: {
@@ -630,7 +623,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       runtime,
       botShipName,
       state: settingsState,
-      processApprovedMessage: async (approval) => {
+      processApprovedMessage: async (approval, ownerStillCurrent) => {
         if (!approval.originalMessage || approval.type === "group") {
           return;
         }
@@ -660,6 +653,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           messageText: approval.originalMessage.messageText,
           messageContent: approval.originalMessage.messageContent,
           timestamp: approval.originalMessage.timestamp,
+          isAdmissionAllowed: ownerStillCurrent,
           isGroup,
           ...(isGroup
             ? {
@@ -903,12 +897,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
 
       const ownerDm = !isClubMessage && isOwner(senderShip);
-      if (ownerDm && (await handleApprovalResponse(rawText))) {
+      if (ownerDm && (await handleApprovalResponse(rawText, senderShip))) {
         runtime.log?.("[tlon] Processed approval response from owner");
         return;
       }
 
-      if (ownerDm && (await handleAdminCommand(rawText))) {
+      if (ownerDm && (await handleAdminCommand(rawText, senderShip))) {
         runtime.log?.("[tlon] Processed admin command from owner");
         return;
       }
@@ -918,7 +912,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           senderShip: senderId,
           accountId: account.accountId,
           conversation: { kind: "direct", id: senderShip },
-          allowFrom: resolveChatAllowFrom({ ownerDm, isClubMessage, senderShip, senderId }),
+          allowFrom: resolveChatAllowFrom({
+            ownerDm: ownerDm && isOwner(senderShip),
+            isClubMessage,
+            senderShip,
+          }),
           contextBinding,
         });
       if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {
@@ -961,6 +959,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         messageContent: essay.content,
         isGroup: false,
         timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
+        isAdmissionAllowed: ownerDm ? () => isOwner(senderShip) : undefined,
         turnAdoptionLifecycle,
         resolveChannelIngress,
       });

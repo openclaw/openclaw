@@ -43,14 +43,12 @@ export function formatApprovalRequest(approval: PendingApproval): string {
   switch (approval.type) {
     case "dm":
       if (approval.clubId !== undefined) {
-        // A club message claiming the owner is queued without originalMessage, so approval only
-        // updates the allowlist and never processes that message; the notice must not promise a reply.
         const replayLine = approval.originalMessage
           ? `The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.`
-          : `The message is not kept, so it will not be answered; have ${approval.requestingShip} send it again in a normal direct message to get a reply.`;
+          : `The message is not kept, so approval only dismisses this request; it will not be answered.`;
         return (
           `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
-          `Approving adds ${approval.requestingShip} to the DM allowlist. ${replayLine}\n` +
+          `${replayLine} Approval grants no direct DM access. Blocking only dismisses this request; no ship is blocked.\n` +
           formatApprovalInstructions(approval.id)
         );
       }
@@ -129,6 +127,9 @@ export function formatApprovalConfirmation(
   action: "approve" | "deny" | "block",
 ): string {
   if (action === "block") {
+    if (approval.type === "dm" && approval.clubId !== undefined) {
+      return `Dismissed unverified group DM request claiming ${approval.requestingShip}. No ship was blocked.`;
+    }
     return `Blocked ${approval.requestingShip}. They will no longer be able to contact the bot.`;
   }
 
@@ -136,6 +137,13 @@ export function formatApprovalConfirmation(
 
   switch (approval.type) {
     case "dm":
+      if (approval.clubId !== undefined) {
+        return action === "approve"
+          ? approval.originalMessage
+            ? `Approved this group DM message for one replay. No direct DM access was granted to ${approval.requestingShip}.`
+            : `Dismissed group DM request claiming ${approval.requestingShip}: no message was saved for replay. No direct DM access was granted.`
+          : `Denied unverified group DM request claiming ${approval.requestingShip}.`;
+      }
       if (action === "approve") {
         if (requiresResendAfterApproval(approval)) {
           return (
