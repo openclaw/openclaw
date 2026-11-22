@@ -438,6 +438,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
 }
 
+/* Keep the language and font pickers on one column as their selections change. */
+@media not all and (max-width: 640px) {
+  #settings-appearance-typography .settings-row__control:has(> .settings-select) {
+    width: 220px;
+  }
+}
+
 .settings-typography-preview {
   width: 100%;
 }
