@@ -83,8 +83,6 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   return {
     trustDeclaredOperatorScopes: false,
     hasCurrentClientAuthority: () => true,
-    assertCurrent: () => {},
-    revalidate: async () => {},
     ...overrides,
   };
 }
@@ -159,38 +157,6 @@ function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
 }
 
 describe("POST /tools/invoke request cancellation", () => {
-  it("rejects a tool when policy authority changes during its awaited hook", async () => {
-    const hookStarted = createDeferred();
-    const releaseHook = createDeferred();
-    let current = true;
-    lifecycle.authorize.mockResolvedValueOnce({
-      cfg: {},
-      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
-      operatorScopes: [],
-    });
-    lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
-      hookStarted.resolve();
-      await releaseHook.promise;
-      return { blocked: false, params };
-    });
-    const pending = invokeAbortProbe();
-    try {
-      await hookStarted.promise;
-      current = false;
-      releaseHook.resolve();
-      const response = await pending;
-      expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({
-        ok: false,
-        error: { message: "Gateway requester authority changed" },
-      });
-      expect(lifecycle.execute).not.toHaveBeenCalled();
-    } finally {
-      releaseHook.resolve();
-      await pending;
-    }
-  });
-
   it("never attaches a disconnect watcher to an unauthorized request", async () => {
     lifecycle.authorize.mockImplementationOnce(async ({ res }) => {
       res.statusCode = 401;

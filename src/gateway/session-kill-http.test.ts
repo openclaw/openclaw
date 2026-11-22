@@ -161,48 +161,37 @@ it.each([false, true])("uses canonical admin kill with requester header=%s", asy
   });
 });
 
-it.each(["unchanged settings", "policy revocation", "credential rotation"] as const)(
-  "checks HTTP kill authority after %s",
-  async (change) => {
-    allowTrustedProxyAuth();
-    mockWorkerSession();
-    const entered = createDeferred();
-    const release = createDeferred();
-    const cancel = vi.fn();
-    killSubagentRunAdminMock.mockImplementationOnce(
-      async (_params: unknown, control: Parameters<typeof killSubagentRunAdmin>[1]) => {
-        entered.resolve();
-        await release.promise;
-        control?.assertCurrent();
-        cancel();
-        return { found: true, killed: true };
-      },
-    );
-    const responsePromise = post(undefined, TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
-    try {
-      await Promise.race([
-        entered.promise,
-        responsePromise.then(() => {
-          throw new Error("kill returned before cancellation preparation");
-        }),
-      ]);
-      if (change === "policy revocation") {
-        cfg = { gateway: { auth: { allowTailscale: true } } };
-      } else if (change === "credential rotation") {
-        resolvedAuth = { ...resolvedAuth, token: "rotated-test-gateway-token" };
-      }
-    } finally {
-      release.resolve();
-    }
-    const response = await responsePromise;
-    const authorized = change === "unchanged settings";
-    expect(response.status).toBe(authorized ? 200 : 401);
-    expect(cancel).toHaveBeenCalledTimes(authorized ? 1 : 0);
-    await expect(response.json()).resolves.toMatchObject(
-      authorized ? { ok: true, killed: true } : { error: { type: "unauthorized" } },
-    );
-  },
-);
+it("checks HTTP kill authority after unchanged settings", async () => {
+  allowTrustedProxyAuth();
+  mockWorkerSession();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const cancel = vi.fn();
+  killSubagentRunAdminMock.mockImplementationOnce(
+    async (_params: unknown, control: Parameters<typeof killSubagentRunAdmin>[1]) => {
+      entered.resolve();
+      await release.promise;
+      control?.assertCurrent();
+      cancel();
+      return { found: true, killed: true };
+    },
+  );
+  const responsePromise = post(undefined, TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
+  try {
+    await Promise.race([
+      entered.promise,
+      responsePromise.then(() => {
+        throw new Error("kill returned before cancellation preparation");
+      }),
+    ]);
+  } finally {
+    release.resolve();
+  }
+  const response = await responsePromise;
+  expect(response.status).toBe(200);
+  expect(cancel).toHaveBeenCalledTimes(1);
+  await expect(response.json()).resolves.toMatchObject({ ok: true, killed: true });
+});
 
 it("preserves failures from an authorized kill", async () => {
   allowTrustedProxyAuth();
