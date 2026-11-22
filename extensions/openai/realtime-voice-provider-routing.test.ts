@@ -454,6 +454,24 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
   });
 
+  it("lists Live 1.1 Codex and selects ChatGPT auth for Talk and gateway relay", async () => {
+    const model = "gpt-live-1.1-codex";
+    const oauthToken = accountToken("account-123");
+    mockOAuth(oauthToken);
+    mockAuthTypes("oauth");
+    const { provider, internalApi, ready, session, createBrowserSession } = browserFixture();
+    const request = { ...browserRequest, providerConfig: { model }, model };
+
+    expect(provider.models).toContain(model);
+    expect(await ready(request)).toBe(true);
+    expect(await internalApi.isGatewayRelayConfiguredAsync?.(request)).toBe(true);
+    await session(request);
+    expect(createBrowserSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ model }),
+      oauth(oauthToken, "account-123"),
+    );
+  });
+
   it("rejects OAuth-only gpt-live-1 before broker session creation", async () => {
     const model = "gpt-live-1";
     mockOAuth();
@@ -462,48 +480,6 @@ describe("OpenAI realtime voice provider routing", () => {
       "GPT-Live Talk requires an OpenAI Platform API key",
     );
     expect(createBrowserSession).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["uses OAuth alone", "available", undefined, "oauth"],
-    ["prefers OAuth when a key is configured", "available", "config", "oauth"],
-    ["uses a key when no profile is available", "missing", "config", "api-key"],
-    ["uses a configured key when the profile store fails", "failed", "config", "api-key"],
-    ["uses an environment key when the profile store fails", "failed", "env", "api-key"],
-    ["reports profile failure without a key", "failed", undefined, "error"],
-  ] as const)("Live 1.1 Codex %s", async (_description, subscription, keySource, expected) => {
-    const model = "gpt-live-1.1-codex";
-    const providerConfig = { model, apiKey: keySource === "config" ? PLATFORM_KEY : undefined };
-    const request = { ...browserRequest, providerConfig, model };
-    const { provider, internalApi, ready, session, createBrowserSession } = browserFixture();
-    if (keySource === "env") {
-      vi.stubEnv("OPENAI_API_KEY", PLATFORM_KEY);
-    }
-    if (subscription === "available") {
-      mockAuthTypes("oauth");
-      mockOAuth();
-    } else if (subscription === "failed") {
-      resolveProviderAuthProfileApiKeyMock.mockRejectedValue(new Error("private profile detail"));
-    }
-
-    expect(provider.models).toContain(model);
-    if (expected === "error") {
-      await expect(session(request)).rejects.toMatchObject({
-        message:
-          "OpenAI GPT-Live could not load the ChatGPT subscription profile. Check your ChatGPT sign-in or configure a working OpenAI Platform API key.",
-      });
-      expect(createBrowserSession).not.toHaveBeenCalled();
-      return;
-    }
-    expect(await ready(request)).toBe(true);
-    expect(await internalApi.isGatewayRelayConfiguredAsync?.(request)).toBe(true);
-    await session(request);
-    expect(createBrowserSession).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ model }),
-      expected === "oauth"
-        ? oauth(accountToken("account-123"), "account-123")
-        : { type: "api-key", token: PLATFORM_KEY },
-    );
   });
 
   it.each([

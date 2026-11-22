@@ -466,27 +466,6 @@ function nativeRequest(
 }
 
 describe("GPT-Live browser session lifecycle", () => {
-  it("reports an OAuth offer rejection without forwarding the provider body", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response("private provider detail", { status: 403 }),
-    );
-    const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
-    const reservation = await reserve(realtime, {
-      ...nativeRequest(runAgentConsult),
-      model: "gpt-live-1.1-codex",
-    });
-    const response = await post(realtime, {
-      token: reservation.clientSecret,
-      body: AUDIO_ONLY_SDP,
-    });
-
-    expect(response.res.statusCode).toBe(502);
-    expect(response.readBody()).toBe(
-      "OpenAI GPT-Live could not start with ChatGPT sign-in (HTTP 403). Check your ChatGPT voice access or select a Platform API model with a key.",
-    );
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
   it("keeps broker registration independent of cold SDK host composition", async () => {
     expect(
       await findSourceImportBackedges("extensions/openai/realtime-quicksilver-session-owner.ts", [

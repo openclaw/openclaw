@@ -5,16 +5,6 @@ export const OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED =
   "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
 export const OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
   "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. No OAuth profile was available and the selected Platform API-key source could not be resolved; fix or remove it.";
-export const OPENAI_GPT_LIVE_SUBSCRIPTION_PROFILE_UNAVAILABLE =
-  "OpenAI GPT-Live could not load the ChatGPT subscription profile. Check your ChatGPT sign-in or configure a working OpenAI Platform API key.";
-
-export class OpenAIChatGptVoiceStartError extends Error {
-  constructor(status?: number) {
-    super(
-      `OpenAI GPT-Live could not start with ChatGPT sign-in${status === undefined ? "" : ` (HTTP ${status})`}. Check your ChatGPT voice access or select a Platform API model with a key.`,
-    );
-  }
-}
 
 export function projectOpenAIQuicksilverAuthErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
@@ -22,8 +12,7 @@ export function projectOpenAIQuicksilverAuthErrorMessage(error: unknown): string
     message === OPENAI_GPT_LIVE_AUTH_REQUIRED ||
     message === OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE ||
     message === OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED ||
-    message === OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE ||
-    message === OPENAI_GPT_LIVE_SUBSCRIPTION_PROFILE_UNAVAILABLE
+    message === OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
   ) {
     return message;
   }
@@ -32,11 +21,7 @@ export function projectOpenAIQuicksilverAuthErrorMessage(error: unknown): string
 
 export function projectOpenAIQuicksilverErrorMessage(
   kind: "gateway" | "provider" | "transport",
-  error?: unknown,
 ): string {
-  if (error instanceof OpenAIChatGptVoiceStartError) {
-    return error.message;
-  }
   switch (kind) {
     case "gateway":
       return "OpenAI GPT-Live gateway relay failed";

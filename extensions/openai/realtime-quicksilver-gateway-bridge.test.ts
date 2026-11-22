@@ -85,54 +85,23 @@ function connectSideband(
 }
 
 describe("GPT-Live gateway relay bridge", () => {
-  it("reports a failed ChatGPT connection without leaking provider details or retrying", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("private network detail"));
-    const { bridge } = createBridge({ model: "gpt-live-1.1-codex", fetchImpl });
+  it("sends the explicit Live 1.1 selector in the Discord relay's ChatGPT WebRTC offer", async () => {
+    const { bridge, fetchImpl } = createBridge({ model: "gpt-live-1.1-codex" });
     onTestFinished(() => bridge.close());
 
-    await expect(bridge.connect()).rejects.toMatchObject({
-      message:
-        "OpenAI GPT-Live could not start with ChatGPT sign-in. Check your ChatGPT voice access or select a Platform API model with a key.",
-    });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
+    await bridge.connect();
 
-  it.each([
-    {
-      route: "ChatGPT",
-      auth: { type: "oauth", token: "oauth-token", accountId: "account-1" },
-      url: "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-      contentType: "application/json",
-    },
-    {
-      route: "Platform",
-      auth: { type: "api-key", token: "test-api-key" },
-      url: "https://api.openai.com/v1/live",
-      contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
-    },
-  ] as const)(
-    "sends the explicit Live 1.1 selector in the $route WebRTC offer",
-    async ({ auth, url, contentType }) => {
-      const { bridge, fetchImpl } = createBridge({
-        model: "gpt-live-1.1-codex",
-        resolveAuth: async () => auth,
-      });
-      onTestFinished(() => bridge.close());
-
-      await bridge.connect();
-
-      expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
-        url,
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            Authorization: `Bearer ${auth.token}`,
-            "Content-Type": contentType,
-          }),
-          body: expect.stringContaining('"model":"gpt-live-1.1-codex"'),
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
+      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer oauth-token",
+          "Content-Type": "application/json",
         }),
-      );
-    },
-  );
+        body: expect.stringContaining('"model":"gpt-live-1.1-codex"'),
+      }),
+    );
+  });
 
   it.each(["accepted", "rejected"])(
     "retains early readiness until the WebRTC answer is %s",

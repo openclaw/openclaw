@@ -335,12 +335,8 @@ sidebarTitle: "Voice and speech"
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
 
-    Select `gpt-live-1.1-codex` explicitly to request GPT-Live-1.1 over the
-    existing Codex WebRTC route. It uses the same voices and credential order
-    as `gpt-live-1-codex`. If the ChatGPT profile cannot be loaded, the Gateway
-    can use a configured Platform key. If the ChatGPT connection fails after a
-    request is sent, the Gateway reports that failure. To use the public API
-    directly, select a public API model and configure a Platform key.
+    Select `gpt-live-1.1-codex` to request GPT-Live 1.1. It uses the same
+    Codex WebRTC route, voices, and credential order as `gpt-live-1-codex`.
 
     Discord uses this same Gateway-owned WebRTC bridge when
     `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set

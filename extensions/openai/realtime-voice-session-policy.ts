@@ -42,7 +42,6 @@ import {
   OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
   OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED,
   OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
-  OPENAI_GPT_LIVE_SUBSCRIPTION_PROFILE_UNAVAILABLE,
 } from "./realtime-quicksilver-redaction.js";
 import {
   OPENAI_GPT_LIVE_MODELS,
@@ -488,52 +487,35 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  const subscriptionModel = isOpenAIGptLiveSubscriptionModel(params.model);
-  let subscriptionProfileFailed = false;
-  if (subscriptionModel) {
-    try {
-      const { resolveAgentDir } = runtime;
-      const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
-        {
-          cfg: params.cfg,
-          agentDir:
-            params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-        },
-        runtime,
-      );
-      if (subscriptionAuth) {
-        return subscriptionAuth;
-      }
-    } catch {
-      // No call has been sent. A working Platform credential can still start one.
-      subscriptionProfileFailed = true;
+  if (isOpenAIGptLiveSubscriptionModel(params.model)) {
+    const { resolveAgentDir } = runtime;
+    const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+      {
+        cfg: params.cfg,
+        agentDir:
+          params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+      },
+      runtime,
+    );
+    if (subscriptionAuth) {
+      return subscriptionAuth;
     }
   }
-  let platformAuth: string | undefined;
-  try {
-    platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
-  } catch (error) {
-    if (!subscriptionProfileFailed) {
-      throw error;
-    }
-    // Both profile lookups use the same store. An environment key is still independent.
-    platformAuth = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
-  }
+  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth) {
     return { type: "api-key" as const, token: platformAuth };
   }
-  if (subscriptionProfileFailed) {
-    throw new Error(OPENAI_GPT_LIVE_SUBSCRIPTION_PROFILE_UNAVAILABLE);
-  }
   if (await hasOpenAIRealtimePlatformAuthInputAsync(params, runtime)) {
     throw new Error(
-      subscriptionModel
+      isOpenAIGptLiveSubscriptionModel(params.model)
         ? OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE
         : OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
     );
   }
   throw new Error(
-    subscriptionModel ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED : OPENAI_GPT_LIVE_AUTH_REQUIRED,
+    isOpenAIGptLiveSubscriptionModel(params.model)
+      ? OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED
+      : OPENAI_GPT_LIVE_AUTH_REQUIRED,
   );
 }
 
