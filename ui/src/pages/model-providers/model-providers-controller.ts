@@ -153,7 +153,7 @@ export function createModelProviders(
         readAccess = canRead;
       }
       installedAgents.synchronize();
-      login.synchronizePresentation();
+      login.synchronize();
       if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
         void refresh("replacement");
       }
@@ -361,7 +361,7 @@ export function createModelProviders(
       discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
-      login.synchronizePresentation();
+      login.synchronize();
     };
     const cleanups = [
       context.router.subscribe((next) => {
