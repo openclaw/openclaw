@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #202507: lean worker memory admission is new scheduling policy; its tests cover queueing without drops, the point-read lane, restart rebinding, floor warnings, hosted-slot ownership, pending physical-host reservation, live/exiting/replacement census and each budget basis, several from verified review findings.
+200

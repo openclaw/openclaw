@@ -136,6 +136,17 @@ a.workboard-session-pr:hover {
   font-size: 0.8rem;
 }
 
+.workboard-sessions-editor label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+
+  > input {
+    margin: 0;
+  }
+}
+
 .workboard-sessions-editor .settings-input {
   width: 100%;
   min-width: 0;

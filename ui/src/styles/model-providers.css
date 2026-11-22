@@ -31,7 +31,6 @@
 .model-provider-login__copy > span,
 .model-providers__catalog-progress,
 .model-providers__profile-position,
-.model-providers__agents-missing,
 .model-providers__profiles-heading-copy span,
 .model-providers__profile-copy span,
 .model-providers__usage-bars small,
@@ -235,16 +234,6 @@
   }
 }
 
-.model-providers__setup .settings-row {
-  min-height: 92px;
-  padding-block: var(--space-5);
-}
-
-.model-providers__setup .settings-row__title {
-  font-size: var(--control-ui-text-lg);
-  font-weight: 600;
-}
-
 /* One line where it fits: the field takes what its actions leave. */
 .provider-row__footer,
 .model-providers__inline-form {
@@ -316,7 +305,7 @@
 }
 
 .model-providers__defaults {
-  .settings-row__control {
+  .settings-row__control:where(:not(.settings-row--nav > *)) {
     flex: 0 1 auto;
     width: 340px;
   }
@@ -354,13 +343,13 @@
   }
 
   @media (max-width: 640px) {
-    .settings-row {
+    .settings-row:not(.settings-row--nav) {
       flex-direction: column;
       align-items: stretch;
       gap: var(--space-2);
     }
 
-    .settings-row__control {
+    .settings-row__control:where(:not(.settings-row--nav > *)) {
       width: 100%;
       max-width: none;
     }
@@ -597,10 +586,9 @@
   flex: none;
 }
 
-/* Apps missing from the Gateway computer share one quiet line instead of rows with switches. */
-.model-providers__agents-missing {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
+/* "Show all" stays a quiet text action under the catalog rows. */
+.model-providers__catalog-more {
+  justify-self: center;
 }
 
 .model-providers__agent-icon {

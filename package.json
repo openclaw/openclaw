@@ -17,7 +17,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 40,
+      "state": 41,
       "agent": 43
     }
   },
@@ -73,6 +73,8 @@
     "node-compile-cache.mjs",
     "gateway-prewarm.mjs",
     "openclaw.mjs",
+    "release-launcher-forward.mjs",
+    "release-launcher-forward.d.mts",
     "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",
@@ -584,6 +586,10 @@
     "./plugin-sdk/runtime-profile": {
       "types": "./dist/plugin-sdk/runtime-profile.d.ts",
       "default": "./dist/plugin-sdk/runtime-profile.js"
+    },
+    "./plugin-sdk/resource-profile": {
+      "types": "./dist/plugin-sdk/resource-profile.d.ts",
+      "default": "./dist/plugin-sdk/resource-profile.js"
     },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
@@ -1870,6 +1876,7 @@
     "check:no-runtime-action-load-config": "node --import ./scripts/tsx.mjs scripts/check-no-runtime-action-load-config.mts",
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
+    "check:runtime-process-lifecycle": "node --import ./scripts/tsx.mjs scripts/check-runtime-process-lifecycle.mts",
     "check:runtime-sidecar-loaders": "node --import ./scripts/tsx.mjs scripts/check-runtime-sidecar-loaders.mts",
     "runtime:scripts:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs",
     "runtime:scripts:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-script-assets.mjs --check",
@@ -2499,7 +2506,7 @@
     "qrcode": "1.5.4",
     "rastermill": "0.4.1",
     "semver": "7.8.6",
-    "tar": "7.5.23",
+    "tar": "7.5.22",
     "tslog": "5.5.0",
     "typebox": "1.4.5",
     "undici": "8.12.4",
@@ -2548,8 +2555,8 @@
     "minipass": "7.1.3",
     "nostr-tools": "2.25.4",
     "oxfmt": "0.74.0",
-    "oxlint": "1.93.0",
-    "oxlint-tsgolint": "7.0.2007",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2005",
     "pako": "3.0.3",
     "playwright": "1.64.1",
     "postcss": "8.5.33",

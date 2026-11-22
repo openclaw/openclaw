@@ -87,9 +87,26 @@ export function createAdmittedRunOperatorAuthority(
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
+    canonicalIdentity:
+      source.canonicalIdentity &&
+      Object.freeze({
+        profileId: source.canonicalIdentity.profileId,
+      }),
+    clientId: source.clientId,
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,
+    device: source.device && Object.freeze({ ...source.device }),
+    deviceScopeCeiling: source.deviceScopeCeiling && Object.freeze([...source.deviceScopeCeiling]),
+    authPolicy: source.authPolicy && Object.freeze({ ...source.authPolicy }),
+    sharedGeneration: source.sharedGeneration,
+    ingress:
+      source.ingress &&
+      Object.freeze({
+        ...source.ingress,
+        principal: Object.freeze({ ...source.ingress.principal }),
+        scopeCeiling: Object.freeze([...source.ingress.scopeCeiling]),
+      }),
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
@@ -101,6 +118,7 @@ export function createAdmittedRunOperatorAuthority(
         })
       : undefined,
     scopes: Object.freeze([...source.scopes]),
+    requesterOwner: source.requesterOwner,
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
@@ -108,7 +126,6 @@ export function createAdmittedRunOperatorAuthority(
     invocation: source.invocation,
     signal,
     retain: source.retain,
-    reauthorize: source.reauthorize,
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -389,6 +406,19 @@ export function getAdmittedRunSource(
     : undefined;
 }
 
+/** Reads the initiating profile only from the host's exact active admission lease. */
+export function getAdmittedRunOperatorProfileId(
+  authority: AgentRunDelegatedAuthority,
+): string | undefined {
+  const context = admittedContextsByAuthority.get(authority);
+  if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
+    return undefined;
+  }
+  const operator = readAdmittedRunOperatorAuthority(context);
+  operator?.assertCurrent();
+  return operator?.profileId;
+}
+
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
@@ -638,7 +668,6 @@ export function prepareAgentRunAdmission(params: {
       admitted ??= runWithSessionSourceScope(
         assertSourceCurrent,
         async () => {
-          operatorAuthority?.reauthorize?.();
           assertSourceCurrent?.();
           const facts = executionIdentitySpawnAdmission({
             operation: "attach",

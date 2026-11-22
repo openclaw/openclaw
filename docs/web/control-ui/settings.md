@@ -675,9 +675,11 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Templates (Labs)
+<a id="templates-labs" />
 
-Enable **Settings → Labs → Templates** to browse official Template packages from
+## Templates
+
+Open **Customize → Templates** to browse official Template packages from
 ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
 Opening a catalog entry keeps the selected published version in its detail link,
@@ -688,8 +690,10 @@ installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
 [Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Template discovery and Add. Existing agents keep
-running.
+Templates are available by default without a settings switch. An existing
+`gateway.controlUi.experimental.templates: false` remains an advanced opt-out
+that hides discovery and blocks new Add operations. Set it to `true` or remove it
+to restore availability. Existing agents keep running.
 
 ## Speech bubbles
 
@@ -790,7 +794,7 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 
 Open **Activity** from the sidebar’s **Pages** view, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
-- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Internal completion-delivery attempts do not advance the latest-input time. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
+- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Internal completion-delivery attempts do not advance the latest-input time. Pins do not affect this order. While you read farther down the feed, session details still update without reordering the list. The feed catches up automatically when you return to the top and stop scrolling. Each row shows the human attribution and configured agent avatar/name. The feed, search results, and counts exclude subagent runs and internal system sessions, such as the records used to publish GitHub pull requests. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
 - The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes once, to the bar of its latest activity; the chart is labeled **Sessions by last activity**, not a count of messages or completed tasks. Peak bars show their session count. **All time** keeps all matching sessions in its summary but labels the chart **Last 12 months**; the chart’s accessible description counts only the sessions in those bars. An empty chart says that no activity was recorded in the period.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.

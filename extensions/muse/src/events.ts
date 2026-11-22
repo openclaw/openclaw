@@ -32,7 +32,7 @@ function assistantMessage(
 }
 
 export async function consumeTurn(
-  turn: Turn,
+  turn: Pick<Turn, "completed" | "deltas" | "items">,
   params: AgentHarnessAttemptParamsV2,
   record: (itemId: string, messages: AgentMessage[]) => Promise<void>,
 ) {

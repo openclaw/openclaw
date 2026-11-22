@@ -9,7 +9,7 @@ import {
 import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listAgentEntriesWithSource, resolveAgentConfig } from "./agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { type ModelManifestNormalizationContext, modelKey } from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
@@ -101,15 +101,13 @@ export function resolveConfiguredModelEntries(
 ): {
   entries: ConfiguredModelEntry[];
   byKey: Map<string, ConfiguredModelEntry>;
-  defaultRef: { provider: string; model: string };
+  defaultRef?: { provider: string; model: string };
 } {
   const defaultProvider = params.defaultProvider ?? DEFAULT_PROVIDER;
-  const defaultModel = params.defaultModel ?? DEFAULT_MODEL;
-  const resolvedDefault = resolveConfiguredModelRef({
-    ...params,
-    defaultProvider,
-    defaultModel,
-  });
+  // A caller-supplied default stands in only when config names no model.
+  const resolvedDefault =
+    resolveConfiguredModelRef({ ...params, defaultProvider }) ??
+    (params.defaultModel ? { provider: defaultProvider, model: params.defaultModel } : undefined);
   const aliasIndex =
     params.aliasIndex ??
     buildModelAliasIndex({
@@ -165,7 +163,9 @@ export function resolveConfiguredModelEntries(
     return resolved ? addEntry(resolved.ref, tag) : undefined;
   };
 
-  addEntry(resolvedDefault, "default");
+  if (resolvedDefault) {
+    addEntry(resolvedDefault, "default");
+  }
   resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId }).forEach(
     (raw, index) => addRaw(raw, `fallback#${index + 1}`),
   );

@@ -91,12 +91,14 @@ function runTargetMetadataResolution({
   version = "2026.9.4",
   kovaRef = "",
   contract = "",
+  mode = "",
 }: {
   schema?: string;
   baseSchema?: string;
   version?: string;
   kovaRef?: string;
   contract?: string;
+  mode?: string;
 }) {
   const root = tempDirs.make("openclaw-kova-target-metadata-");
   const git = (...args: string[]) =>
@@ -154,6 +156,7 @@ function runTargetMetadataResolution({
       GITHUB_REF_NAME: "main",
       KOVA_REF_INPUT: kovaRef,
       KOVA_CONFIG_CONTRACT_INPUT: contract,
+      PERFORMANCE_MODE: mode,
       TARGET_CHECKOUT_DIR: root,
       TARGET_REF_INPUT: "fixture-target",
     },
@@ -210,6 +213,82 @@ function runCandidateTrustClassification({
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("routes memory-cap dispatches to the delegated mock Gateway benchmark", () => {
+    const job = "gateway_concurrency";
+    const workflow = readWorkflow();
+    expect(workflow.jobs?.[job]?.if).toContain("inputs.mode == 'gateway-memory-caps'");
+    expect(workflow.jobs?.kova?.if).toContain("inputs.mode == 'kova'");
+    expect(findStep("Set up Gateway concurrency environment", job).with?.["semantic-checks"]).toBe(
+      "${{ inputs.mode == 'gateway-memory-caps' }}",
+    );
+    const caps = findStep("Run Gateway under 2 and 4 GiB caps", job);
+    expect(caps.if).toBe("${{ inputs.mode == 'gateway-memory-caps' }}");
+    expect(caps.run).toContain("for cap in 2 4");
+    expect(caps.run).toContain("--property='Delegate=cpu memory'");
+    expect(caps.run).toContain('--gateway-memory-gib "$cap"');
+    expect(caps.run).not.toContain("--provider");
+    expect(findStep("Run live Gateway concurrency", job).if).toContain(
+      "inputs.mode == 'gateway-concurrency'",
+    );
+  });
+
+  posixIt("admits only the mock lane for Gateway cold-turn calibration", () => {
+    const root = tempDirs.make("openclaw-kova-calibration-");
+    const mode = "gateway-cold-turn-calibration";
+    const workflow = readWorkflow();
+    const run = findStep("Calibrate Gateway cold-turn resources");
+    const decide = (findStep("Decide lane").run ?? "")
+      .replaceAll("${{ github.event_name }}", "workflow_dispatch")
+      .replaceAll("${{ inputs.deep_profile || 'false' }}", "true")
+      .replaceAll("${{ inputs.live_openai_candidate || 'false' }}", "true");
+
+    for (const entry of kovaMatrixEntries()) {
+      const lane = expectDefined(entry.lane, "Kova lane");
+      const output = join(root, lane);
+      const result = spawnSync("bash", ["-c", decide], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          LANE_ID: lane,
+          PERFORMANCE_MODE: mode,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8").trim()).toBe(`run=${lane === "mock-provider"}`);
+    }
+
+    const context = {
+      eventName: "workflow_dispatch",
+      inputs: { mode, dispatch_id: "full-release-validation-calibration", publish_reports: true },
+      releaseRunnerGroup: "release-only",
+    } as const;
+    for (const name of ["resolve_target", "kova"]) {
+      expect(evaluateWorkflowRunner(workflow.jobs?.[name]?.["runs-on"], context)).toBe(
+        "ubuntu-24.04",
+      );
+    }
+    for (const name of ["publish", "source_performance", "seal_release_child_evidence"]) {
+      expect(evaluateWorkflow(workflow.jobs?.[name]?.if, context)).toBe(false);
+    }
+    const { result, outputs, sha } = runTargetMetadataResolution({
+      schema: "    imageGenerationModel: AgentToolModelSchema.optional(),",
+      mode,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs).toMatchObject({
+      kova_ref: workflow.env?.KOVA_COLD_TURN_CALIBRATION_REF,
+      kova_config_contract: "legacy-list",
+      tested_sha: sha,
+    });
+    expect(outputs.kova_ref).toMatch(/^[0-9a-f]{40}$/u);
+    expect(findStep("Run Kova").if).toContain(`inputs.mode != '${mode}'`);
+    expect(run.if).toContain(`inputs.mode == '${mode}'`);
+    expect(run.run).toContain('--target "local-build:$GITHUB_WORKSPACE"');
+    expect(run.run).toContain(`--scenario ${mode} --state mock-openai-provider --auth mock`);
+    expect(run.run).toContain("read-gateway-cold-turn-calibration.mjs");
+  });
+
   it("keeps Vitest pair benchmarking opt-in and exact-head bound", () => {
     const workflow = readWorkflow();
     const inputs = workflow.on?.workflow_dispatch?.inputs;
@@ -226,7 +305,13 @@ describe("OpenClaw performance workflow", () => {
       default: "kova",
       required: false,
       type: "choice",
-      options: ["kova", "vitest-pair", "gateway-concurrency"],
+      options: [
+        "kova",
+        "vitest-pair",
+        "gateway-concurrency",
+        "gateway-memory-caps",
+        "gateway-cold-turn-calibration",
+      ],
     });
     expect(inputs?.baseline_ref).toMatchObject({
       default: "",
@@ -295,11 +380,10 @@ describe("OpenClaw performance workflow", () => {
     const guard = jobs?.vitest_pair_guard;
     const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
 
-    for (const name of ["resolve_target", "kova", "source_performance"] as const) {
-      expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(jobs?.resolve_target?.if).toContain("inputs.mode != 'vitest-pair'");
+    for (const name of ["kova", "source_performance", "publish", "artifact_only_guard"] as const) {
+      expect(jobs?.[name]?.if).toContain("inputs.mode == 'kova'");
     }
-    expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
-    expect(jobs?.artifact_only_guard?.if).toContain("inputs.mode != 'vitest-pair'");
     expect(guard?.needs).toEqual([
       "resolve_target",
       "kova",
@@ -891,7 +975,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova", "source_performance"]);
     expect(publisher?.if).toBe(
-      "${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || inputs.mode == 'kova') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
     );
     expect(evaluateWorkflowRunner(publisher?.["runs-on"])).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -932,7 +1016,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
     expect(guard?.if).toBe(
-      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}",
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'kova' && inputs.publish_reports != true }}",
     );
     expect(guard?.permissions?.contents).toBe("read");
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");

@@ -70,14 +70,16 @@ export function prepareCommandModelCatalog(params: {
   pluginsEnabled: boolean;
   workspaceDir: string;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   modelManifestContext: ModelManifestNormalizationContext;
 }) {
   const { cfg, metadataSnapshot, pluginsEnabled, workspaceDir } = params;
   const policyParams = {
     cfg,
     defaultProvider: params.defaultProvider,
-    defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
+    ...(params.defaultModel
+      ? { defaultModel: { provider: params.defaultProvider, model: params.defaultModel } }
+      : {}),
     agentId: params.agentId,
     allowManifestNormalization: true,
     allowPluginNormalization: pluginsEnabled,

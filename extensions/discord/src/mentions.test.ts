@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
-import {
-  discordTextHasBroadcastMention,
-  formatMention,
-  rewriteDiscordKnownMentions,
-} from "./mentions.js";
+import { discordTextHasBroadcastMention, rewriteDiscordKnownMentions } from "./mentions.js";
+import { formatMention } from "./target-parsing.js";
 
 function remember(handles: string[], userId = "123456789", accountId = "default") {
   rememberDiscordDirectoryUser({ accountId, userId, handles });

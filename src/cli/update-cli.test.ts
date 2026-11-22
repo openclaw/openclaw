@@ -4,7 +4,6 @@ import { CANCEL_SYMBOL } from "@clack/core";
 import { Command } from "commander";
 import { afterAll, aroundEach, describe, expect, it, vi } from "vitest";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
-import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import {
   finishUpdateRun,
   readOwedUpdateSteps,
@@ -30,7 +29,7 @@ const {
   defaultRuntime: runtime,
   runCommandWithTimeout: runCommand,
   updateCommand: runUpdate,
-  updateGitCheckout: gitUpdate,
+  updateGitRelease: gitUpdate,
 } = cli;
 const { freshRestartCalls: restarts } = check;
 
@@ -43,7 +42,6 @@ describe("update-cli", () => {
   const {
     configSnapshot,
     createCaseDir,
-    mockCompletionCacheRefresh,
     mockCurrentProcessFreshDoctor,
     mockFileBackedPathExists,
     mockNpmGlobalCommands,
@@ -52,7 +50,6 @@ describe("update-cli", () => {
     setTty,
     setupNonInteractiveDowngrade,
     setupInstalledPackageAtNodeModules,
-    runRestartFallbackScenario,
     tempDirs,
     mockGatewayHealth,
     mockGatewayInstallFailure,
@@ -60,7 +57,6 @@ describe("update-cli", () => {
     primeServiceCommand,
     profileStateDir,
     setupNpmUpdatedRootRefresh,
-    setupUpdatedRootRefresh,
   } = createUpdateCliFixture();
 
   const oweEarlier = (id: UpdateOwedStepId) => {
@@ -113,85 +109,6 @@ describe("update-cli", () => {
     const logOutput = check.getLogOutput();
     expect(logOutput).toContain("timed out after 30s");
     expect(logOutput).toContain("openclaw completion --write-state");
-  });
-
-  it("owes a shell completion refresh whose profile install fails", async () => {
-    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
-      databaseEngines: ["sqlite", "postgres"],
-    });
-    setTty(true);
-    mocks.checkShellCompletionStatus.mockResolvedValue({
-      shell: "zsh",
-      profileInstalled: true,
-      cacheExists: true,
-      cachePath: "/tmp/openclaw-completion.zsh",
-      usesSlowPattern: true,
-    });
-    mocks.installCompletion.mockRejectedValueOnce(new Error("EACCES: permission denied"));
-
-    await runUpdate({ yes: true, restart: false });
-
-    const owed =
-      "Warning: Shell completion refresh is owed: EACCES: permission denied. Retried by the next `openclaw update`; run `openclaw update repair` to retry it now.";
-    expect(check.getLogOutput()).toContain(
-      "Shell completion refresh failed: EACCES: permission denied",
-    );
-    expect(check.getLogOutput()).toContain(owed);
-    expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    vi.mocked(mocks.runtimeCapture.log).mockClear();
-    await cli.updateStatusCommand({});
-    expect(check.getLogOutput()).toContain(owed);
-  });
-
-  it.each([
-    { outcome: "owes a failed", code: 1 },
-    { outcome: "settles an owed", code: 0 },
-  ])("a core update $outcome completion cache refresh in JSON", async ({ code }) => {
-    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
-      databaseEngines: ["sqlite", "postgres"],
-    });
-    oweEarlier("shell-completion");
-    mockCompletionCacheRefresh({ code, stderr: "EACCES: permission denied" });
-
-    await runUpdate({ yes: true, restart: false, json: true });
-
-    const reason = "Completion cache update failed: EACCES: permission denied";
-    const result = check.lastWriteJsonCall() as UpdateRunResult;
-    expect(result.status).toBe("ok");
-    expect(result.steps.filter((step) => step.advisory?.message.includes(" is owed: "))).toEqual(
-      code
-        ? [
-            expect.objectContaining({
-              name: "shell-completion",
-              exitCode: 0,
-              advisory: {
-                kind: "recoverable-maintenance",
-                message: `Shell completion refresh is owed: ${reason}. Retried by the next \`openclaw update\`; run \`openclaw update repair\` to retry it now.`,
-              },
-            }),
-          ]
-        : [],
-    );
-    expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    await cli.updateStatusCommand({ json: true });
-    const status = check.lastWriteJsonCall() as { lastRun?: unknown; owedSteps?: unknown };
-    expect(status.lastRun).toMatchObject({ runId: result.runId, status: "succeeded" });
-    expect(status.owedSteps).toEqual(
-      code ? [{ id: "shell-completion", runId: result.runId, reason }] : undefined,
-    );
-  });
-
-  it("prompts for optional shell completion setup without --yes", async () => {
-    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { version: VERSION } }), false, {
-      databaseEngines: ["sqlite", "postgres"],
-    });
-    setTty(true);
-    mocks.confirm.mockResolvedValue(true);
-
-    await runUpdate({ yes: false, restart: false });
-
-    expect(mocks.confirm).toHaveBeenCalledOnce();
-    expect(mocks.installCompletion).toHaveBeenCalledWith("zsh", false, "openclaw");
   });
 
   it.each([false, true])(
@@ -584,43 +501,10 @@ describe("update-cli", () => {
     await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
       setTty(true);
       mocks.select.mockResolvedValue("dev");
-      mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      vi.mocked(gitUpdate).mockImplementation(async ({ opts: options }) => {
-        await writeOpenClawPackageFixture(tempDir, VERSION, {
-          git: true,
-          builtSha: sha,
-          databaseEngines,
-        });
-        await options.prepareGitExposure?.(tempDir, sha, undefined);
-        await options.validateCandidate(tempDir);
-        await check.requireValue(
-          options.beforeGitMutation,
-          "Git mutation admission",
-        )({
-          databaseEngines,
-        });
-        return cli.makeOkUpdateResult({
-          root: tempDir,
-          after: { sha, version: VERSION },
-        });
-      });
-      const runFixtureExec = check.requireValue(
-        vi.mocked(cli.runExec).getMockImplementation(),
-        "exec fixture",
-      );
-      vi.mocked(cli.runExec).mockImplementation((file, args, options) => {
-        if (
-          args.length === 3 &&
-          args[0] === path.join(tempDir, "dist", "entry.js") &&
-          args[1] === "update" &&
-          args[2] === "--help"
-        ) {
-          return Promise.resolve({
-            stdout: new Command("update").option("--accept-capabilities").helpInformation(),
-            stderr: "",
-          });
-        }
-        return runFixtureExec(file, args, options);
+      // Create the checkout, then restart: the first release converges plugins only when activated.
+      mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+      cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ after: { sha, version: VERSION } }), {
+        databaseEngines,
       });
 
       const program = new Command();
@@ -631,132 +515,19 @@ describe("update-cli", () => {
       expect(cli.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       const call = vi.mocked(gitUpdate).mock.calls[0]?.[0];
       expect(call?.opts.channel).toBe("dev");
-      await expect(fs.realpath(packageRoot)).resolves.toBe(tempDir);
-      // Directory-observation helpers can also spawn while the update runs.
+      // The release converges plugins in this process; no update child receives the consent.
       const updateInvocations = mocks.spawn.mock.calls
         .map(([, args]) => args)
         .filter((args) => args[1] === "update");
-      expect(updateInvocations).toEqual([
-        [
-          path.join(tempDir, "dist", "entry.js"),
-          "update",
-          "--no-restart",
-          "--accept-capabilities",
-          "--timeout",
-          "1800",
-        ],
-      ]);
-      check.expectNoSideEffects(mocks.syncPluginsForUpdateChannel, mocks.updateNpmInstalledPlugins);
+      expect(updateInvocations).toEqual([]);
+      // Stdout is not a TTY, so only the forwarded consent supplies a consent handler.
+      expect(cli.runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ onCapabilityConsent: expect.any(Function) }),
+      );
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
     });
   });
 
-  it.each([
-    {
-      name: "versioned tracked target",
-      env: applyDevUpdateTargetEnv(
-        {},
-        { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" },
-      ),
-      expected: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" },
-    },
-  ])("maps the internal dev target environment $name", async ({ env, expected }) => {
-    await withEnvAsync(env, async () => {
-      await runUpdate({ channel: "dev", yes: true, restart: false });
-    });
-
-    expect(vi.mocked(gitUpdate).mock.calls[0]?.[0]?.opts).toEqual(
-      expect.objectContaining({ devTarget: expected }),
-    );
-  });
-
-  it.each([cli.devTargetRefusalCases[4]])(
-    "rejects a %s dev target before running the update",
-    async (_name, value) => {
-      const diagnostic =
-        "Invalid internal OPENCLAW_UPDATE_DEV_TARGET_REF contract; expected a plain Git ref or a supported tracked-target encoding.";
-      await withEnvAsync({ OPENCLAW_UPDATE_DEV_TARGET_REF: value }, async () => {
-        const command = cli.invokeUpdateCli({
-          json: true,
-          yes: true,
-          restart: false,
-        });
-        await expect(command).rejects.toEqual(new cli.ExitError(1));
-      });
-
-      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(diagnostic);
-      expect(runtime.exit).not.toHaveBeenCalled();
-      check.expectNoSideEffects(
-        cli.runUpdateFailureTriage,
-        gitUpdate,
-        cli.replaceConfigFile,
-        cli.mutateConfigFileWithRetry,
-        cli.runDaemonInstall,
-        cli.runDaemonRestart,
-        mocks.syncPluginsForUpdateChannel,
-        mocks.updateNpmInstalledPlugins,
-        mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
-      );
-      const runs = cli.listUpdateRuns();
-      expect(runs).toHaveLength(1);
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          status: "error",
-          reason: "invalid-dev-target",
-          runId: runs[0]?.runId,
-          failedStep: expect.objectContaining({
-            name: "invalid-dev-target",
-            exitCode: 1,
-            stderrTail: diagnostic,
-            failureFacts: [
-              { check: "invalid-dev-target", code: "invalid-dev-target", message: diagnostic },
-            ],
-          }),
-          run: expect.objectContaining({
-            runId: runs[0]?.runId,
-            status: "failed",
-            phase: "finished",
-            reason: "invalid-dev-target",
-          }),
-        }),
-      );
-      expect(runs[0]).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: "invalid-dev-target",
-        origin: { nextAction: diagnostic },
-      });
-      expect(runs[0]?.steps).toContainEqual(
-        expect.objectContaining({ step: "invalid-dev-target", status: "failed", exitCode: 1 }),
-      );
-    },
-  );
-
-  it.each(["error", "skipped"] as const)("explains edited files (%s)", async (status) => {
-    vi.mocked(runtime.log).mockClear();
-    vi.mocked(runtime.error).mockClear();
-    vi.mocked(runtime.exit).mockClear();
-    vi.mocked(gitUpdate).mockResolvedValue({
-      status,
-      mode: "git",
-      reason: "dirty",
-      steps: [],
-      durationMs: 100,
-    } satisfies UpdateRunResult);
-
-    await expect(runUpdate({ channel: "dev" })).rejects.toEqual(new cli.ExitError(1));
-
-    const logs = check.getLogOutput();
-    expect(logs).toContain(`OpenClaw update ${status === "error" ? "failed" : "skipped"}: dirty.`);
-    expect(logs).toContain(
-      "Local changes prevented this update before installation. Your checkout was preserved.",
-    );
-    expect(logs).toContain("Commit your changes and retry, or run `openclaw triage` for help.");
-    expect(cli.listUpdateRuns({ limit: 1 })[0]?.origin.nextAction).toContain(
-      "Commit your changes and retry",
-    );
-    check.expectNoSideEffects(mocks.serviceStop, runtime.exit);
-  });
   it("reports activation failure when the updated CLI entrypoint is missing", async () => {
     const root = await mockPackageInstallAtCaseDir();
     mockRunningManagedGateway([
@@ -777,7 +548,7 @@ describe("update-cli", () => {
   });
 
   it("tries the updated install restart when package service refresh fails in JSON mode", async () => {
-    const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
+    const { updatedRoot, updatedEntrypoint } = await setupNpmUpdatedRootRefresh();
     mocks.serviceLoaded.mockResolvedValue(true);
     primeServiceCommand([nodeExecutable, updatedEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint, "runtime warning");
@@ -800,46 +571,13 @@ describe("update-cli", () => {
     );
   });
 
-  it("warns without restarting a stale same-version service when installation reconciliation fails", async () => {
-    const oldRoot = createCaseDir("openclaw-old-root");
-    const updatedRoot = createCaseDir("openclaw-updated-root");
-    const oldEntrypoint = path.join(oldRoot, "dist", "entry.js");
-    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
-    setupUpdatedRootRefresh({
-      entrypoints: [oldEntrypoint, updatedEntrypoint],
-      targetVersion: "2026.4.24",
-      gatewayUpdateImpl: async () =>
-        cli.makeOkUpdateResult({
-          mode: "npm",
-          root: updatedRoot,
-          before: { version: "2026.4.24" },
-          after: { version: "2026.4.24" },
-        }),
-    });
-    mocks.serviceLoaded.mockResolvedValue(true);
-    primeServiceCommand([nodeExecutable, oldEntrypoint, "gateway", "run"]);
-    mockGatewayInstallFailure(updatedEntrypoint);
-    mockGatewayHealth("2026.4.24", "matching-old-service");
-
-    await runUpdate({ yes: true });
-
-    expect(check.gatewayCommandCall(updatedEntrypoint, "install")?.[0]).toContain("--force");
-    expect(check.gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
-    check.expectNoSideEffects(mocks.serviceStop, mocks.serviceStart, mocks.serviceRestart);
-    expect(restarts()).toHaveLength(0);
-    expect(check.getErrorOutput()).toContain(
-      `Failed to reconcile gateway service with ${updatedRoot}`,
-    );
-    expect(runtime.exit).not.toHaveBeenCalledWith(1);
-  });
-
   it.each([
     { plugins: "converge", convergenceFailure: undefined },
     { plugins: "fail to converge", convergenceFailure: "plugin registry exploded" },
   ])(
     "shows the matching-version probe failure when a JSON package update restart stays unhealthy and plugins $plugins",
     async ({ convergenceFailure }) => {
-      setupNpmUpdatedRootRefresh();
+      await setupNpmUpdatedRootRefresh();
       const earlier = oweEarlier("shell-completion");
       if (convergenceFailure) {
         mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(convergenceFailure));
@@ -890,7 +628,7 @@ describe("update-cli", () => {
     },
   );
   it("keeps a JSON package update whose plugin convergence fails and owes the step", async () => {
-    setupNpmUpdatedRootRefresh();
+    await setupNpmUpdatedRootRefresh();
     const reason = "plugin registry exploded";
     mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(reason));
 
@@ -944,47 +682,9 @@ describe("update-cli", () => {
         root: canonicalGitRoot,
         after: { sha, version: VERSION },
       }),
-      false,
       { databaseEngines: ["sqlite", "postgres"] },
     );
     await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, () => runUpdate({ yes: true }));
-    check.expectUpdateCallChannel("dev");
-  });
-
-  it.each(["fail", "ok"] as const)(
-    "uses the installed Git CLI and owes the service refresh only when it cannot complete (%s)",
-    async (daemonInstall) => {
-      oweEarlier("service-definition");
-
-      await runRestartFallbackScenario({ daemonInstall });
-
-      check.expectNoSideEffects(cli.runDaemonInstall, cli.runDaemonRestart);
-      expect(readOwedUpdateSteps()).toEqual(
-        daemonInstall === "fail"
-          ? [
-              {
-                id: "service-definition",
-                runId: cli.listUpdateRuns({ limit: 1 })[0]?.runId,
-                reason: expect.stringContaining("Failed to reconcile gateway service with"),
-              },
-            ]
-          : [],
-      );
-    },
-  );
-  it("defaults to dev channel for git installs when unset", async () => {
-    const root = createCaseDir("openclaw-routing-legacy-git");
-    await writeOpenClawPackageFixture(root, "1.0.0", { git: true, entrySource: "export {};\n" });
-    mockFileBackedPathExists();
-    const canonicalRoot = await fs.realpath(root);
-    vi.mocked(cli.resolveOpenClawPackageRoot).mockResolvedValue(canonicalRoot);
-    vi.mocked(cli.resolveOpenClawPackageRootSync).mockReturnValue(canonicalRoot);
-    vi.mocked(cli.resolveUpdateInstallKind).mockImplementation(async (target) => {
-      expect(target).toBe(canonicalRoot);
-      return "git";
-    });
-    cli.mockGitUpdateAfterMutation(cli.makeOkUpdateResult({ mode: "git", root: canonicalRoot }));
-    await runUpdate({});
     check.expectUpdateCallChannel("dev");
   });
 });

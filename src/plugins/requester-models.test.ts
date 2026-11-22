@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { preparePluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import * as catalogReader from "../gateway/server-methods/requester-model-catalog.js";
@@ -25,7 +25,7 @@ const requester = () => ({
   assertCurrent() {},
 });
 const authority = () =>
-  createAdmittedRunOperatorAuthority({
+  createTestOperatorAuthority({
     profileId: "person",
     scopes: [],
     assertCurrent() {},
@@ -81,7 +81,7 @@ it("omits model authority when requester or exact session authority is missing a
   expect(() =>
     createPluginRequesterModels({
       ...requester(),
-      authority: { profileId: "forged", scopes: [], assertCurrent() {} },
+      authority: { canonicalIdentity: null, profileId: "forged", scopes: [], assertCurrent() {} },
     }),
   ).toThrow("must be issued by the host");
 });

@@ -43,7 +43,6 @@ import {
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
-  readTemplateAsync,
   releaseTemplateReaderAsync,
   retainTemplateReaderAsync,
 } from "./template-registry-async.js";
@@ -582,74 +581,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await fs.readFile(path.join(destination, "included.txt"), "utf8")).toBe("included\n");
     expect(await git(destination, "status", "--porcelain")).toBe("");
   });
-
-  it.each(["ignored", "HEAD", "worktree-config", "sparse", "source-only-sparse"] as const)(
-    "rebuilds a template with %s contamination before creating another checkout",
-    async (change) => {
-      const sparse = change === "sparse" || change === "source-only-sparse";
-      const provisionIgnoredFiles = change !== "source-only-sparse";
-      await fs.writeFile(path.join(repo, ".gitignore"), "ignored-*\n");
-      if (sparse) {
-        await fs.mkdir(path.join(repo, "included"));
-        await fs.writeFile(path.join(repo, "included", "file.txt"), "included\n");
-      }
-      await git(repo, "add", ".");
-      await git(repo, "commit", "-m", "ignore template fixture");
-      // The older commit has identical files, so HEAD validation cannot be
-      // replaced by comparing the tree or accepting a clean inventory alone.
-      await git(repo, "commit", "--allow-empty", "-m", "new template base");
-      if (change === "worktree-config" || sparse) {
-        await git(repo, "config", "extensions.worktreeConfig", "true");
-      }
-      await service.create({
-        repoRoot: repo,
-        name: "seed",
-        baseRef: "HEAD",
-        provisionIgnoredFiles,
-      });
-      const original = (await listTemplatesAsync(env))[0];
-      assert(original);
-      const unusualName = process.platform === "win32" ? "é space.txt" : "é space\nname.txt";
-      if (change === "HEAD") {
-        await git(original.path, "checkout", "--detach", "HEAD~1");
-      } else if (change === "worktree-config") {
-        await git(original.path, "config", "--worktree", "core.autocrlf", "true");
-      } else if (sparse) {
-        await git(original.path, "sparse-checkout", "set", "--cone", "missing-directory");
-        await expect(fs.access(path.join(original.path, "included"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } else {
-        await fs.writeFile(
-          path.join(original.path, `ignored-${unusualName}`),
-          "template contamination\n",
-        );
-      }
-
-      const created = await service.create({
-        repoRoot: repo,
-        name: "replacement",
-        baseRef: "HEAD",
-        provisionIgnoredFiles,
-      });
-
-      const replacement = await readTemplateAsync(env, original.cacheKey);
-      assert(replacement);
-      expect(replacement.id).not.toBe(original.id);
-      await fs.access(original.path);
-      expect((await fs.readdir(created.path)).toSorted()).toEqual([
-        ".git",
-        ".gitignore",
-        "README.md",
-        ...(sparse ? ["included"] : []),
-      ]);
-      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(original.sourceCommit);
-      expect(
-        await git(created.path, "status", "--porcelain", "--untracked-files=all", "--ignored"),
-      ).toBe("");
-    },
-  );
 
   it.each(["advanced", "detached"])(
     "preserves files when clone fallback finds a %s worktree HEAD",
