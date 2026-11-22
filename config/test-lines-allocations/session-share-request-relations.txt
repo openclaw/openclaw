@@ -1,5 +1,5 @@
 # Request-scoped catalog consolidation: real registrar/default invoke policy,
-# source relation and cursor boundaries, slow cached pages, partial-row retention,
+# source relation, cursor and transport boundaries, slow cached pages, partial-row retention,
 # older-Gateway capability checks, and both browser navigation/links fixtures.
 # Exact measured net test-line growth minus the standard 400-line allowance.
-757
+767

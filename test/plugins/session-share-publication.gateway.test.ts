@@ -363,7 +363,11 @@ it.each([false, true])(
     cfg.plugins!.entries!["session-share"]!.enabled = false;
     await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
     cfg.plugins!.entries!["session-share"]!.enabled = true;
-    const holdRead = async (mutate: () => void | Promise<unknown>, disclose = false) => {
+    const holdRead = async (
+      mutate: () => void | Promise<unknown>,
+      disclose = false,
+      rejection = "Session Share request denied or source unavailable",
+    ) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const original = transcript.readSessionTranscriptCatalogPage;
@@ -380,7 +384,7 @@ it.each([false, true])(
         ? expect(pending).resolves.toMatchObject({
             items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }],
           })
-        : expect(pending).rejects.toThrow("Session Share request denied or source unavailable");
+        : expect(pending).rejects.toThrow(rejection);
       try {
         await Promise.race([entered.promise, pending]);
         await mutate();
@@ -411,14 +415,18 @@ it.each([false, true])(
     });
     share.groups = ["Team"];
     let rotated!: Awaited<ReturnType<typeof rotateDeviceToken>>;
-    await holdRead(async () => {
-      rotated = await rotateDeviceToken({
-        deviceId: device.identity.deviceId,
-        role: "operator",
-        scopes: [scope],
-      });
-    });
-    await expect(list()).rejects.toThrow("publication transport method denied");
+    await holdRead(
+      async () => {
+        rotated = await rotateDeviceToken({
+          deviceId: device.identity.deviceId,
+          role: "operator",
+          scopes: [scope],
+        });
+      },
+      false,
+      "gateway closed (4001): publication transport authority changed",
+    );
+    await expect(list()).rejects.toThrow("gateway not connected");
     if (!rotated.ok) {
       throw new Error(`Fixture rotation refused: ${rotated.reason}`);
     }
