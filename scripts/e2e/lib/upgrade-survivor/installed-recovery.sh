@@ -39,7 +39,7 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missi
 state_home=installed-recovery
 service_cut=0
 case "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" in
-  older-runtime | live-gateway | owed-plugin-retry) service_cut=1 ;;
+  older-runtime | live-gateway | owed-plugin-retry | data-at-risk) service_cut=1 ;;
 esac
 if [ "$service_cut" = 1 ]; then
   # This disposable container installs a native service; its state must belong to
@@ -91,7 +91,8 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; 
   exit 0
 fi
 if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
-  [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]; then
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ] ||
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = data-at-risk ]; then
   start_installed_recovery_gateway "$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT"
   phase="$OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT-recovery"
   node "$harness/scripts/e2e/lib/upgrade-survivor/installed-recovery-gateway.mjs" \

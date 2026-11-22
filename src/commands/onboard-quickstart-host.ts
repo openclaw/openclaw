@@ -1,15 +1,10 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
-import {
-  formatDurableInstallCommand,
-  isDisposableEntrypoint,
-} from "../daemon/durable-service-entrypoint.js";
+import { formatUserCliCommand } from "../daemon/durable-service-entrypoint.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
-import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import {
@@ -79,7 +74,11 @@ export async function runQuickstartForegroundGateway(params: {
           runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
         }
       } else {
-        runtime.log(t("wizard.guided.quickstartGatewayPending"));
+        runtime.log(
+          t("wizard.guided.quickstartGatewayPending", {
+            statusCommand: await formatUserCliCommand("gateway status"),
+          }),
+        );
       }
       const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
         links.httpUrl,
@@ -88,15 +87,20 @@ export async function runQuickstartForegroundGateway(params: {
       );
       runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
       runtime.log(t("wizard.guided.quickstartForeground"));
-      // npx/dlx users have no openclaw on PATH; the same version installs a durable copy.
-      const command = (await isDisposableEntrypoint(process.argv[1] ?? ""))
-        ? formatDurableInstallCommand(VERSION, "gateway install")
-        : formatCliCommand("openclaw gateway install");
-      runtime.log(t("wizard.guided.quickstartBackground", { command }));
-      runtime.log(t("wizard.guided.quickstartReopen"));
+      runtime.log(
+        t("wizard.guided.quickstartBackground", {
+          command: await formatUserCliCommand("gateway install"),
+        }),
+      );
+      runtime.log(
+        t("wizard.guided.quickstartReopen", {
+          tuiCommand: await formatUserCliCommand(),
+          dashboardCommand: await formatUserCliCommand("dashboard"),
+        }),
+      );
       if (setupOnly) {
         runtime.log(
-          "Use openclaw setup for the setup assistant. Choose a primary model with openclaw onboard before regular agent chat.",
+          `Use ${await formatUserCliCommand("setup")} for the setup assistant. Choose a primary model with ${await formatUserCliCommand("onboard")} before regular agent chat.`,
         );
       }
       await gateway.wait;

@@ -9,7 +9,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
+import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
 import "../../styles/templates-catalog.css";
@@ -28,6 +29,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
   const [category, setCategory] = createSignal<Category | null>(null);
   const [selectedName, setSelectedName] = createSignal<string | null>(null);
   const [allFiles, setAllFiles] = createSignal(false);
+  const automationSummary = createTemplateAutomationSummary();
   const identity = () => props.view.detail ?? props.view.selected;
   const contents = () => props.view.readDetail()?.contents;
   const items = (key: Category) => contents()?.[key] ?? [];
@@ -79,17 +81,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return (
-        item.schedule +
-        " · " +
-        item.timezone +
-        " · " +
-        t(
-          item.enabled
-            ? "templatesCatalog.automationEnabled"
-            : "templatesCatalog.automationDisabled",
-        )
-      );
+      return automationSummary(item);
     }
     if ("source" in item && item.source === "bundled") {
       return t("templatesCatalog.dependencyBundled");
@@ -113,7 +105,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         <Show
           when={category()}
           fallback={
-            <span class="template-package-art template-preview__art">
+            <span class="template-art template-package-art template-preview__art">
               <TemplateArtwork src={identity()?.iconUrl} />
             </span>
           }
@@ -183,7 +175,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           {(item) => (
                             <button
                               type="button"
-                              class="template-package-row template-preview__row"
+                              class="row template-package-row template-preview__row"
                               onClick={() => setCategory(item.key)}
                             >
                               <Icon name={item.icon} />
@@ -219,36 +211,34 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                 {(item) => (
                                   <button
                                     type="button"
-                                    class="template-package-row template-preview__row"
+                                    class="row template-package-row template-preview__row"
                                     onClick={() => open(item.name)}
                                   >
                                     {"kind" in item && item.kind === "plugin" ? (
                                       <span class="plugin-capability__icon">
                                         <TemplatePluginIcon
-                                          plugin={props.view.pluginPresentation?.[item.name]}
+                                          plugin={
+                                            props.view.readPluginPresentation(item) ?? undefined
+                                          }
                                         />
                                       </span>
                                     ) : undefined}
                                     <span>
                                       <strong>
-                                        {"kind" in item && item.kind === "plugin"
-                                          ? (props.view.pluginPresentation?.[item.name]?.name ??
-                                            item.name)
-                                          : item.name}
+                                        {"kind" in item && item.kind === "plugin" ? (
+                                          <TemplatePluginName
+                                            name={item.source === "clawhub" ? item.ref : item.name}
+                                            presentation={props.view.readPluginPresentation(item)}
+                                          />
+                                        ) : (
+                                          item.name
+                                        )}
                                       </strong>
                                       <small>
                                         {"excerpt" in item
                                           ? item.excerpt
                                           : "schedule" in item
-                                            ? item.schedule +
-                                              " · " +
-                                              item.timezone +
-                                              " · " +
-                                              t(
-                                                item.enabled
-                                                  ? "templatesCatalog.automationEnabled"
-                                                  : "templatesCatalog.automationDisabled",
-                                              )
+                                            ? automationSummary(item)
                                             : ""}
                                       </small>
                                     </span>

@@ -456,7 +456,10 @@ describe("state lease heartbeat lifetime", () => {
           "lastRenewedAt=never",
         );
       }
-      worker.emit("error", new Error("later error delivery"));
+      // A native Worker's exit is its final event.
+      if (observation !== "exit") {
+        worker.emit("error", new Error("later error delivery"));
+      }
       expect(params.onLost).toHaveBeenCalledOnce();
     },
   );

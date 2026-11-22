@@ -25,7 +25,7 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
-  readOnlySqliteValidationSnapshot,
+  readSessionImportValidationSnapshot,
   type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
 import {
@@ -339,11 +339,11 @@ export function validateLegacySessionRecords(
     return true;
   }
   const issueCountBeforeValidation = report.issues.length;
-  const validation = readOnlySqliteValidationSnapshot(target);
+  const validation = readSessionImportValidationSnapshot(target, env);
   if (!validation.ok) {
     report.issues.push({
       code: "sqlite_read_failed",
-      message: `SQLite validation read failed: ${String(validation.error)}`,
+      message: `Session validation read failed: ${String(validation.error)}`,
     });
     return false;
   }
@@ -376,13 +376,13 @@ function validateLegacySessionRecord(
         : undefined
       : snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
-    recordIssue("sqlite_entry_missing", `SQLite entry is missing for ${normalizedKey}.`);
+    recordIssue("sqlite_entry_missing", `Session entry is missing for ${normalizedKey}.`);
     return;
   }
   if (sqliteSessionId !== record.entry.sessionId) {
     recordIssue(
       "sqlite_entry_mismatch",
-      `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
+      `Stored sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
     );
     return;
   }
@@ -431,8 +431,8 @@ function validateLegacySessionRecord(
     recordIssue(
       "sqlite_transcript_count_mismatch",
       beforeArchive
-        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
-        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
+        ? `Stored transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
+        : `Stored transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
     );
     return;
   }

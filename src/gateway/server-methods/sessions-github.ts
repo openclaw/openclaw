@@ -34,6 +34,7 @@ import {
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { createSessionGitHubIssue } from "../github-publication-issue.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import {
@@ -189,6 +190,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.action",
     validateSessionGitHubActionParams,
     async (options) => {
+      if (options.params.action === "create_issue") {
+        options.respond(
+          true,
+          await createSessionGitHubIssue({ ...options, params: options.params }),
+        );
+        return;
+      }
       if (options.params.action === "prepare_pr") {
         await performSessionGitHubPreparation({ ...options, params: options.params });
         return;

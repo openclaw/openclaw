@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { For, Show, createMemo } from "solid-js";
+import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -12,6 +13,7 @@ import {
 } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -21,6 +23,7 @@ import "./terminal-page.css";
 
 export function TerminalPage(props: { location: RouteLocation | null }) {
   const context = useApplication();
+  const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
   const selection = projectAgentSelection(context.agentSelection);
@@ -53,6 +56,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               hidden={!available()}
               embedded
               fullscreen
+              mobile={mobile()}
               page={true}
               routeTarget={entry().target}
               client={snapshot().client}

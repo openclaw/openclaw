@@ -6,6 +6,7 @@ import { PluginRuntimeCloseRetainedError } from "../../plugins/runtime-close-err
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { registerExternalHandoffShutdownTests } from "./run-loop-external-handoff.test-support.js";
+import { registerExternalRestartSignalTests } from "./run-loop-external-signal.test-support.js";
 import { registerGatewayLogSettlementTests } from "./run-loop-log-settlement.test-support.js";
 import { gatewayWorkAdmissionActual, runLoopFixture } from "./run-loop-mocks.test-support.js";
 import { registerNaturalExitTests } from "./run-loop-natural-exit.test-support.js";
@@ -774,42 +775,7 @@ describe("runGatewayLoop", () => {
     },
   );
 
-  it.each([true, false])(
-    "clears the SIGUSR2 token before applying external restart policy (allowed: %s)",
-    async (allowed) => {
-      mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-      mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(allowed);
-      await mocks.withRunningGateway(async ({ captureSignal, close, start }) => {
-        const restartDrainSignal = gatewayWorkAdmissionActual.getGatewayRestartDrainSignal();
-        captureSignal("SIGUSR2")();
-        await waitForLoopTurn();
-        expect(mocks.markGatewayRestartHandled).toHaveBeenCalledOnce();
-        expect(close).not.toHaveBeenCalled();
-        expect(start).toHaveBeenCalledOnce();
-        if (allowed) {
-          expect(mocks.scheduleGatewayRestart).toHaveBeenCalledWith({
-            delayMs: 0,
-            reason: "SIGUSR2",
-          });
-          expect(mocks.markGatewayRestartHandled.mock.invocationCallOrder[0]).toBeLessThan(
-            mocks.scheduleGatewayRestart.mock.invocationCallOrder[0] ?? 0,
-          );
-        } else {
-          expect(mocks.scheduleGatewayRestart).not.toHaveBeenCalled();
-          expect(restartDrainSignal.aborted).toBe(false);
-          expect(gatewayWorkAdmissionActual.isGatewayRestartDraining()).toBe(false);
-          expect(mocks.gatewayLog.warn.mock.calls).toEqual([
-            ["SIGUSR2 restart ignored (not authorized; commands.restart=false)."],
-            [
-              "An unauthorized SIGUSR2 restart signal was received and ignored. " +
-                "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
-                "or restart the gateway through your service manager.",
-            ],
-          ]);
-        }
-      });
-    },
-  );
+  registerExternalRestartSignalTests(waitForLoopTurn);
 
   it.each([true, false])(
     "consumes file-intent SIGUSR2 and cancels pending reloads (authorized=%s)",

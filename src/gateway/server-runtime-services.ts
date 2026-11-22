@@ -24,6 +24,10 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
+import {
+  startAgentExecCgroupCleanup,
+  sweepAgentExecCgroups,
+} from "../process/linux-exec-cgroup.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -129,12 +133,22 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     log: params.log,
   };
   if (process.platform === "linux") {
+    startAgentExecCgroupCleanup(
+      AbortSignal.any([params.signal, params.scheduler.signal]),
+      params.log,
+    );
     scheduleGatewayIdleTask({
       ...idle,
       id: "database:page-cache",
+      // Reclaim remains useful under memory pressure; defer the warmer's import below.
+      isBusy: isRecovering,
       repeatDelayMs: 15 * 60 * 1000,
       errorMessage: "database page-cache probe failed",
       run: async (signal) => {
+        void sweepAgentExecCgroups();
+        if (isConstrainedProcessLowOnMemory()) {
+          return;
+        }
         try {
           const { warmGatewayDatabasePageCache } = await import("./server-database-page-cache.js");
           signal.throwIfAborted();

@@ -11,8 +11,10 @@ import {
 import { deliver } from "./delivery.test-support.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
-import { createLocationMessage as createRealLocationMessage } from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import {
+  buildTemplateMessageFromPayload,
+  createLocationMessage as createRealLocationMessage,
+} from "./template-messages.js";
 import type { LineChannelData } from "./types.js";
 
 const replyOptions = { cfg: LINE_TEST_CFG, accountId: "acc" };

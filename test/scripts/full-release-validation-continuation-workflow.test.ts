@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -41,6 +42,30 @@ function step(job: string, name: string) {
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
+
+it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
+  const revision = "b720fcdb58b62c90eaae10c2d1ba99ba813adb36";
+  for (const name of ["release_decision", "diagnostic_drain"]) {
+    expect((workflowJob(name) as { uses?: string }).uses).toBe(
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
+    );
+  }
+  // Independently verified against the immutable selected revision; no Git-history
+  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
+  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
+  expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
+    "4ee76e74a50fa5d0939b67010e0b334bf0a7bda604c0e81de079f05291ce561f",
+  );
+  const selected = parse(selectedSource);
+  expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+    "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+  );
+  expect(
+    selected.jobs.watch.steps.find(
+      (entry: { name: string }) => entry.name === "Checkout release state tooling",
+    ).if,
+  ).toBeUndefined();
+});
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
   const tooling = allSteps.filter((entry) =>
@@ -277,8 +302,9 @@ describe("full release same-parent recovery workflow", () => {
           verifierCheckedOut ? verifierSha : "",
         );
       }
-      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(
-        !verifierCheckedOut,
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
+      expect(workflowJob("watch").env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+        "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
       );
       for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
         const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
@@ -296,6 +322,14 @@ describe("full release same-parent recovery workflow", () => {
         for (const entry of job.steps) {
           const env = entry.env as Record<string, unknown> | undefined;
           if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            expect(
+              env.OPENCLAW_RELEASE_WAIVERS_PATH ?? job.env?.OPENCLAW_RELEASE_WAIVERS_PATH,
+              jobName,
+            ).toBe(
+              jobName === "evidence_reuse"
+                ? "${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json"
+                : "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+            );
             const root =
               jobName === "evidence_reuse" && !verifierCheckedOut
                 ? "/workspace/workflow"

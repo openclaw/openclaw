@@ -35,6 +35,7 @@ import {
 } from "./lib/release-evidence-identity.mjs";
 import {
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaiversAsync,
   releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
 import {
@@ -335,6 +336,9 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     token: deps.token,
   });
+  const waiverPolicy = await readReleaseValidationWaiversAsync((path) =>
+    client.getWorkflowSource(qualificationSha, path),
+  );
   const children = [];
   for (const { key: role } of admission.coverage.children) {
     const selection = request.children[role];
@@ -372,13 +376,14 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       jobs: verified.receipt.jobs,
     };
     requireValue(
-      terminalPolicyPass(child, binding.package.version, target),
+      terminalPolicyPass(child, binding.package.version, target, waiverPolicy),
       "original child failed release policy",
     );
     const policy = evaluateReleaseChildPolicy({
       child,
       targetVersion: binding.package.version,
       targetSha: target,
+      waiverPolicy,
     });
     // Reuse the admitted workload inventory and authenticated composite; recovery
     // does not reconstruct a second matrix policy from historical source files.

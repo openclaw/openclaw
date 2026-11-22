@@ -1,5 +1,7 @@
 import Foundation
+import Observation
 import OpenClawKit
+import Synchronization
 import Testing
 @testable import OpenClawChatUI
 
@@ -438,6 +440,38 @@ struct ChatSourcePreviewTests {
         #expect(cards(footer("error", cites: self.first)).isEmpty)
         #expect(cards(footer("error")) == [self.second])
         #expect(cards(footer("error", ownsFooter: false)).isEmpty)
+    }
+
+    @Test @MainActor func `refresh keeps the current context and lands only a changed one`() async throws {
+        let state = ChatSourcePreviewState()
+        let gateway = try #require(URL(string: "https://gateway.example.com"))
+        let current = OpenClawChatSourceContext(gatewayURL: gateway, basePath: "", automaticallyFetchFavicons: true)
+        state.refresh { current }
+        await waitForObservedState { state.context == current }
+
+        let notified = Mutex(false)
+        withObservationTracking { _ = state.context } onChange: { notified.withLock { $0 = true } }
+        let gate = AsyncStream<Void>.makeStream()
+        let returning = AsyncStream<Void>.makeStream()
+        state.refresh {
+            for await _ in gate.stream {
+                break
+            }
+            returning.continuation.yield()
+            return current
+        }
+        // Favicons keep their context while the refresh loads, and the same context lands as no change.
+        #expect(state.context == current)
+        gate.continuation.yield()
+        var landed = returning.stream.makeAsyncIterator()
+        _ = await landed.next()
+        let didNotify = notified.withLock { $0 }
+        #expect(state.context == current)
+        #expect(!didNotify)
+
+        let changed = OpenClawChatSourceContext(gatewayURL: gateway, basePath: "", automaticallyFetchFavicons: false)
+        state.refresh { changed }
+        await waitForObservedState { state.context == changed }
     }
 
     private func answer(_ text: String) -> OpenClawChatMessage {

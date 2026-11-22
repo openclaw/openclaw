@@ -120,6 +120,19 @@ it("renders device codes and sends selection answers on the admitted session", a
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
 });
 
+it("keeps the line breaks of multi-line login steps while stripping terminal controls", async () => {
+  const message =
+    "Enter this code.\nCode: ABCD-1234\n\n\u001b[31mxAI OAuth complete\u001b[0m\u0007";
+  await gateway([
+    step({ id: "device", type: "progress", title: "xAI OAuth", message }),
+    done,
+  ]).run();
+  expect(prompts.note).toHaveBeenCalledWith(
+    "Enter this code.\nCode: ABCD-1234\n\nxAI OAuth complete",
+    "xAI OAuth",
+  );
+});
+
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
   const h = gateway([step({ id: "choice", type: "select", options: [] })]);

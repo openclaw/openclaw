@@ -10,6 +10,8 @@ export const AgentsCreateParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   /** Begin the created agent's normal onboarding with an assistant-authored opening turn. */
   onboarding: Type.Optional(Type.Boolean()),
+  /** Interface language at creation; it may have changed since the client connected. */
+  locale: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   expectedOwnerId: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),

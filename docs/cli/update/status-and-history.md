@@ -140,9 +140,10 @@ ledger after the last repair pass. Completed obligations leave the final summary
 and persisted warning steps; pending obligations keep their retry command.
 If the ledger cannot be read, the summary retains the warnings. Messages already
 printed during an earlier phase can remain in the terminal scrollback.
-Repeated warnings appear once in the final report. If update Doctor deferred
-agent database path repair to preserve the rollback inventory, its warning points
-to `openclaw doctor --fix` without telling you to wait for the completed update.
+Repeated warnings appear once in the final report. Update Doctor defers agent
+database path repair to preserve the rollback inventory. It warns only when a
+registration needs that repair; the warning gives the count and points to
+`openclaw doctor --fix` without telling you to wait for the completed update.
 
 Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
 with its reason and what settles it. A successful update's headline counts it
@@ -215,6 +216,12 @@ Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+When the CLI saves a Markdown report, it prints the path and a **Read report**
+command. Copy the command, not the path alone: `cat -- <quoted-path>` in a POSIX
+shell, or `Get-Content -LiteralPath <quoted-path>` in PowerShell on Windows.
+The report is a private text file, not an executable; reading it does not require
+changing its permissions. JSON output keeps the report path without shell instructions.
+
 On an existing profile, update history admission waits for a database writer using
 the update's step timeout (30 minutes by default, or `--timeout`). If that wait
 expires, the command exits successfully with a deferred `update-ledger-busy`
@@ -231,6 +238,10 @@ use candidate code before its own history admission completes.
 
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
+
+Standalone `openclaw update repair` reports a repair and shows only its own phases.
+If the newest prior run is a failed update, the repair report retains that run's ID,
+version, failed phase, reason, and failure detail under **Repaired update**.
 
 Unexpected automatic-update campaign failures retain the error code, when present,
 and a redacted diagnostic in the run history as well as the Gateway log. Status

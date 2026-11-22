@@ -8,8 +8,8 @@ read_when:
 
 ## Boat start admission
 
-Ordinary admitted Boat CI uses the hybrid plan and spends starts on its longest
-eligible Node rows first, with at most 20 Boat jobs per run. Preflight reads
+Ordinary admitted Boat CI uses the GitHub-hosted plan and spends starts on its
+longest eligible Node rows first, with at most 20 Boat jobs per run. Preflight reads
 `GET /api/v1/limits` for the configured `BOAT_ORG`, using the existing
 `BOAT_API_KEY`. It uses included limits only, leaves 20% daily headroom, and
 paces the observed hourly usage against 80% of the daily limit divided by 24.
@@ -18,10 +18,11 @@ targets are 1,920 starts per day and 80 per hour.
 
 When no Boat starts are admitted, including unknown, exhausted or mismatched
 account state, CI uses the GitHub-hosted plan without allocating Boat or
-Blacksmith jobs. A positive allowance retains hybrid placement for overflow.
-The prepared-workspace test retains its original non-Boat placement.
-Each selected Boat row retains its memory class, CPU cap and store-only setup;
-other rows keep their hybrid placement and the complete test inventory.
+Blacksmith jobs. A positive allowance also keeps overflow on GitHub-hosted
+runners. Only rows mapped to `boat-large` or `boat-xlarge` can use the allowance,
+preserving the hosted plan's 16 GiB memory floor and at most four-CPU envelope.
+The prepared-workspace test stays hosted. Selected Boat rows retain their group
+memory and worker limits; other rows keep the complete hosted test inventory.
 
 This is a quota snapshot, not an atomic reservation. Concurrent preflights and
 other workflows can consume the observed allowance; the reserve absorbs ordinary

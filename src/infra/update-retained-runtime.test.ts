@@ -188,7 +188,7 @@ it.for([false, true])(
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
       "retained:still open",
     ]);
-    expect((await stat(directory)).isDirectory()).toBe(true);
+    expect(await contents(directory, "owner.json")).toContain(`"pid":${process.pid},`);
     expect(reportRetained).toHaveBeenCalledWith(
       directory,
       expect.stringContaining("worker generation settled; cleanup deferred"),

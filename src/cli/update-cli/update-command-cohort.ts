@@ -62,11 +62,8 @@ export async function createUpdateCommandRollbackCapture(
   const previous = await readPackageUpdateIdentity(execution.root);
   assertCurrent();
   let candidate: Awaited<ReturnType<typeof readPackageUpdateIdentity>> | undefined;
-  let targetVersion = execution.packageTargetVersion;
+  const targetVersion = execution.packageTargetVersion;
   return {
-    selectTargetVersion(version: string | undefined) {
-      targetVersion = version;
-    },
     async observeCandidate(root: string) {
       candidate = await readPackageUpdateIdentity(root);
       assertCurrent();
