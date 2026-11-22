@@ -37,6 +37,20 @@ describe("session placement recovery", () => {
     sessionStorage.clear();
   });
 
+  it.each([false, true])(
+    "round-trips automatic source selection only for required placement: %s",
+    (required) => {
+      const automatic = {
+        ...recovery,
+        phase: "creating" as const,
+        target: { ...recovery.target, ...(required ? { required: true as const } : {}) },
+        createParams: { key: recovery.sessionKey, agentId: recovery.agentId, message: "" as const },
+      };
+      expect(writeSessionPlacementRecovery(automatic)).toBe(required);
+      expect(readRecovery()).toEqual(required ? automatic : null);
+    },
+  );
+
   it("frames every namespace component without URI encoding", () => {
     const gatewayUrl = "ws://gateway.example";
     const recoveryScope = "principal-a";

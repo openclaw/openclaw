@@ -219,6 +219,14 @@ test("accepts a provider neutral repository default", () => {
   ).toBe(true);
 });
 
+test.each([
+  ["registered-project", true],
+  ["", false],
+  ["  ", false],
+])("validates a registered project default %j", (defaultProjectId, expected) => {
+  expect(accepts({ gateway: { projects: { defaultProjectId } } })).toBe(expected);
+});
+
 test("preserves a SecretRef-only bundled overlay without custom provider fields", () => {
   const apiKey = { source: "file", provider: "x", id: "/runway" };
   const parsed = ModelsConfigSchema.parse({ providers: { runway: { apiKey } } });

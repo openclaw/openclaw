@@ -42,6 +42,14 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
       }
     | { worktree: true; repository?: undefined; deviceFolder?: undefined }
     | {
+        worktree?: undefined;
+        repository?: undefined;
+        deviceFolder?: undefined;
+        projectId?: undefined;
+        cwd?: undefined;
+        catalogId?: undefined;
+      }
+    | {
         repository: NonNullable<SessionCreateParams["repository"]>;
         worktree?: undefined;
         deviceFolder?: undefined;
@@ -113,11 +121,21 @@ export function parseSessionPlacementCreateParams(
   value: unknown,
   sessionKey: string,
   agentId: string,
+  target?: SessionPlacementTarget,
 ): SessionPlacementCreateParams | null {
   if (!isRecord(value)) {
     return null;
   }
   const record = value;
+  const automaticRequiredWorkspace =
+    target?.kind === "profile" &&
+    target.required === true &&
+    record.worktree === undefined &&
+    record.projectId === undefined &&
+    record.cwd === undefined &&
+    record.catalogId === undefined &&
+    record.worktreeBaseRef === undefined &&
+    record.worktreeName === undefined;
   if (
     Object.keys(record).some((key) => !PLACEMENT_CREATE_FIELDS.has(key)) ||
     record.key !== sessionKey ||
@@ -142,7 +160,7 @@ export function parseSessionPlacementCreateParams(
         record.worktreeName !== undefined ||
         record.catalogId !== undefined
       : record.repository === undefined
-        ? record.worktree !== true
+        ? record.worktree !== true && !automaticRequiredWorkspace
         : !isSessionRepository(record.repository) ||
           record.worktree !== undefined ||
           record.projectId !== undefined ||
@@ -250,7 +268,12 @@ function validateSessionPlacementRecovery(
         !isNonEmptyString(value.error) ||
         value.error.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     (value.phase === "creating" &&
-      !parseSessionPlacementCreateParams(value.createParams, value.sessionKey, value.agentId))
+      !parseSessionPlacementCreateParams(
+        value.createParams,
+        value.sessionKey,
+        value.agentId,
+        target,
+      ))
   ) {
     return null;
   }

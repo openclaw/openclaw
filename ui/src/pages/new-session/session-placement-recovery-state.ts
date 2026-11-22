@@ -151,6 +151,7 @@ export class PendingSessionPlacementRecoveryState {
       { ...params.createParams, key: sessionKey },
       sessionKey,
       params.agentId,
+      params.target,
     );
     if (!createParams) {
       return null;

@@ -221,6 +221,10 @@ export class DraftPlaceBrowser {
     return this.#projectCatalog?.snapshot.result?.githubHost;
   }
 
+  get defaultProjectId(): string {
+    return this.#projectCatalog?.snapshot.result?.defaultProjectId ?? "";
+  }
+
   get defaultRemoteProject(): DraftRemoteProject | null {
     const configured = this.#projectCatalog?.snapshot.result?.defaultRepository;
     return configured

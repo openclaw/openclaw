@@ -18,6 +18,11 @@ export function buildSelectedSessionCreateParams(
   place: DraftPlaceState,
   params: DraftSessionCreateSelection,
 ): SessionCreateParams {
+  const defaultProjectOptOut = place.preferenceSelection().defaultRepositoryOptOut === true;
+  // Leave automatic required-worker source selection to the Gateway. An explicit
+  // empty-workspace choice still travels as worktreeSource: "empty".
+  const automaticRequiredWorkspace =
+    place.requiredPlacement && place.freshWorkspace && !defaultProjectOptOut;
   const draft = {
     ...params,
     deferInitialTurn: place.remotePlacement,
@@ -32,8 +37,8 @@ export function buildSelectedSessionCreateParams(
     projectGitUrl: place.hostedEnvironment ? undefined : place.browser.remoteProject?.cloneUrl,
     repository: place.remoteRepository,
     deviceFolder: place.deviceFolder,
-    worktree: place.worktree,
-    worktreeSource: place.freshWorkspace ? "empty" : undefined,
+    worktree: automaticRequiredWorkspace ? false : place.worktree,
+    worktreeSource: !automaticRequiredWorkspace && place.freshWorkspace ? "empty" : undefined,
     baseRef: place.baseRef,
     worktreeName: place.worktreeName,
     cwd: place.hostedEnvironment ? undefined : place.folder,
@@ -77,7 +82,7 @@ export function buildSelectedSessionCreateParams(
     !projectId &&
     !projectGitUrl &&
     cwd &&
-    cwd !== workspace
+    (cwd !== workspace || defaultProjectOptOut)
       ? cwd
       : undefined;
   return {

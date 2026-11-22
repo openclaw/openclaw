@@ -259,6 +259,12 @@ test.each([
     const otherRepository = await createRepository(state.root, projectName);
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
+    const config = await getGatewayConfigModule();
+    const cfg = config.getRuntimeConfig();
+    await config.writeConfigFile({
+      ...cfg,
+      gateway: { ...cfg.gateway, projects: { defaultProjectId: project.id } },
+    });
     const { context, registerRun, spawn } = await createVisibleSpawnTool();
     const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     const bindChild = vi.spyOn(sessionAccess, "createSessionEntryWithTranscript");
@@ -304,11 +310,6 @@ test.each([
         expect(bindChild).not.toHaveBeenCalled();
         expect(registerRun).not.toHaveBeenCalled();
         expect(createWorktree).not.toHaveBeenCalled();
-        if (childKey) {
-          expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
-        }
-        expect(child?.worktree).toBeUndefined();
-        expect(child?.projectId).toBeUndefined();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         return;
       }

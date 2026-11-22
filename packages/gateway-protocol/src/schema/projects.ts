@@ -120,6 +120,7 @@ export const ProjectDefaultRepositorySchema = closedObject({
 export const ProjectsListResultSchema = closedObject({
   projects: Type.Array(ProjectRecordSchema),
   defaultRepository: Type.Optional(ProjectDefaultRepositorySchema),
+  defaultProjectId: Type.Optional(NonEmptyString),
   githubHost: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   recents: Type.Optional(Type.Array(ProjectRecentSchema, { maxItems: 8 })),
   observedProjects: Type.Optional(
