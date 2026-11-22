@@ -16,6 +16,7 @@ import {
 import { classifySessionKeyShape, isAcpSessionKey } from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
+  isAgentMediatedCompletionSourceTool,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import {
@@ -222,7 +223,13 @@ export async function prepareAgentContentPhase(params: {
         agentId: catalogAgentId,
         ...model,
       }));
-    needsImageUnderstanding = !supportsImages;
+    // A media-generation completion hands the agent the files it just produced. The agent
+    // already knows what it asked for, so a text-only model gets them offloaded as references
+    // without forcing an image-understanding pass (which fails hard without a vision model).
+    const isGeneratedMediaCompletion =
+      params.inputProvenance?.kind === "inter_session" &&
+      isAgentMediatedCompletionSourceTool(params.inputProvenance.sourceTool);
+    needsImageUnderstanding = !supportsImages && !isGeneratedMediaCompletion;
     params.assertAdmissionCurrent?.();
     try {
       content = await parseMessageWithAttachments(content.message, params.normalizedAttachments, {
