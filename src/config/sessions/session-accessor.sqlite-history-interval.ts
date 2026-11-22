@@ -1,6 +1,5 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
-import { parseTranscriptLineWithinBytes } from "../../gateway/session-transcript-record-parser.js";
 import {
   resolveTranscriptStandInThresholdBytes,
   SOURCE_PAGE_MAX_BYTES,
@@ -27,6 +26,7 @@ import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-hi
 import {
   getActiveTranscriptKysely,
   readSnapshotEventRows,
+  readSnapshotEventStandIns,
   selectActiveTranscriptIdentityRows,
   type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
@@ -310,29 +310,29 @@ function readHistoricalDisplayEventRange(
   if (selected.length === 0) {
     return [];
   }
-  const payloads = readSnapshotEventRows(
+  // Rows admitted as stand-ins are built from their identity; their payload is never selected.
+  const standIns = readSnapshotEventStandIns(
     projection,
-    selected.map((row) => row.event_seq),
+    selected.filter((row) => row.serialized_bytes > standInAboveBytes).map((row) => row.event_seq),
   );
+  const whole = selected.filter((row) => row.serialized_bytes <= standInAboveBytes);
+  const payloads =
+    whole.length === 0
+      ? []
+      : readSnapshotEventRows(
+          projection,
+          whole.map((row) => row.event_seq),
+        );
   const payloadBySeq = new Map(payloads.map((row) => [row.seq, readTranscriptPayload(row)]));
   return positionTranscriptDisplayEvents(
     projection,
     displaySource,
     selected.flatMap((row) => {
       const eventJson = payloadBySeq.get(row.event_seq);
-      return eventJson === undefined
-        ? []
-        : [
-            {
-              // Bounded on the same threshold the window was admitted under.
-              event: parseTranscriptLineWithinBytes(
-                eventJson,
-                standInAboveBytes,
-              ) as TranscriptEvent,
-              eventSeq: row.event_seq,
-              seq: row.displaySeq,
-            },
-          ];
+      const event =
+        standIns.get(row.event_seq) ??
+        (eventJson === undefined ? undefined : parseStoredTranscriptEvent(eventJson));
+      return event === undefined ? [] : [{ event, eventSeq: row.event_seq, seq: row.displaySeq }];
     }),
   );
 }

@@ -336,6 +336,73 @@ describe("session transcript reader facade", () => {
     );
   });
 
+  // Admission charges an oversized row only the stand-in bound, so the reader must not
+  // select its payload either: sixteen such rows would otherwise fit one page's charge
+  // while the history worker materialized every body.
+  test.each([false, true])(
+    "serves an oversized row from its identity without selecting its payload (historical=%s)",
+    async (historical) => {
+      const sessionId = `reader-oversized-unselected-${historical}`;
+      const events: unknown[] = [
+        event("first", null, { role: "user", content: "first prompt" }),
+        event("huge", "first", { role: "user", content: "h".repeat(9 * 1024 * 1024) }),
+        event("last", "huge", { role: "assistant", content: "last answer" }),
+      ];
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "last",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+      }
+      const scope = await writeTranscript(sessionId, events);
+      // Keep the recorded size but poison the body: any reader that selects it fails to parse.
+      database()
+        .db.prepare(
+          `UPDATE transcript_events
+             SET event_utf8_bytes = coalesce(event_utf8_bytes, octet_length(event_json)),
+                 event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = 'huge'
+           )`,
+        )
+        .run(sessionId, sessionId);
+      // The reset that closes the interval takes one slot of an anchored page.
+      const max = historical ? 4 : 3;
+      const kernel = (messageId: string | undefined) =>
+        readChatHistoryPageKernel(
+          {
+            entry: undefined,
+            provider: undefined,
+            sessionId: scope.sessionId,
+            storePath: scope.storePath,
+            sessionAgentId: scope.agentId,
+            canonicalKey: scope.sessionKey,
+            max,
+            maxHistoryBytes: 8 * 1024 * 1024,
+            effectiveMaxChars: 1_000_000,
+            offset: undefined,
+            messageId,
+          },
+          { readers },
+        );
+      if (!historical) {
+        expectBoundedStandInPage((await readPage(scope, { offset: 0, maxMessages: 3 })).messages);
+        expectBoundedStandInPage((await readRecent(scope, { maxMessages: 3 })).messages);
+        expectBoundedStandInPage((await kernel(undefined)).messages);
+      }
+      const messagesOf = (page: { messages: unknown[] }) =>
+        page.messages.filter((message) => readChatHistoryMessageId(message) !== "reset");
+      for (const messageId of ["huge", "last"]) {
+        expectBoundedStandInPage(
+          messagesOf(await readAround(scope, { messageId, maxMessages: max })),
+        );
+        expectBoundedStandInPage(messagesOf(await kernel(messageId)));
+      }
+    },
+  );
+
   test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";
     const scope = await writeTranscript(

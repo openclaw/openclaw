@@ -116,7 +116,7 @@ function readBoundaryEvents(
     if (boundary.serializedBytes > standInAboveBytes) {
       events.set(
         boundary.eventSeq,
-        oversizedTranscriptStandIn(boundary.eventId) as TranscriptEvent,
+        oversizedTranscriptStandIn({ id: boundary.eventId }) as TranscriptEvent,
       );
     } else {
       whole.push(boundary.eventSeq);

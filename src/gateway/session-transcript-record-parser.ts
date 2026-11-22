@@ -307,30 +307,24 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   };
 }
 
-/** The bounded stand-in a reader serves for a row it holds nothing but the id of. */
-export function oversizedTranscriptStandIn(id: string): Record<string, unknown> {
+/**
+ * The bounded stand-in for a row a reader selected only the indexed identity of. Its
+ * payload is never read, so the bytes the page ceiling refused never reach memory.
+ */
+export function oversizedTranscriptStandIn(identity: {
+  id?: string | null;
+  parentId?: string | null;
+  type?: string | null;
+  role?: string | null;
+}): Record<string, unknown> {
   return {
-    id,
+    ...(identity.type ? { type: identity.type } : {}),
+    ...(identity.id ? { id: identity.id } : {}),
+    ...(identity.parentId ? { parentId: identity.parentId } : {}),
     message: {
-      role: "assistant",
+      role: identity.role ?? "assistant",
       content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
       __openclaw: { truncated: true, reason: "oversized" },
     },
   };
-}
-
-/**
- * Parse one stored transcript line, serving a line past `maxBytes` as the bounded
- * stand-in the JSONL readers already project instead of decoding its whole payload.
- * `maxBytes` is compared against recorded row bytes -- the payload plus exactly one
- * JSONL separator -- because that is the quantity page admission charges.
- */
-export function parseTranscriptLineWithinBytes(line: string, maxBytes: number): unknown {
-  if (Buffer.byteLength(line, "utf8") + 1 > maxBytes) {
-    const bounded = parseTranscriptRecord(line);
-    if (bounded) {
-      return bounded.record;
-    }
-  }
-  return JSON.parse(line) as unknown;
 }
