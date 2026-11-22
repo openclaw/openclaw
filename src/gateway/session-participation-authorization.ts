@@ -44,6 +44,15 @@ export function createSessionParticipationAuthorization(
   let lifetime: ReturnType<typeof retainSessionParticipation> | undefined;
   return {
     isBoundedMethod,
+    get admission() {
+      return ceiling
+        ? {
+            participationCeiling: ceiling,
+            participationSignal: lifetime?.signal,
+            release: () => lifetime?.release(),
+          }
+        : {};
+    },
     get ceiling() {
       return ceiling;
     },

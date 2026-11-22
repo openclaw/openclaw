@@ -1,3 +1,4 @@
+import { decodeQueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
@@ -10,7 +11,6 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
-import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 
 /** A committed reduction retires persisted input custody before a re-invitation can occur. */
 export function revokeSessionParticipationQueueInTransaction(
@@ -30,15 +30,21 @@ export function revokeSessionParticipationQueueInTransaction(
       .where("consumed_event_id", "is", null),
   ).rows;
   for (const row of rows) {
-    const { __openclaw: provenance } = parseSessionPendingInputMessage(row.message_json);
-    const ceiling = provenance?.participationCeiling;
+    if (!row.origin_source_json) {
+      continue;
+    }
+    let source;
+    try {
+      source = decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json));
+    } catch {
+      continue;
+    }
+    const ceiling = source.kind === "gateway" ? source.snapshot.participationCeiling : undefined;
     if (
       ceiling?.kind !== "send" ||
       ceiling.profileId !== target.profileId ||
       ceiling.sessionKey !== target.sessionKey ||
-      (ceiling.source
-        ? ceiling.source.sessionId !== target.sessionId
-        : row.session_key !== target.sessionKey || row.session_id !== target.sessionId)
+      ceiling.source.sessionId !== target.sessionId
     ) {
       continue;
     }

@@ -53,7 +53,10 @@ export function retainGatewayOperatorInvocation(
     ? intersectOperatorScopes(captured.authority.scopes, source.scopes)
     : source.scopes;
   const participationCeiling = intersectParticipationCeilings(
-    source.participationCeiling,
+    intersectParticipationCeilings(
+      captured.authority.participationCeiling,
+      source.participationCeiling,
+    ),
     invocation.participationCeiling,
   );
   const authority = createAdmittedRunOperatorAuthority({

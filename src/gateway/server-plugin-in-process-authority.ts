@@ -150,7 +150,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
   });
   return prepareGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
-    participationCeiling: options?.participationCeiling,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
   }).then((captured) => {

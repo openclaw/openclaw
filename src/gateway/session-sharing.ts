@@ -571,13 +571,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   };
   participation.retain(authorizedTargets[0]);
   const authorization: SessionMutationAuthorization = {
-    ...(participation.ceiling ? { participationCeiling: participation.ceiling } : {}),
-    ...(participation.signal
-      ? {
-          participationSignal: participation.signal,
-          release: participation.release,
-        }
-      : {}),
+    ...participation.admission,
     ...(params.preparedTargets
       ? {
           bindCreation: (target, operation) =>

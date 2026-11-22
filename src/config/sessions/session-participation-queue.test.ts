@@ -56,25 +56,39 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
                 lifecycle_generation: "generation",
                 state: "queued",
                 accepted_at: 1,
-                message_json: JSON.stringify({
-                  role: "user",
-                  content: [],
-                  __openclaw: {
+                message_json: JSON.stringify({ role: "user", content: [] }),
+                origin_source_json: JSON.stringify({
+                  kind: "gateway",
+                  snapshot: {
+                    version: 2,
+                    profileId,
+                    scopes: ["operator.sessions.read"],
+                    assignedRole: "invited",
+                    githubLogin: null,
+                    grant: null,
+                    aliasBindingIds: [],
+                    authPolicy: {
+                      generation: "",
+                      grantGeneration: "fixture",
+                      role: "operator",
+                      authMethod: "token",
+                    },
+                    sourceIngress: "control-ui",
+                    controlUiAdmin: false,
+                    localOperator: false,
                     participationCeiling: {
                       kind: "send",
                       profileId,
                       sessionKey: sessionKey === childKey ? scope.sessionKey : sessionKey,
-                      ...(sessionKey === childKey
-                        ? {
-                            source: {
-                              agentId: "main",
-                              sessionId: "current",
-                              lifecycleRevision: null,
-                              creatorProfileId: "creator",
-                              root: "/synthetic/root",
-                            },
-                          }
-                        : {}),
+                      tools: ["read"],
+                      permission: "workspace",
+                      source: {
+                        agentId: "main",
+                        sessionId: sessionKey === childKey ? "current" : sessionId,
+                        lifecycleRevision: null,
+                        creatorProfileId: "creator",
+                        root: "/synthetic/root",
+                      },
                     },
                   },
                 }),

@@ -25,6 +25,7 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
+import { prepareRecoveredParticipation } from "./session-participation-recovery.js";
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
@@ -87,7 +88,7 @@ async function admitStart(
 ): Promise<RestoredGatewayOperatorAuthority> {
   const admitted = await admitQueuedSource(params);
   const { channelRecoverySource, scopes } = admitted.authority;
-  if (!channelRecoverySource && !operatorScopeSatisfied(grant, scopes)) {
+  if (!channelRecoverySource && !operatorScopeSatisfied(admitted.authority.participationCeiling && grant === "operator.sessions.write" ? "operator.sessions.read" : grant, scopes)) {
     admitted.release();
     throw new GatewayOperatorRecoveryAuthorizationError(
       `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
@@ -120,11 +121,36 @@ async function admitQueuedSource(
     prepared.identity?.release();
     throw error;
   }
-  return decideOperatorAdmission(facts, prepared);
+  const admitted = decideOperatorAdmission(facts, prepared);
+  const ceiling = facts.kind === "gateway" ? facts.snapshot.participationCeiling : facts.kind === "live" ? facts.authority.participationCeiling : undefined;
+  if (!ceiling) return admitted;
+  try {
+    const context = params.context.resolveGatewayContext?.();
+    if (!context) throw new GatewayOperatorRecoveryAuthorizationError("Participant continuation requires its original Gateway.");
+    const revoked = new AbortController();
+    const participation = await prepareRecoveredParticipation({
+      context,
+      authority: admitted.authority,
+      ceiling,
+      revoke: (cause) => revoked.abort(cause),
+    });
+    return {
+      ...admitted,
+      ...retainGatewayOperatorInvocation(admitted, {
+        participationCeiling: participation.ceiling,
+        assertCurrent: () => revoked.signal.throwIfAborted(),
+        signal: revoked.signal,
+        release: participation.release,
+      }),
+    };
+  } catch (error) {
+    admitted.release();
+    throw error;
+  }
 }
 
 /** Accepted work runs on its origin's saved facts and current policy, not its accepting request. */
-async function captureGatewayOperatorContinuationSource(
+export async function captureGatewayOperatorContinuation(
   input: GatewayOperatorRunAdmissionInput,
 ): Promise<PreparedGatewayOperatorRunAuthority | undefined> {
   const inherited = input.client?.internal?.operatorRunAuthority;
@@ -148,43 +174,4 @@ async function captureGatewayOperatorContinuationSource(
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
   return retainGatewayOperatorInvocation({ authority, release: restored.release }, input.invocationAuthority);
-}
-
-/** Re-admit a descendant's invitation independently of the ended spawning request. */
-export async function captureGatewayOperatorContinuation(
-  input: GatewayOperatorRunAdmissionInput & {
-    participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
-  },
-): Promise<PreparedGatewayOperatorRunAuthority | undefined> {
-  const captured = await captureGatewayOperatorContinuationSource(input);
-  const ceiling =
-    input.participationCeiling ??
-    input.client?.internal?.operatorRunAuthority?.participationCeiling;
-  if (!captured || !ceiling?.source) {
-    return captured;
-  }
-  try {
-    const { prepareSessionParticipationRun } = await import("./session-principal-run-authority.js");
-    const context = input.context.resolveGatewayContext?.();
-    if (!context) {
-      throw new Error("Participant continuation requires its original Gateway.");
-    }
-    const participant = await prepareSessionParticipationRun({
-      context,
-      agentId: ceiling.source.agentId,
-      turnCeiling: ceiling,
-    });
-    if (!participant) {
-      throw new Error("Participant continuation requires current source authority.");
-    }
-    return retainGatewayOperatorInvocation(captured, {
-      participationAuthority: participant.authority,
-      assertCurrent: participant.authority.assertCurrent,
-      signal: participant.authority.signal,
-      release: participant.release,
-    });
-  } catch (error) {
-    captured.release();
-    throw error;
-  }
 }
