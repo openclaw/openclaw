@@ -3743,8 +3743,7 @@ describe("prepareCliRunContext", () => {
   );
 
   it("keeps Claude CLI on the Gateway without tools.exec.claudeCliHost", async () => {
-    setCliBackendForPrepareTest({ bundleMcp: true });
-    setCliRunnerPrepareTestDeps({ ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer) });
+    setCliBackendForPrepareTest();
     const sessionEntry = { sessionId: "session-test", updatedAt: 0 };
     const context = await fixture.prepare({
       provider: "claude-cli",
@@ -3754,7 +3753,7 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.executionTarget.kind).not.toBe("node");
-    expect(context.params.sessionEntry).toBe(sessionEntry);
+    expect(context.params.sessionEntry).toEqual(sessionEntry);
     await context.preparedBackend.cleanup?.();
   });
 

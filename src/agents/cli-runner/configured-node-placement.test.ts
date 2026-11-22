@@ -4,7 +4,10 @@ import { applyConfiguredClaudeCliPlacement } from "./configured-node-placement.j
 
 const placed: OpenClawConfig = { tools: { exec: { claudeCliHost: "node", node: "node-a" } } };
 
-function place(config: OpenClawConfig, entry: { execHost?: string; execNode?: string } | undefined) {
+function place(
+  config: OpenClawConfig,
+  entry: { execHost?: string; execNode?: string } | undefined,
+) {
   return applyConfiguredClaudeCliPlacement({
     config,
     agentId: "main",
@@ -37,7 +40,10 @@ describe("applyConfiguredClaudeCliPlacement", () => {
   });
 
   it("places the session on the configured node, keeping its node cwd", () => {
-    expect(place(placed, { execHost: "gateway" })).toEqual({ execHost: "node", execNode: "node-a" });
+    expect(place(placed, { execHost: "gateway" })).toEqual({
+      execHost: "node",
+      execNode: "node-a",
+    });
     const bound = { execHost: "node", execNode: "node-a", execCwd: "/work" };
     expect(place(placed, bound)).toBe(bound);
     expect(place(placed, { execNode: " node-a " })).toEqual({

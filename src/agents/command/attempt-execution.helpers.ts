@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -34,6 +35,7 @@ import {
   isClaudeToolResultBlockType,
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
+import { applyConfiguredClaudeCliPlacement } from "../cli-runner/configured-node-placement.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -454,7 +456,12 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
 
 /** Restores completion tools only on runtimes that enforce the captured requester cap. */
 export function resolveCompletionToolPolicy(params: {
-  run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  run: {
+    cfg: OpenClawConfig;
+    sessionAgentId: string;
+    sessionEntry: SessionEntry | undefined;
+    opts: AgentCommandOpts;
+  };
   trustedSubagentAnnounceHandoff: boolean;
   isSubagentAnnounceHandoff: boolean;
   isRawModelRun: boolean;
@@ -463,12 +470,21 @@ export function resolveCompletionToolPolicy(params: {
   completionNeedsMessageDelivery: boolean;
 }) {
   const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  // The CLI runner applies a configured Claude node placement; decide on the same entry.
+  const sessionEntry = params.isCliExecutionProvider
+    ? applyConfiguredClaudeCliPlacement({
+        config: run.cfg,
+        agentId: run.sessionAgentId,
+        backendId: params.cliExecutionProvider,
+        sessionEntry: run.sessionEntry,
+      })
+    : run.sessionEntry;
   const completionRetainsRequesterTools =
     params.trustedSubagentAnnounceHandoff &&
     !params.isRawModelRun &&
     (!params.isCliExecutionProvider ||
       (isClaudeCliProvider(params.cliExecutionProvider) &&
-        run.sessionEntry?.execHost !== "node" &&
+        sessionEntry?.execHost !== "node" &&
         !run.opts.trustedInternalHandoff?.settleBatch &&
         !messageToolOwnsVisibleReply(run.opts))) &&
     (!messageToolOwnsVisibleReply(run.opts) || completionNeedsMessageDelivery);
