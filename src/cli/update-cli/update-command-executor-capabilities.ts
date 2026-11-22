@@ -106,12 +106,19 @@ export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFen
   requireCapability(preflightReleases.get(fence), "Update preflight handoff is not current.")();
 }
 
-/** The occupied slot this live executor reserved, if any, by its slot key. */
-export function readUpdateCommandExecutorReservedSlot(
+/**
+ * The authority a live executor publishes a package at `root` with: its installation, or the
+ * occupied slot it reserved (the npm package a Git release install left forwarding to it).
+ */
+export function captureUpdateCommandExecutorPublicationAuthority(
   fence: UpdateRecoveryFence,
-): string | undefined {
-  captureUpdateCommandExecutorAuthority(fence);
-  return reservedSlots.get(fence);
+  root: string,
+): ManagedUpdateLeaseAuthority | undefined {
+  const authority = captureUpdateCommandExecutorAuthority(fence);
+  const key = resolveUpdateInstallRoot(root);
+  return authority.installKey === key || reservedSlots.get(fence) === key
+    ? { ...authority, installKey: key }
+    : undefined;
 }
 
 /** Reserve a prospective package slot without replacing the original domain. */

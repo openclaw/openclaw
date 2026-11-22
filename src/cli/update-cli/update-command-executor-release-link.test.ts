@@ -12,7 +12,7 @@ import {
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
-  readUpdateCommandExecutorReservedSlot,
+  captureUpdateCommandExecutorPublicationAuthority,
   reserveUpdateCommandExecutorSlot,
 } from "./update-command-executor-capabilities.js";
 import {
@@ -113,7 +113,7 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
       path.join(root, "other-git-install"),
     );
     const store = createManagedHandoffLeaseStore();
-    const outcome: { lease?: string; reserved?: string; foreign?: string } = {};
+    const outcome: { lease?: string; publishes?: string; foreign?: string } = {};
 
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(slot);
@@ -124,13 +124,17 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
       }
       reserveUpdateCommandExecutorSlot(fence, forwarding);
       outcome.lease = store.read(forwarding).kind;
-      outcome.reserved = readUpdateCommandExecutorReservedSlot(fence);
+      // Package activation and its continuation key this publication by the package.
+      outcome.publishes = captureUpdateCommandExecutorPublicationAuthority(
+        fence,
+        forwarding,
+      )?.installKey;
     });
 
     expect(outcome).toEqual({
       foreign: expect.stringMatching(/does not resolve to its original installation/u),
       lease: "current",
-      reserved: forwarding,
+      publishes: forwarding,
     });
   });
 });

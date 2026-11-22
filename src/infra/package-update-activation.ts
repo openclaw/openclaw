@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
-  captureUpdateCommandExecutorAuthority,
+  captureUpdateCommandExecutorPublicationAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -147,7 +147,7 @@ export function assertNoPendingPackageActivation(
     options?.continuation &&
     isDeepStrictEqual(
       record.descriptor.authority,
-      captureUpdateCommandExecutorAuthority(options.continuation),
+      captureUpdateCommandExecutorPublicationAuthority(options.continuation, installKey),
     )
   ) {
     return;
