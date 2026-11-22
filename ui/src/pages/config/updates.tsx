@@ -40,6 +40,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
@@ -311,11 +312,21 @@ function GatewayUpdates(props: UpdatesViewProps) {
     yield pending.catch(() => {});
   });
   const updateNow = async () => {
+    const trigger = document.activeElement;
     const view = props.captureCommandPresentation();
     const pending = Promise.race([props.onUpdateNow(), view.retired]);
     void setConfirmation(() => pending);
     await Promise.resolve();
-    return presentConfirmation(view, pending);
+    await presentConfirmation(view, pending);
+    // The modal can't return focus to the settings button while this command disables it.
+    if (
+      view.isCurrent() &&
+      trigger instanceof HTMLButtonElement &&
+      trigger.isConnected &&
+      document.activeElement === document.body
+    ) {
+      focusProgrammatically(trigger, { preventScroll: true });
+    }
   };
   // Seed only the first paint so checking does not suspend the surrounding settings.
   const completion = createMemo<boolean | null>(async () => (await props.statusRead) ?? false, {

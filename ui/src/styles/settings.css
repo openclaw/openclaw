@@ -1221,6 +1221,20 @@ textarea.settings-input {
   grid-column: 2;
 }
 
+.settings-row__control:has(> .updates-schedule-presets) {
+  container: update-schedule / inline-size;
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Below the four presets' single-row width, keep two peer choices per row. */
+@container update-schedule (max-width: 28em) {
+  .updates-schedule-presets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+}
+
 .updates-status-control {
   display: inline-flex;
   align-items: center;

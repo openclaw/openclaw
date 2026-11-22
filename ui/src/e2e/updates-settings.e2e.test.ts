@@ -40,6 +40,39 @@ async function expectRadiosDisabled(page: Page) {
 }
 
 suite.define(() => {
+  it("keeps the four schedule presets in two aligned columns on a phone", async () => {
+    await suite.withPage(
+      { ...pageOptions, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["config.get", "update.status"],
+          methodResponses: {
+            "config.get": configResponse({ update: { channel: "stable" } }, "schedule-phone"),
+            "update.status": {
+              sentinel: null,
+              schedule: { channel: "stable", autoEnabled: false },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        const labels = page.getByRole("radiogroup", { name: "Update schedule" }).locator("label");
+        await labels.first().waitFor();
+        const boxes = await labels.evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const { x, y, width } = node.getBoundingClientRect();
+            return { x, y, width };
+          }),
+        );
+        expect(boxes).toHaveLength(4);
+        expect(boxes[0]!.y).toBe(boxes[1]!.y);
+        expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
+        expect(boxes[2]!.y).toBe(boxes[3]!.y);
+        expect(boxes.slice(2).map(({ x, width }) => [x, width])).toEqual(
+          boxes.slice(0, 2).map(({ x, width }) => [x, width]),
+        );
+      },
+    );
+  });
   it("saves hourly daily weekly and custom automatic update schedules", async () => {
     await suite.withPage(
       { ...pageOptions, viewport: { width: 1280, height: 1000 } },

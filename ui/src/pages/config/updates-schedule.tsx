@@ -74,6 +74,7 @@ export function UpdatesSchedule(props: {
         stacked
         control={
           <SettingsSegmented
+            class="updates-schedule-presets"
             value={preset()}
             disabled={props.disabled}
             ariaLabel={t("updates.page.schedule")}

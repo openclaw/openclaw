@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -35,10 +39,16 @@ suite.define(() => {
           updateAvailable,
           methodResponses: { "update.status": { sentinel: null, schedule, updateAvailable } },
         });
+        await page.addInitScript(
+          (key) => localStorage.setItem(key, JSON.stringify({ textScale: 140 })),
+          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        );
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
         await page.locator(".settings-status", { hasText: "5 commits behind" }).waitFor();
-        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+        const trigger = page.getByRole("button", { name: "Update Gateway…", exact: true });
+        await trigger.focus();
+        await page.keyboard.press("Enter");
         await page.getByRole("dialog", { name: "Update and restart?", exact: true }).waitFor();
         const modal = page.locator("openclaw-modal-dialog");
         const summary = modal.locator(".exec-approval-command > div").first();
@@ -56,6 +66,13 @@ suite.define(() => {
         expect(codeBoxes[0]).toBe(codeBoxes[1]);
         const link = modal.getByRole("link", { name: "Compare on GitHub" });
         expect(await link.getAttribute("target")).toBe("_blank");
+        expect(
+          await link.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+        ).toBeCloseTo(16.8, 1);
+        await modal.getByRole("button", { name: "Cancel", exact: true }).press("Enter");
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
     ),

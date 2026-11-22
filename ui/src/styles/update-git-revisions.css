@@ -2,6 +2,10 @@
   white-space: normal;
 }
 
+.update-confirmation-details > :first-child {
+  font-size: calc(1em * var(--control-ui-text-scale));
+}
+
 .update-git-revisions {
   display: flex;
   align-items: center;
@@ -25,6 +29,11 @@
 .update-git-revisions a {
   white-space: nowrap;
   cursor: pointer;
+}
+
+#config-section-update .update-git-revisions,
+.update-run-dialog .update-git-revisions {
+  font-size: var(--control-ui-text-sm);
 }
 
 .update-run-dialog .update-git-revisions {
