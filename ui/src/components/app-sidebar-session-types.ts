@@ -94,8 +94,6 @@ export type SidebarToolActivity = {
 
 export type SidebarRecentSession = Readonly<{
   key: string;
-  /** Visible occurrence for range selection; never a Gateway/session identity. */
-  selectionKey?: string;
   agentId?: string;
   sessionId?: string;
   displayName?: string;
@@ -201,8 +199,6 @@ export type SidebarRecentSession = Readonly<{
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
-  runtimeMs?: number;
-  runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
   /** Detail queries retain their original parents when hidden runs are skipped. */
   childLoadParentKeys?: readonly string[];

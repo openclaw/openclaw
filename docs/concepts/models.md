@@ -365,6 +365,11 @@ configured `agentRuntime` remains the default:
 }
 ```
 
+In **Settings → Models**, the **Model** and **Fallback model** menus show the
+available harness choices. Choosing one saves it as the global default for that
+specific model. Other models keep their own settings, and agent-specific
+overrides still take precedence. Choosing a harness in chat changes only that session.
+
 The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
 change credentials, or rename the upstream model. Each runtime supplies its own

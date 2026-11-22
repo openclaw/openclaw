@@ -13,15 +13,7 @@ export function noteDoctorAgentDatabasePathHealth(params: {
     return [];
   }
   const report = runOpenClawStateWriteTransaction(
-    (database) =>
-      isUpdateDoctorLintPass(params.env)
-        ? {
-            repaired: 0,
-            warnings: [
-              "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
-            ],
-          }
-        : repairOpenClawAgentDatabasePaths(database),
+    (database) => repairOpenClawAgentDatabasePaths(database, isUpdateDoctorLintPass(params.env)),
     { env: params.env },
     { operationLabel: "doctor.agent-database-paths" },
   );

@@ -135,6 +135,7 @@ export function captureGitHubPublicationActionAuthority(
   };
   assertCurrent();
   return {
+    scopes,
     operatorWrite,
     assertCurrent,
     assertOperatorWrite: () => {

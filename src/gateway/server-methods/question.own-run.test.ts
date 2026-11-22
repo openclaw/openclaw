@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -71,7 +72,13 @@ function questionPeer(
   };
   const client: GatewayWsClient = {
     socket: socket as unknown as GatewayWsClient["socket"],
-    connect: { role: "operator", scopes } as GatewayWsClient["connect"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+      role: "operator",
+      scopes,
+    },
     connId,
     usesSharedGatewayAuth: false,
     authenticatedUserProfile: {

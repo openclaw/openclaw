@@ -92,6 +92,7 @@ export function createAdmittedRunOperatorAuthority(
       Object.freeze({
         profileId: source.canonicalIdentity.profileId,
       }),
+    clientId: source.clientId,
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,

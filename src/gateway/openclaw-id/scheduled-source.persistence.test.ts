@@ -25,7 +25,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
 import { restoreGatewayOperatorSource } from "../operator-run-recovery.js";
-import { recoveryFixture } from "../operator-run-recovery.test-support.js";
+import { expectCurrent, recoveryFixture } from "../operator-run-recovery.test-support.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { cronHandlers } from "../server-methods/cron.js";
 import {
@@ -321,10 +321,6 @@ it.each([
   },
 );
 
-function expectCurrent(authority: AdmittedRunOperatorAuthority) {
-  expect(authority.signal?.aborted).toBe(false);
-  expect(authority.assertCurrent).not.toThrow();
-}
 it.each(["member", "owner"] as const)(
   "keeps an admitted serialized OCID %s request while refusing stale source recovery",
   async (kind) => {

@@ -16,6 +16,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Canonical owner binding, or an explicitly host-issued opaque grant. */
   canonicalIdentity: Readonly<{ profileId: string }> | null;
+  /** Original transport for presentation only; never grants authority. */
+  clientId?: import("../../packages/gateway-protocol/src/client-info.js").GatewayClientId;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Plain source evidence for another same-process start; never a lifetime check. */

@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -149,6 +150,40 @@ describe("unified skill discovery", () => {
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
   });
 
+  it("keeps the feed usable without category support, and retries a failed taxonomy independently", async () => {
+    const research = { slug: "research", label: "Research" };
+    const categories = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Directory unavailable"))
+      .mockResolvedValue({ categories: [research] });
+    const feed = vi.fn(() => ({ results: [{ ...remoteSkill(), categories: [research.slug] }] }));
+    const sources: Record<string, () => unknown> = {
+      "skills.categories": categories,
+      "skills.search": feed,
+      "skills.library.list": () => personalLibrary,
+    };
+    const { container, context, connection } = mountSkills(
+      async (method) => sources[method]?.() ?? {},
+    );
+    const section = () =>
+      container
+        .querySelector('[data-skill-id="remote:@alice/repo"]')
+        ?.closest<HTMLElement>("[data-catalog-section]")?.dataset.catalogSection;
+    await waitForFast(() => expect(section()).toBe("clawhub"));
+    expect(categories).not.toHaveBeenCalled();
+    connection.publish({
+      ...context.gateway.snapshot,
+      hello: gatewayHelloForMethods(["skills.categories"]),
+    });
+    const alert = () => container.querySelector('[role="alert"]');
+    await waitForFast(() => expect(alert()?.textContent).toContain("Directory unavailable"));
+    expect(section()).toBe("clawhub");
+    const reads = feed.mock.calls.length;
+    alert()!.querySelector("button")!.click();
+    await waitForFast(() => expect(section()).toBe("category-research"));
+    expect(feed).toHaveBeenCalledTimes(reads);
+  });
+
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {
@@ -175,6 +210,61 @@ describe("unified skill discovery", () => {
     expect(cards[1]?.textContent).toContain("Bob");
     cards[1]?.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
     expect(onLibraryOpen).toHaveBeenCalledWith(libraries[1]!.skillId);
+  });
+
+  it("reports an empty category independently of installed matches or pending inventory", () => {
+    const container = renderDiscovery({
+      clawhubCategory: { slug: "research", label: "Research" },
+      clawhubQuery: "repo",
+      clawhubResults: [],
+      libraryEntries: undefined,
+      loading: true,
+    });
+    expect(container.querySelector(".plugin-catalog-card")).toBeNull();
+    expect(container.querySelector(".settings-empty")?.textContent).toBe(
+      "No skills match your filters.",
+    );
+  });
+
+  it("previews only advertised memberships in taxonomy order, with a flat remainder", () => {
+    const alpha = { slug: "lab-a", label: "Field work" };
+    const beta = { slug: "lab-b", label: "On call" };
+    const tagged = Array.from({ length: 6 }, (_, index) => ({
+      ...remoteSkill("alice", "row-" + index, "Row " + index),
+      categories: index ? [alpha.slug] : [alpha.slug, beta.slug, beta.slug],
+    }));
+    const uncategorized = [
+      remoteSkill("alice", "old"),
+      { ...remoteSkill("alice", "unknown"), categories: ["unadvertised"] },
+    ];
+    const onCategoryChange = vi.fn();
+    const props = { clawhubResults: [...tagged, ...uncategorized], onCategoryChange };
+    const container = renderDiscovery({ ...props, readCategories: () => null });
+    expect(shelfText(container)).not.toBe("");
+    expect(container.querySelector("[data-skill-id]")).toBeNull();
+    const categories = [beta, alpha, { slug: "empty", label: "Empty" }];
+    renderDiscovery({ ...props, readCategories: () => ({ categories }) }, container);
+    const sections = [...container.querySelectorAll("[data-catalog-section]")];
+    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+      "On call",
+      "Field work",
+      "ClawHub",
+    ]);
+    const ids = (section: Element) =>
+      [...section.querySelectorAll("[data-skill-id]")].map((el) =>
+        el.getAttribute("data-skill-id"),
+      );
+    expect(ids(sections[0]!)).toEqual(["remote:@alice/row-0"]);
+    expect(ids(sections[1]!)).toEqual(tagged.slice(0, 4).map((row) => "remote:" + row.installRef));
+    expect(ids(sections[2]!)).toEqual(uncategorized.map((row) => "remote:" + row.installRef));
+    const chip = [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")].find(
+      (button) => button.textContent === alpha.label,
+    )!;
+    const focus = vi.spyOn(chip, "focus");
+    sections[1]!.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(onCategoryChange).toHaveBeenCalledExactlyOnceWith(alpha);
+    expect(sections[2]!.querySelector(".plugin-catalog-section__view-all")).toBeNull();
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {

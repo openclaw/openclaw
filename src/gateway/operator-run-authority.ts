@@ -493,6 +493,7 @@ export async function prepareGatewayOperatorRunAuthority(
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
       canonicalIdentity: { profileId: capturedProfile.profileId },
+      clientId: client.internal?.syntheticClient ? undefined : client.connect.client.id,
       recoverySnapshot,
       recoverySnapshotUnavailableReason,
       device,
