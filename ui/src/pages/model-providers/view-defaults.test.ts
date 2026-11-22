@@ -2,7 +2,7 @@
 
 import { expect, it, vi } from "vitest";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
-import { mount, props, settingsRow } from "./view.test-support.tsx";
+import { mount, openMoreSettings, props, settingsRow } from "./view.test-support.tsx";
 
 const trigger = (container: Element, setting: string) =>
   container.querySelector<HTMLButtonElement>(`#model-providers-${setting}-model`)!;
@@ -195,6 +195,7 @@ it("names agents with their own utility settings and opens their Overview", asyn
       onOpenAgent,
     }),
   );
+  openMoreSettings(container);
   const row = settingsRow(container, "Utility model");
   expect(row.textContent).toContain("Forge: fixture/small · fallbacks: fixture/backup");
   expect(row.textContent).toContain("Quiet: Disabled");

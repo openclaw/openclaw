@@ -123,6 +123,14 @@ export function text(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
+/** Opens the folded defaults (fallback, utility and decision models). */
+export function openMoreSettings(container: Element): void {
+  container
+    .querySelector<HTMLButtonElement>('[data-models-more-settings][aria-expanded="false"]')
+    ?.click();
+  flush();
+}
+
 export function settingsRow(container: Element, label: string): HTMLElement {
   const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
     (candidate) =>

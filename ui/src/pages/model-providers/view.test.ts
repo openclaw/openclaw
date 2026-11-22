@@ -6,7 +6,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { resolveDefaultModelPresentation, type ModelProviderCard } from "./data.ts";
-import { card, mount, props, settingsRow, text } from "./view.test-support.tsx";
+import { card, mount, openMoreSettings, props, settingsRow, text } from "./view.test-support.tsx";
 
 function expand(container: Element, providerId = "openai"): Element {
   container
@@ -277,7 +277,7 @@ describe("renderModelProviders", () => {
     const configured = view([unconnected], "openai/gpt-5.5");
     // Saved credentials with no default yet: the listing failure is why nothing works.
     const signedIn = view(
-      [card({ profiles: [{ profileId: "openai:a", type: "oauth", status: "ok" }] })],
+      [card({ profiles: [{ profileId: "a", type: "oauth", status: "ok" }] })],
       "",
     );
     await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
@@ -358,6 +358,7 @@ describe("renderModelProviders", () => {
 
   it("keeps decision model help behind the standard info button", () => {
     const container = mount(props());
+    openMoreSettings(container);
     const row = settingsRow(container, "Decision model");
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
@@ -643,12 +644,10 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
         thinkingOverridden: false,
         fastModeOverridden: false,
-        decisionModels: [],
         catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
         onCatalogConnect,
       }),
     );
-
     const catalog = container.querySelector("[data-models-catalog]");
     expect(text(catalog)).toContain(t("modelProviders.catalog.firstTitle"));
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
@@ -659,9 +658,8 @@ describe("renderModelProviders", () => {
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     const later = container.querySelector("[data-models-catalog]");
     expect(text(later)).toContain(t("modelProviders.catalog.title"));
-    expect(
-      text(later?.querySelector('[data-models-catalog-provider="openai"] p') ?? null),
-    ).toContain("Connected");
+    const openaiRow = later?.querySelector('[data-models-catalog-provider="openai"] p');
+    expect(text(openaiRow ?? null)).toContain("Connected");
   });
 
   it.each([true])(
@@ -820,6 +818,7 @@ describe("renderModelProviders", () => {
           automaticUtilityModel,
         }),
       );
+      openMoreSettings(automatic);
       await updatePickers(automatic);
       await openPicker(automatic.querySelector("openclaw-select-picker")!);
       expect(

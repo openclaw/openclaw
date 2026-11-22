@@ -88,8 +88,6 @@ export type DefaultModelsViewProps = {
   onCatalogRetry: () => void;
   /** The selected agent's own model when it differs from the default, as a sentence. */
   agentModel?: string;
-  /** Start with the folded rows open, for a link that points at them. */
-  openAdvanced?: boolean;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -510,17 +508,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
 
   // Discovery reports on the heading line, so the rows below it never move.
   const catalogProgress = <CatalogProgress {...props} />;
-  // The rest of the defaults stay folded until one of them is changed. Once open they stay open,
-  // so resetting the last change never folds the row under the pointer; a click always wins.
+  // Fallback, utility and decision models stay folded until one of them is set. Once open they
+  // stay open, so clearing the last one never folds the row under the pointer; a click wins.
   const [moreOpen, setMoreOpen] = createSignal<boolean>(
     (open) =>
       open === true ||
-      props.openAdvanced === true ||
       props.selection.fallbacks.length > 0 ||
       props.selection.utilityModel !== null ||
-      Boolean(props.selection.decisionModel) ||
-      props.thinkingOverridden ||
-      props.fastModeOverridden,
+      Boolean(props.selection.decisionModel),
   );
   return (
     <SettingsSection
@@ -543,6 +538,28 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               onChange={(value) => selectChatChoice(value, props.onPrimaryChange)}
             />
           }
+        />
+        <BehaviorSetting
+          field={"thinking"}
+          view={props}
+          value={props.thinkingLevel ?? ""}
+          options={thinkingOptions()}
+          overridden={props.thinkingOverridden}
+          onChange={props.onThinkingChange}
+          onReset={props.onThinkingReset}
+        />
+        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
+          field={"fastMode"}
+          view={props}
+          value={fastMode()}
+          options={fastModeOptions()}
+          overridden={props.fastModeOverridden}
+          onChange={(value) => {
+            if (value !== fastMode()) {
+              props.onFastModeChange(fastModeOptionValue(value));
+            }
+          }}
+          onReset={props.onFastModeReset}
         />
         <button
           type="button"
@@ -571,28 +588,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             onChange={(value) =>
               value ? selectChatChoice(value, props.onFallbackChange) : props.onFallbackChange(null)
             }
-          />
-          <BehaviorSetting
-            field={"thinking"}
-            view={props}
-            value={props.thinkingLevel ?? ""}
-            options={thinkingOptions()}
-            overridden={props.thinkingOverridden}
-            onChange={props.onThinkingChange}
-            onReset={props.onThinkingReset}
-          />
-          <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
-            field={"fastMode"}
-            view={props}
-            value={fastMode()}
-            options={fastModeOptions()}
-            overridden={props.fastModeOverridden}
-            onChange={(value) => {
-              if (value !== fastMode()) {
-                props.onFastModeChange(fastModeOptionValue(value));
-              }
-            }}
-            onReset={props.onFastModeReset}
           />
           <SettingsRow
             title={

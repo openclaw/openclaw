@@ -156,7 +156,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
   );
   const available = (model: { available?: boolean }) => model.available !== false;
   // A provider with credentials can list models, so its listing errors (shown in the defaults
-  // heading, with Retry) matter; before that the defaults are seven empty controls.
+  // heading, with Retry) matter; before that the defaults are empty controls.
   const providerSetUp = () =>
     props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0);
   const hasDefaults = () => {
@@ -210,8 +210,6 @@ export function ModelProviders(props: ModelProvidersViewProps) {
               canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
               mutationBlockedReason={props.defaultsMutationBlockedReason}
               message={props.messages.defaults}
-              // A settings-search link to these defaults (effort, speed) opens the folded rows.
-              openAdvanced={globalThis.location?.hash === `#${MODEL_SETTINGS_TARGET_IDS.behavior}`}
               // Before any provider or default is set up, providers can't list models and the
               // catalog is the call to action; a listing failure isn't news then.
               catalogDiscoveryError={
