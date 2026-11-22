@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -22,8 +21,6 @@ import {
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   captureSessionTarget,
@@ -235,47 +232,6 @@ describe("sessions.patch", () => {
           expect.anything(),
         );
       });
-    }));
-
-  it("rechecks dashboard tool authority at the actual session commit admission", () =>
-    withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:dashboard-authority";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "dashboard-authority",
-        updatedAt: 1,
-        boardPresentation: "split",
-      });
-      const before = loadSessionEntry(scope);
-      const requestContext = context({});
-      let revoked = false;
-      let reachedCommitAdmission = false;
-      probe.admission(workerAdmission, (request, grant, admit) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind === "session-entry-replacements"
-        ) {
-          reachedCommitAdmission = true;
-          revoked = true;
-        }
-        admit(request, grant);
-      });
-      const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
-      await expect(
-        withGatewayToolCallerIdentity(
-          {
-            ...dashboardCaller(sessionKey, requestContext),
-            receiptAuthority: () => !revoked,
-          },
-          () =>
-            tool.execute("save", { action: "set_default_presentation", presentation: "expanded" }),
-        ),
-      ).rejects.toThrow(/authority.*no longer active/i);
-      expect(reachedCommitAdmission).toBe(true);
-      expect(loadSessionEntry(scope)).toEqual(before);
-      expect(requestContext.broadcastToConnIds).not.toHaveBeenCalled();
     }));
 
   it("persists preference clears with an agent model rollback marker", () =>

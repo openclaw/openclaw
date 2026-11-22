@@ -366,7 +366,7 @@ describe("models.authLogin ownership", () => {
   });
 
   it.each(["https://gateway.example", "http://localhost:18789", undefined])(
-    "binds browser callback eligibility and cancellation to the connected origin (%s)",
+    "binds browser callback eligibility to the connected origin and stops on cancel (%s)",
     async (origin) => {
       const { h } = browserHarness(
         origin ? { origin, requestHost: new URL(origin).host, isLocalClient: true } : undefined,
@@ -383,11 +383,13 @@ describe("models.authLogin ownership", () => {
         message: "Paste the redirect URL",
         externalUrl: "https://provider.example/authorize",
       });
+      // Leaving the tab keeps the sign-in; only its cancellation stops the provider flow.
       h.controller.abort();
+      expect(session.getStatus()).toBe("running");
+      expectReply(await h.cancel(), { status: "cancelled" });
       await whenAdmittedWizardSessionSettled(session);
       expect(options.signal?.aborted).toBe(true);
       expect(options.beforePersistentEffect).toThrow();
-      expect(session.getStatus()).toBe("error");
     },
   );
 
@@ -406,19 +408,53 @@ describe("models.authLogin ownership", () => {
     session.cancel();
   });
 
-  it("releases admission on disconnect with a post-save note", async () => {
+  it("keeps a sign-in across a socket loss; another owner replaces it only while nobody reads it", async () => {
     const h = harness();
-    postSaveNote();
+    void mockLogin(async (options) => {
+      await options.prompter.text({ message: "Address of the page your browser opened" });
+    });
     const session = await h.begin();
-    expect(await h.next()).toMatchObject({ step: { message: "Credentials saved." } });
+    const step = await h.next();
     h.controller.abort();
-    await withTestTimeout(
-      whenAdmittedWizardSessionSettled(session),
-      1_000,
-      "Disconnected login retained admission",
+    expect(session.getStatus()).toBe("running");
+    // The user comes back on a new socket and reads the same step.
+    const returning = new AbortController();
+    const returned: GatewayClient = {
+      ...h.client,
+      connId: "returned",
+      connectionSignal: returning.signal,
+    };
+    const resumed = await h.invoke("wizard.next", { sessionId: "login" }, returned);
+    expectReply(resumed, { step: expect.objectContaining({ id: step.step?.id }) });
+    // Someone is watching the sign-in again, so another operator stays busy.
+    const other: GatewayClient = { ...h.client, connId: "other" };
+    const start = () =>
+      h.invoke(
+        "models.authLogin",
+        { sessionId: "replacement", authChoice: "fixture/fixture-device" },
+        other,
+      );
+    expectRejected(await start(), { details: { code: "SETUP_ADMISSION_BUSY" } });
+    // A second tab reads it and drops; the returned tab still shows it.
+    const secondTab = new AbortController();
+    await h.invoke(
+      "wizard.next",
+      { sessionId: "login" },
+      {
+        ...h.client,
+        connId: "second-tab",
+        connectionSignal: secondTab.signal,
+      },
     );
-    expect(session.getStatus()).toBe("error");
-    expectReply(await harness().start(), { sessionId: "login" });
+    secondTab.abort();
+    expectRejected(await start(), { details: { code: "SETUP_ADMISSION_BUSY" } });
+    expect(session.getStatus()).toBe("running");
+    // Once every reader's socket is closed, nobody watches it: a new sign-in is not refused.
+    returning.abort();
+    void mockLogin(() => undefined);
+    expectReply(await start(), { sessionId: "replacement", status: "running" });
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("cancelled");
   });
 
   it("settles discarded login input before admitting another login on the same connection", async () => {
