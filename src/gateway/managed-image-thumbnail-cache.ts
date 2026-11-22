@@ -53,13 +53,10 @@ export async function encodeImageThumbnail(
   if (thumbnail.data.byteLength > maxBytes) {
     throw new Error("Managed image thumbnail exceeds the preview byte limit");
   }
-  if (thumbnail.mimeType === "image/jpeg") {
-    return { data: thumbnail.data, extension: ".jpg", mimeType: thumbnail.mimeType };
-  }
-  if (thumbnail.mimeType === "image/webp") {
-    return { data: thumbnail.data, extension: ".webp", mimeType: thumbnail.mimeType };
-  }
-  throw new Error("Managed image thumbnail returned an unexpected format");
+  // Rastermill emits exactly the requested format.
+  return stillHeif
+    ? { data: thumbnail.data, extension: ".jpg", mimeType: "image/jpeg" }
+    : { data: thumbnail.data, extension: ".webp", mimeType: "image/webp" };
 }
 
 const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES = 128;
