@@ -25,6 +25,24 @@ Codex has two OpenClaw routes:
 
 Prefer the native route unless you explicitly need ACP/acpx behavior.
 
+## Set up a coding app
+
+You can use a coding app’s models in OpenClaw chat without adding a separate
+provider account in OpenClaw.
+
+1. On **the computer that runs OpenClaw**, install the command-line version of an
+   app listed in **Settings → Models → Installed agents**. Use the app’s guide:
+   [GitHub Copilot CLI](#github-copilot-cli-in-native-chat), [Grok Build](#grok-build-in-native-chat),
+   [Kilo Code](https://kilo.ai/docs/code-with-ai/platforms/cli), [OpenCode](https://opencode.ai/docs/),
+   [Pi](https://github.com/earendil-works/pi) with its [ACP adapter](https://github.com/svkozak/pi-acp),
+   [Qoder CLI](#qoder-cli-in-native-chat), or [Qwen Code](https://github.com/QwenLM/qwen-code).
+2. Open the app as the OS user that runs OpenClaw and complete its sign-in or
+   model setup. Installing it on the device you use to view the dashboard does
+   not help if OpenClaw runs on a different computer.
+3. Return to **Installed agents** and select **Check again**. If the app is off,
+   enable it and review its [permissions](#permissions-for-native-chat-runtimes).
+   Once its models are available, choose one from the model picker in chat.
+
 ## acpx harness support (current)
 
 Built-in acpx harness aliases (from the pinned `acpx` dependency):
