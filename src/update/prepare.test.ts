@@ -293,9 +293,7 @@ describe("package release conversion", () => {
         });
         expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
         expect(await readTrial()).toBeNull();
-        await expect(fs.stat(path.join(resolvePrefix(), "releases"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
         await expect(
           fs.stat(path.join(target.checkout, ".openclaw-launcher")),
         ).rejects.toMatchObject({ code: "ENOENT" });
@@ -338,9 +336,7 @@ describe("package release conversion", () => {
         });
         expect(outcome).toMatchObject({ status: "failed", reason: "database-schema-preflight" });
         expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
-        await expect(fs.stat(path.join(resolvePrefix(), "releases"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
         await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
           code: "ENOENT",
         });
