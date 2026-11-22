@@ -305,7 +305,11 @@ export function SkillDiscovery(props: SkillsProps) {
   });
   const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
   const groupingPending = () =>
-    scope() === "all" && !category() && !query().trim() && !props.readCategories();
+    props.state.connected &&
+    scope() === "all" &&
+    !category() &&
+    !query().trim() &&
+    !props.readCategories();
   const loadingResults = () => (
     <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
       {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
@@ -429,7 +433,9 @@ export function SkillDiscovery(props: SkillsProps) {
       <Show
         when={!groupingPending()}
         fallback={
-          props.state.connected && (pending() || remoteRows().length > 0) && loadingResults()
+          props.state.connected &&
+          (shelf() || pending() || remoteRows().length > 0) &&
+          loadingResults()
         }
       >
         <div class="plugin-catalog-results__body">
@@ -507,7 +513,6 @@ export function SkillDiscovery(props: SkillsProps) {
       <Errored fallback={() => null}>
         <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&
-            !groupingPending() &&
             (category() || inventoryReady()) &&
             !props.hasNextPage &&
             installedSection().length + remoteRows().length === 0 &&
