@@ -16,7 +16,6 @@ import { SessionDiffOpenIcon } from "./session-diff-icons.tsx";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { FILE_STATUS_LABELS, diffStat, splitPath } from "./session-diff-presentation.ts";
 import { SessionDiffFileBody } from "./session-diff-render.tsx";
-import { ReviewFilename } from "./session-diff-tree.tsx";
 import type { FileView } from "./session-diff-types.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -277,7 +276,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
                 </span>
               )}
               <span class="session-diff__filename" title={path().name}>
-                <ReviewFilename name={path().name} />
+                {path().name}
               </span>
               {desktop() && (
                 <span

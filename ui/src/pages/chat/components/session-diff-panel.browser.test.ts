@@ -20,6 +20,53 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review layout", () => {
+  it.each([true, false])(
+    "shows a long filename in the diff heading with mobile=%s",
+    async (mobile) => {
+      const { userEvent } = await import("vitest/browser");
+      const name =
+        "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
+      const mounted = mountSolid(() =>
+        createComponent(SessionDiffPanel, {
+          mobile,
+          desktop: !mobile,
+          owner: null,
+          execNode: null,
+          loadFileText: null,
+          openFile: null,
+          revealFile: null,
+          loader: async () => ({
+            sessionKey: "main",
+            additions: 1,
+            deletions: 0,
+            files: [{ path: "src/" + name, status: "added", additions: 1, deletions: 0 }],
+          }),
+        }),
+      );
+      const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+      panel.style.cssText = "display:flex;position:fixed;top:0;left:0;width:390px;height:500px";
+      await waitForSolid(() =>
+        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe(name),
+      );
+      const label = panel.querySelector<HTMLElement>(".session-diff__filename")!;
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const bounds = label.getBoundingClientRect();
+      expect(bounds.width).toBeGreaterThan(0);
+      for (const line of range.getClientRects()) {
+        expect(line.left).toBeGreaterThanOrEqual(bounds.left - 1);
+        expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
+        expect(line.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
+      }
+      const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+      const initial = toggle.getAttribute("aria-expanded");
+      await userEvent.click(toggle);
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).not.toBe(initial));
+      await userEvent.keyboard("{Enter}");
+      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe(initial));
+    },
+  );
+
   it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);

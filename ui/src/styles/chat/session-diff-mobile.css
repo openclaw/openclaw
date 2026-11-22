@@ -205,7 +205,6 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
-  overflow-wrap: anywhere;
 }
 
 .session-diff--mobile .session-diff__directory,

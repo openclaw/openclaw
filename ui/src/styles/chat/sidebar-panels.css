@@ -719,10 +719,11 @@ button.sidebar-image-view__image {
 }
 
 .session-diff__filename {
-  overflow: hidden;
+  min-width: 0;
   flex-shrink: 0;
   max-width: 48%;
-  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
   color: var(--text-strong);
   font-weight: 550;
 }

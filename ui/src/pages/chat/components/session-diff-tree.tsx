@@ -17,7 +17,7 @@ type ReviewNode = { key: string; name: string; path: string } & (
 );
 type ReviewDirectory = Extract<ReviewNode, { kind: "directory" }>;
 
-export function ReviewFilename(props: { name: string }) {
+function ReviewFilename(props: { name: string }) {
   const split = createMemo(() => {
     const compound = props.name.match(/\.(?:d\.ts|tar\.gz)$/i);
     return compound
