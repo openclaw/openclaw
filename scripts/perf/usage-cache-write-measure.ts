@@ -63,7 +63,8 @@ let resolve;
 const gate = new Promise(done => { resolve = done; });
 export const release = () => resolve();
 async function runOpenClawAgentWorkerWrite(_options, run) { await gate; return run(); }
-const captureOpenClawAgentDatabasePreparationExecution = () => ({
+const toAgentExecutionConstraints = () => ({});
+const captureOpenClawAgentDatabaseExecutionAsync = async () => ({
   prepare: async () => {},
   runExisting: async (source, run) => {
     source.assertCurrent();

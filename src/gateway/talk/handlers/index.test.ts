@@ -23,7 +23,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -35,6 +35,7 @@ import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
   createTalkConfig,
   defineRealtimeConfigProjectionTests,
+  talkRealtimeConfigProjectionCases,
   type TalkConfigProjectionResponse,
 } from "./config-realtime.test-support.js";
 import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
@@ -123,7 +124,7 @@ const mocks = vi.hoisted(() => ({
   sendTalkTranscriptionRelayAudio: vi.fn(),
   stopTalkTranscriptionRelaySession: vi.fn(),
   chatSend: vi.fn(),
-  controlRealtimeVoiceAgentRun: vi.fn(),
+  controlTalkAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveRealtimeVoiceAgentContextInstructions: vi.fn(async (): Promise<string> => ""),
@@ -220,8 +221,9 @@ vi.mock("../../../talk/provider-internal.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Handler routing tests stub active-run control instead of driving live session runs.
 vi.mock("../../../talk/agent-run-control.js", () => ({
-  controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun: mocks.controlTalkAgentRun,
 }));
 
 vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => {
@@ -279,6 +281,14 @@ vi.mock("../../../talk/client-voice-session-write.js", async (importOriginal) =>
   return {
     ...actual,
     ensureClientVoiceAgentSessionEntry: mocks.ensureClientVoiceAgentSessionEntry,
+  };
+});
+
+vi.mock("../../../talk/client-voice-session-source.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../talk/client-voice-session-source.js")>();
+  return {
+    ...actual,
     // Creation is mocked here; expose its supplied source without acquiring a database writer.
     captureClientVoiceSessionWriter: ({
       physicalSource,
@@ -672,32 +682,7 @@ describe("talk.config handler", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    runtimeConfig: OpenClawConfig;
-    sourceConfig?: OpenClawConfig;
-    expected: Record<string, unknown>;
-    providerConfig?: Record<string, unknown>;
-  }>([
-    {
-      name: "runtime transport absent from source",
-      runtimeConfig: realtimeConfig({ transport: "provider-websocket" }),
-      sourceConfig: {},
-      expected: { transport: "provider-websocket" },
-    },
-    {
-      name: "unavailable non-OpenAI model without a bundled projector",
-      runtimeConfig: realtimeConfig({
-        provider: "other-realtime",
-        model: "other-live-model",
-        providers: {
-          "other-realtime": { model: "other-live-model", voice: "other-voice" },
-        },
-      }),
-      expected: { provider: "other-realtime", model: "other-live-model" },
-      providerConfig: { model: "other-live-model", voice: "other-voice" },
-    },
-  ])(
+  it.each(talkRealtimeConfigProjectionCases)(
     "projects realtime config: $name",
     async ({ runtimeConfig, sourceConfig, expected, providerConfig }) => {
       setSourceConfig(sourceConfig ?? runtimeConfig);
@@ -1077,7 +1062,7 @@ describe("talk.session unified handlers", () => {
       };
     });
     mocks.steerTalkRealtimeRelayAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("session:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("session:main"));
   });
 
   it("creates and drives a realtime gateway-relay session through the unified API", async () => {
@@ -2124,7 +2109,7 @@ describe("talk.client.steer handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
   });
 
   it.each([
@@ -2140,7 +2125,7 @@ describe("talk.client.steer handler", () => {
       params: { sessionKey: "agent:main:main", text, ...(mode ? { mode } : {}) },
       context: await createSteerContext("conn-2"),
     });
-    expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+    expect(mocks.controlTalkAgentRun).not.toHaveBeenCalled();
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
       ...(message ? { message } : {}),
@@ -2937,7 +2922,7 @@ describe("role-required Talk session creation", () => {
         params,
         client: {
           connId: "conn-required",
-          connect: { scopes: ["operator.talk"] },
+          connect: gatewayConnect(["operator.talk"]),
           authenticatedUserProfile: { profileId: profile.id },
         },
         context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },

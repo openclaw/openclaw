@@ -39,7 +39,7 @@ export function getTextLexicalIndex(
 ) {
   const prepared = typeof documents[0] === "object";
   const revision = prepared
-    ? `prepared:${JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))}`
+    ? `prepared:${prepareTextLexicalDocument(JSON.stringify(documents.map((document) => (typeof document === "string" ? document : document.revision)))).revision}`
     : createHash("sha256").update(JSON.stringify(documents)).digest("hex");
   if (current?.revision === revision && current.index) {
     return current.index;
@@ -163,10 +163,9 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
   if (cached && cached.kind === "entry") {
     return cached.text;
   }
-  // Only first-party schemas are walked. MCP and client parameters are untrusted
-  // and deliberately never traversed: compactToolSearchCatalogEntry reports them
-  // as "unknown" for the same reason, and a client may hand us a lazy object that
-  // throws on property access.
+  // Only first-party schemas are walked for ranking. MCP and client parameter
+  // names and descriptions are untrusted and must not steer which tools a query
+  // returns; a client may also hand us a lazy object that throws on property access.
   const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
   const text = [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)

@@ -394,6 +394,7 @@ internal fun ChatScreen(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -961,7 +962,15 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -2962,6 +2971,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -2980,6 +2990,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }
@@ -3421,16 +3432,15 @@ private fun ChatComposer(
         )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
           val toolbarInset = if (maxWidth >= 360.dp) 4.dp else 0.dp
-          val iconWidth = if (onOpenDetails != null) 36.dp else ClawTheme.spacing.touchTarget
           val showEffort = thinkingSupported || fastModeEnabled || fastMode
           val primaryAction = resolveChatComposerPrimaryAction(talkActive, pendingRunCount > 0, hasContent)
           Row(Modifier.fillMaxWidth().padding(horizontal = toolbarInset), verticalAlignment = Alignment.CenterVertically) {
             if (onOpenDetails != null) {
-              IconButton(onClick = onOpenDetails, modifier = Modifier.size(width = 36.dp, height = ClawTheme.spacing.touchTarget)) {
+              IconButton(onClick = onOpenDetails, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
               }
             }
-            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
+            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
               Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -3458,7 +3468,6 @@ private fun ChatComposer(
               } else {
                 Box {
                   ChatComposerMicButton(
-                    modifier = Modifier.width(iconWidth),
                     dictationState = dictationState,
                     dictationEnabled = ownerReady && dictationEnabled,
                     voiceNoteEnabled = ownerReady && recordVoiceNoteEnabled,

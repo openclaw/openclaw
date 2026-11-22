@@ -144,7 +144,7 @@ export async function runUpdateCandidateAdmission(params: {
         const cleanupBudget = Math.min(2_000, Math.floor(budget / 10));
         const running = launchCanary({
           assertCurrent: params.assertCurrent,
-          target: { kind: "cli", entryPath: entry },
+          entryPath: entry,
           args: ["update", "admit", "--context", contextPath],
           root: params.candidateRoot,
           env,

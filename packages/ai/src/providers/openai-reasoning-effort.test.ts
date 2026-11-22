@@ -8,6 +8,19 @@ import {
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it.each([
+    { id: "gpt-6.2-astra", api: "openai-completions" },
+    { id: "gpt-6.2-sol", api: "openai-completions" },
+    { id: "gpt-6.2-astra", api: "openai-responses" },
+    { id: "gpt-6.2-sol", api: "openai-responses" },
+    { id: "openai/gpt-6.2-sol", api: "openai-completions" },
+    { id: "gpt-6.2-astra", api: "openclaw-openai-completions-transport" },
+  ])("preserves $id max reasoning on $api without catalog metadata", (model) => {
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "max" })).toBe("max");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" })).toBe("low");
+    expect(supportsOpenAIReasoningEffort(model, "none")).toBe(false);
+  });
+
   it("uses xhigh for the completions transport max contract", () => {
     const model = {
       provider: "openai",

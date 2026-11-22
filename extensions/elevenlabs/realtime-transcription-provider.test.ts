@@ -17,8 +17,12 @@ vi.mock("./config-api.js", () => ({
 
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
+// The saved-key store is fixture-owned; no test reads real credentials.
+const savedKey = vi.fn<(lookup: object) => Promise<string | undefined>>();
 const provider = buildElevenLabsRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
+  isProviderAuthProfileConfiguredAsync: async (lookup) => (await savedKey(lookup)) !== undefined,
+  resolveProviderAuthProfileApiKey: savedKey,
 });
 
 const committed = { message_type: "committed_transcript", text: "yes" };
@@ -38,9 +42,11 @@ async function createSession(
   const server = createServer();
   const wss = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
   const requests: URL[] = [];
+  const apiKeys: unknown[] = [];
   let connectionCount = 0;
   wss.on("connection", (ws, request) => {
     requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
+    apiKeys.push(request.headers["xi-api-key"]);
     for (const event of [initialEvent, ...(eventsByConnection[connectionCount++] ?? [])]) {
       ws.send(JSON.stringify(event));
     }
@@ -65,7 +71,7 @@ async function createSession(
     await promisify(wss.close.bind(wss))();
     await promisify(server.close.bind(server))();
   };
-  return { session, requests };
+  return { session, requests, apiKeys };
 }
 
 describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
@@ -74,6 +80,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     cleanup = undefined;
     vi.unstubAllEnvs();
     resolveApiKeyMock.mockReset();
+    savedKey.mockReset();
   });
 
   it("normalizes nested config and connects with the configured URL params", async () => {
@@ -168,14 +175,38 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     }
   });
 
-  it("rejects whitespace-only environment keys before session creation", async () => {
+  it.each([
+    ["a key saved for ElevenLabs", "", null, "", "saved-key"],
+    ["the Voice Call key before a saved one", "config-key", null, "", "config-key"],
+    ["ELEVENLABS_API_KEY before a saved one", "", "env-key", "", "env-key"],
+    ["XI_API_KEY before a saved one", "", null, "xi-key", "xi-key"],
+  ])("connects with %s", async (_name, apiKey, envKey, xiKey, expected) => {
+    resolveApiKeyMock.mockReturnValue(envKey);
+    vi.stubEnv("XI_API_KEY", xiKey);
+    savedKey.mockResolvedValue("saved-key");
+
+    const readiness = { cfg: {}, providerConfig: { apiKey } };
+    // Unnamed, as a candidate of automatic selection, the saved key does not count.
+    expect(await provider.isConfiguredAsync?.(readiness)).toBe(expected !== "saved-key");
+    expect(await provider.isConfiguredAsync?.({ ...readiness, selectedExplicitly: true })).toBe(
+      true,
+    );
+    const { session, apiKeys } = await createSession([], { cfg: {}, providerConfig: { apiKey } });
+    await session.connect();
+    expect(apiKeys).toEqual([expected]);
+    // Only a provider with no other key asks the store, and only for its own API key.
+    const lookup = { provider: "elevenlabs", cfg: {}, profileTypes: ["api_key"] };
+    expect(savedKey.mock.calls).toEqual(expected === "saved-key" ? [[lookup], [lookup]] : []);
+  });
+
+  it("rejects whitespace-only environment keys when connecting", async () => {
     resolveApiKeyMock.mockReturnValue(null);
     vi.stubEnv("ELEVENLABS_API_KEY", "");
     vi.stubEnv("XI_API_KEY", "   ");
 
     expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
-    expect(() => provider.createSession({ providerConfig: {} })).toThrow(
-      "ElevenLabs API key missing",
-    );
+    const session = provider.createSession({ providerConfig: {} });
+    await expect(session.connect()).rejects.toThrow("ElevenLabs API key missing");
+    session.close();
   });
 });

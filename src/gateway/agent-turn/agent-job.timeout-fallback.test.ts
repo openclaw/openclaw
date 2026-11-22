@@ -72,6 +72,24 @@ describe("waitForAgentJob timeout fallback", () => {
   });
 
   for (const phase of HARD_TIMEOUT_PHASES) {
+    it("includes a slow restored-completion read in the wait deadline", async () => {
+      const seen = vi.fn();
+      const wait = waitForAgentJob({
+        runId: "slow-restored-completion",
+        timeoutMs: 10,
+        canRestoreCompletion: () => true,
+        readRestoredCompletion: () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ status: "ok" }), 80);
+          }),
+      }).then(seen);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toHaveBeenCalledWith(null);
+      await vi.advanceTimersByTimeAsync(70);
+      await wait;
+      expect(seen).toHaveBeenCalledTimes(1);
+    });
+
     it(`forwards a pending ${phase} hard timeout`, async () => {
       await expect(resolveOuterTimeoutRace({ timeoutPhase: phase })).resolves.toMatchObject({
         status: "timeout",

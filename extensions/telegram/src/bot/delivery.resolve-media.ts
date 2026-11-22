@@ -21,7 +21,6 @@ import { resolveTelegramPrimaryMedia } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
-const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
@@ -104,15 +103,8 @@ function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
 
 async function resolveTelegramFileWithRetry(
   ctx: Pick<TelegramContext, "getFile">,
-  abortSignal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<{ file_path?: string }> {
-  const deadline = new AbortController();
-  const deadlineTimer = setTimeout(
-    () => deadline.abort(new Error("Telegram getFile retry deadline exceeded")),
-    TELEGRAM_GET_FILE_RETRY_DEADLINE_MS,
-  );
-  deadlineTimer.unref?.();
-  const signal = abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal;
   // grammY ships a compatible AbortSignal runtime with a structurally distinct
   // declaration, so keep the cast at this dependency boundary.
   const getFileSignal = signal as Parameters<TelegramContext["getFile"]>[0];
@@ -140,7 +132,7 @@ async function resolveTelegramFileWithRetry(
     }
     const status = err instanceof GrammyError ? err.error_code : undefined;
     // Keep getFile failures on the same typed path as download failures so the
-    // handler can warn the user and durably retry transient spooled updates.
+    // handler delivers the message without the attachment and warns the user.
     throw new MediaFetchError(
       status ? "http_error" : "fetch_failed",
       `Telegram getFile failed after retries: ${formatErrorMessage(err)}`,
@@ -149,8 +141,6 @@ async function resolveTelegramFileWithRetry(
         status,
       },
     );
-  } finally {
-    clearTimeout(deadlineTimer);
   }
 }
 
@@ -236,7 +226,10 @@ export async function resolveMedia(params: {
   apiRoot?: string;
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
+  /** The caller's owner left (shutdown, lost claim). */
   abortSignal?: AbortSignal;
+  /** Time left for every fetch in the caller's batch; covers getFile, its retries and the download. */
+  budget: AbortSignal;
 }): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
   const { ctx, ...downloadOptions } = params;
   const msg = ctx.message;
@@ -251,14 +244,17 @@ export async function resolveMedia(params: {
   if (!metadata.fileRef?.file_id) {
     return null;
   }
-  const file = await resolveTelegramFileWithRetry(ctx, params.abortSignal);
-  if (!file.file_path) {
-    throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
-  }
-  const filePath = file.file_path;
+  const signal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, params.budget])
+    : params.budget;
   const telegramFileName = metadata.fileName;
   const mimeType = metadata.mimeType;
   const saved = await (async (): Promise<Awaited<ReturnType<typeof saveRemoteMedia>>> => {
+    const file = await resolveTelegramFileWithRetry(ctx, signal);
+    if (!file.file_path) {
+      throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
+    }
+    const filePath = file.file_path;
     const trustedLocalFile = resolveTrustedLocalTelegramRoot(
       filePath,
       downloadOptions.trustedLocalFileRoots,
@@ -318,9 +314,7 @@ export async function resolveMedia(params: {
       shouldRetryFetchError: shouldRetryTelegramTransportFallback,
       // The update spool and best-effort album/reply callers own failure handling.
       // Nested retries would multiply this header deadline before those owners act.
-      ...(downloadOptions.abortSignal
-        ? { requestInit: { signal: downloadOptions.abortSignal } }
-        : {}),
+      requestInit: { signal },
       filePathHint: filePath,
       maxBytes: downloadOptions.maxBytes,
       responseHeaderTimeoutMs: TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,

@@ -18,6 +18,8 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
+  clickPluginSwitch,
+  findPluginSwitch,
   createClient,
   createContext,
   createDiscoveryDetail,
@@ -133,57 +135,71 @@ async function mountInventory(
   };
 }
 
-it("flushes a pending config draft before enabling and refreshes afterward", async () => {
-  await import("./settings-view.tsx");
-  vi.useFakeTimers();
-  let config: Record<string, unknown> = { pending: false };
-  let hash = "hash-1";
-  const enabled = createPlugin({ enabled: true, state: "enabled" });
-  const fixture = runtimeFixture({
-    "config.get": () => {
-      return sourceConfigSnapshot(config, hash);
-    },
-    "config.set": (params) => {
-      config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-      hash = "hash-2";
-      return { config, hash };
-    },
-    "plugins.setEnabled": () => {
-      config = { ...config, pluginMutation: "enable" };
-      hash = "hash-3";
-      return { ok: true, plugin: enabled, restartRequired: true };
-    },
-    "plugins.inspect": () => {
-      return createInspectResult();
-    },
-    "config.schema": () => {
-      return { schema: { type: "object", properties: {} }, uiHints: {} };
-    },
-    "plugins.list": () => {
-      return createResult(enabled);
-    },
-  });
-  const { runtimeConfig } = fixture;
-  await runtimeConfig.ensureLoaded();
-  const { page } = await fixture.mount();
-  await settlePlugins();
-  fixture.request.mockClear();
-  const order = () => fixture.request.mock.calls.map(([method]) => method);
-  runtimeConfig.patchForm(["pending"], true);
-  await clickPluginAction(page, "Enable Workboard");
-  await waitForSolid(() => expect(order()).toContain("plugins.list"));
-  expect(order().slice(0, 4)).toEqual([
-    "config.set",
-    "plugins.setEnabled",
-    "config.get",
-    "plugins.list",
-  ]);
-  expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
-  expect(runtimeConfig.state.configForm).toMatchObject({
-    pending: true,
-    pluginMutation: "enable",
-  });
-});
+it.each([
+  { suffix: "", refreshBeforeEnable: false },
+  { suffix: " after catalog refresh", refreshBeforeEnable: true },
+])(
+  "flushes a pending config draft before enabling and refreshes afterward$suffix",
+  async ({ refreshBeforeEnable }) => {
+    await import("./settings-view.tsx");
+    vi.useFakeTimers();
+    let config: Record<string, unknown> = { pending: false };
+    let hash = "hash-1";
+    const enabled = createPlugin({ enabled: true, state: "enabled" });
+    let inventory = createResult();
+    const fixture = runtimeFixture({
+      "config.get": () => {
+        return sourceConfigSnapshot(config, hash);
+      },
+      "config.set": (params) => {
+        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { config, hash };
+      },
+      "plugins.setEnabled": () => {
+        config = { ...config, pluginMutation: "enable" };
+        hash = "hash-3";
+        inventory = createResult(enabled);
+        return { ok: true, plugin: enabled, restartRequired: true };
+      },
+      "plugins.inspect": () => {
+        return createInspectResult();
+      },
+      "config.schema": () => {
+        return { schema: { type: "object", properties: {} }, uiHints: {} };
+      },
+      "plugins.list": () => {
+        return inventory;
+      },
+    });
+    const { runtimeConfig } = fixture;
+    await runtimeConfig.ensureLoaded();
+    const { page } = await fixture.mount();
+    await settlePlugins();
+    if (refreshBeforeEnable) {
+      fixture.request.mockClear();
+      fixture.publishGeneration(1);
+      await fixture.waitForCall("plugins.list");
+      await settlePlugins();
+    }
+    fixture.request.mockClear();
+    const order = () => fixture.request.mock.calls.map(([method]) => method);
+    runtimeConfig.patchForm(["pending"], true);
+    await clickPluginSwitch(page, "Workboard", false);
+    await waitForSolid(() => expect(order()).toContain("plugins.list"));
+    expect(order().slice(0, 4)).toEqual([
+      "config.set",
+      "plugins.setEnabled",
+      "config.get",
+      "plugins.list",
+    ]);
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    expect(runtimeConfig.state.configForm).toMatchObject({
+      pending: true,
+      pluginMutation: "enable",
+    });
+  },
+);
 
 it("waits for uninstall confirmation and sends nothing when cancelled", async () => {
   const { client, request } = scriptedClient({
@@ -240,22 +256,20 @@ it.each([false, true])(
       "plugins.setEnabled": () => pending.promise,
       "plugins.list": () => createResult(plugin),
     });
-    const { page, find } = await mountInventory(client, createResult(plugin));
-    const label = `${enabled ? "Disable" : "Enable"} Workboard`;
-    await clickPluginAction(page, label);
-    const action = () => find<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    const { page } = await mountInventory(client, createResult(plugin));
+    await clickPluginSwitch(page, "Workboard", enabled);
+    const action = () => findPluginSwitch(page, "Workboard")!;
     await waitForSolid(() => {
-      expect(action().disabled).toBe(true);
-      expect(action().getAttribute("aria-busy")).toBe("true");
-      expect(action().classList.contains("primary")).toBe(enabled);
+      expect(action().getAttribute("aria-disabled")).toBe("true");
+      expect(action().checked).toBe(!enabled);
     });
     action().click();
     expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
     pending.reject(unavailable("Change refused."));
     await waitForSolid(() => {
       expect(page.textContent).toContain("Change refused.");
-      expect(action().disabled).toBe(false);
-      expect(action().classList.contains("primary")).toBe(!enabled);
+      expect(action().getAttribute("aria-disabled")).toBeNull();
+      expect(action().checked).toBe(enabled);
     });
   },
 );
@@ -288,7 +302,7 @@ it("keeps newer notices when an older uninstall completes", async () => {
     createResult([createPlugin(), removablePlugin()]),
     "/settings/plugins/workboard",
   );
-  await clickPluginAction(page, "Enable Workboard");
+  await clickPluginSwitch(page, "Workboard", false);
   await waitForText(page, "Enable requires attention.");
 
   uninstallResult.resolve({
@@ -377,7 +391,7 @@ it.each(["close", "retry"] as const)("handles inspection failure then %s", async
     client,
     createResult(createPlugin({ origin: "global" })),
   );
-  await clickPluginAction(page, "Enable Workboard");
+  await clickPluginSwitch(page, "Workboard", false);
   const dialog = () => find(consentSelector);
   const loading = () => {
     expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
@@ -461,7 +475,7 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
   });
   const { page, find } = await mountInventory(client, createResult(plugin));
 
-  await clickPluginAction(page, "Enable Workboard");
+  await clickPluginSwitch(page, "Workboard", false);
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.setEnabled", enableRequest),
   );
@@ -493,7 +507,7 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
   await waitForSolid(() => expect(inspections).toBe(3));
   await page.updateComplete;
   expect(consentAction(page)?.disabled).toBe(true);
-  expect(find('[aria-label="Disable Workboard"]')).toBeNull();
+  expect(findPluginSwitch(page, "Workboard")?.checked).toBe(false);
   expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(2);
 
   reinspection.resolve(changedInspection);
@@ -502,12 +516,12 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
     expect(dialog?.textContent).toContain("workboard_manage");
     expect(consentAction(page)?.disabled).toBe(false);
   });
-  expect(find('[aria-label="Disable Workboard"]')).toBeNull();
+  expect(findPluginSwitch(page, "Workboard")?.checked).toBe(false);
   expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(2);
 
   consentAction(page)?.click();
 
-  await waitForSolid(() => expect(find('[aria-label="Disable Workboard"]')).not.toBeNull());
+  await waitForSolid(() => expect(findPluginSwitch(page, "Workboard")?.checked).toBe(true));
   expect(methodCalls(request, "plugins.setEnabled").map(([, params]) => params)).toEqual([
     enableRequest,
     {
@@ -548,7 +562,7 @@ it("discards stale consent inspections after reconnect", async () => {
   });
   const { page, find, harness } = await mountInventory(client, createResult(plugin));
 
-  await clickPluginAction(page, "Enable Workboard");
+  await clickPluginSwitch(page, "Workboard", false);
   await waitForSolid(() =>
     expect(find("openclaw-modal-dialog .plugins-consent__hint")).not.toBeNull(),
   );
@@ -561,8 +575,8 @@ it("discards stale consent inspections after reconnect", async () => {
   expect(methodCalls(request, "plugins.setEnabled").map(([, params]) => params)).toEqual([
     enableRequest,
   ]);
-  await waitForSolid(() => expect(find('[aria-label="Enable Workboard"]')).not.toBeNull());
-  await clickPluginAction(page, "Enable Workboard");
+  await waitForSolid(() => expect(findPluginSwitch(page, "Workboard")?.checked).toBe(false));
+  await clickPluginSwitch(page, "Workboard", false);
   await waitForSolid(() => expect(consentAction(page)?.disabled).toBe(false));
   consentAction(page)?.click();
 

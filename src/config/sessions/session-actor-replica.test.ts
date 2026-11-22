@@ -4,6 +4,7 @@ import { assert, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -19,7 +20,12 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
@@ -41,6 +47,7 @@ import type {
   SessionActorReceipt,
 } from "./session-actor-contract.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
+import * as replicaReceipts from "./session-actor-replica-receipts.js";
 import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
@@ -59,6 +66,12 @@ import { addSessionMember } from "./session-sharing-store.native.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  beginAgentToolUsageInDatabase,
+  flushAgentToolUsageInDatabase,
+  readAgentToolUsageInDatabase,
+  readAgentToolUsageLiveRunsInDatabase,
+} from "./tool-usage.kernel.js";
 
 type Fixture = Parameters<Parameters<typeof withReplica>[0]>[0];
 type Replica = ReturnType<typeof replicaFor>;
@@ -263,11 +276,14 @@ it("keeps transcript replacement charges within the shared byte and entry budget
     fixture.replica.close();
     fixture.replica.invalidate();
     const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
-    const create = (entryFirst = false, keepOpen = false) => {
+    const create = (entryFirst = false, keepOpen = false, sharedPrompt = "") => {
       const state: SessionActorHotState = {
         ...structuredClone(original),
         target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
       };
+      if (sharedPrompt) {
+        state.entry = { ...state.entry!, skillsSnapshot: { prompt: sharedPrompt, skills: [] } };
+      }
       state.dependencySessionIds = [];
       state.writeToken = tokenFor(state, fixture.database.path);
       if (entryFirst) {
@@ -289,7 +305,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       retainText(cell.state, "x".repeat(characters));
     try {
       const first = create(false, true);
-      const second = create(true);
+      const second = create(true, true);
       const third = create();
       const firstTranscript = retain(first, 1024 * 1024);
       retain(second, 1024 * 1024);
@@ -306,7 +322,10 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         },
       };
       retainSessionActorTranscriptReplica(first.state, grown);
-      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect([
+        readSessionActorTranscriptReplica(second.state),
+        second.replica.beginCommand().preimage?.entry,
+      ]).toEqual([undefined, second.state.entry]);
       expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
       expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
       retain(first, 512 * 1024);
@@ -325,8 +344,12 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         cell.replica.close();
         cell.replica.invalidate();
       }
+      // Retired shared values must release their pool charge before the next cohort.
+      for (let index = 0; index < 40; index++) {
+        create(false, false, String(index).padStart(2, "0").repeat(60000)).replica.invalidate();
+      }
       const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0, true);
+        const cell = create(index % 2 === 0, true, "Shared instructions".repeat(6000));
         return { cell, transcript: retain(cell, 16) };
       });
       expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
@@ -546,6 +569,72 @@ it("shares committed facts across released handles and retires them for writes a
   }, "agent:main:matrix:group:!Room:server");
 });
 
+it("leaves reset-window history presence to the history reader", async ({ fixture }) => {
+  const target = { ...fixture.scope, sessionId: "replica-session" };
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "saved",
+      message: { role: "user", content: "Before reset" },
+    }).ok,
+  ).toBe(true);
+  hydrate(fixture);
+  const rowTarget = { path: fixture.database.path, sessionKey: fixture.scope.sessionKey };
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBe(true);
+  expect(
+    appendTranscriptEventSync(target, { type: "reset", id: "reset", parentId: "saved" }).ok,
+  ).toBe(true);
+  await waitForSessionTranscriptProjection(target);
+  expect(readSessionTranscriptMessageEvents(target)).toEqual([]);
+  hydrate(fixture);
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBeUndefined();
+});
+
+it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {
+  const { database, scope, replica } = fixture;
+  const initial = hydrate(fixture);
+  assert(initial.target.database.kind === "file", "Usage fixture requires a durable actor");
+  const target = { ...initial.target, database: initial.target.database };
+  const facts = readSessionActorEntryFacts(target);
+  const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
+  const rows = readSessionActorRowFacts(rowTarget);
+  expect(facts?.entry).toBe(initial.entry);
+  expect(rows).toBeDefined();
+  const now = Date.now();
+  let previousWrite = readSqliteDatabaseWriteTokenForPath(database.path);
+  const unchanged = () => {
+    const write = readSqliteDatabaseWriteTokenForPath(database.path);
+    expect(write).not.toBe(previousWrite);
+    previousWrite = write;
+    expect(readSessionActorEntryFacts(target)?.writeToken).toBe(facts?.writeToken);
+    expect(readSessionActorEntryFacts(target)?.entry).toBe(facts?.entry);
+    expect(readSessionActorRowFacts(rowTarget)).toEqual(rows);
+    expect(replica.read()).toBe(initial);
+  };
+  const admitted = runOpenClawAgentWriteTransaction(
+    ({ db }) => beginAgentToolUsageInDatabase(db, now, "scope-regression"),
+    { agentId: scope.agentId, path: database.path, env: scope.env },
+  );
+  expect(admitted.liveSince).toBe(now);
+  expect(readAgentToolUsageLiveRunsInDatabase(database.db, now)).toContain("scope-regression");
+  unchanged();
+  expect(
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        flushAgentToolUsageInDatabase(db, {
+          generation: admitted.generation,
+          runId: "scope-regression",
+          rows: [{ toolId: "openclaw:core:read", score: 1, updatedAt: now }],
+          now,
+        }),
+      { agentId: scope.agentId, path: database.path, env: scope.env },
+    ),
+  ).toBe(true);
+  expect(readAgentToolUsageInDatabase(database.db, now).rows).toEqual([
+    { toolId: "openclaw:core:read", score: 1, updatedAt: now },
+  ]);
+  unchanged();
+});
+
 it("retains unrelated session postimages but invalidates a shared physical session window", ({
   fixture,
 }) => {
@@ -754,6 +843,66 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
   });
 });
 
+it("bounds exact row lookups by matching keys while retaining physical store isolation", async () => {
+  await withReplica((fixture) => {
+    const { database, scope } = fixture;
+    const state = hydrate(fixture);
+    const target = sessionActorFileTarget(database, scope.sessionKey);
+    const other = openOpenClawAgentDatabase({ agentId: "other", env: scope.env });
+    const otherTarget = sessionActorFileTarget(other, scope.sessionKey);
+    retainSessionActorEntryFacts(
+      otherTarget.database,
+      [
+        {
+          sessionKey: scope.sessionKey,
+          facts: {
+            entry: entry("other store", 1, "other-session"),
+            snapshots: "full",
+            projection: { hasBoard: true },
+          },
+        },
+      ],
+      readOpenClawAgentDatabaseIdentity(other).incarnation,
+    );
+    retainSessionActorEntryFacts(
+      target.database,
+      Array.from({ length: 80 }, (_, index) => ({
+        sessionKey: `agent:main:unrelated-${index}`,
+        facts: {
+          entry: entry("unrelated", 1, `unrelated-${index}`),
+          snapshots: "full" as const,
+          projection: { hasBoard: false },
+        },
+      })),
+      readOpenClawAgentDatabaseIdentity(database).incarnation,
+    );
+    let visited = 0;
+    const select = replicaReceipts.sessionActorReplicaCellsForPath;
+    using lookup = vi.spyOn(replicaReceipts, "sessionActorReplicaCellsForPath");
+    lookup.mockImplementation(function* (cells, databasePath) {
+      yield* select(
+        (function* () {
+          for (const cell of cells) {
+            visited++;
+            yield cell;
+          }
+        })(),
+        databasePath,
+      );
+    });
+    expect(
+      readSessionActorRowFacts({ path: other.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: { sessionId: "other-session" }, hasBoard: true });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey }),
+    ).toMatchObject({ entry: state.entry, hasBoard: false });
+    expect(
+      readSessionActorRowFacts({ path: database.path, sessionKey: "agent:main:absent" }),
+    ).toBeUndefined();
+    expect(visited).toBeLessThanOrEqual(4);
+  }, "agent:main:bounded-row-lookup");
+});
+
 it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", ({
   fixture,
 }) => {
@@ -822,9 +971,15 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
   const withdraw = stage("withdraw");
   hydrate(fixture);
-  mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
+  mutate({
+    ...withdraw,
+    kind: "finish",
+    inputId: "withdraw",
+    disposition: "cancelled",
+    endCause: "failed",
+  });
   expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
-    { input_id: "withdraw", state: "cancelled" },
+    { input_id: "withdraw", state: "cancelled", end_cause: "failed" },
   ]);
 });
 

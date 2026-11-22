@@ -35,12 +35,15 @@ function prepareArchiveTree(
   rows: GatewaySessionRow[],
   childrenByParent?: ReadonlyMap<string, GatewaySessionRow[]>,
 ) {
+  const childrenOf = (key: string) =>
+    childrenByParent?.get(key) ?? rows.filter((row) => row.parentSessionKey === key);
+  for (const row of new Set([...rows, ...Array.from(childrenByParent?.values() ?? []).flat()])) {
+    row.childSessions = childrenOf(row.key).map((child) => child.key);
+  }
   let children: GatewaySessionRow[] = [];
   const describeSession = vi.fn(async () => ({ session: rows[0]! }));
   const refreshList = vi.fn(async (query?: SessionRefreshOptions) => {
-    children = childrenByParent
-      ? (childrenByParent.get(query?.spawnedBy ?? "") ?? [])
-      : rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
+    children = childrenOf(query?.spawnedBy ?? "");
   });
   harness.scope.sessions.describe = describeSession;
   harness.scope.sessions.refreshList = refreshList;
@@ -117,7 +120,8 @@ describe("session organizer nested archive choice", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     answerConfirmDialog(actions, "confirm");
-    expect(await pending).toMatchObject({
+    const result = await pending;
+    expect(result).toMatchObject({
       kind: "tree",
       rows: [
         {
@@ -125,9 +129,12 @@ describe("session organizer nested archive choice", () => {
           archiveGuard: { expectedSidebarAncestors: [guardedTarget(2), guardedTarget(0)] },
         },
         { key: child.key, archiveGuard: { expectedSidebarAncestors: [guardedTarget(0)] } },
-        { key: root.key, archiveGuard: { expectedSidebarAncestors: [] } },
+        { key: root.key, archiveGuard: { expectedCategory: null, expectedArchived: false } },
       ],
     });
+    expect(result?.kind === "tree" && result.rows.at(-1)?.archiveGuard).not.toHaveProperty(
+      "expectedSidebarAncestors",
+    );
     expect(reads.refreshList.mock.calls.map(([query]) => query?.spawnedBy)).toEqual([
       root.key,
       worker.key,
@@ -139,7 +146,12 @@ describe("session organizer nested archive choice", () => {
   it("does not return a partial tree when a child read fails or the connection changes", async () => {
     const harness = createHarness();
     const root = { ...sessionRow(0), hasArchiveDescendants: true };
-    const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
+    const reads = prepareArchiveTree(harness, [
+      gatewayRow(0),
+      gatewayRow(1, {
+        parentSessionKey: root.key,
+      }),
+    ]);
     const isCurrent = () => harness.host.sessionData.isSessionMutationScopeCurrent(harness.scope);
     reads.refreshList.mockImplementation(async () => {
       throw new Error("unavailable");
@@ -232,9 +244,13 @@ describe("session organizer nested archive choice", () => {
           targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
             Object.assign(guardedTarget(index), {
               expectedArchived: false,
-              expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
-                guardedTarget(index - ancestor - 1),
-              ),
+              ...(index > 0
+                ? {
+                    expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
+                      guardedTarget(index - ancestor - 1),
+                    ),
+                  }
+                : {}),
             }),
           ),
           patch: { archived: true },
@@ -258,7 +274,7 @@ describe("session organizer nested archive choice", () => {
       expect(harness.patch).toHaveBeenCalledOnce();
       expect(harness.request).not.toHaveBeenCalled();
       expect(reads.describeSession).toHaveBeenCalledTimes(hint ? 1 : 0);
-      expect(reads.refreshList).toHaveBeenCalledTimes(hint ? 1 : 0);
+      expect(reads.refreshList).not.toHaveBeenCalled();
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { toSandboxProvisioningError } from "../../agents/sandbox/provisioning-error.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { WorkspaceResultLimitError } from "../worker-environments/workspace-inventory-limits.js";
 import * as agentDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import * as workspace from "./session-create-project.js";
@@ -199,10 +201,33 @@ test.each([
       "This workspace is unavailable. Ask the operator to review its setup before retrying.",
   },
   {
+    name: "wrapped workspace limit",
+    failure: toSandboxProvisioningError(
+      new WorkspaceResultLimitError("Private workspace /private/project exceeds its byte limit."),
+      "test-backend",
+    ),
+    notice: "This workspace exceeds OpenClaw's file or size limits.",
+    diagnostic: undefined,
+  },
+  {
+    name: "serialized workspace limit",
+    failure: toSandboxProvisioningError(
+      Object.assign(new Error("Private workspace /private/project has too many entries."), {
+        code: "WORKSPACE_RESULT_LIMIT",
+      }),
+      "test-backend",
+    ),
+    notice: "This workspace exceeds OpenClaw's file or size limits.",
+    diagnostic: undefined,
+  },
+  {
     name: "unknown private failure",
-    failure: new Error("private credentials /private/worktree database is locked"),
+    failure: new Error(
+      "private credentials /private/worktree database is locked WORKSPACE_RESULT_LIMIT",
+    ),
     notice: undefined,
-    diagnostic: "Error: private credentials /private/worktree database is locked",
+    diagnostic:
+      "Error: private credentials /private/worktree database is locked WORKSPACE_RESULT_LIMIT",
   },
 ])("preserves $name through accepted chat.send", async ({ failure, notice, diagnostic }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -271,6 +296,9 @@ test.each([
         content: "Your request couldn't be completed.",
         details: { runId, ...(notice ? { desktopNotice: notice } : {}) },
       });
+      if (!notice) {
+        expect(notices[0]).not.toHaveProperty("details.desktopNotice");
+      }
       if (diagnostic) {
         expect(notices[0]).toMatchObject({ details: { error: diagnostic } });
         expect(notices[0]).not.toMatchObject({ details: { errorKind: expect.anything() } });

@@ -33,9 +33,12 @@ describe("update conversation notices", () => {
     const text = renderUpdateRunSummary(record);
     expect(renderUpdateRunNotice(record, "finished")).toBe(status === "running" ? null : text);
     expect(isUpdateRunTerminalNoticeText(text)).toBe(status !== "running");
+    expect(
+      isUpdateRunTerminalNoticeText(text.replace("in the OpenClaw app", "in the Control UI")),
+    ).toBe(status !== "running");
     expect(text.split("\n")).toEqual([
       headline,
-      "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
     ]);
   });
 

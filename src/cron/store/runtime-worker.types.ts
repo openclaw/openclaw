@@ -1,5 +1,6 @@
 import type { SessionEntryCurrentSource } from "../../config/sessions/session-entry-current.types.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "../../gateway/openclaw-id/member-source-role-import.js";
 import type {
   OperatorApprovalConsumptionInput,
   OperatorApprovalRecord,
@@ -83,6 +84,7 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.importLegacyMemberSources": LegacyOpenClawIdMemberRoleImport;
   "cron.provisionDefaultProactive": {
     storeKey: string;
     agentId: string;
@@ -140,13 +142,6 @@ export type CronRuntimeMutationInputs = {
     notificationId: string | undefined;
     outcome: CronFailureNotificationDelivery;
   };
-  "cron.recordFailureRepairSettlement": {
-    storeKey: string;
-    jobId: string;
-    repairAtMs: number;
-    repairId: string;
-    settledAtMs: number;
-  };
 };
 
 /** Completed run facts sent to the worker; live execution owners stay on the host. */
@@ -177,6 +172,11 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.importLegacyMemberSources": {
+    input: LegacyOpenClawIdMemberRoleImport;
+    snapshot: Record<string, never>;
+    outcome: { storeKeys: string[] };
+  };
   "cron.provisionDefaultProactive": {
     input: CronRuntimeMutationInputs["cron.provisionDefaultProactive"];
     snapshot: Record<string, never>;
@@ -189,7 +189,6 @@ export type CronRuntimeMutationContracts = {
       defaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronConfig;
-      failureRepairTimeoutMs?: number;
       ownership: CronScheduleOwnershipFacts[];
     };
     outcome: {
@@ -247,7 +246,6 @@ export type CronRuntimeMutationContracts = {
       nowMs: number;
       defaultAgentId?: string;
       cronConfig?: CronConfig;
-      failureRepairTimeoutMs?: number;
       outcomes: CronRunFinalizationOutcome[];
     };
     outcome: {
@@ -276,11 +274,6 @@ export type CronRuntimeMutationContracts = {
   };
   "cron.recordFailureAlertOutcome": {
     input: CronRuntimeMutationInputs["cron.recordFailureAlertOutcome"];
-    snapshot: Record<string, never>;
-    outcome: { job?: CronJob };
-  };
-  "cron.recordFailureRepairSettlement": {
-    input: CronRuntimeMutationInputs["cron.recordFailureRepairSettlement"];
     snapshot: Record<string, never>;
     outcome: { job?: CronJob };
   };

@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { formatStateLeaseLoss } from "../shared/state-lease-loss.js";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
 import type {
   UpdateDestinationFailureSchema,
   UpdateFailureFactSchema,

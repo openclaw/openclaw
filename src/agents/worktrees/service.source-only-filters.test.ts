@@ -175,8 +175,11 @@ it("reuses and refreshes source-only templates without running host filters", as
   const third = await createSourceOnly("template-third");
   expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
-  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
-  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).toBe(policyTemplate?.id);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(5); // Refresh stages an independent generation.
+  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).not.toBe(
+    policyTemplate?.id,
+  );
+  expect(await fs.readFile(path.join(policyTemplate!.path, "README.md"), "utf8")).toBe("base\r\n");
   await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });
 

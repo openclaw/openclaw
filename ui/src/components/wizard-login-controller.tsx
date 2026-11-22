@@ -28,12 +28,15 @@ export function createWizardLogin(options: {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onClose: () => void;
+  onCancelled?: () => void;
+  onSessionMissing?: () => void;
   requestFailedMessage: () => string;
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;
   onAnswer?: (value: unknown, includeValue?: boolean) => void;
   onPresentationChange?: () => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
+  recovery?: WizardViewProps["recovery"];
 }) {
   const [state, setState] = createSignal<ModelSetupWizardState>({ phase: "idle" });
   const [draft, setValue] = createSignal<unknown>();
@@ -120,6 +123,7 @@ export function createWizardLogin(options: {
         options.onAnswer ?? ((value, includeValue) => void runner.answer(value, includeValue)),
       onCancel: cancel,
       onClose: options.onClose,
+      recovery: options.recovery,
     };
   }
 
@@ -144,6 +148,7 @@ export function createWizardLogin(options: {
       .requestCancellation()
       .then((outcome) => {
         if (currentGeneration === generation && outcome === "cancelled") {
+          options.onCancelled?.();
           options.onClose();
         }
         return outcome;

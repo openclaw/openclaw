@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
 import { isFailoverError, isSignalTimeoutReason } from "../agents/failover/error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -16,7 +16,7 @@ import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -148,7 +148,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? await captureGatewayOperatorRunAuthority({
+    ? await prepareGatewayOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,

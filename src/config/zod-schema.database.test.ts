@@ -58,14 +58,43 @@ describe("database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
+    { engine: "postgres", postgres: { schemaPrefix: "pgopenclaw" } },
     { families: familyEngines(Array.from({ length: 5 }, () => "postgres")) },
     { families: {} },
     {
       engine: "postgres",
       families: familyEngines(["sqlite", "sqlite", "postgres", "sqlite", "postgres"]),
     },
+    { engine: "sqlite", postgres: { ownership: "state-directory" } },
+    { engine: "postgres", postgres: { ownership: "installation" } },
+    { engine: "postgres", postgres: { ownership: "installation", recoveryCaptures: "server" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "state-directory", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+    },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+  });
+
+  it.each(["pg", "pg_openclaw"])("reports reserved PostgreSQL schema prefix %s", (schemaPrefix) => {
+    const result = validateConfigObjectRaw({
+      database: { engine: "postgres", postgres: { schemaPrefix } },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          path: "database.postgres.schemaPrefix",
+          message: expect.stringContaining("reserved PostgreSQL schema names"),
+        },
+      ],
+    });
   });
 
   it.each([
@@ -78,6 +107,23 @@ describe("database config", () => {
     { families: { state: { engine: "unknown" } } },
     { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
     { families: { quarantine: { engine: "sqlite" } } },
+    { postgres: { ownership: "installation" } },
+    { engine: "sqlite", postgres: { ownership: "installation" } },
+    {
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+      postgres: { ownership: "installation" },
+    },
+    { engine: "postgres", postgres: { ownership: "none" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(["postgres", "postgres", "postgres", "postgres", "sqlite"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });

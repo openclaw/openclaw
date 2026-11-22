@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { CronOperatorSourceError } from "../cron/operator-source-error.js";
@@ -9,6 +7,7 @@ import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-
 import { isCronOperatorSourceParent } from "../cron/session-target.js";
 import type { CronJobPatch, CronStoredJob } from "../cron/types.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -17,8 +16,10 @@ import {
   intersectOperatorScopes,
 } from "../shared/operator-scope-compat.js";
 import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import {
+  hasAutomationAdminDelegation,
+  decodeGatewayOperatorRecoverySource,
+} from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -28,11 +29,8 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   /** Condition/script runners supply the same current Gateway owner explicitly. */
   context?: GatewayRequestContext;
-  target?: {
-    agentId: string;
-    sessionKey: string;
-    entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">;
-  };
+  /** The chat this run executes in, by key; the restored authority lives until that chat is deleted. */
+  target?: { agentId: string; sessionKey: string };
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {
@@ -47,29 +45,19 @@ export async function restoreCronOperatorSource(params: {
       params.target ??
       (source.kind === "gateway"
         ? undefined
-        : {
-            agentId: source.agentId,
-            sessionKey: source.sessionKey,
-            entry: source,
-          });
+        : { agentId: source.agentId, sessionKey: source.sessionKey });
     const context =
       params.context ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
-    const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
-    if (!context || !assertOccurrence || !params.deliveryAttemptFence) {
+    if (!context || !params.deliveryAttemptFence) {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
-    // An in-session run executes in the captured conversation and must match its
-    // incarnation. A child runs in its own session; occurrence admission owns the
-    // parent's lifecycle, so a reset parent still rechecks device and grant here.
-    const inSession =
-      source.kind !== "gateway" && params.job.sessionTarget === `session:${source.sessionKey}`;
+    // The source's conversation is linked by key: edits and resets of that chat keep it.
     let admitted = false;
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
       // Admission may force-run an already paused job; later disable/remove edits
       // revoke this exact occurrence through its existing cancellation owner.
-      assertOccurrence();
       fence.assertCurrent();
       if (admitted) {
         return;
@@ -93,12 +81,7 @@ export async function restoreCronOperatorSource(params: {
                 current.payload.kind === "command")
             ) ||
             current.owner?.sessionKey !== source.sessionKey ||
-            !isCronOperatorSourceParent(current, source.sessionKey) ||
-            (inSession &&
-              target &&
-              (target.sessionKey !== source.sessionKey ||
-                target.entry.sessionId !== source.sessionId ||
-                target.entry.lifecycleRevision !== source.lifecycleRevision)))) ||
+            !isCronOperatorSourceParent(current, source.sessionKey))) ||
         !isDeepStrictEqual(current.operatorSource, captured)
       ) {
         throw new Error(
@@ -108,15 +91,9 @@ export async function restoreCronOperatorSource(params: {
     };
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
+      agentId: target?.agentId ?? source.agentId,
       snapshot: source.snapshot,
-      // The restored authority lives as long as the session this run executes in.
-      target: target
-        ? {
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            sessionId: target.entry.sessionId,
-          }
-        : undefined,
+      source,
       context,
       assertCurrent,
     });
@@ -125,18 +102,17 @@ export async function restoreCronOperatorSource(params: {
     return operator;
   } catch (error) {
     operator?.release();
-    if (error instanceof GatewayDispatchUnavailableError && error.retryable) {
+    if (
+      isOperatorAuthorityUnavailable(error) ||
+      (error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ) {
       throw error;
     }
     // Restart and cancellation end this attempt; they say nothing about the stored source.
     if (params.signal?.aborted || isAbortError(error)) {
       throw error;
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new CronOperatorSourceError(
-      `The operator authority that created this automation was refused (device, access grant, role or definition changed); recreate it from an authenticated turn. Cause: ${reason}`,
-      { cause: error },
-    );
+    throw new CronOperatorSourceError(error);
   }
 }
 
@@ -207,15 +183,11 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     previous.source.snapshot.openclawIdPrincipal,
     fresh.snapshot.openclawIdPrincipal,
   );
-  const samePolicy = isDeepStrictEqual(
-    sourceRolePolicy(previous.source.snapshot.rolePolicy),
-    sourceRolePolicy(fresh.snapshot.rolePolicy),
-  );
   if (sameRequester && !controlOnly) {
     // Changing what runs authorizes the new task under the editing device, as recreating it would.
     return params.capture;
   }
-  if (sameRequester && sameDevice && samePolicy) {
+  if (sameRequester && sameDevice) {
     // A fresh connection may have broader invocation scopes; a timing edit does not grant them.
     const scopes = intersectOperatorScopes(fresh.snapshot.scopes, previous.source.snapshot.scopes);
     return {
@@ -225,6 +197,16 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
         snapshot: {
           ...fresh.snapshot,
           scopes,
+          modelPolicy: previous.source.snapshot.modelPolicy,
+          localOperator: previous.source.snapshot.localOperator && fresh.snapshot.localOperator,
+          ...(fresh.snapshot.sourceIngress !== "principal"
+            ? {
+                automationAdmin:
+                  hasAutomationAdminDelegation(previous.source.snapshot) &&
+                  hasAutomationAdminDelegation(fresh.snapshot) &&
+                  operatorScopeSatisfied("operator.admin", scopes),
+              }
+            : {}),
           controlUiAdmin:
             previous.source.snapshot.controlUiAdmin &&
             fresh.snapshot.controlUiAdmin &&

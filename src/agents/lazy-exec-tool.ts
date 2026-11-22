@@ -48,6 +48,8 @@ export function createLazyExecTool(
     sessionId: defaults?.sessionId,
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const sessionsYieldAvailabilityRef = defaults?.sessionsYieldAvailabilityRef ?? {};
+  let processToolOffered = processToolAvailabilityRef.value;
   const execSchema = createExecSchema(defaults);
   const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
@@ -56,7 +58,10 @@ export function createLazyExecTool(
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
         createExecTool(
-          withExecRequestOwners({ ...defaults, processToolAvailabilityRef }, requestOwners),
+          withExecRequestOwners(
+            { ...defaults, processToolAvailabilityRef, sessionsYieldAvailabilityRef },
+            requestOwners,
+          ),
         ),
       );
       return loadedTool;
@@ -76,7 +81,7 @@ export function createLazyExecTool(
           presentation?.description ??
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
-            hasProcessTool: processToolAvailabilityRef.value,
+            hasProcessTool: processToolOffered,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -84,7 +89,7 @@ export function createLazyExecTool(
       get parameters() {
         return (
           presentation?.parameters ??
-          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+          (processToolOffered === false ? execCompletionSchema : execSchema)
         );
       },
       prepareBeforeToolCallParams: async (...args) =>
@@ -101,8 +106,11 @@ export function createLazyExecTool(
     } as AnyAgentTool,
     {
       prepareBeforeNormalization: true,
-      prepare: (_tool, callableTools) => {
+      prepare: (_tool, callableTools, offeredTools) => {
+        // Declarations follow the session catalog; execution retains this turn's authority.
+        processToolOffered = offeredTools.has("process");
         processToolAvailabilityRef.value = callableTools.has("process");
+        sessionsYieldAvailabilityRef.value = callableTools.has("sessions_yield");
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
     },

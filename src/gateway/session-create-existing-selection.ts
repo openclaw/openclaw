@@ -9,6 +9,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -87,7 +88,7 @@ async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   defaultProvider: string;
   existingEntry: SessionEntry;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
@@ -276,8 +277,8 @@ export async function validateExistingSessionCreateSelection(
     agentId: target.agentId,
     cfg: request.cfg,
     catalogModel: normalizeOptionalString(request.catalogTarget?.model),
-    defaultModel: defaults.model,
-    defaultProvider: defaults.provider,
+    defaultModel: defaults?.model,
+    defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
     existingEntry: target.existingEntry,
     loadGatewayModelCatalogSnapshot: request.loadGatewayModelCatalogSnapshot,
     requestedModel: request.model,

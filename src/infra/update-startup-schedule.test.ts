@@ -5,7 +5,7 @@ import {
   closeUpdateFixtureDatabases,
   resetUpdateFixtureModules,
 } from "./update-fixture.test-support.js";
-import { idleActiveWorkInspectors } from "./update-startup-suite.test-support.js";
+import { expectNoCalls, idleActiveWorkInspectors } from "./update-startup-suite.test-support.js";
 
 let { sessionChanges } = await import("../sessions/session-row-changes.js");
 let { createGatewaySchedulerClock, createTestGatewayScheduler } =
@@ -18,6 +18,7 @@ let autoRun = await import("./update-startup-auto-run.js");
 let { createGatewayUpdateCheck } = await import("./update-startup-scheduler.js");
 let { runGatewayUpdateCheck } = await import("./update-startup.js");
 let { getUpdateSchedule } = await import("./update-status-state.js");
+let hostMemory = await import("./host-memory.js");
 
 async function importUpdateFixtureModules() {
   ({ sessionChanges } = await import("../sessions/session-row-changes.js"));
@@ -31,9 +32,10 @@ async function importUpdateFixtureModules() {
   ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
   ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
   ({ getUpdateSchedule } = await import("./update-status-state.js"));
+  hostMemory = await import("./host-memory.js");
 }
 
-const { checkTelemetryUpdateMock, versionMock } = await vi.hoisted(
+const { checkTelemetryUpdateMock, refreshRemoteModelCatalogMock, versionMock } = await vi.hoisted(
   () => import("./update-startup.test-support.js"),
 );
 let state: OpenClawTestState;
@@ -52,10 +54,13 @@ beforeEach(async () => {
       OPENCLAW_NO_AUTO_UPDATE: undefined,
       OPENCLAW_SUPERVISOR_MODE: undefined,
       NODE_ENV: "production",
+      TZ: "UTC",
       VITEST: undefined,
     },
   });
   versionMock.value = "1.0.0";
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  refreshRemoteModelCatalogMock.mockClear();
   clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -169,4 +174,30 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
   await clock.advanceBy(0);
   await clock.advanceBy(60_000);
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+});
+
+it("defers automatic update and catalog checks until constrained memory recovers", async () => {
+  vi.mocked(checkUpdateStatus).mockClear();
+  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(true);
+  const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
+  check = createGatewayUpdateCheck({
+    lifecycle,
+    getConfig: () => ({}),
+    log: { info: vi.fn() },
+    isNixMode: false,
+    applyRemoteCatalogUpdate,
+  });
+  check.start();
+
+  await clock.advanceBy(0);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  await clock.advanceBy(60_000);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  lowMemory.mockReturnValue(false);
+  await clock.advanceBy(59_999);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  await clock.advanceBy(1);
+  expect(checkUpdateStatus).toHaveBeenCalledOnce();
+  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
+  expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
 });

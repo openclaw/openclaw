@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   hashVitestWorkerArtifact,
@@ -15,11 +16,47 @@ import {
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
 import type { VitestWorkerPreset } from "../../scripts/lib/vitest-worker-descriptor.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { runRetentionNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeWorkerFixtureManifest } from "./fixtures/vitest-worker-compiler.mjs";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+
+it("releases prepared snapshots while miss and restored cache handles remain usable", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const lifetime = createFixtureLifetime();
+  onTestFinished(() => lifetime.cleanup());
+  await lifetime.run(async () => {
+    let joined = true;
+    const { directory } = await lifetime.acquire(async () => ({
+      directory: lifetime.createTempDir("vitest-worker-cache-retention-"),
+      async cleanup() {
+        if (!joined) {
+          throw new Error("Cache retention fixture remains unjoined");
+        }
+      },
+    }));
+    joined = false;
+    const result = await lifetime.track(
+      runRetentionNodeScript(
+        {
+          currentModuleUrl: import.meta.url,
+          sourceWorkerName: "vitest-worker-cache-retention.test-support",
+          distWorkerPath: "test/scripts/vitest-worker-cache-retention.test-support.js",
+        },
+        { cwd: directory, signal },
+      ),
+    );
+    joined = !hasUnjoinedWork(result.error);
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ retained: [], captures: 2, restored: true });
+  });
+}, 30_000);
 
 function fixture(slot = "run-cache-0", root = roots.make("vitest-worker-cache-")) {
   const directory = path.join(root, ".artifacts/vitest-workers", slot);
@@ -170,12 +207,17 @@ it("restores identical executable bytes into the same reserved generation path",
 });
 
 it("leaves incompatible preset generations available for their original borrower", async () => {
-  for (const preset of ["full", "runtime"] as const) {
+  for (const preset of ["full", "runtime", "tooling"] as const) {
     const f = fixture();
     await f.seed(preset);
     f.nextInvocation();
-    expect(await f.restore(preset === "full" ? "runtime" : "full")).toBeUndefined();
-    f.expectAbsent("dist");
+    for (const other of ["full", "runtime", "tooling"] as const) {
+      if (other === preset) {
+        continue;
+      }
+      expect(await f.restore(other)).toBeUndefined();
+      f.expectAbsent("dist");
+    }
 
     const restored = await f.restore(preset === "full" ? undefined : preset);
     expect(restored).toBeDefined();
@@ -183,17 +225,47 @@ it("leaves incompatible preset generations available for their original borrower
   }
 });
 
-it("retains full and runtime generations independently at their original executable paths", async () => {
+it.each([
+  ["--max-old-space-size=8192", "", true],
+  ["--max-old-space-size=8192", "--max_old_space_size=4096", true],
+  ["--max-old-space-size=8192", "--conditions=custom", false],
+  ["--conditions=custom --max-old-space-size=8192", "--conditions=custom", true],
+])(
+  "reuses worker bytes across heap budgets while retaining Node options: %s -> %s",
+  async (before, after, reuse) => {
+    const f = fixture("run-cache-runtime-0");
+    try {
+      vi.stubEnv("NODE_OPTIONS", before);
+      await f.seed("runtime");
+      f.nextInvocation();
+      vi.stubEnv("NODE_OPTIONS", after);
+      expect(Boolean(await f.restore("runtime"))).toBe(reuse);
+      if (reuse) {
+        expect(f.observe().value).toBe("first");
+      } else {
+        f.expectAbsent("dist");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it("retains each preset independently at their original executable paths", async () => {
   const full = fixture();
   await full.seed();
   full.nextInvocation();
   const runtime = fixture("run-cache-runtime-0", full.root);
   await runtime.seed("runtime");
   runtime.nextInvocation();
+  const tooling = fixture("run-cache-tooling-0", full.root);
+  await tooling.seed("tooling");
+  tooling.nextInvocation();
 
   for (const [f, preset] of [
     [full, "full"],
     [runtime, "runtime"],
+    [tooling, "tooling"],
   ] as const) {
     expect(await f.restore(preset)).toBeDefined();
     expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });

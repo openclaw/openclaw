@@ -42,7 +42,12 @@ export async function runGatewayCronSessionEvent(
   const sessionKey = resolveCronSessionTargetSessionKey(request.job.sessionTarget);
   const target = resolveTarget({ agentId: request.job.agentId, sessionKey });
   if (!target.agentId || !target.sessionKey) {
-    return { status: "error" as const, error: "Automation has no valid session destination" };
+    return {
+      status: "error" as const,
+      error: "Automation has no valid session destination",
+      errorClassification: { kind: "permanent" as const },
+      failureNotificationDetail: { kind: "invalid-target" as const },
+    };
   }
   const canonicalRequest = sessionKey
     ? canonicalizeMainSessionAlias({
@@ -55,6 +60,8 @@ export async function runGatewayCronSessionEvent(
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== normalizeAgentId(target.agentId)) {
     return {
       status: "error" as const,
+      errorClassification: { kind: "permanent" as const },
+      failureNotificationDetail: { kind: "invalid-target" as const },
       error:
         "Automation session target belongs to another agent; update agentId or sessionTarget before retrying",
     };

@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSandboxPathMapping } from "./path-policy.js";
+import { resolveSandboxReferencePath } from "./sandbox/fs-bridge.js";
 import type { SandboxContext } from "./sandbox/types.js";
 
 export const OPENCLAW_DOCS_URL = "https://docs.openclaw.ai";
@@ -38,7 +39,9 @@ export async function resolveOpenClawReferencePaths(
         return null;
       }
       const mappings = bridge.pathMappings;
-      const resolved = bridge.resolvePath({ filePath: mappings ? directory : hostPath });
+      const resolved = await resolveSandboxReferencePath(bridge, {
+        filePath: mappings ? directory : hostPath,
+      });
       const mapped = mappings ? resolveSandboxPathMapping(mappings, resolved.containerPath) : null;
       const backingPath = mappings ? mapped?.hostPath : resolved.hostPath;
       // Preserve mount aliases, but reject shadows and symlinks outside the selected source.

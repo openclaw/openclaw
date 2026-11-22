@@ -108,7 +108,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
       {
         id: OPENROUTER_DEFAULT_MODEL_ID,
         name: "OpenRouter Auto",
-        reasoning: false,
+        reasoning: true,
         input: ["text", "image"],
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,

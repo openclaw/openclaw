@@ -121,7 +121,7 @@ function readGatewayLastShutdownInDatabase(db: EngineConnection) {
     db,
     getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
       .selectFrom("gateway_boot_lifecycle")
-      .select(["reason", "completed_at_ms as completedAtMs"])
+      .select(["pid", "reason", "completed_at_ms as completedAtMs"])
       .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
       .where("completed_at_ms", "is not", null)
       .orderBy("completed_at_ms", "desc")

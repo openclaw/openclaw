@@ -325,7 +325,7 @@ suite.define(() => {
       await guidance.waitFor();
       const account = environment.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
-      expect(await account.textContent()).toContain("Agent override");
+      expect(await account.textContent()).toContain("Own account");
       const refresh = environment.getByRole("button", { name: "Refresh publication" });
       const tokens = await history.evaluate((element) => {
         const probe = document.createElement("span");

@@ -17,6 +17,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
@@ -125,7 +126,7 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer) => {
+it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", async (producer) => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -180,7 +181,27 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
       ),
     );
     const publish = async (ids: string[]) => {
-      if (producer === "lifecycle") {
+      if (producer === "summary") {
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        try {
+          const work = broadcastSessionActivitySummary(
+            {
+              key,
+              agentId: "main",
+              storePath: projection.describe({ key, agentId: "main" })!.storeTarget.storePath,
+            },
+            {
+              getSessionRowProjection: () => projection,
+              broadcast: (event, payload, options) =>
+                connection.broadcastToConnIds(event, payload, new Set(ids), options),
+            },
+          );
+          await vi.advanceTimersByTimeAsync(750);
+          await work;
+        } finally {
+          vi.useRealTimers();
+        }
+      } else if (producer === "lifecycle") {
         await createLifecycleEventBroadcastHandler({
           broadcastToConnIds: connection.broadcastToConnIds,
           sessionEventSubscribers: { getAll: () => new Set(ids) },
@@ -236,7 +257,11 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
     };
     const prime = async (selected: typeof peers, label: string) => {
       const previousSends = selected.map((peer) => peer.send.mock.calls.length);
-      await publish(selected.map((peer) => peer.client.connId));
+      // Separate publications leave equal wire baselines with distinct history tokens.
+      for (const copy of [0, 1]) {
+        const ids = selected.filter((peer) => peer.copy === copy).map((peer) => peer.client.connId);
+        await publish(ids);
+      }
       for (const [index, peer] of selected.entries()) {
         expect(peer.send).toHaveBeenCalledTimes(previousSends[index]! + 1);
         expect(decodeLast(peer)).toMatchObject({
@@ -348,9 +373,16 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
         }
         return stringify(...args);
       });
+      const utf8 = vi.spyOn(Buffer, "from");
+      let sessionEncodings: string[] = [];
       try {
         await publish(peers.map((peer) => peer.client.connId));
       } finally {
+        sessionEncodings = utf8.mock.calls.flatMap(([value]) => {
+          const offset = typeof value === "string" ? value.indexOf('"session":') : -1;
+          return typeof value === "string" && offset >= 0 ? [value.slice(offset)] : [];
+        });
+        utf8.mockRestore();
         globalThis.Map = MapConstructor;
         encoding.mockRestore();
         enumerating.mockRestore();
@@ -425,11 +457,11 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
       expect(stagedFieldIndexTuples).toBe(0);
       // Row changes retain connection keys; only four unprimed legacy sockets need encoding.
       expect(sharingKeyEncodings).toBe(4);
-      // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
-      // Empty ancestor fields are constant across divergent connection histories.
+      // Two authorities, each with stale/current deltas and one legacy representation.
+      expect(sessionEncodings).toHaveLength(6);
       expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();

@@ -1,3 +1,0 @@
-# PR #183800: bounded row preparation, geometry/scroll ownership, media retention,
-# and long-session workload regression coverage. Covers this PR's net test growth only.
-4504

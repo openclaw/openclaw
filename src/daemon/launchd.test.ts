@@ -27,6 +27,7 @@ import {
 } from "./launchd-ancestry.test-support.js";
 import * as currentService from "./launchd-current-service.js";
 import * as launchdExec from "./launchd-exec.js";
+import { stageLaunchAgent } from "./launchd-install.js";
 import {
   capturePassThroughOutput,
   createDefaultLaunchdEnv,
@@ -37,13 +38,13 @@ import {
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
 import * as launchdRuntime from "./launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   isLaunchAgentEnabled,
   readLaunchAgentProgramArguments,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
-  resolveLaunchAgentPlistPath,
   startLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -518,6 +519,47 @@ describe("launchd install", () => {
     },
   );
 
+  it.each(["matching", "staged"] as const)(
+    "uses the %s command on the next restart",
+    async (definition) => {
+      const programArguments = ["/usr/bin/node", "/checkout/dist/index.js", "gateway"];
+      const args = { ...defaultLaunchAgentFixture(ENV), programArguments };
+      await installLaunchAgent(args);
+      state.printOutput = [
+        "state = running",
+        "pid = 4242",
+        "program = /usr/bin/node",
+        "arguments = {",
+        ...programArguments.map((arg) => `\t${arg}`),
+        "}",
+      ].join("\n");
+      if (definition === "staged") {
+        await stageLaunchAgent({
+          ...args,
+          programArguments: [
+            "/usr/bin/node",
+            "/state/git-install/openclaw-launcher.mjs",
+            "gateway",
+          ],
+        });
+      }
+      state.launchctlCalls.length = 0;
+
+      await restartLaunchAgent(control({ preserveDefinition: true }));
+
+      const commands = launchctlCommandNames();
+      if (definition === "staged") {
+        expect(commands).toContain("bootout");
+        expect(commands).toContain("bootstrap");
+        expect(commands).not.toContain("kickstart");
+      } else {
+        expect(commands).toContain("kickstart");
+        expect(commands).not.toContain("bootout");
+        expect(commands).not.toContain("bootstrap");
+      }
+    },
+  );
+
   it("publishes the rewritten plist before restart bootstrap", async () => {
     state.serviceLoaded = false;
     setGatewayPlist(["node", "gateway.js"], { OPENCLAW_SERVICE_VERSION: "2026.4.24" });
@@ -728,6 +770,7 @@ describe("launchd install", () => {
 
   it("audits kickstart before a later output failure", async () => {
     const env = createLaunchdEnvWithGatewayPort("18789");
+    await install();
     const onMutation = vi.fn();
     const stdout = {
       write: vi.fn(() => {
@@ -858,6 +901,29 @@ describe("launchd install", () => {
     expect(state.fileWrites).toHaveLength(0);
   });
 
+  it("reloads the LaunchAgent when Doctor restoration fails on an unowned listener", async () => {
+    const env = createLaunchdEnvWithGatewayPort("19002");
+    setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    cleanStaleGatewayProcessesSync.mockImplementationOnce(() => []);
+    mockPort(19002, "busy", [{ pid: 5151, address: "TCP 127.0.0.1:19002 (LISTEN)" }]);
+
+    await expect(
+      restartLaunchAgent(
+        launchAgentControlFixture(env, {
+          preserveDefinition: true,
+          preserveAutoStart: true,
+        }),
+      ),
+    ).rejects.toThrow("is loaded; launchd can retry its KeepAlive job");
+
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "bootstrap")).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "kickstart")).toBe(false);
+    expect(state.fileWrites).toHaveLength(0);
+  });
+
   it.each([
     ["start", "stopped", "", true],
     ["start", "bootstrap-kickstart", "Could not find service", true],
@@ -867,6 +933,8 @@ describe("launchd install", () => {
   ] as const)(
     "settles %s after kickstart failure (%s, %s, preserve=%s)",
     async (action, phase, detail, preserveDefinition) => {
+      await install();
+      state.launchctlCalls.length = 0;
       if (phase !== "loaded") {
         await stopLaunchAgent(control());
         expect(state.serviceLoaded).toBe(false);
@@ -921,6 +989,8 @@ describe("retained LaunchAgent policy", () => {
   )(
     "retains launchd policy: $scenario preserve=$preserveAutoStart",
     async ({ scenario, preserveAutoStart }) => {
+      await install();
+      state.launchctlCalls.length = 0;
       Object.assign(state, {
         serviceLoaded: scenario === "loaded",
         serviceRunning: false,

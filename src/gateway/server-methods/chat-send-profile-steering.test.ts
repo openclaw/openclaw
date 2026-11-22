@@ -167,11 +167,9 @@ it.for([
         expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
         expect.soft(enqueued).not.toHaveBeenCalled();
         const errorMessage = expect.stringContaining(
-          boundary === "mailbox"
-            ? "operator source identity changed; start a new request"
-            : change === "profile merge"
-              ? "Selected account changed"
-              : "authority is no longer current",
+          boundary === "mailbox" || change === "profile merge"
+            ? "Authenticated profile verification is unavailable"
+            : "authority is no longer current",
         );
         const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect.soft(failure).toMatchObject({
@@ -296,6 +294,10 @@ it.each(["backend", "question dispatcher"] as const)(
       throw new Error("Expected normal followup dispatch after unsupported steering");
     }
     expect(dispatched.replyOptions.messageInjectionDisposition).toBe("rejected");
+    expect(dispatched.replyOptions.messageInjectionRejection).toMatchObject({
+      status: "rejected",
+      reason: sink === "backend" ? "guarded_injection_unsupported" : "injection_unavailable",
+    });
     const authority = dispatched.replyOptions.operatorAuthority;
     assertAdmittedRunOperatorAuthority(authority);
     expect(authority).toBe(originalOperatorAuthority);

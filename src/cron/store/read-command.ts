@@ -9,20 +9,6 @@ import { readCronRunReceiptCurrentFactsInDatabase } from "./run-receipt-read.js"
 
 type CronStateReadCommand = Extract<OpenClawStateReadCommand, { type: `cron.${string}` }>;
 
-export function isCronStateReadCommand(
-  command: OpenClawStateReadCommand,
-): command is CronStateReadCommand {
-  switch (command.type) {
-    case "cron.currentReceipt":
-    case "cron.scratch":
-    case "cron.jobNames":
-    case "cron.quarantine":
-      return true;
-    default:
-      return false;
-  }
-}
-
 /** Runs Cron queries inside the shared reader's admitted native frame. */
 export function readCronStateCommandInDatabase(
   db: EngineConnection,

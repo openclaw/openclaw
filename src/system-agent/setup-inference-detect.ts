@@ -14,8 +14,10 @@ import {
 } from "../agents/utility-model.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { isProviderAuthChoicePlatformSupported } from "../plugins/provider-auth-choice-platform.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
+import {
+  isProviderAuthChoicePlatformSupported,
+  resolveManifestProviderAuthChoices,
+} from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
@@ -124,7 +126,7 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   let utilityModel: string | undefined;
   if (utilitySetting.kind === "explicit") {
     const { resolveSimpleCompletionSelectionForAgent } =
-      await import("../agents/simple-completion-runtime.js");
+      await import("../agents/simple-completion-selection.js");
     const selection = resolveSimpleCompletionSelectionForAgent({
       cfg,
       agentId: targetAgentId,

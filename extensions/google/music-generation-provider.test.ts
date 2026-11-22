@@ -16,6 +16,7 @@ vi.mock("./google-genai-runtime.js", () => ({
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
+import { createGoogleMusicGenerationProviderMetadata } from "./generation-provider-metadata.js";
 import { googleMusicGenerationProvider } from "./music-generation-provider.js";
 
 type GoogleGenAIConfig = {
@@ -77,6 +78,46 @@ afterEach(() => {
 afterAll(() => {
   vi.doUnmock("./google-genai-runtime.js");
   vi.resetModules();
+});
+
+it("keeps music format metadata independent between modes and provider instances", () => {
+  const metadata = [
+    createGoogleMusicGenerationProviderMetadata(),
+    createGoogleMusicGenerationProviderMetadata(),
+  ];
+  const formatsByMode = metadata.flatMap(({ capabilities }) => [
+    capabilities.generate?.supportedFormatsByModel,
+    capabilities.edit?.supportedFormatsByModel,
+  ]);
+  for (const formats of formatsByMode) {
+    expect(formats).toEqual({
+      "lyria-3-clip-preview": ["mp3"],
+      "lyria-3-pro-preview": ["mp3", "wav"],
+    });
+  }
+  expect(new Set(formatsByMode).size).toBe(4);
+  for (const model of ["lyria-3-clip-preview", "lyria-3-pro-preview"]) {
+    expect(new Set(formatsByMode.map((formats) => formats?.[model])).size).toBe(4);
+  }
+});
+
+it.each<{ model: string; format: NonNullable<GenerateMusicRequest["format"]> }>([
+  { model: "lyria-3-pro-preview", format: "wav" },
+  { model: "unlisted-lyria-model", format: "mp3" },
+])("accepts $format requests for $model", async ({ model, format }) => {
+  generateContentMock.mockResolvedValue(googleMusicAudioResponse());
+
+  const result = await generateMusic({ model, format });
+
+  expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
+  expect(result.model).toBe(model);
+});
+
+it("keeps unknown music models restricted to mp3 output", async () => {
+  await expect(generateMusic({ model: "unlisted-lyria-model", format: "wav" })).rejects.toThrow(
+    "Google music generation model unlisted-lyria-model supports mp3 output.",
+  );
+  expect(generateContentMock).not.toHaveBeenCalled();
 });
 
 it("advertises Gemini music generation with a config-only Google API key", async () => {

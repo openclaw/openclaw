@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,6 +20,42 @@ import {
   seedRow as writeEntry,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
+
+it("releases superseded display configs while resident row facts remain usable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = (name: string) => ({ agents: { entries: { main: { identity: { name } } } } });
+    setRuntimeConfigSnapshot(config("Initial"));
+    const keys = Array.from({ length: 4 }, (_, index) => `agent:main:config-retention-${index}`);
+    for (const key of keys) {
+      writeEntry(key, { sessionId: key, updatedAt: 1 });
+    }
+    using _ = holdForeground();
+    using projection = await createTestProjection({
+      cfg: getRuntimeConfigSnapshot()!,
+      getConfig: () => getRuntimeConfigSnapshot()!,
+      modelCatalog: [],
+    });
+    async function refreshConfigs() {
+      const retired: WeakRef<object>[] = [];
+      for (const [index, key] of keys.entries()) {
+        setRuntimeConfigSnapshot(config(`Revision ${index}`));
+        await projection.ensureMaterialized();
+        expect(projection.describe({ agentId: "main", key })).toBeDefined();
+        // Check retired generations, excluding the last prepared config.
+        if (index < keys.length - 1) {
+          retired.push(weak(getRuntimeConfigSnapshot()!));
+        }
+      }
+      setRuntimeConfigSnapshot(config("Current"));
+      return retired;
+    }
+    const retired = await refreshConfigs();
+    await expectCollected(weakControl(), ...retired);
+    for (const key of keys) {
+      expect(projection.snapshot({ agentId: "main", key }, {}).row?.sessionId).toBe(key);
+    }
+  });
+});
 
 it("releases old catalog planning rosters while published adoption identities remain usable", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

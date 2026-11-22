@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { makeProviderModelFixture } from "../../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_PRIMARY_MODEL_REF } from "../../../config/utility-model-separation-migration.js";
 import { collectCodexRuntimeRouteHits } from "./codex-route-config-scan.js";
 
 describe("Doctor implicit routes with agent utility settings", () => {
@@ -44,7 +44,7 @@ describe("Doctor implicit routes with agent utility settings", () => {
           ? [
               expect.objectContaining({
                 agentId: "worker",
-                modelRef: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+                modelRef: LEGACY_IMPLICIT_PRIMARY_MODEL_REF,
               }),
             ]
           : [],
