@@ -32,10 +32,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
 import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
-import {
-  addSessionMember,
-  removeSessionMember,
-} from "../../config/sessions/session-sharing-store.native.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
@@ -157,7 +154,6 @@ const admissionScenarios = [
   "dashboard-writer",
   "dashboard-handed-off",
   "dashboard-credential-revoked",
-  "dashboard-member-revoked",
   "dashboard-unattested",
   "dashboard-internal",
 ] as const;
@@ -168,11 +164,9 @@ it.each(admissionScenarios)(
     const dashboard = scenario.startsWith("dashboard");
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
-    const membershipRequired = scenario === "dashboard-member-revoked";
     const handedOff = scenario === "dashboard-handed-off";
     const writer = scenario === "dashboard-writer" || handedOff;
-    const createsSession =
-      (dashboardReadAllowed && !membershipRequired && !handedOff) || scenario === "queued";
+    const createsSession = (dashboardReadAllowed && !handedOff) || scenario === "queued";
     const closure =
       scenario === "narrow-first-send"
         ? "rotated"
@@ -205,11 +199,8 @@ it.each(admissionScenarios)(
             entry.sessionId === "unrelated-session",
         ).length;
       const profile = ensureProfileForEmail("authoring-binding@example.test");
-      const owner = membershipRequired
-        ? ensureProfileForEmail("authoring-owner@example.test")
-        : profile;
-      const initialSessionId = membershipRequired ? "member-session" : runId;
-      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      const initialSessionId = runId;
+      const createdActor = { type: "human", source: "profile", id: profile.id } as const;
       if (handedOff) {
         await upsertSessionEntryCore(scope, {
           sessionId: initialSessionId,
@@ -221,15 +212,6 @@ it.each(admissionScenarios)(
           spawnDepth: 1,
         });
       }
-      if (membershipRequired) {
-        await upsertSessionEntryCore(scope, {
-          sessionId: initialSessionId,
-          updatedAt: Date.now(),
-          visibility: "suggest",
-          createdActor,
-        });
-        addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
-      }
       const connection = new AbortController();
       const hasCurrentClientAuthority = vi.fn(() => true);
       const client = createBindingClient({
@@ -237,11 +219,11 @@ it.each(admissionScenarios)(
         signal: connection.signal,
         dashboard,
         attested: scenario !== "dashboard-unattested",
-        admin: !writer && !membershipRequired,
+        admin: !writer,
         scopes:
           scenario === "narrow-first-send"
             ? ["operator.sessions.write"]
-            : writer || membershipRequired
+            : writer
               ? ["operator.write"]
               : dashboard
                 ? ["operator.admin"]
@@ -321,7 +303,6 @@ it.each(admissionScenarios)(
           sessionId: dashboard ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
           createdActor,
-          ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         };
         if (createsSession) {
           const creationScope = { ...scope, storePath: owned.session.storePath };
@@ -368,14 +349,7 @@ it.each(admissionScenarios)(
           expect(dashboardRead.assertCurrent).not.toThrow();
           if (scenario === "dashboard-credential-revoked") {
             hasCurrentClientAuthority.mockReturnValue(false);
-            expect(dashboardRead.assertCurrent).toThrow(
-              "Dashboard message read admission is no longer active.",
-            );
-          } else if (membershipRequired) {
-            removeSessionMember(scope, profile.id, undefined, binding.sessionId);
-            expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
-            expect(hasCurrentClientAuthority()).toBe(true);
-            expect(dashboardRead.assertCurrent).toThrow("session is suggest for this connection");
+            expect(dashboardRead.assertCurrent).not.toThrow();
           }
         }
 
@@ -447,13 +421,7 @@ it.each(admissionScenarios)(
         }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
-          if (membershipRequired) {
-            // The pre-ACK commit survives revocation; replay cannot append to the successor.
-            await expect(userTurn.persist()).resolves.toMatchObject({
-              admission: { sessionId: binding.sessionId, sessionKey },
-              message: { role: "user", content: "Keep this user turn in its session" },
-            });
-          } else if (closure === "released") {
+          if (closure === "released") {
             await expect(userTurn.persist()).rejects.toThrow(
               handedOff
                 ? "Chat admission ended or was cancelled"
@@ -495,7 +463,7 @@ it.each(admissionScenarios)(
   },
 );
 
-const reactionSourceScenarios = ["allowed", "credential-revoked", "member-revoked"] as const;
+const reactionSourceScenarios = ["allowed", "credential-revoked"] as const;
 
 it.each(
   (["queued", "steered"] as const).flatMap((mode) =>
@@ -730,7 +698,6 @@ it.each(
           connection.abort();
           readUserTurnPromptReactionSource(prompt)?.assertCurrent();
           let commitRequests = 0;
-          let preparationRevoked = false;
           probe = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
             if (request.stage === "commit") {
               commitRequests++;
@@ -738,56 +705,31 @@ it.each(
                 client.invalidated = true;
               }
             }
-            if (
-              request.stage === "prepare" &&
-              outcome === "member-revoked" &&
-              !preparationRevoked
-            ) {
-              // Remove membership before the reaction worker takes BEGIN IMMEDIATE;
-              // deleting from the same database at its commit checkpoint would deadlock.
-              preparationRevoked = true;
-              expect(removeSessionMember(scope, profile.id, undefined, sessionId)).not.toBeNull();
-            }
             admit(request, grant);
           });
-          if (outcome === "allowed") {
-            expect((await react()).details).toMatchObject({ messageId, changed: true });
-            expect(commitRequests).toBeGreaterThan(0);
-            expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
-              {
-                emoji: "👍",
-                count: 2,
-                identities: expect.arrayContaining([
-                  { id: profile.id, label: "Human" },
-                  { id: "agent:main", label: expect.any(String) },
-                ]),
-              },
-            ]);
-            expect(reactionEvents()).toEqual([
-              [
-                "session.reaction",
-                expect.objectContaining({
-                  messageId,
-                  action: "added",
-                  actor: expect.objectContaining({ type: "agent", id: "main" }),
-                }),
-                { sessionKeys: [sessionKey], agentId: "main" },
-              ],
-            ]);
-          } else {
-            await expect(react()).rejects.toThrow(
-              outcome === "credential-revoked"
-                ? "Dashboard message read admission is no longer active."
-                : "session is suggest for this connection",
-            );
-            if (outcome === "credential-revoked") {
-              expect(commitRequests).toBeGreaterThan(0);
-            } else {
-              expect(preparationRevoked).toBe(true);
-            }
-            expect(listSessionReactions(scope, { sessionId })).toEqual(before);
-            expect(reactionEvents()).toEqual([]);
-          }
+          expect((await react()).details).toMatchObject({ messageId, changed: true });
+          expect(commitRequests).toBeGreaterThan(0);
+          expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
+            {
+              emoji: "👍",
+              count: 2,
+              identities: expect.arrayContaining([
+                { id: profile.id, label: "Human" },
+                { id: "agent:main", label: expect.any(String) },
+              ]),
+            },
+          ]);
+          expect(reactionEvents()).toEqual([
+            [
+              "session.reaction",
+              expect.objectContaining({
+                messageId,
+                action: "added",
+                actor: expect.objectContaining({ type: "agent", id: "main" }),
+              }),
+              { sessionKeys: [sessionKey], agentId: "main" },
+            ],
+          ]);
           probe.mockRestore();
           if (outcome === "allowed") {
             await react({ remove: true });

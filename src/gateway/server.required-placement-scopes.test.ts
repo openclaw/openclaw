@@ -137,7 +137,7 @@ test.each([false, true])(
 );
 
 test.for(["before acknowledgment", "after acknowledgment"] as const)(
-  "required placement survives disconnect %s but stops setup when committed caller authority ends",
+  "required placement survives disconnect and role revocation %s but stops setup when its worker policy changes",
   async (timing, { signal }) => {
     const afterAcknowledgment = timing === "after acknowledgment";
     const admin = "admin@example.invalid";
@@ -332,23 +332,7 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
         await expect(disconnected.created).rejects.toThrow(/closed/);
       }
 
-      const revoked = await createThenEndAuthority(
-        writers.scope,
-        async () => {
-          await commitConfigPatch({
-            raw: JSON.stringify({
-              gateway: { auth: { identityScopes: { [writers.scope]: null } } },
-            }),
-            replacePaths: [`gateway.auth.identityScopes.${writers.scope}`],
-          });
-        },
-        /^Gateway requester authority changed$/,
-      );
-      if (!afterAcknowledgment) {
-        await expect(revoked.created).rejects.toThrow(/gateway policy changed/);
-      }
-
-      // Restoring the role cannot restore authority accepted before its revocation.
+      // A role revoked after the placement committed applies to the next request.
       const reassigned = await createThenEndAuthority(
         writers.role,
         async (ws) => {
@@ -362,8 +346,8 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
             expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
           }
         },
-        // Role revocation also invalidates the client; either retained authority check may refuse first.
-        /^(?:Your operator role changed; reconnect before continuing\.|Gateway requester authority changed)$/,
+        /device worker is not a paired node host: paired/,
+        ["prepareProjectIntent", "createWithRequest"],
       );
       if (!afterAcknowledgment) {
         await expect(reassigned.created).rejects.toThrow(/closed|policy changed|role changed/);

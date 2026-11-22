@@ -1215,6 +1215,22 @@ freshness or dependencies. Those checks run when you apply the update; use
 | `--timeout <seconds>`   | Unset   | Optional overall update budget in seconds.                   |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
+## `update plugins`
+
+Plugin maintenance for the release this command runs from: channel sync, plugin
+updates and repair, the same work `openclaw update` does after a core update. On a
+Git install, `openclaw update` runs it from the new release before the restart, so
+the new core chooses its plugins, and from the serving release when the checkout is
+already current. A plugin problem is reported as a warning and never fails the update;
+`openclaw plugins update` retries it. You do not normally run this command yourself.
+
+| Flag                    | Default  | Description                                |
+| ----------------------- | -------- | ------------------------------------------ |
+| `--channel <channel>`   | Required | Update channel the plugins follow.         |
+| `--timeout <seconds>`   | Required | Budget for plugin maintenance in seconds.  |
+| `--accept-capabilities` | `false`  | Accept reviewed plugin capability changes. |
+| `--json`                | `false`  | Print the result as JSON.                  |
+
 ## Detailed topics
 
 <CardGroup cols={3}>

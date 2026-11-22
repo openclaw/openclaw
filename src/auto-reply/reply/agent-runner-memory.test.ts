@@ -17,12 +17,12 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { modelDefinition, providerConfig } from "../../agents/model-auth.fixtures.test-support.js";
@@ -409,7 +409,7 @@ describe("runMemoryFlushIfNeeded", () => {
       let admission: PreparedAgentRunAdmission | undefined;
       let admittedContext: AdmittedRunContext | undefined;
       const releaseOperatorAuthority = vi.fn();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "guest",
         scopes: ["operator.write"],
         assertCurrent: vi.fn<() => void>(),
@@ -1035,7 +1035,7 @@ describe("runMemoryFlushIfNeeded", () => {
       let authorized = true;
       let operatorCurrent = true;
       if (invalidation === "operator") {
-        followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
+        followupRun.operatorAuthority = createTestOperatorAuthority({
           profileId: "guest",
           scopes: ["operator.write"],
           assertCurrent: () => {

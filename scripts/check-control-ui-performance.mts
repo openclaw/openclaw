@@ -115,8 +115,11 @@ const controlUiPerformanceBudgets = {
   // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
   // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
   // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
-  totalCssGzipBytes: 337_312,
-  totalCssRawBytes: 1_740_234,
+  // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
+  // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
+  // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
+  totalCssGzipBytes: 344_948,
+  totalCssRawBytes: 1_779_112,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

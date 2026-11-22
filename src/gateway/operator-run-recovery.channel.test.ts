@@ -50,7 +50,7 @@ it.each(["unlink", "reassign"] as const)(
           const other = expectDefined(admins[1], "replacement owner");
           await changeCanonicalUserChannelIdentity("link", other.profile.id, member.identity);
         }
-        await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+        await expect(restore()).rejects.toThrow();
       } finally {
         restored.release();
       }

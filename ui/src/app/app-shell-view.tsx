@@ -556,6 +556,7 @@ export function ApplicationShell(props: {
           prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
+          prop:firstUse={view().firstUse}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
           prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}

@@ -426,18 +426,17 @@ it.each(
       }
       const mayRecover =
         recoverable &&
-        (!configured || boundary === "restart-configured-allowed") &&
-        (!boundary.startsWith("restart-retained-") || boundary === "restart-retained-lifecycle");
+        (!configured ||
+          boundary === "restart-configured-allowed" ||
+          boundary === "restart-configured-handoff-removed") &&
+        (!boundary.startsWith("restart-retained-") ||
+          boundary === "restart-retained-lifecycle" ||
+          boundary === "restart-retained-grant-handoff-replaced" ||
+          boundary === "restart-retained-recovered-handoff-revoked");
       held = false;
+      // Recovery admits once. Policy changes inside the adapter affect the next
+      // start, not the admitted batch; writer and cancellation fences still apply.
       await recover();
-      if (
-        boundary === "restart-retained-recovered-handoff-revoked" ||
-        boundary === "restart-configured-handoff-removed"
-      ) {
-        expect(writes).toEqual([]);
-        expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
-        await recover();
-      }
       expect(writes).toEqual(mayRecover ? ["Captured final answer", "Final detail"] : []);
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(0);
       if (recoverable) {

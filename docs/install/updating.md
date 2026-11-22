@@ -1573,8 +1573,8 @@ and the package transaction restores the previous launchers. A launcher format
 the updater cannot read only produces a warning with repair guidance. A pnpm
 package update also restarts the Gateway on the new version even though pnpm
 moved the package to a new versioned store directory. The updater that is already
-installed runs these steps, so updates driven by 2026.11.4 or 2026.11.5 do not
-get them.
+installed runs these steps, so updates driven by 2026.11.4, 2026.11.5 or
+2026.11.6 do not get them.
 
 When 2026.11.4, 2026.11.5 or 2026.11.6 updates a pnpm install with a managed
 Gateway service to a release with this fix, it still publishes a launcher that points into its removed stage. The
@@ -1593,7 +1593,9 @@ names the previous version's store directory.
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher
 whose `cmd-shim-target` names this installation and whose stage directory is
-gone. This automatic repair runs on macOS and Linux only; on Windows, use the
+gone. Only a launcher owned by the account running the repair is rewritten, and
+set-ID bits are not kept; another account's launcher is left unchanged and
+reported with the reinstall command. This automatic repair runs on macOS and Linux only; on Windows, use the
 reinstall steps below. If the Gateway is also down and no new code has run yet, reinstall the same version
 with `pnpm add -g --allow-build=openclaw openclaw@<installed-version>` using the same account and global
 directories, then run `openclaw gateway install --force` and
@@ -2200,11 +2202,15 @@ Use the original anchor and operation ID with a supported external Node or Bun
 runtime. Keep other updaters and package managers stopped. Ordinary `status` and
 update admission remain strict for unfinished identity-mismatched journals.
 
-The helper can refuse when retained launcher evidence is missing. In one
-report, the 2026.10.5 helper refused a 2026.9.33 `publication-complete` journal
-whose anchor held only `previous`, with `ENOENT` on
-`<anchor>/launchers`. No supported procedure covers that layout yet. Preserve
-the journal, anchor, and retained generation, and report the exact output.
+On Homebrew Node installs, `brew cleanup` (which Homebrew also runs periodically
+after `brew install` and `brew upgrade`) removes dangling symlinks and empty
+directories below its prefix. That deletes the relative launcher copies retained
+in `<anchor>/launchers` and `<anchor>/previous-launchers`, leaving an anchor that
+holds only `previous`. Older updaters and helpers refuse that layout with
+`ENOENT` on `<anchor>/launchers` ([#197910](https://github.com/openclaw/openclaw/issues/197910)).
+Repair now settles it: settlement never republishes those copies, so an absent
+launcher root is accepted, while a present one must still match its recorded
+identity. The live launchers and all other checks below are still required.
 
 If publication never started and the previous package is still installed, repair
 verifies its full tree fingerprint and unchanged launchers under the same device

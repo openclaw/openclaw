@@ -6,6 +6,8 @@ import {
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "../daemon/windows-task-supervisor-contract.js";
+import { LINK_SOURCE } from "../update/link-source.js";
+import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL } from "./git-release-paths.js";
 
 export type GitReleaseTrial = {
@@ -79,41 +81,6 @@ globalThis[Symbol.for("openclaw.gitReleaseLauncher")] = fileURLToPath(import.met
 // Upgraded state keeps each replaced file as "<file>.pre-<generation>". Restore them
 // together: a trial's WAL, journal, SHM or seal must never pair with a restored
 // database, so a companion with no preserved predecessor is removed.
-function collectPreserved(dir, suffix, since, depth, found) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
-        collectPreserved(file, suffix, since, depth - 1, found);
-      }
-    } else if (entry.name.endsWith(suffix) && fs.lstatSync(file).ctimeMs >= since) {
-      found.push(file.slice(0, -suffix.length));
-    }
-  }
-  return found;
-}
-
-function restoreState(files, suffix) {
-  const restored = new Set(files);
-  for (const file of files) {
-    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
-      if (!restored.has(file + companion)) {
-        fs.rmSync(file + companion, { force: true });
-      }
-    }
-  }
-  for (const file of files) {
-    if (fs.existsSync(file + suffix)) {
-      fs.renameSync(file + suffix, file);
-    }
-  }
-}
 
 function writeTrial(record) {
   const temporary = trialFile + "." + process.pid;
@@ -125,67 +92,15 @@ function writeTrial(record) {
 // ("<stateDir>/.upgrade-<generation>-*/plan.json") would be finished by the previous release,
 // and an applied one (".upgraded-<generation>.json") names files it added with no
 // predecessor. Undo those additions and retire both; the suffix restore covers the rest.
-function retirePlans(stateDir, generation) {
-  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
-  let record;
-  try {
-    record = JSON.parse(fs.readFileSync(applied, "utf8"));
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  // A failed removal propagates and keeps the record, so the next start retries.
-  for (const op of record?.ops ?? []) {
-    if (op.kind === "add") {
-      fs.rmSync(op.live, { force: true });
-    }
-  }
-  fs.rmSync(applied, { force: true });
-  for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(".upgrade-" + generation + "-")) {
-      continue;
-    }
-    const dir = path.join(stateDir, entry);
-    let plan;
-    try {
-      plan = JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
-    } catch {}
-    for (const op of plan?.ops ?? []) {
-      if (op.kind === "add" && op.next && !fs.existsSync(op.next)) {
-        fs.rmSync(op.live, { force: true });
-      }
-    }
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
+${ROLLBACK_SOURCE}
 
-// On Windows the link is a junction: absolute text, and no rename onto an existing one.
-function switchLink(target) {
-  const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
-  fs.symlinkSync(target, temporary, "junction");
-  if (process.platform === "win32") {
-    fs.rmSync(slot, { force: true });
-  }
-  fs.renameSync(temporary, slot);
-}
+${LINK_SOURCE}
 
 function linked(target) {
   return path.resolve(path.dirname(slot), target);
 }
 
-// Windows removes the old junction before renaming the new one into place. A switch killed in
-// between leaves no link and the new one under its temporary name: finish the switch.
-if (!fs.lstatSync(slot, { throwIfNoEntry: false })) {
-  const waiting = fs
-    .readdirSync(prefix)
-    .filter((name) => name.startsWith(".openclaw.release-link-"))
-    .map((name) => path.join(prefix, name))
-    .sort((a, b) => fs.lstatSync(b).mtimeMs - fs.lstatSync(a).mtimeMs)[0];
-  if (waiting) {
-    fs.renameSync(waiting, slot);
-  }
-}
+finishSwitch();
 
 let trial;
 try {
@@ -277,6 +192,11 @@ await import(pathToFileURL(supervisorEntry ?? process.argv[1]).href);
 export async function writeGitReleaseLauncher(prefix: string): Promise<string> {
   const launcher = path.join(prefix, GIT_RELEASE_LAUNCHER);
   const current = await fs.readFile(launcher, "utf8").catch(() => null);
+  // PR1 keeps legacy callers, but they cannot replace the resident supervisor with format 1.
+  const format = current?.match(/^\/\/ OpenClaw launcher format: (\d+)$/m);
+  if (format && Number(format[1]) >= 2) {
+    return launcher;
+  }
   if (current !== LAUNCHER_SOURCE) {
     const temporary = `${launcher}.${process.pid}`;
     await fs.writeFile(temporary, LAUNCHER_SOURCE, { mode: 0o755 });

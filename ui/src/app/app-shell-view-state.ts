@@ -62,6 +62,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
+  readonly firstUse: boolean;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -288,6 +289,7 @@ export function readShellView(host: ShellViewHost) {
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
+    firstUse: host.firstUse,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
@@ -415,6 +417,7 @@ export function readShellView(host: ShellViewHost) {
     desktopPanelAvailable,
     homePanelAvailable,
     custodianPanelAvailable,
+    firstUse: host.firstUse,
     activeRoute,
     workboardLayout,
     sessionRoute,

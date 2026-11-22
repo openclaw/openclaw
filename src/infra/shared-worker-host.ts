@@ -31,6 +31,7 @@ import type {
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import type { WorkerRetirementReason } from "./worker-cpu.js";
 import { receiveWorkerMemoryPort, setTrackedWorkerHostedEndpoints } from "./worker-cpu.js";
+import { registerHostedMemoryPredicates } from "./worker-memory-budget.js";
 import { createRetainedNativeWorker } from "./worker-native-lifecycle.js";
 
 const hostedEntrypoints = {
@@ -96,6 +97,26 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   }
   const host = state.host;
   return !host || (!host.failure && !host.hasEndpoint(key ?? kind));
+}
+
+/** Includes construction and retirement until the native owner joins the physical host. */
+function hasSharedWorkerHost(): boolean {
+  return state.host !== undefined;
+}
+
+/** Budget ownership includes occupied endpoints, not only slots available to launch. */
+function claimsSharedHostMemorySlot(url: string, key?: string, pool?: object): boolean {
+  const workerUrl = new URL(url);
+  const kind = hostedKind(workerUrl);
+  if (!kind) {
+    return false;
+  }
+  for (const endpoint of state.host?.endpoints.values() ?? []) {
+    if (endpoint.key === (key ?? kind)) {
+      return pool ? endpoint.pool === pool : true;
+    }
+  }
+  return claimsSharedHostSlot(workerUrl, key);
 }
 
 /** Callers check claimsSharedHostSlot first; this never falls back to a dedicated Worker. */
@@ -290,6 +311,7 @@ class SharedWorkerHost {
 export class HostedWorkerEndpoint extends EventEmitter implements RetainedNativeWorker {
   readonly id: number;
   started = false;
+  pool?: object;
   executionStopped = false;
   executionExitCode?: number;
   terminalFailure?: Error;
@@ -434,3 +456,5 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
     this.emit("exit", code);
   }
 }
+
+registerHostedMemoryPredicates(claimsSharedHostMemorySlot, hasSharedWorkerHost);
