@@ -208,8 +208,8 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
       record.reason === "already-current" ? "Already up to date." : `Skipped: ${record.reason}`,
     );
   } else {
-    defaultRuntime.error(
-      `Update failed: ${record.origin.nextAction ?? record.reason ?? "unknown reason"}`,
-    );
+    const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
+    const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
+    defaultRuntime.error(`Update failed: ${detail ? `${detail}\n${message}` : message}`);
   }
 }

@@ -3,11 +3,14 @@
 // switch and its trial) and to the new build (migration at boot, `ready`).
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
@@ -102,8 +105,12 @@ export async function prepareUpdate(params: {
   const fail = async (
     reason: string,
     message: string,
-    detail?: string,
+    output?: string,
   ): Promise<UpdateRunOutcome> => {
+    // The ledger bounds detail from the head; preserve the command's final error first.
+    const detail = output
+      ? sliceUtf16Safe(stripAnsi(output).trim(), -UPDATE_RUN_TEXT_LIMIT)
+      : undefined;
     await finishUpdateRunAsync(
       params.runId,
       {
