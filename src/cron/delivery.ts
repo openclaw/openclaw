@@ -187,6 +187,11 @@ export async function sendCronAnnouncePayloadStrict(params: {
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
+          // Forwarded into the durable batch so the queue executor reports it from
+          // its post-mark dispatch point, not from a receipt callback here.
+          ...(params.onTransportDispatched
+            ? { onTransportDispatched: async () => params.onTransportDispatched?.() }
+            : {}),
           onDeliveredPayload: ({ hookContent, ...payload }) => {
             deliveredPayloads.push({ ...payload, spokenText: hookContent });
             // A chunk the provider accepted is receipt evidence for the whole
@@ -195,10 +200,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
             params.onPayloadDelivered?.();
           },
           onDeliveryResult: (deliveryResult) => {
-            // A transport result means the adapter actually ran (not merely that
-            // admission or channel preparation began), so this is the point past
-            // which the provider may complete the delivery on its own.
-            params.onTransportDispatched?.();
             if (params.onDeliveryReceipt) {
               const receipt = createMessageReceiptFromOutboundResults({
                 results: [deliveryResult],
