@@ -17,7 +17,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { PreemptiveCompactionRoute as SessionContextBudgetStatusRoute } from "../../agents/embedded-agent-runner/run/preemptive-compaction.types.js";
-import type { ParticipationCeiling } from "../../agents/participation-ceiling.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -426,10 +425,11 @@ type SessionEntryCore = SessionEntryProvenance &
     blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
-    /** Restriction provenance; participant children require their private ceiling at admission. */
+    /** Restriction provenance for ordinary sender-delegated tool policy. */
     inheritedToolPolicySource?: "sender" | "participant";
-    /** Private, immutable participation constraints; not a live authorization grant. */
-    participationCeiling?: ParticipationCeiling;
+    participationCeiling?: import("../../agents/participation-ceiling.js").ParticipationCeiling;
+    /** Immutable original execution source required by a constrained delegated session. */
+    delegatedOperatorSource?: QueuedOperatorRecoverySource;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */

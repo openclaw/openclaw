@@ -28,7 +28,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     subagentControlScope: entry.subagentControlScope,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
-    participationCeiling: structuredClone(entry.participationCeiling),
+    delegatedOperatorSource: structuredClone(entry.delegatedOperatorSource),
     delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
     inheritedToolAllow: Array.isArray(entry.inheritedToolAllow)
       ? [...entry.inheritedToolAllow]

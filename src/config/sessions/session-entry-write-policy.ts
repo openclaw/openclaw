@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { getChildLogger } from "../../logging/logger.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import { preserveSessionParticipationCeiling } from "./session-entry-lineage.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -21,7 +21,10 @@ export function applySessionEntryWritePolicy(
     preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
-  let normalizedEntry = preserveSessionParticipationCeiling(initialEntry, canonicalPreviousEntry);
+  let normalizedEntry = preserveSessionDelegatedOperatorSource(
+    initialEntry,
+    canonicalPreviousEntry,
+  );
   if (
     canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
     canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||

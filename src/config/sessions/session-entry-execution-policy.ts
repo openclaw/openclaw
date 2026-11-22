@@ -21,7 +21,7 @@ export function captureSessionExecutionPolicy(entry: SessionSharingEntry | undef
     modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
-    participationCeiling: entry.participationCeiling,
+    delegatedOperatorSource: entry.delegatedOperatorSource,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
     spawnedBy: entry.spawnedBy,

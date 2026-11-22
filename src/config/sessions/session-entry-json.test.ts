@@ -7,60 +7,26 @@ import { projectPublicSessionEntry } from "./session-entry-projection.js";
 import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 
-describe("persisted participation constraints", () => {
-  const ceiling = {
-    kind: "send",
-    profileId: "participant",
-    sessionKey: "agent:main:source",
-    permission: "guarded",
-    tools: ["read"],
-    source: {
-      agentId: "main",
-      sessionId: "source-id",
-      lifecycleRevision: null,
-      creatorProfileId: "creator",
-      root: "/synthetic/root",
-    },
-  };
-  const read = (participationCeiling: unknown) =>
+describe("persisted delegated operator sources", () => {
+  const read = (delegatedOperatorSource: unknown) =>
     parseCanonicalSqliteSessionEntry({
-      entry_json: JSON.stringify({
-        sessionId: "child",
-        updatedAt: 1,
-        inheritedToolPolicySource: "participant",
-        participationCeiling,
-      }),
+      entry_json: JSON.stringify({ sessionId: "child", updatedAt: 1, delegatedOperatorSource }),
     });
-
   it.each([
     null,
-    { ...ceiling, permission: "owner" },
-    { ...ceiling, tools: [false] },
-    { ...ceiling, toolConstraints: [false] },
-    { ...ceiling, toolConstraints: [["read"], [123]] },
-    { ...ceiling, execPolicy: { security: "allowlist", ask: "invalid" } },
-    { ...ceiling, profileId: "" },
-    { ...ceiling, source: { ...ceiling.source, root: 123 } },
-    { ...ceiling, source: { ...ceiling.source, lifecycleRevision: undefined } },
-  ])("rejects malformed constraints before publishing typed metadata (%#)", (value) => {
-    expect(() => read(value)).toThrow('Session field "participationCeiling" is malformed');
+    {},
+    { kind: "gateway" },
+    { kind: "unavailable", extra: true },
+    { kind: "unavailable", reason: "invalid" },
+  ])("rejects malformed bindings before typed metadata (%#)", (value) => {
+    expect(() => read(value)).toThrow(/operator recovery source/);
   });
-
-  it("retains missing/source-less markers for runtime fail-closed admission", () => {
-    expect(read(undefined)?.inheritedToolPolicySource).toBe("participant");
-    expect(read({ ...ceiling, source: undefined })).toMatchObject({
-      inheritedToolPolicySource: "participant",
-      participationCeiling: { kind: "send", permission: "guarded" },
+  it("retains explicit unavailable bindings and leaves ordinary entries unbound", () => {
+    expect(read({ kind: "unavailable", reason: "no-source" })?.delegatedOperatorSource).toEqual({
+      kind: "unavailable",
+      reason: "no-source",
     });
-    expect(
-      read({ ...ceiling, execPolicy: { security: "allowlist", ask: "always" } })
-        ?.participationCeiling?.execPolicy,
-    ).toEqual({ security: "allowlist", ask: "always" });
-    expect(read(ceiling)?.participationCeiling?.source?.lifecycleRevision).toBeNull();
-    expect(
-      read({ ...ceiling, toolConstraints: [["group:fs"], []] })?.participationCeiling
-        ?.toolConstraints,
-    ).toEqual([["group:fs"], []]);
+    expect(read(undefined)).not.toHaveProperty("delegatedOperatorSource");
   });
 });
 

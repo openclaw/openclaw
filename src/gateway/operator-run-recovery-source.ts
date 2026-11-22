@@ -30,8 +30,11 @@ export function captureQueuedOperatorRecoverySource(
   }
   assertAdmittedRunOperatorAuthority(authority);
   let captured: QueuedOperatorRecoverySource;
-  if (authority.recoverySnapshot) {
-    const snapshot = authority.recoverySnapshot;
+  const snapshot = authority.recoverySnapshot;
+  if (authority.participationCeiling && !snapshot) {
+    return { kind: "unavailable", reason: "decode-failed" };
+  }
+  if (snapshot) {
     captured = {
       kind: "gateway",
       snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },
@@ -70,11 +73,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
-    | "profileId"
-    | "scopes"
-    | "gatewayAccessGrant"
-    | "openclawIdPrincipal"
-    | "participationCeiling"
+    "profileId" | "scopes" | "gatewayAccessGrant" | "openclawIdPrincipal"
   >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
@@ -151,9 +150,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     const profile = identity.readCurrentProfile();
     const snapshot = normalizeGatewayOperatorRecoverySnapshot({
       profileId: authority.profileId,
-      ...(authority.participationCeiling && {
-        participationCeiling: authority.participationCeiling,
-      }),
       openclawIdPrincipal: authority.openclawIdPrincipal,
       scopes: [...authority.scopes],
       assignedRole: profile.assignedRole,
@@ -192,7 +188,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   const profile = identity.readCurrentProfile();
   const source = {
     profileId: authority.profileId,
-    ...(authority.participationCeiling && { participationCeiling: authority.participationCeiling }),
     openclawIdPrincipal: authority.openclawIdPrincipal,
     scopes: [...authority.scopes],
     assignedRole: profile.assignedRole,

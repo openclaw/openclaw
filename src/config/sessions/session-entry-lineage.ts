@@ -26,7 +26,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
-  | "participationCeiling"
+  | "delegatedOperatorSource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -46,8 +46,8 @@ export function preserveSessionInheritedToolPolicy(
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
-    ...(entry?.participationCeiling
-      ? { participationCeiling: structuredClone(entry.participationCeiling) }
+    ...(entry?.delegatedOperatorSource
+      ? { delegatedOperatorSource: structuredClone(entry.delegatedOperatorSource) }
       : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),
@@ -55,21 +55,14 @@ export function preserveSessionInheritedToolPolicy(
 }
 
 /** A logical child retains its original constraints through reset and stale full-row writes. */
-export function preserveSessionParticipationCeiling<T extends SessionEntry>(
+export function preserveSessionDelegatedOperatorSource<T extends SessionEntry>(
   next: T,
   previous: SessionEntry | undefined,
 ): T {
-  if (
-    previous?.inheritedToolPolicySource !== "participant" &&
-    previous?.participationCeiling === undefined
-  ) {
+  if (previous?.delegatedOperatorSource === undefined) {
     return next;
   }
-  return {
-    ...next,
-    inheritedToolPolicySource: "participant",
-    participationCeiling: previous.participationCeiling,
-  };
+  return { ...next, delegatedOperatorSource: previous.delegatedOperatorSource };
 }
 
 /**

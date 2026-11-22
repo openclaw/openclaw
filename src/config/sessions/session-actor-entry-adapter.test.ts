@@ -138,21 +138,11 @@ async function fixture(name: string, stateDir = `/synthetic/actor-entry-adapter/
 describe("generic session entry APIs with actor memory storage", () => {
   it("keeps participant constraints when replacing an incognito child's generation", async () => {
     const { run, scope, read, patch } = await fixture("participation");
-    const participationCeiling = {
-      kind: "send" as const,
-      profileId: "participant",
-      sessionKey: "agent:main:source",
-      permission: "read-only" as const,
-      tools: ["read"],
-      source: {
-        agentId: "main",
-        sessionId: "source-id",
-        lifecycleRevision: null,
-        creatorProfileId: "creator",
-        root: "/synthetic/participant-root",
-      },
-    };
-    await patch({ inheritedToolPolicySource: "participant", participationCeiling });
+    const delegatedOperatorSource = { kind: "unavailable" as const, reason: "no-source" as const };
+    await patch({ delegatedOperatorSource });
+    await patch({ delegatedOperatorSource: undefined });
+    await patch({ delegatedOperatorSource: { kind: "unavailable", reason: "unauthenticated" } });
+    expect(read()?.delegatedOperatorSource).toEqual(delegatedOperatorSource);
     await run(() =>
       resetSessionEntryLifecycle({
         ...scope,
@@ -162,8 +152,7 @@ describe("generic session entry APIs with actor memory storage", () => {
     );
     expect(read()).toMatchObject({
       sessionId: "next",
-      inheritedToolPolicySource: "participant",
-      participationCeiling,
+      delegatedOperatorSource,
     });
   });
 

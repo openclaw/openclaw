@@ -43,7 +43,7 @@ export type SessionEntryCurrentFacts = {
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
   inheritedToolPolicySource?: unknown;
-  participationCeiling?: unknown;
+  delegatedOperatorSource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   delegatedToolPolicy?: unknown;

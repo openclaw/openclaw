@@ -63,7 +63,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
-    participationCeiling: entry.participationCeiling,
+    delegatedOperatorSource: entry.delegatedOperatorSource,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
     archivedAt: entry.archivedAt,

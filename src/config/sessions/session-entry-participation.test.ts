@@ -15,64 +15,42 @@ import {
   projectPublicSessionEntryPatch,
 } from "./session-entry-projection.js";
 
-const participationCeiling = {
-  kind: "send" as const,
-  profileId: "participant",
-  sessionKey: "agent:main:source",
-  tools: ["read", "exec"],
-  permission: "guarded" as const,
-  source: {
-    agentId: "main",
-    sessionId: "source-id",
-    lifecycleRevision: null,
-    creatorProfileId: "creator",
-    root: "/synthetic/participant-root",
-  },
-};
+const delegatedOperatorSource = { kind: "unavailable" as const, reason: "no-source" as const };
 
 // Storage preserves constraints; live source membership remains a runtime admission decision.
-test("retains participant constraints through stale replacements, reset, and cold reopening", async ({
+test("retains delegated source bindings through stale replacements, reset, and cold reopening", async ({
   store,
 }) => {
   store.replace({
-    inheritedToolPolicySource: "participant",
     inheritedToolPolicyVersion: 1,
     inheritedToolAllow: ["read", "exec"],
-    participationCeiling,
+    delegatedOperatorSource,
   });
   const initial = (await store.entry())!;
   const publicEntry = projectPublicSessionEntry(initial);
-  expect(publicEntry).not.toHaveProperty("participationCeiling");
-  expect(publicEntry).not.toHaveProperty("inheritedToolPolicySource");
-  expect(projectPublicSessionEntryPatch(initial)).not.toHaveProperty("participationCeiling");
-  expect(projectExecutionSessionEntry(initial).participationCeiling?.source?.root).toBe(
-    "/synthetic/participant-root",
+  expect(publicEntry).not.toHaveProperty("delegatedOperatorSource");
+  expect(projectPublicSessionEntryPatch(initial)).not.toHaveProperty("delegatedOperatorSource");
+  expect(projectExecutionSessionEntry(initial).delegatedOperatorSource).toEqual(
+    delegatedOperatorSource,
   );
   expect(
-    captureSessionExecutionPolicy(projectSessionSharingEntry(initial))?.participationCeiling
-      ?.permission,
-  ).toBe("guarded");
-  expect(preserveSessionLineage(initial).participationCeiling).toEqual(participationCeiling);
+    captureSessionExecutionPolicy(projectSessionSharingEntry(initial))?.delegatedOperatorSource,
+  ).toEqual(delegatedOperatorSource);
+  expect(preserveSessionLineage(initial).delegatedOperatorSource).toEqual(delegatedOperatorSource);
 
   // A full public row lacks private state, and a stale internal row can explicitly clear it.
   for (const next of [
     publicEntry,
-    { ...publicEntry, participationCeiling: undefined, inheritedToolPolicySource: undefined },
+    { ...publicEntry, delegatedOperatorSource: undefined, inheritedToolPolicySource: undefined },
     {
       ...publicEntry,
       inheritedToolPolicySource: "sender" as const,
-      participationCeiling: {
-        ...participationCeiling,
-        permission: "full" as const,
-        tools: ["read", "exec", "sessions_spawn"],
-        source: { ...participationCeiling.source, creatorProfileId: "replacement-creator" },
-      },
+      delegatedOperatorSource: { kind: "unavailable" as const, reason: "unauthenticated" as const },
     },
   ]) {
     replaceSessionEntrySync(store.scope, { ...next, updatedAt: 2 });
     expect(await store.entry()).toMatchObject({
-      participationCeiling,
-      inheritedToolPolicySource: "participant",
+      delegatedOperatorSource,
     });
   }
 
@@ -85,8 +63,7 @@ test("retains participant constraints through stale replacements, reset, and col
     expect(await store.entry()).toMatchObject({
       sessionId,
       lifecycleRevision: `reset-${sessionId}`,
-      participationCeiling,
-      inheritedToolPolicySource: "participant",
+      delegatedOperatorSource,
     });
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -94,8 +71,7 @@ test("retains participant constraints through stale replacements, reset, and col
   const reopened = (await store.entry())!;
   expect(reopened).toMatchObject({
     sessionId: "rotated",
-    participationCeiling,
-    inheritedToolPolicySource: "participant",
+    delegatedOperatorSource,
   });
   replaceSessionEntrySync(store.scope, {
     sessionId: "rotated",
@@ -105,19 +81,6 @@ test("retains participant constraints through stale replacements, reset, and col
   });
   expect(await store.entry()).toMatchObject({
     label: "ordinary bookkeeping",
-    participationCeiling,
-    inheritedToolPolicySource: "participant",
+    delegatedOperatorSource,
   });
-});
-
-test("does not erase a participant marker whose envelope is missing", async ({ store }) => {
-  store.replace({ inheritedToolPolicySource: "participant" });
-  replaceSessionEntrySync(store.scope, { sessionId: "next", updatedAt: 2 });
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  expect(await store.entry()).toMatchObject({
-    sessionId: "next",
-    inheritedToolPolicySource: "participant",
-  });
-  expect(await store.entry()).not.toHaveProperty("participationCeiling");
 });

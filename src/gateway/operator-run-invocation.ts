@@ -8,7 +8,6 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
 
 /** Retain a recovered source and its new exact invocation restriction as one producer. */
 export function retainGatewayOperatorInvocation(
@@ -57,24 +56,11 @@ export function retainGatewayOperatorInvocation(
     source.participationCeiling,
     invocation.participationCeiling,
   );
-  const recoverySnapshot =
-    participationCeiling && source.recoverySnapshot
-      ? normalizeGatewayOperatorRecoverySnapshot({
-          ...source.recoverySnapshot,
-          scopes,
-          participationCeiling,
-        })
-      : source.recoverySnapshot;
   const authority = createAdmittedRunOperatorAuthority({
     ...source,
     invocation,
     scopes,
     participationCeiling,
-    recoverySnapshot,
-    recoverySnapshotUnavailableReason:
-      source.recoverySnapshot && !recoverySnapshot
-        ? "decode-failed"
-        : source.recoverySnapshotUnavailableReason,
     assertCurrent,
     signal: AbortSignal.any(signals),
     get modelPolicy() {

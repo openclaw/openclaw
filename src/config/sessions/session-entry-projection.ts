@@ -77,10 +77,7 @@ function stripPrivateSessionEntryFields(
     }
   }
   if (identity === "public") {
-    delete projected.participationCeiling;
-    if (projected.inheritedToolPolicySource === "participant") {
-      delete projected.inheritedToolPolicySource;
-    }
+    delete projected.delegatedOperatorSource;
     if (projected.createdActor) {
       projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
     }
