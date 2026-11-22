@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "../realtime-defaults.js";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { makeBridge, makeCall, makeHandler } from "./realtime-call-control.test-helpers.js";
@@ -237,6 +238,25 @@ it.each([false, true])(
       expect(request.instructions).toMatch(/^Be helpful\.\n\nConsult behavior:\n/);
       expect(request.instructions).toContain(
         "- Call openclaw_agent_consult before answering requests that need facts",
+      );
+    }
+  },
+);
+it.each([false, true])(
+  "words the default base prompt for the routed model (native consult=%s)",
+  async (nativeConsult) => {
+    const { request } = await connectCall("CA-default-base", {
+      nativeConsult,
+      instructions: `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS}\n\nAgent context.`,
+    });
+    if (nativeConsult) {
+      expect(request.instructions).toMatch(
+        /delegate it to OpenClaw before answering\.\n\nAgent context\./,
+      );
+      expect(request.instructions).not.toMatch(/openclaw_agent_consult|openclaw_end_call/);
+    } else {
+      expect(request.instructions).toBe(
+        `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS}\n\nAgent context.`,
       );
     }
   },

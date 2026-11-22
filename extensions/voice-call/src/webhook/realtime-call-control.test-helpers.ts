@@ -80,9 +80,11 @@ export function makeHandler(params: {
   idleHangupMs?: number;
   nativeConsult?: boolean;
   consultPolicy?: ReturnType<typeof createRealtimeConfig>["consultPolicy"];
+  instructions?: string;
 }) {
   const config = {
     ...createRealtimeConfig(),
+    ...(params.instructions ? { instructions: params.instructions } : {}),
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
     ...(params.consultPolicy ? { consultPolicy: params.consultPolicy } : {}),
   };

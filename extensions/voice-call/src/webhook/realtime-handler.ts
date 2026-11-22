@@ -42,6 +42,7 @@ import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import { resolveVoiceCallBaseInstructions } from "../realtime-defaults.js";
 import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { createRealtimeCallPlayback } from "./realtime-call-playback.js";
@@ -701,7 +702,10 @@ export class RealtimeCallHandler {
       capabilities,
     } = registration;
     const { handlesAgentConsult, toolPolicy } = sessionPolicy;
-    const instructions = [registrationInstructions, consultPolicyInstructions]
+    const instructions = [
+      resolveVoiceCallBaseInstructions(registrationInstructions, handlesAgentConsult),
+      consultPolicyInstructions,
+    ]
       .filter(Boolean)
       .join("\n\n");
     if (handlesAgentConsult) {

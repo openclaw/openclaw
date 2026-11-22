@@ -102,6 +102,10 @@ opening indefinitely. A machine result, including `machine_start`, suppresses
 realtime speech beyond the cap; the host owns voicemail playback. Inbound greeting timing is unchanged. `voicecall.speak` requests use the same native session context path.
 Delegated work retains the call's agent, tool policy, and cancellation lifetime.
 
+On GPT-Live, the built-in default `realtime.instructions` is reworded to
+delegate to OpenClaw instead of naming `openclaw_agent_consult` and
+`openclaw_end_call`. Custom `realtime.instructions` are sent as written.
+
 GPT-Live rejects `realtime.consultPolicy: "always"`: it owns delegation and
 cannot enforce host-triggered transcript consults. Use `"auto"` or
 `"substantive"` guidance, or choose a model supporting host-controlled turns.
