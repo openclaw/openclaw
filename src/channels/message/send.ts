@@ -445,6 +445,7 @@ async function sendMessageBatch(
         ...params,
         ...pendingFinalDelivery,
         onPlatformSendDispatch,
+        onTransportDispatched: params.onTransportDispatched,
         assertDirectAdapterHandoff,
       },
       async (ctx) => {

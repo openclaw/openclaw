@@ -286,6 +286,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (platformSendSourceIndex !== undefined) {
         platformDispatchedPayloads.add(platformSendSourceIndex);
       }
+      // Only this post-mark call reports an actually dispatched transport: the
+      // adapter-admission handoff above also refreshes the shared dispatch hook,
+      // but no send has begun at that point.
+      await params.onTransportDispatched?.();
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       if (deliveredResults.length === 0) {

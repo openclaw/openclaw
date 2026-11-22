@@ -75,8 +75,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   onDeliveryReceipt?: (receipt: NonNullable<CronDeliveryTrace["receipts"]>[number]) => void;
   /** Fires once the provider has acknowledged the complete payload set. */
   onPayloadDelivered?: () => void;
-  /** Fires when the adapter actually returned a transport result (not merely admitted). */
-  onTransportDispatch?: () => void;
+  /** Fires once the queue executor has durably marked the send dispatched. */
+  onTransportDispatched?: () => void;
 }): Promise<CronAnnounceResult> {
   const delivery = params.target;
   params.abortSignal.throwIfAborted();
@@ -198,7 +198,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
             // A transport result means the adapter actually ran (not merely that
             // admission or channel preparation began), so this is the point past
             // which the provider may complete the delivery on its own.
-            params.onTransportDispatch?.();
+            params.onTransportDispatched?.();
             if (params.onDeliveryReceipt) {
               const receipt = createMessageReceiptFromOutboundResults({
                 results: [deliveryResult],

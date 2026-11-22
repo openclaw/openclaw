@@ -561,7 +561,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           }),
           abortSignal: abortController.signal,
           onDeliveryAttempt,
-          onTransportDispatch: () => {
+          onTransportDispatched: () => {
             transportDispatched = true;
           },
           onPayloadDelivered: () => {

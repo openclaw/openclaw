@@ -171,6 +171,12 @@ type OutboundChannelContext = {
   assertDirectAdapterHandoff?: () => void;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /**
+   * @internal Fires once the queue executor has durably marked the send dispatched
+   * (its record exists, so a later deadline can no longer prove non-delivery).
+   * Separate from adapter-admission callbacks, which run before the adapter runs.
+   */
+  onTransportDispatched?: () => Promise<void>;
   /** @internal Runs after each identified platform result, before further fallible work. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };

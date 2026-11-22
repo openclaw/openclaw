@@ -186,6 +186,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Fires once the queue executor has durably marked the send dispatched. */
+  onTransportDispatched?: () => Promise<void>;
   /** @internal Synchronously fence custody after refresh and immediately before provider I/O. */
   assertDirectAdapterHandoff?: () => void;
   /** @internal Report each completed platform sub-send before another fallible step. */
