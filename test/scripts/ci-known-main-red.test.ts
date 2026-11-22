@@ -795,7 +795,7 @@ describe("loose CI failure discovery", () => {
     const log = [
       `2026-10-12T08:00:00Z [shard:gateway] \u001b[31m FAIL \u001b[0m gateway-server (gateway-server-parallel) ${file} > native session > denies`,
       `2026-10-12T08:00:01Z [shard:other] FAIL ${file} > native session > denies`,
-      `2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
+      `\uFEFF2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
     ].join("\n");
     expect(extractNodeFailedTests(log)).toEqual([
       { file, tests: ["native session > denies"] },
