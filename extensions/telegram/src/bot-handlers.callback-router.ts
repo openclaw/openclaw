@@ -551,8 +551,10 @@ export function createTelegramCallbackRouter({
                   ? [[{ text: "🔐 Sign in", callback_data: signInCallback }]]
                   : [];
               const offerSignIn = signInRow.length > 0;
-              if (offerSignIn) {
-                // A successful sign-in from this button applies the blocked selection.
+              // A chat sign-in from this button applies the blocked selection. An API
+              // key is entered in the app instead, so nothing in chat finishes it.
+              const signInSwitches = offerSignIn && !authBlock.apiKeyLogin;
+              if (signInSwitches) {
                 recordPendingPickerSelection(
                   {
                     accountId,
@@ -567,9 +569,11 @@ export function createTelegramCallbackRouter({
                   },
                 );
               }
-              const nextStep = offerSignIn
+              const nextStep = signInSwitches
                 ? "Sign in below and this chat switches to it."
-                : "After connecting, select the model again.";
+                : offerSignIn
+                  ? "Sign in below, then select the model again."
+                  : "After connecting, select the model again.";
               await showModelReply(
                 `⚠️ Model not changed: ${selection.provider}/${selection.model} needs a working sign-in first.\n\n${authBlock.notice}\n\n${nextStep} Your current model is unchanged.`,
                 [...signInRow, ...buildProviderKeyboard(providerInfos)],

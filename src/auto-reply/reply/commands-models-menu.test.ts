@@ -41,6 +41,7 @@ describe("resolveModelSelectionAuthBlock", () => {
     });
     expect(block?.label).toBe("Sign-in needed");
     expect(block?.notice).toBe("meta: Sign-in needed. Connect with /login meta.");
+    expect(block?.apiKeyLogin).toBe(false);
   });
 
   it("blocks a model whose saved sign-in failed", () => {
@@ -73,6 +74,8 @@ describe("resolveModelSelectionAuthBlock", () => {
     expect(block?.notice).toContain("the OpenClaw app under Models → Connect provider");
     expect(block?.notice).toContain("`openclaw models auth login --provider opencode-go`");
     expect(block?.notice).not.toContain("/login");
+    // The key is entered in the app, so a chat sign-in cannot finish the selection.
+    expect(block?.apiKeyLogin).toBe(true);
   });
 
   it("gives API-key update instructions when a saved key fails", () => {

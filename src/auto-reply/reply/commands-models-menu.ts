@@ -46,20 +46,25 @@ export type ModelSelectionAuthBlock = {
   notice: string;
   // A chat `/login <provider>` route exists and may be offered as a button.
   loginSupported: boolean;
+  // The key is entered outside chat, so a chat sign-in never finishes the selection.
+  apiKeyLogin: boolean;
 };
+
+function isApiKeyLogin(login: ModelProviderLogin | undefined): boolean {
+  return login?.methodId === "api-key" || login?.mode === "secret";
+}
 
 function describeUnavailableModel(params: {
   provider: string;
   state: ModelReadiness;
   route: ReturnType<typeof resolveModelRuntimeRoute>;
   loginSupported: boolean;
-  login?: ModelProviderLogin;
+  apiKeyLogin: boolean;
   pending?: boolean;
   agentId?: string;
 }): { label: string; recovery: string } {
-  const { state } = params;
+  const { state, apiKeyLogin } = params;
   const loginCommand = formatProviderLoginCommand(params.provider);
-  const apiKeyLogin = params.login?.methodId === "api-key" || params.login?.mode === "secret";
   const safeProvider = resolveSafeProviderId(params.provider);
   const agentFlag = params.agentId ? ` --agent ${params.agentId}` : "";
   const apiKeyRecovery = (verb: "Add" | "Update") =>
@@ -149,15 +154,23 @@ export function resolveModelSelectionAuthBlock(params: {
   const route = resolveModelRuntimeRoute(params.provider, state.runtimeId);
   const loginSupported =
     params.menu?.loginProviders?.has(params.provider) === true && route !== "claudeCli";
+  const login = params.menu?.providerLogins?.get(params.provider);
+  const apiKeyLogin = isApiKeyLogin(login);
   const { label, recovery } = describeUnavailableModel({
     provider: params.provider,
     state,
     route,
     loginSupported,
-    login: params.menu?.providerLogins?.get(params.provider),
+    apiKeyLogin,
     agentId: params.agentId,
   });
-  return { label, recovery, notice: `${params.provider}: ${label}. ${recovery}`, loginSupported };
+  return {
+    label,
+    recovery,
+    notice: `${params.provider}: ${label}. ${recovery}`,
+    loginSupported,
+    apiKeyLogin,
+  };
 }
 
 export function buildModelsMenu(data: {
@@ -198,7 +211,7 @@ export function buildModelsMenu(data: {
         state,
         route,
         loginSupported,
-        login,
+        apiKeyLogin: isApiKeyLogin(login),
         pending,
       });
       modelNames.set(key, `${label} — ${modelNames.get(key) ?? model}`);
