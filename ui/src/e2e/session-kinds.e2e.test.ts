@@ -160,6 +160,44 @@ suite.define(() => {
     );
   });
 
+  it("shows the full expanded session name without pushing its badges out of the phone drawer", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      const row = sessionRow(
+        "agent:main:dashboard:77d49b41-7f39-496e-987d-19c8ab47be60",
+        "Release readiness for the international observatory calibration workspaces",
+        10,
+      );
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            sessions: [row],
+            count: 1,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            path: "",
+            ts: 10,
+          },
+          "sessions.describe": { session: row },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const drawer = page.locator("openclaw-sessions-page .session-details-panel");
+      await page.locator(".session-data-row .session-details-toggle").click();
+      await drawer.waitFor();
+      const heading = drawer.locator(".session-details-panel__title");
+      const fullHeading = await heading.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return Array.from(range.getClientRects()).every(
+          (rect) => rect.right <= el.getBoundingClientRect().right + 1,
+        );
+      });
+      expect(fullHeading).toBe(true);
+      const badges = await drawer.locator(".session-details-panel__badges").boundingBox();
+      const panel = await drawer.boundingBox();
+      expect(badges!.x + badges!.width).toBeLessThanOrEqual(panel!.x + panel!.width);
+    });
+  });
+
   it("groups by displayed kind while keeping the scan table compact", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const sessions = [

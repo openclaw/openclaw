@@ -1113,6 +1113,17 @@ select.session-group-select {
     opacity: 1;
   }
 
+  openclaw-sessions-page .session-details-panel__hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  openclaw-sessions-page .session-details-panel__title,
+  openclaw-sessions-page .session-details-panel__subtitle {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
   .session-list-cell {
     position: relative;
     display: grid;
