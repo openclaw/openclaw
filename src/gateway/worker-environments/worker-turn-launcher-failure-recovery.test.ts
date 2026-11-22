@@ -562,6 +562,9 @@ describe("worker turn launcher failure recovery", () => {
             launcher.executeTurn(runIdentity(runId), { ...turn, ...options }, localResult),
         });
       };
+      // Keep the retry inside the probe interval even during cold worker startup.
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now());
       await expect(run("probe-offline")).rejects.toThrow();
       if (disconnect === "before") {
         await expect(run("probe-retry")).resolves.toMatchObject({ outcome: "completed" });
