@@ -660,6 +660,24 @@ suite.define(() => {
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
         await page.keyboard.press("Escape");
+        // Closing the menu returns the phone keyboard outline to the trailing action.
+        expect(
+          await display.evaluate((button) => {
+            const header = button.closest<HTMLElement>(".dashboards-header")!;
+            const rightEdge =
+              getComputedStyle(header).overflowX === "visible"
+                ? document.documentElement.clientWidth
+                : header.getBoundingClientRect().right;
+            const style = getComputedStyle(button);
+            const ring =
+              Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+            return (
+              button.matches(":focus-visible") &&
+              ring > 0 &&
+              button.getBoundingClientRect().right + ring <= rightEdge
+            );
+          }),
+        ).toBe(true);
         await page.reload();
         await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
         await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
