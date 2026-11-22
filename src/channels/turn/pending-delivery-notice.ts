@@ -14,12 +14,13 @@ import { hasActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
 
+/** Reports whether this notice was delivered or has a queued retry owner. */
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
   agentId?: string,
   expectedIntentId?: string,
-): Promise<void> {
+): Promise<boolean> {
   const resolvedAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const pending = await withSessionEntriesFromStoresInWorker(
     [
@@ -66,7 +67,7 @@ export async function deliverPendingDeliveryNotice(
     { ordered: true },
   );
   if (!pending) {
-    return;
+    return false;
   }
   const { entry, notice, idempotencyKey } = pending;
   const outcome = await pending.delivery;
@@ -78,7 +79,8 @@ export async function deliverPendingDeliveryNotice(
     // Its receipt still permits recording the notice and clearing its debt.
     const owner = await findDeliveryIntentOwner(idempotencyKey);
     if (!outcome && owner?.status !== "completed" && owner?.status !== "failed") {
-      return;
+      // The exact outbound queue intent can own a retry. Session notice debt alone cannot.
+      return owner?.status === "pending";
     }
     delivered = owner?.status === "completed";
   }
@@ -96,7 +98,7 @@ export async function deliverPendingDeliveryNotice(
       })
     ).ok
   ) {
-    return;
+    return true;
   }
   await updateSessionEntry(
     { agentId: resolvedAgentId, sessionKey, storePath },
@@ -117,4 +119,5 @@ export async function deliverPendingDeliveryNotice(
         : null,
     { skipMaintenance: true, takeCacheOwnership: true },
   );
+  return delivered;
 }

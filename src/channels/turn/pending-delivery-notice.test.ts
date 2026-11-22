@@ -100,7 +100,9 @@ it.each([
     sendNotice.mockResolvedValue({ suppressed: true });
   }
   findDeliveryIntentOwner.mockReturnValue(status === "missing" ? null : { status });
-  await deliver();
+  await expect(deliver()).resolves.toBe(
+    status === "completed" || (outcome === "send error" && status === "pending"),
+  );
   if (status === "completed") {
     expect(sendNotice).toHaveBeenCalledWith({
       ...context,
@@ -141,5 +143,11 @@ it("leaves a replacement notice owed when an earlier send finishes", async () =>
 it("does not deliver a successor intent while settling an earlier failure", async () => {
   await deliverPendingDeliveryNotice(sessionKey, storePath, undefined, "earlier-intent");
   expect(sendNotice).not.toHaveBeenCalled();
+  expectNotice("owed");
+});
+
+it("does not give an owed session flag custody of a refused notice", async () => {
+  sendNotice.mockRejectedValue(new Error("429 Too Many Requests"));
+  await expect(deliver()).resolves.toBe(false);
   expectNotice("owed");
 });

@@ -180,6 +180,8 @@ export class OutboundDeliveryError extends Error {
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
   queueCustody?: "held" | "released";
+  /** The lifecycle sender delivered the terminal notice or has custody of its retry. */
+  failureNoticeHandled?: true;
 
   constructor(
     message: string,

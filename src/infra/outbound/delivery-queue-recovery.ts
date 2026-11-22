@@ -266,6 +266,7 @@ async function settleQueuedFailure(
     rejectionError?: string;
     events?: readonly IndexedMessageSentEvent[];
     terminals?: ReturnType<typeof failedOutboundAuditTerminals>;
+    onFailureNoticeHandled?: () => void;
   },
   stateContext: DeliveryQueueStateContext,
 ): Promise<"moved-to-failed" | "failed" | "already-gone"> {
@@ -292,13 +293,16 @@ async function settleQueuedFailure(
     }
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
-    if (entry.deliveryCompletion) {
-      await settleFailedQueuedDeliveryCompletion(
+    if (
+      entry.deliveryCompletion &&
+      (await settleFailedQueuedDeliveryCompletion(
         entry.deliveryCompletion,
         settlement,
         params.stateDir,
         stateContext,
-      );
+      ))
+    ) {
+      params.onFailureNoticeHandled?.();
     }
     const spoolPaths = collectEntrySpoolPaths(
       preparedOutboundPayloads(entry.preparedBatch),
@@ -1211,7 +1215,16 @@ export async function recoverLiveFinalDelivery(
   const pending = await loadUnfinishedDelivery(entry.id, params.stateDir, stateContext);
   if (pending && resolveDeliveryQueueAttemptCount(pending) >= resolveMaxRetries(pending)) {
     const settled = await settleQueuedFailure(
-      { ...params, entry: pending, error: pending.lastError ?? "delivery retry budget exhausted" },
+      {
+        ...params,
+        entry: pending,
+        error: pending.lastError ?? "delivery retry budget exhausted",
+        onFailureNoticeHandled: () => {
+          if (outcome.value.status === "failed") {
+            outcome.value.error.failureNoticeHandled = true;
+          }
+        },
+      },
       stateContext,
     );
     if (settled === "moved-to-failed" && outcome.value.status === "failed") {
