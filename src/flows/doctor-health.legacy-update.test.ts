@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
 import { ensureHeartbeatMonitorJobs } from "../commands/doctor-heartbeat-cadence-migration.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
@@ -501,34 +502,76 @@ it("imports retained legacy sessions after verified stop and before any candidat
   });
 });
 
-it.each(["manager-refused", "old-listener-remains"] as const)(
-  "reports stale stop failure before repair mutations: %s",
-  async (failure) => {
-    await resultState(async (state, resultPath, configBefore) => {
-      const service = managedService(state);
-      inspectStaleBuild();
-      if (failure === "manager-refused") {
-        service.stop.mockRejectedValueOnce(new Error("synthetic native stop refused"));
-      } else {
-        mocks.probePortUsage.mockResolvedValue("busy");
-      }
-      const facts = failureFacts({ check: "gateway-stop", code: "stale-gateway-stop-failed" });
-      const run = runDoctor();
+it.each([
+  "manager-refused",
+  "old-listener-remains",
+  "stop-unconfirmed",
+  "identity-uninspectable",
+] as const)("reports stale stop failure before repair mutations: %s", async (failure) => {
+  await resultState(async (state, resultPath, configBefore) => {
+    const service = managedService(state);
+    inspectStaleBuild();
+    const skipped =
+      "Gateway restoration identity could not be inspected; the managed service was not stopped.";
+    if (failure === "manager-refused") {
+      service.stop.mockRejectedValueOnce(new Error("synthetic native stop refused"));
+    } else if (failure === "old-listener-remains") {
+      mocks.probePortUsage.mockResolvedValue("busy");
+    } else if (failure === "stop-unconfirmed") {
+      // The port is free, but the manager reports an unknown state with the old PID.
+      const readRuntime = service.readRuntime;
+      service.readRuntime = async () =>
+        service.stop.mock.calls.length > service.restart.mock.calls.length
+          ? { status: "unknown", pid: 4200 }
+          : await readRuntime();
+      // An unknown state restores through a plain start.
+      Object.assign(service, { start: service.restart });
+    } else {
+      // No user D-Bus: the stop is skipped before the native manager is asked.
+      const inspect = serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate;
+      vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
+        async (params) =>
+          params.phase === "inspect"
+            ? await inspect(params)
+            : {
+                ...(await inspect({ ...params, phase: "inspect" })),
+                stopped: false,
+                serviceMutationAllowed: false,
+                serviceMutationSkipMessage: skipped,
+                serviceUpdateVerdict: { kind: "unavailable" as const, message: skipped },
+              },
+      );
+    }
+    const facts = failureFacts({ check: "gateway-stop", code: "stale-gateway-stop-failed" });
+    const run = runDoctor();
 
-      await expectRefusal(run, state.env, facts, "gateway restart", "gateway status --deep");
+    await expectRefusal(run, state.env, facts, "gateway restart", "gateway status --deep");
+    if (failure === "identity-uninspectable") {
+      // The message must not claim a stop was attempted for a PID that still runs.
+      await expect(run).rejects.toThrow(
+        `Stale Gateway PID 4200 was not stopped: ${skipped} Observed: service=running, PID=4200,`,
+      );
+      expect(service.stop).not.toHaveBeenCalled();
+    } else {
       expect(service.stop).toHaveBeenCalledOnce();
-      expectUncalled(mocks.config, mocks.runContributions);
-      expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
-      expectResult(resultPath, {
-        status: "error",
-        configHash: "unchanged",
-        maintenanceRefusal: unverifiedState,
-        failureFacts: facts,
-      });
-      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+    }
+    if (failure === "stop-unconfirmed") {
+      // A free port and an unknown state do not show the old Gateway still running.
+      await expect(run).rejects.toThrow(
+        "Stale Gateway PID 4200 could not be confirmed stopped: service=unknown, PID=4200, port 19754=free",
+      );
+    }
+    expectUncalled(mocks.config, mocks.runContributions);
+    expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+    expectResult(resultPath, {
+      status: "error",
+      configHash: "unchanged",
+      maintenanceRefusal: unverifiedState,
+      failureFacts: facts,
     });
-  },
-);
+    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+  });
+});
 
 it("records advisory restoration when the service runs without verified readiness", async () => {
   // Exercise Gateway readiness after repair, not runtime capability admission.

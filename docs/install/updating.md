@@ -53,6 +53,19 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
+Git release conversion leaves the serving link unchanged until candidate checks
+and service ownership revalidation finish. At activation, the legacy
+`git-install/lib/node_modules/openclaw` link follows `git-install/openclaw`, so
+existing CLI paths keep working without retaining a separate release selection.
+This also applies with `--no-restart`; the launcher selects the pending candidate
+on its next start. The installed updater must contain this repair.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
@@ -82,6 +95,12 @@ plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
 owners even when the displayed ID summary is truncated. The candidate must contain
 this repair; the installed updater needs no schema or protocol change.
+
+Update Doctor still defers agent database path repair so the captured rollback
+inventory stays unchanged. It reads the registrations and warns only when one
+needs that repair, with the count; a registry with nothing to repair adds no
+warning to the update result. The candidate must contain this change; the
+installed updater needs no schema or protocol change.
 
 Gateway update handoff preparation and its parent-side lease reads, identity checks,
 and cleanup run in the existing handoff worker. Slow coordinator filesystem work
@@ -294,6 +313,10 @@ through private snapshots. It does not retain an independent WAL reader that can
 block its own next migration's exclusive lock. Exec approvals policy, local socket
 credentials, and verified rollback attribution retain their existing checks. This
 repair requires the candidate Doctor; the installed updater needs no change.
+
+When retrying an update from a restored 2026.9.37 profile, Doctor configures
+shared-state journaling before taking the exclusive schema migration lock. This
+lets the agent maintenance worker acquire its lease after shared-state migration.
 
 Gateway cleanup preserves retired managed npm plugin generations referenced by
 absolute or home-relative paths in startup or current configuration. This keeps
@@ -1024,7 +1047,24 @@ updater must contain this fix; without it the retry is refused as an
 uninspectable destination until the link is moved back by hand. No journal,
 schema, or protocol change is involved.
 
+Update cleanup retires the pre-migration `.databases` snapshot directory of an
+earlier update once a later update is verified successful. It finds a snapshot
+only through the location that update recorded in update history, including one
+under a previous install root, and deletes nothing an unfinished update or a
+pending recovery owns. This includes the snapshots that older updaters left in a
+Git checkout's `.artifacts` directory. Update history holds no usable location for
+a checkout outside the home directory; those snapshots stay. A verified update's own retained snapshot waits for the
+next verified update. The installed updater or Gateway that finishes the later
+update must contain this change; no schema, journal, or protocol change is
+involved.
+
 ### Migration integrity checks
+
+Cold update-history bookkeeping verifies shared-state integrity before acquiring
+the SQLite writer. The full check still runs, but a serving Gateway can continue
+writing while it scans. Ledger changes and current ownership/schema checks remain
+transactional; explicit maintenance and orphan recovery retain their existing
+transaction-local verification.
 
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
@@ -1235,6 +1275,17 @@ changes nothing. The saved report keeps the details.
   cache). Registries that omit `dist.unpackedSize` skip this check. The state
   snapshot has its own measured check.
 
+A package update that must migrate a shared or agent database runs that
+migration in the candidate Doctor, which needs exclusive access to the state.
+A Gateway that the updater does not manage as a service keeps running through
+the update, for example a foreground `openclaw gateway run` under a non-default
+`OPENCLAW_HOME` or `OPENCLAW_STATE_DIR` profile, or one under an external
+supervisor. If such a Gateway owns the state, the update refuses before
+replacing the package. The refusal names each database with its schema hop and
+the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
+terminal, then rerun `openclaw update`. Updates that need no migration still
+run while it serves.
+
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
 `network`, `config-invalid`, `install-failed`, `state-migration-failed`,
@@ -1424,6 +1475,10 @@ Older running Gateways, including 2026.9.6, can still fail their first shutdown
 with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
 candidate cannot change code already running in that process. Start the updated
 Gateway with its installation owner if the old process exits without restarting.
+The retained shutdown code includes restart-marker persistence and subagent
+settlement. Running 2026.11.5 and 2026.11.6 Gateways load both only at shutdown,
+so after an in-place replacement such as `openclaw update --no-restart` they can
+fail that shutdown without recording which interrupted sessions to resume.
 
 When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
@@ -2559,9 +2614,15 @@ Managed systemd or launchd updates can stop the Gateway before an intermediate
 notice is delivered. The complete four-message sequence is not guaranteed for
 those installations; the durable run report remains available after reconnect.
 
-Runs with an internal origin session, including Control UI and webchat, receive
-these notices directly in that session's transcript. Passing only `sessionKey`
-is enough; the caller does not need to supply `deliveryContext`.
+For updates requested from a Control UI or desktop conversation, the app shows
+progress and the result in a persistent top-right notification instead of
+appending update messages to the conversation. The notification reconnects to the
+existing run after a Gateway restart. Dismiss the result or open Settings → Updates
+for the full report. Native mobile and other chat clients keep their current delivery.
+
+Other runs with an internal origin session receive these notices in that session’s
+transcript. Passing only `sessionKey` is enough; the caller does not need to
+supply `deliveryContext`.
 Before stopping the managed service, the updater waits for the serving Gateway
 to finish its restart notice attempt. That wait is capped at 10 seconds so a
 stalled notice cannot block activation.
@@ -2729,7 +2790,8 @@ and protected or unknown artifacts remain. It is not a substitute for a
 [Update cleanup](/cli/update#update-cleanup) for eligibility, JSON output, and
 resuming interrupted deletion.
 Private package, command-shim, and Git runtime backups remain owned by the update
-transaction and are outside this migration cleanup. An interrupted entry in update
+transaction and are outside this migration cleanup. Their pre-migration database
+snapshot directories are retired once a later update is verified successful. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.
 
 ## After updating

@@ -3,6 +3,238 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.11.6</title>
+            <pubDate>Sat, 21 Nov 2026 05:18:06 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
+            <sparkle:version>2611000690</sparkle:version>
+            <sparkle:shortVersionString>2026.11.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.2</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.11.6</h2>
+<h3>Highlights</h3>
+<ul>
+<li><strong>Smoother upgrades:</strong> bridge the 2026.11.5 updater to the current release path and validate staged plugin dependencies correctly on Windows. (#200662, #200595) Authored by @steipete. Thanks @RomneyDa and @desksk.</li>
+<li><strong>More resilient conversations:</strong> keep subagent and background turns running through configuration edits, and deliver final answers when a Gateway restart interrupted sending. (#200516, #200553) Thanks @obviyus and @RomneyDa.</li>
+<li><strong>Lighter, more responsive Gateway:</strong> reduce startup memory pressure and resident memory on constrained hosts, defer unused local credential runtimes, and keep plugin tool discovery from blocking the Gateway. (#191272, #198194, #188033) Authored by @steipete. Thanks @RomneyDa, @vincentkoc, @ctbritt, and @obviyus.</li>
+<li><strong>Reliable long-running model turns:</strong> preserve append-only provider history, exact Responses tool-argument bytes, and final replies from long, tool-heavy Claude CLI turns. (#197874, #200020, #200501) Authored by @steipete. Thanks @RomneyDa, @ZengWen-DT, @obviyus, @boeingchoco, @n1hility, and @Trinity-AI-Coder.</li>
+<li><strong>Better conversation continuity:</strong> keep loaded chat history visible during compaction and allow iOS Talk turns to continue beyond the previous 30-second cutoff. (#199534, #163474) Authored by @steipete. Thanks @RomneyDa, @fuller-stack-dev, @vincentkoc, @Olli0103, and @keysersozeh.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li><strong>ChatGPT setup and models:</strong> update Sign in with ChatGPT labels and Business usage guidance, refresh bundled Codex support for newer ChatGPT models, and restore model catalog requests through the inference relay. (#196330, #200784, #197768) Thanks @stevenlee-oai, @hannesrudolph, @VACInc, and @bdjben.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li><strong>Git updates:</strong> skip unnecessary declaration builds during ordinary Git updates while preserving explicit build settings and release-build behavior. (#189463) Thanks @vincentkoc.</li>
+<li><strong>Responses recovery:</strong> recover saved conversation item conflicts before output and across runs without replaying completed effects. (#199757, #199896, #200020) Authored by @steipete.</li>
+<li><strong>Subagent results:</strong> retain results through Gateway restarts and resume requester settlement without replaying already-consumed results; keep actual delivery failures distinct from successful consumption. (#199695, #199868, #200249) Authored by @steipete. Thanks @RomneyDa, @vincentkoc, @yousan, @Marvinthebored, @sallyom, and @obviyus.</li>
+<li><strong>Large file reads:</strong> stop scanning after the requested text page instead of loading the whole file, while preserving continuation and text-encoding handling. (#186992) Authored by @steipete. Thanks @MoerAI and @JasonBuildAI.</li>
+<li><strong>Credential handling:</strong> redact inline environment credentials in configuration reads and preserve SecretRef-backed skill API keys instead of replacing references with plaintext. (#190618, #200539) Authored by @steipete. Thanks @RomneyDa, @wangmiao0668000666, @yetval, @obviyus, and @tommyjoseph.</li>
+<li><strong>Safe configuration writes:</strong> preserve malformed UTF-8 configuration sources before writing and retain rollback snapshots when pre-update writes are interrupted. (#194181, #189946) Authored by @steipete. Thanks @RomneyDa, @syxscott, @zhangguiping-xydt, @fuller-stack-dev, @obviyus, @Alix-007, and @kaguranananana.</li>
+<li><strong>PostgreSQL upgrades:</strong> stop before replacing a still-serving installation when its PostgreSQL backup cannot run. (#193190) Authored by @steipete. Thanks @etzelm.</li>
+<li><strong>Session storage:</strong> keep large rewinds from exhausting the shared database worker and prevent slow history reads from blocking transcript writes. (#198786, #187989) Authored by @steipete. Thanks @RomneyDa, @jalehman, @fuller-stack-dev, and @vincentkoc.</li>
+<li><strong>Automation continuity:</strong> keep scheduled automations running when their chat identifier changes. (#200396) Thanks @obviyus.</li>
+<li><strong>Channel messages:</strong> preserve Discord user mentions inside code and multiline command arguments in Slack, Feishu, and Zalo. (#200053, #190730) Thanks @RomneyDa, @Sedrak-Hovhannisyan, @obviyus, @saariuslystoned, and @masatohoshino.</li>
+<li><strong>Knowledge on Windows:</strong> restore Knowledge writes on Windows. (#189088) Thanks @HermanZeng.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.11.5..d02df984730d764d613988d86a5060bc9e66e945 history: 189 in-range PRs + 0 retained seed-only PRs = 189 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #188521</strong> Authored by @steipete.</li>
+<li><strong>PR #199927</strong> Thanks @RomneyDa and @vincentkoc.</li>
+<li><strong>PR #200551</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #197590</strong> Related #197552. Thanks @wr-web and @primepal2.</li>
+<li><strong>PR #199924</strong> Thanks @RomneyDa, @vincentkoc, and @Patrick-Erichsen.</li>
+<li><strong>PR #200516</strong> Thanks @obviyus and @RomneyDa.</li>
+<li><strong>PR #199926</strong> Thanks @RomneyDa and @vincentkoc.</li>
+<li><strong>PR #200510</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #199923</strong> Thanks @RomneyDa, @vincentkoc, and @Patrick-Erichsen.</li>
+<li><strong>PR #199838</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #198906</strong> Related #198892. Thanks @llbohacll and @sallyom.</li>
+<li><strong>PR #200053</strong> Related #195585. Thanks @obviyus and @saariuslystoned.</li>
+<li><strong>PR #188080</strong> Related #188064. Thanks @shakkernerd.</li>
+<li><strong>PR #189147</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #190828</strong> Thanks @galiniliev.</li>
+<li><strong>PR #191333</strong> Related #191330. Thanks @vincentkoc.</li>
+<li><strong>PR #191271</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #190571</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #187499</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #189184</strong> Thanks @obviyus.</li>
+<li><strong>PR #193842</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #194307</strong> Related #192959. Thanks @tssala23 and @sallyom.</li>
+<li><strong>PR #188464</strong> Thanks @joshavant.</li>
+<li><strong>PR #179944</strong> Authored by @steipete. Thanks @DonnieFi and @vyctorbrzezowski.</li>
+<li><strong>PR #198132</strong> Related #198130. Thanks @EmilienM and @sallyom.</li>
+<li><strong>PR #198786</strong> Authored by @steipete.</li>
+<li><strong>PR #190618</strong> Thanks @yetval.</li>
+<li><strong>PR #190939</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #187884</strong> Thanks @art22s.</li>
+<li><strong>PR #198331</strong> Thanks @mmaps.</li>
+<li><strong>PR #189192</strong> Thanks @obviyus.</li>
+<li><strong>PR #189423</strong> Thanks @obviyus.</li>
+<li><strong>PR #191748</strong> Thanks @Finn763.</li>
+<li><strong>PR #190944</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #186709</strong> Related #186708. Thanks @nxmxbbd.</li>
+<li><strong>PR #190665</strong> Related #190658. Authored by @steipete. Thanks @saariuslystoned.</li>
+<li><strong>PR #191102</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #188790</strong> Related #188751. Thanks @shakkernerd.</li>
+<li><strong>PR #197103</strong> Related #197090. Thanks @obviyus and @shuisadev.</li>
+<li><strong>PR #192534</strong> Thanks @obviyus.</li>
+<li><strong>PR #190375</strong> Thanks @ericcaiwx-star.</li>
+<li><strong>PR #196411</strong> Thanks @Patrick-Erichsen.</li>
+<li><strong>PR #189818</strong> Authored by @steipete. Thanks @duyufansh2008.</li>
+<li><strong>PR #194198</strong> Related #194191. Authored by @steipete. Thanks @jacobtomlinson-bot.</li>
+<li><strong>PR #190730</strong> Related #185266. Thanks @masatohoshino.</li>
+<li><strong>PR #188745</strong> Authored by @steipete.</li>
+<li><strong>PR #188250</strong> Related #188222. Thanks @shakkernerd.</li>
+<li><strong>PR #194181</strong> Thanks @Alix-007 and @obviyus.</li>
+<li><strong>PR #189541</strong> Thanks @McgAtom and @obviyus.</li>
+<li><strong>PR #188920</strong> Authored by @steipete.</li>
+<li><strong>PR #188805</strong> Thanks @galiniliev.</li>
+<li><strong>PR #193190</strong> Authored by @steipete. Thanks @etzelm.</li>
+<li><strong>PR #189819</strong> Authored by @steipete.</li>
+<li><strong>PR #192699</strong> Authored by @steipete.</li>
+<li><strong>PR #196370</strong> Thanks @fuller-stack-dev.</li>
+<li><strong>PR #188292</strong> Authored by @steipete. Thanks @McgAtom.</li>
+<li><strong>PR #194488</strong> Thanks @zhangguiping-xydt and @obviyus.</li>
+<li><strong>PR #194635</strong> Thanks @zhangguiping-xydt and @obviyus.</li>
+<li><strong>PR #196330</strong> Thanks @stevenlee-oai and @hannesrudolph.</li>
+<li><strong>PR #190175</strong> Thanks @joetam.</li>
+<li><strong>PR #189684</strong> Authored by @steipete.</li>
+<li><strong>PR #189662</strong> Authored by @steipete.</li>
+<li><strong>PR #200662</strong> Authored by @steipete.</li>
+<li><strong>PR #188005</strong> Related #187982. Authored by @steipete. Thanks @McgAtom.</li>
+<li><strong>PR #187564</strong> Related #187519. Authored by @steipete. Thanks @RomneyDa.</li>
+<li><strong>PR #200579</strong> Thanks @fuller-stack-dev.</li>
+<li><strong>PR #200457</strong> Related #200451. Authored by @steipete. Thanks @LolPanda2004.</li>
+<li><strong>PR #190024</strong> Thanks @yetval.</li>
+<li><strong>PR #193687</strong> Thanks @VACInc.</li>
+<li><strong>PR #200501</strong> Related #186967. Thanks @obviyus and @Trinity-AI-Coder.</li>
+<li><strong>PR #192838</strong> Related #192735. Thanks @yousan, @obviyus, and @slatem.</li>
+<li><strong>PR #200539</strong> Related #193149. Thanks @obviyus and @tommyjoseph.</li>
+<li><strong>PR #200595</strong> Related #200573. Authored by @steipete. Thanks @desksk.</li>
+<li><strong>PR #190674</strong> Thanks @MertBasar0.</li>
+<li><strong>PR #189946</strong> Authored by @steipete. Thanks @kaguranananana.</li>
+<li><strong>PR #190326</strong> Thanks @VACInc.</li>
+<li><strong>PR #176154</strong> Related #176138. Thanks @xyi74976-del, @obviyus, and @Oldrich333.</li>
+<li><strong>PR #189364</strong> Authored by @steipete.</li>
+<li><strong>PR #197978</strong> Authored by @steipete.</li>
+<li><strong>PR #190308</strong> Related #184207. Thanks @Marvinthebored.</li>
+<li><strong>PR #189560</strong> Thanks @vyctorbrzezowski.</li>
+<li><strong>PR #191819</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #189338</strong> Authored by @steipete.</li>
+<li><strong>PR #189813</strong> Thanks @SebTardif.</li>
+<li><strong>PR #194503</strong> Related #194493. Authored by @steipete. Thanks @kuanjames.</li>
+<li><strong>PR #190163</strong> Thanks @mike1122real-hub.</li>
+<li><strong>PR #188117</strong> Thanks @obviyus.</li>
+<li><strong>PR #190433</strong> Authored by @steipete.</li>
+<li><strong>PR #193263</strong> Authored by @steipete.</li>
+<li><strong>PR #187966</strong> Related #187937. Thanks @shakkernerd.</li>
+<li><strong>PR #193049</strong> Authored by @steipete.</li>
+<li><strong>PR #189804</strong> Authored by @steipete.</li>
+<li><strong>PR #188611</strong> Authored by @steipete.</li>
+<li><strong>PR #193431</strong> Authored by @steipete.</li>
+<li><strong>PR #189088</strong> Related #189087. Thanks @HermanZeng.</li>
+<li><strong>PR #200504</strong> Thanks @freeqaz.</li>
+<li><strong>PR #191632</strong> Thanks @Decent9967.</li>
+<li><strong>PR #188909</strong> Thanks @SebTardif.</li>
+<li><strong>PR #188355</strong> Authored by @steipete.</li>
+<li><strong>PR #194957</strong> Authored by @steipete.</li>
+<li><strong>PR #194885</strong> Authored by @steipete.</li>
+<li><strong>PR #190165</strong> Thanks @Leon-SK668.</li>
+<li><strong>PR #189781</strong> Thanks @Yigtwxx.</li>
+<li><strong>PR #188616</strong> Related #187814. Thanks @daniel-lxs and @hannesrudolph.</li>
+<li><strong>PR #187451</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #200532</strong> Related #200508. Authored by @steipete. Thanks @garrietv.</li>
+<li><strong>PR #190676</strong> Related #190666. Authored by @steipete. Thanks @katie-hemus.</li>
+<li><strong>PR #187989</strong> Thanks @RomneyDa, @jalehman, @fuller-stack-dev, and @vincentkoc.</li>
+<li><strong>PR #195656</strong></li>
+<li><strong>PR #189246</strong> Authored by @steipete.</li>
+<li><strong>PR #186080</strong> Related #112625. Thanks @MoerAI, @obviyus, and @kangarooo.</li>
+<li><strong>PR #188033</strong> Related #188031. Thanks @ctbritt and @obviyus.</li>
+<li><strong>PR #200647</strong> Authored by @steipete.</li>
+<li><strong>PR #200403</strong> Thanks @obviyus.</li>
+<li><strong>PR #200574</strong> Thanks @obviyus.</li>
+<li><strong>PR #197136</strong> Related #197129. Thanks @Marvinthebored, @Peetiegonzalez, and @vyctorbrzezowski.</li>
+<li><strong>PR #199039</strong> Related #198970. Thanks @MoerAI, @obviyus, and @sangwf.</li>
+<li><strong>PR #163474</strong> Related #162784. Thanks @Olli0103 and @keysersozeh.</li>
+<li><strong>PR #167665</strong> Related #165668. Thanks @Anurag-5ingh, @obviyus, and @lucasprocoio.</li>
+<li><strong>PR #188817</strong> Thanks @galiniliev.</li>
+<li><strong>PR #200643</strong> Authored by @steipete.</li>
+<li><strong>PR #193200</strong> Thanks @ayaangazali and @obviyus.</li>
+<li><strong>PR #200553</strong> Thanks @obviyus.</li>
+<li><strong>PR #200396</strong> Thanks @obviyus.</li>
+<li><strong>PR #189469</strong> Thanks @xydigitLybnnnn.</li>
+<li><strong>PR #197378</strong> Related #197377. Thanks @holgergruenhagen and @sallyom.</li>
+<li><strong>PR #194775</strong> Thanks @LinzeShi and @obviyus.</li>
+<li><strong>PR #198351</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #188919</strong> Related #188897. Authored by @steipete. Thanks @ourcoms2018.</li>
+<li><strong>PR #190991</strong> Authored by @steipete. Thanks @SunnyShu0925.</li>
+<li><strong>PR #191547</strong> Related #191542. Authored by @steipete. Thanks @etzelm.</li>
+<li><strong>PR #185180</strong> Authored by @steipete. Thanks @Stronggenetics.</li>
+<li><strong>PR #197874</strong> Thanks @obviyus.</li>
+<li><strong>PR #193381</strong> Related #193303. Authored by @steipete. Thanks @LiuwqGit and @bryan-filmio-studios.</li>
+<li><strong>PR #189144</strong> Thanks @amittell.</li>
+<li><strong>PR #197961</strong> Thanks @joshavant.</li>
+<li><strong>PR #188614</strong> Related #184027. Authored by @steipete. Thanks @etzelm.</li>
+<li><strong>PR #195459</strong> Authored by @steipete.</li>
+<li><strong>PR #188887</strong> Related #188771. Thanks @shakkernerd and @DonnieFi.</li>
+<li><strong>PR #189287</strong> Authored by @steipete.</li>
+<li><strong>PR #200306</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #199636</strong> Authored by @steipete.</li>
+<li><strong>PR #188413</strong> Authored by @steipete.</li>
+<li><strong>PR #188409</strong> Authored by @steipete.</li>
+<li><strong>PR #200330</strong> Authored by @steipete.</li>
+<li><strong>PR #200559</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #197768</strong> Thanks @bdjben and @VACInc.</li>
+<li><strong>PR #200784</strong> Thanks @VACInc.</li>
+<li><strong>PR #194638</strong> Thanks @mmaps.</li>
+<li><strong>PR #198353</strong> Thanks @pgondhi987.</li>
+<li><strong>PR #200031</strong> Related #199950. Thanks @daniel-lxs and @wangmiao0668000666.</li>
+<li><strong>PR #191272</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #198194</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #200017</strong> Related #199895. Thanks @daniel-lxs and @sallyom.</li>
+<li><strong>PR #199534</strong> Thanks @vincentkoc.</li>
+<li><strong>PR #200389</strong> Thanks @obviyus.</li>
+<li><strong>PR #189512</strong> Related #189508. Thanks @Marvinthebored, @Peetiegonzalez, and @obviyus.</li>
+<li><strong>PR #154125</strong> Thanks @sobechestnut-dev and @obviyus.</li>
+<li><strong>PR #185186</strong> Related #185079. Thanks @kaguranananana, @obviyus, and @UHDPass.</li>
+<li><strong>PR #190233</strong> Authored by @steipete.</li>
+<li><strong>PR #188728</strong> Authored by @steipete.</li>
+<li><strong>PR #200216</strong> Authored by @steipete.</li>
+<li><strong>PR #200453</strong> Thanks @fuller-stack-dev.</li>
+<li><strong>PR #200320</strong> Authored by @steipete.</li>
+<li><strong>PR #200363</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #192543</strong> Authored by @steipete.</li>
+<li><strong>PR #167443</strong> Authored by @steipete.</li>
+<li><strong>PR #186524</strong> Thanks @jjjhenriksen and @brokemac79.</li>
+<li><strong>PR #200191</strong> Thanks @obviyus.</li>
+<li><strong>PR #194648</strong> Related #194626. Authored by @steipete. Thanks @ylcn91.</li>
+<li><strong>PR #197526</strong> Related #197320. Thanks @daniel-lxs and @etzelm.</li>
+<li><strong>PR #200335</strong> Authored by @steipete.</li>
+<li><strong>PR #198262</strong> Thanks @RomneyDa and @vincentkoc.</li>
+<li><strong>PR #200374</strong> Authored by @steipete.</li>
+<li><strong>PR #200193</strong> Authored by @steipete.</li>
+<li><strong>PR #197975</strong> Authored by @steipete.</li>
+<li><strong>PR #200038</strong> Related #199762. Thanks @obviyus and @goldmar.</li>
+<li><strong>PR #190181</strong> Thanks @shakkernerd.</li>
+<li><strong>PR #190219</strong> Thanks @shakkernerd.</li>
+<li><strong>PR #192444</strong> Related #192416. Thanks @jalehman.</li>
+<li><strong>PR #200020</strong> Authored by @steipete.</li>
+<li><strong>PR #200099</strong> Thanks @obviyus.</li>
+<li><strong>PR #189463</strong> Related #189456, #189585. Thanks @vincentkoc.</li>
+<li><strong>PR #199695</strong> Authored by @steipete.</li>
+<li><strong>PR #199868</strong> Authored by @steipete.</li>
+<li><strong>PR #200249</strong> Thanks @obviyus.</li>
+<li><strong>PR #199757</strong> Authored by @steipete.</li>
+<li><strong>PR #199896</strong> Authored by @steipete.</li>
+<li><strong>PR #186992</strong> Related #186565. Authored by @steipete. Thanks @MoerAI and @JasonBuildAI.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.11.6/OpenClaw-2026.11.6-x86_64.zip" length="512246876" type="application/octet-stream" sparkle:edSignature="5PQOzPJTrCBgLrfz/ZSUWpIYytVueU8cylPn0Dls9b1O4AbwKzWAs+gRVf38zlzt3mBcjn2CyZvmZANckS9HDQ=="/>
+        </item>
+        <item>
             <title>2026.11.5</title>
             <pubDate>Wed, 18 Nov 2026 03:23:53 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
@@ -622,85 +854,6 @@ This audited record covers the complete v2026.11.3..09aa6442a3a260aa93b335039a9d
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.11.4/OpenClaw-2026.11.4-x86_64.zip" length="342682961" type="application/octet-stream" sparkle:edSignature="XlhoGhcBdABKaY+jPn7V6yOpTlm4iM/TTaJbXlj4tK5qCakaaekQmYd6sWMJZOobFX5xFXjE0TETl2W2gON+BQ=="/>
-        </item>
-        <item>
-            <title>2026.11.3</title>
-            <pubDate>Tue, 10 Nov 2026 19:03:23 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
-            <sparkle:version>2611000390</sparkle:version>
-            <sparkle:shortVersionString>2026.11.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.2</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.11.3</h2>
-<h3>Highlights</h3>
-<ul>
-<li><strong>Private task results:</strong> Keep private subagent completions out of streamed chat replies. (#188490) Thanks @fuller-stack-dev.</li>
-<li><strong>Reliable child-task handoffs:</strong> Allow a parent to hand off to replacement work after cancelling a child, without leaving the cancelled child's completion receipt blocking the handoff. (#178893; related #178565) Thanks @brianmcguire and @letsc4.</li>
-<li><strong>Visible tool failures:</strong> Report unanswered tool failures instead of silently ending a user-addressed turn as a success. (#182458; related #99645) Authored by @steipete. Thanks @rdleclerc.</li>
-<li><strong>Bounded authentication:</strong> Stop stalled provider authentication at the run deadline and propagate cancellation through authentication work. (#189144) Thanks @amittell.</li>
-<li><strong>Sandboxed image access:</strong> Keep required-sandbox image previews inside allowed folders, even in Full Access mode, while preserving explicit administrator image allowances. (#176203) Thanks @shakkernerd.</li>
-<li><strong>Verified workspace connections:</strong> Preserve saved node certificate pins when an empty fingerprint is supplied, and verify workspace-transfer certificates before sending credentials or data. (#125646, #190002) Thanks @wanyongstar and @avelev99.</li>
-<li><strong>Faster, responsive Gateway:</strong> Reduce startup module-file loading overhead and avoid stalls when abort-command detection encounters long punctuation runs. (#192217, #184433) Thanks @karkarl, @RomneyDa, @LeizhenZhang, and @obviyus.</li>
-</ul>
-<h3>Changes</h3>
-No new configuration options or features.
-<h3>Fixes</h3>
-<ul>
-<li><strong>Credential isolation:</strong> Keep reused and cached plugin results scoped to their connection credentials, and keep other plugins' transport hooks on the provider's origin. (#178444, #177974, #189423) Authored by @steipete. Thanks @obviyus.</li>
-<li><strong>Search and memory credentials:</strong> Keep Firecrawl search and scrape keys with their scoped endpoints and embedding credentials with their destination. (#190706, #184966) Thanks @zhangguiping-xydt and @eleqtrizit.</li>
-<li><strong>Credential redaction:</strong> Redact inline environment credentials from configuration reads and reflected search credentials from Exa errors. (#190618, #178745) Authored by @steipete. Thanks @yetval.</li>
-<li><strong>Child-process environments:</strong> Prevent managed Signal daemons and bundled language servers from inheriting unrelated Gateway secrets. (#179198, #179415) Thanks @VACInc.</li>
-<li><strong>Authentication errors:</strong> Surface credential-read failures rather than treating them as missing credentials, and reject explicitly selected auth profiles belonging to incompatible providers. (#173970, #181597) Authored by @steipete. Thanks @vincentkoc.</li>
-<li><strong>Channel safety:</strong> Keep incoming Twitch IRC content out of parser error logs and require explicit request IDs when multiple Tlon approvals are pending. (#174552, #186243) Authored by @steipete. Thanks @mmaps.</li>
-<li><strong>Scheduled jobs:</strong> Handle queued cron storage failures without exiting the Gateway, and clear one-shot cleanup when a job becomes recurring. (#175678, #168985) Authored by @steipete. Thanks @yxshee, @wangmiao0668000666, and @obviyus.</li>
-<li><strong>Updates:</strong> Let profile-backed updates recognize their own maintenance lock and preserve cancellation when ledger writes are deferred. (#177792, #187998) Thanks @GrahamMcBain and @vincentkoc.</li>
-<li><strong>Update recovery:</strong> Recover safely when the initial package-presence check times out, requiring a fresh valid directory identity before replacement and retaining rollback to the original package. (#181906) Authored by @steipete.</li>
-<li><strong>Anthropic usage caps:</strong> Recognize exhausted plural usage-limit errors without spending the transient rate-limit retry budget. (#176186; related #176179) Thanks @sunlit-deng and @blue-dot-1.</li>
-<li><strong>Terminal sessions:</strong> Forward /reset soft to the Gateway instead of hard-resetting the session. (#172431) Thanks @yetval and @obviyus.</li>
-<li><strong>Git recovery:</strong> Preserve uncertain command failures during Git repair rather than treating an unconfirmed operation as successful. (#176006) Authored by @steipete.</li>
-<li><strong>Memory provider selection:</strong> Accept mixed-case none and auto provider values. (#186310) Authored by @steipete. Thanks @sagealice2002-dotcom.</li>
-</ul>
-<h3>Complete contribution record</h3>
-This audited record covers the complete v2026.11.2..abf11ef015b9d4cdf5b2e6e2a6a84b87c7b8c920 history: 34 in-range PRs + 0 retained seed-only PRs = 34 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
-<h4>Pull requests</h4>
-<ul>
-<li><strong>PR #192217</strong> Thanks @karkarl and @RomneyDa.</li>
-<li><strong>PR #172887</strong> Authored by @steipete.</li>
-<li><strong>PR #184433</strong> Thanks @LeizhenZhang and @obviyus.</li>
-<li><strong>PR #125646</strong> Thanks @wanyongstar.</li>
-<li><strong>PR #190002</strong> Thanks @avelev99.</li>
-<li><strong>PR #176203</strong> Thanks @shakkernerd.</li>
-<li><strong>PR #174552</strong> Authored by @steipete.</li>
-<li><strong>PR #179198</strong> Thanks @VACInc.</li>
-<li><strong>PR #186243</strong> Thanks @mmaps.</li>
-<li><strong>PR #190618</strong> Thanks @yetval.</li>
-<li><strong>PR #175678</strong> Thanks @yxshee, @wangmiao0668000666, and @obviyus.</li>
-<li><strong>PR #168985</strong> Authored by @steipete.</li>
-<li><strong>PR #188490</strong> Thanks @fuller-stack-dev.</li>
-<li><strong>PR #177792</strong> Thanks @GrahamMcBain.</li>
-<li><strong>PR #176006</strong> Authored by @steipete.</li>
-<li><strong>PR #189423</strong> Thanks @obviyus.</li>
-<li><strong>PR #179415</strong> Thanks @VACInc.</li>
-<li><strong>PR #190706</strong> Thanks @zhangguiping-xydt.</li>
-<li><strong>PR #184966</strong> Thanks @eleqtrizit.</li>
-<li><strong>PR #186310</strong> Authored by @steipete. Thanks @sagealice2002-dotcom.</li>
-<li><strong>PR #187998</strong> Thanks @vincentkoc.</li>
-<li><strong>PR #172431</strong> Thanks @yetval and @obviyus.</li>
-<li><strong>PR #178444</strong> Authored by @steipete.</li>
-<li><strong>PR #173970</strong> Authored by @steipete.</li>
-<li><strong>PR #181597</strong> Thanks @vincentkoc.</li>
-<li><strong>PR #195140</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #177974</strong> Authored by @steipete.</li>
-<li><strong>PR #178745</strong> Authored by @steipete.</li>
-<li><strong>PR #182458</strong> Related #99645. Authored by @steipete. Thanks @rdleclerc.</li>
-<li><strong>PR #184791</strong> Thanks @hannesrudolph.</li>
-<li><strong>PR #189144</strong> Thanks @amittell.</li>
-<li><strong>PR #178893</strong> Related #178565. Thanks @brianmcguire and @letsc4.</li>
-<li><strong>PR #181906</strong> Authored by @steipete.</li>
-<li><strong>PR #176186</strong> Related #176179. Thanks @sunlit-deng and @blue-dot-1.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.11.3/OpenClaw-2026.11.3-x86_64.zip" length="342293321" type="application/octet-stream" sparkle:edSignature="uc9ePKLDzyhwB6IDgShmY42HeVLAR00y3mC+YwUlsn0QxT77FbE/EbSm0LujR1ogOowY3LcLsLk6Gm04tgP5BA=="/>
         </item>
         <item>
             <title>2026.10.9</title>

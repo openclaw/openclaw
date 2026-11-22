@@ -11,6 +11,7 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import { getAdmittedPostgresSchema } from "../infra/database-engine/postgres-schema.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -52,8 +53,8 @@ import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-
 import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
 import {
   admitStateSchemaFacts,
-  parseStateSchemaContentVersion,
   PostgresSchemaAdmissionUnavailableError,
+  parseStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
@@ -527,7 +528,34 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   ) {
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
+  // Another process may install an additive fragment without our process-local publication.
+  // Only a cache miss probes the catalog, under the owner's existing writer lock.
+  const present = db // sqlite-allow-raw: Schema presence primitive under the owner's writer lock.
+    .prepare(`SELECT 1 AS present FROM pg_catalog.pg_class
+    WHERE relnamespace = ?::regnamespace AND relname IN (${fragmentTables.map(() => "?").join(", ")})
+    LIMIT 1`)
+    .get(facts.namespace, ...fragmentTables);
+  const schema = getAdmittedPostgresSchema(db);
+  if (!schema) {
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
+  }
   invalidateLocalSqliteSchemaAdmissions(db);
+  if (present) {
+    // Verify the peer's committed seal; never hide a partial fragment with IF NOT EXISTS.
+    admitPostgresPhysicalFacts({
+      db,
+      namespace: facts.namespace,
+      storeId: facts.storeId,
+      store: facts.store,
+      version: facts.version,
+      schema,
+      preserveSchemaSeal: true,
+    });
+    admitStatePostgres(db, false);
+    return;
+  }
   const repositorySql =
     facts.version < 38 ? withLegacyRepositoryDiskAuthority(fragment.sql) : fragment.sql;
   const templateSql =

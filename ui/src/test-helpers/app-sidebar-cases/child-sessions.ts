@@ -123,14 +123,9 @@ describe("AppSidebar agent chip", () => {
       expect(row.querySelector(".sidebar-session-indicator")).not.toBeNull();
       expect(row.querySelector("[data-sidebar-session-pin], .session-row-state")).toBeNull();
     }
-    expect(sidebar.querySelector('[aria-label="Done"]')).not.toBeNull();
-    const runtime = sidebar.querySelector(
-      '[data-session-key="agent:main:child-one"] openclaw-elapsed-time',
-    );
-    const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
-    expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
-    expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
-    expect(runtime?.textContent).toMatch(/^(?:29|30|31)s$/);
+    expect(sidebar.querySelector('[aria-label="Done"]')).toBeNull();
+    expect(childRows[0]?.querySelector(".session-glyph--running")).not.toBeNull();
+    expect(childRows[0]?.querySelector("openclaw-elapsed-time")).toBeNull();
 
     harness.list.mockResolvedValue(
       listResult(
@@ -161,8 +156,8 @@ describe("AppSidebar agent chip", () => {
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
       expect(
-        sidebar.querySelector('[data-session-key="agent:main:child-one"] [aria-label="Done"]'),
-      ).not.toBeNull(),
+        sidebar.querySelector('[data-session-key="agent:main:child-one"] .session-glyph--running'),
+      ).toBeNull(),
     );
   });
 

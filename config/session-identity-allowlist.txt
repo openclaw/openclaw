@@ -1002,7 +1002,6 @@ src/gateway/server-methods/update-admission.ts	1
 src/gateway/server-methods/update-report.ts	2
 src/gateway/server-methods/update-status.ts	4
 src/gateway/server-methods/update.ts	1
-src/gateway/server-methods/usage-overview-report.ts	2
 src/gateway/server-methods/usage-session-selection.ts	9
 src/gateway/server-methods/usage.ts	2
 src/gateway/server-plugin-forked-turn.ts	2

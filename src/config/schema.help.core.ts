@@ -145,7 +145,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.sessionControl.publicationWriteEnabled":
     "Allows restricted publication-writer connections only when true (default: false). Independent of publication reads and host steering. Source plugins still require their own opt-in and device grant. Checked at each request admission; disabling denies new requests without revoking admitted work.",
   "gateway.sessionControl.publicationReadEnabled":
-    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
+    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Checked when each connection or read request starts; disabling denies new requests without revoking an already admitted read.",
   "gateway.sessionControl.steeringEnabled":
     "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
@@ -206,6 +206,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant":
+    "When true, an approved CLI or TUI device behind the trusted proxy that requests more than its paired scopes connects within them instead of filing a scope-upgrade request, and the TUI receives a device token. Browser clients are unaffected. Default false.",
   "gateway.roles":
     "Named operator-role catalog. A default enables enforcement for all identified profiles. Without a default, only current linked OpenClaw ID members use their profile role across sign-in routes. Enforced profiles without a resolvable role cannot connect.",
   "gateway.roles.default":

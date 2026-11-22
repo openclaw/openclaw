@@ -6,7 +6,7 @@ import "../test-helpers/load-styles.ts";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM identity", () => {
-  it("moves existing row DOM when a new session shifts the list", async () => {
+  it("retains session row DOM and focus through insertion and activity reordering", async () => {
     await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessionsHarness, createSessionState, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
@@ -66,5 +66,26 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       );
       expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe("/control/chat/main/beta");
     });
+    // Unlike insertion, moving the focused row itself can blur the same DOM link.
+    sidebar.setSessionSortMode("updated");
+    await sidebar.updateComplete;
+    const order = () =>
+      [...sidebar.querySelectorAll<HTMLElement>("[data-session-tree]")].map(
+        (row) => row.dataset.sessionTree,
+      );
+    const movedKey = order().at(-1)!;
+    const moved = rowFor(movedKey)!.querySelector("a")!;
+    moved.focus();
+    const current = next.result!.sessions.find((row) => row.key === movedKey)!;
+    const refreshed = { ...current, lastActivityAt: Date.now() + 1000 };
+    harness.publishList({
+      ...next,
+      result: {
+        ...next.result!,
+        sessions: next.result!.sessions.map((row) => (row === current ? refreshed : row)),
+      },
+    });
+    await waitForSolid(() => expect(order()[0]).toBe(movedKey));
+    expect(document.activeElement).toBe(moved);
   });
 });
