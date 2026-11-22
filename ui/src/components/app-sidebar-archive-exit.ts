@@ -30,7 +30,14 @@ export function startSidebarArchiveExit(row: HTMLElement) {
   ) {
     return undefined;
   }
-  const height = tree.getBoundingClientRect().height;
+  const bounds = tree.getBoundingClientRect();
+  const viewport = tree.closest(".sidebar-shell__body")?.getBoundingClientRect();
+  // Offscreen removals belong to the virtual window's scroll anchoring.
+  // Retaining their height in an exit would displace the visible rows.
+  if (viewport && (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom)) {
+    return undefined;
+  }
+  const height = bounds.height;
   let snapshot: HTMLElement | undefined;
   const observer = new MutationObserver((records) => {
     const removal = records.find((record) => [...record.removedNodes].includes(tree));

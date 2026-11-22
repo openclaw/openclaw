@@ -15,7 +15,7 @@ import { compactSessionMenuViewForValue } from "../../../components/session-menu
 import { sessionMenuDataFromRow } from "../../../components/session-menu-data.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
-import { sessionPlacementAction } from "../../../components/session-placement-action.ts";
+import { sessionMenuPlacementAction } from "../../../components/session-placement-action.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -86,37 +86,36 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       "main",
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
     ).sessionKey;
-    const label = menu.session.label;
-    const isChild =
-      !isSubagentSessionKey(row.key) &&
-      Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
-    const archiving = owner.context.sessions.archiveVisibility(row.key) === "pending";
-    const pinned = owner.context.navigation.snapshot.sidebarEntries.includes(
-      serializeSidebarEntry({ type: "session", key: row.key }),
-    );
     const pinnable = isPinnableUiSessionRow(row);
+    const presentation = {
+      label: menu.session.label,
+      placementAction: sessionMenuPlacementAction(row, agentsList),
+      isChild:
+        !isSubagentSessionKey(row.key) &&
+        Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
+      archiving: owner.context.sessions.archiveVisibility(row.key) === "pending",
+      pinned: owner.context.navigation.snapshot.sidebarEntries.includes(
+        serializeSidebarEntry({ type: "session", key: row.key }),
+      ),
+      pinnable,
+    };
     const session = sessionDataMemo.read(
       [
-        label,
-        sessionPlacementAction(row),
+        ...Object.values(presentation),
         row.key,
         row.agentId,
         row.sessionId,
-        isChild,
-        pinned,
-        pinnable,
         row.snoozedUntil,
         row.unread,
         row.hiddenFromInvolvingMe,
         row.communication,
         row.effectiveCommunication,
         row.archived,
-        archiving,
         row.category,
         row.icon,
         row.color,
       ],
-      () => sessionMenuDataFromRow(row, { label, isChild, pinned, pinnable, archiving }),
+      () => sessionMenuDataFromRow(row, presentation),
     );
     const sessionReasons = sessionMenuReasons({
       snapshot,
