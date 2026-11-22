@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { resolveCommandContextAuthorizationAsync } from "../command-auth.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
@@ -33,7 +33,7 @@ export async function tryFastApproveFromMessage(params: {
   };
   const command = buildCommandContext(
     commandContext,
-    await resolveCommandAuthorizationAsync(commandContext),
+    await resolveCommandContextAuthorizationAsync(commandContext),
   );
   const result = await handleApproveCommandFromContext(
     { cfg: params.cfg, ctx: params.ctx, command },

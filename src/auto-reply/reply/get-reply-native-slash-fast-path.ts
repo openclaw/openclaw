@@ -20,7 +20,7 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { resolveCommandContextAuthorizationAsync } from "../command-auth.js";
 import { isAuthorizedTextSlashCommandTurn, isNativeCommandTurn } from "../command-turn-context.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
@@ -182,7 +182,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   };
   const command = buildCommandContext(
     commandContext,
-    await resolveCommandAuthorizationAsync(commandContext),
+    await resolveCommandContextAuthorizationAsync(commandContext),
   );
   const commandScope = () => ({
     cfg: params.cfg,

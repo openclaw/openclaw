@@ -94,6 +94,11 @@ export function defineGatewayControlCommand(
   );
 }
 
+/** A paired private-chat sender already knows the bot; silence there only looks like a failure. */
+function isAdmittedDirectSender(params: HandleCommandsParams): boolean {
+  return params.command.resetOnly === true && !params.isGroup;
+}
+
 export function rejectUnauthorizedCommand(
   params: HandleCommandsParams,
   commandLabel: string,
@@ -109,6 +114,11 @@ export function rejectUnauthorizedCommand(
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
+  if (isAdmittedDirectSender(params)) {
+    return commandReply(
+      `${commandLabel} is limited to this bot's owners. You can keep chatting and use /new or /reset.`,
+    );
+  }
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return commandReply("You are not authorized to use this command.");
   }
