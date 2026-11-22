@@ -6,7 +6,9 @@ import {
   type HealthFinding,
   type HealthFindingSeverity,
 } from "../flows/health-checks.js";
+import { startDoctorProgress } from "../infra/doctor-progress.js";
 import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
@@ -100,6 +102,37 @@ export type DoctorLintExecution = {
   warnings?: readonly HealthFinding[];
   writeOutput: () => void;
 };
+
+export type DoctorLintProgress = {
+  phase: (label: string) => void;
+  stop: () => void;
+};
+
+export const noDoctorLintProgress: DoctorLintProgress = { phase() {}, stop() {} };
+
+/**
+ * Lint progress goes to stderr only when a person is watching it. Piped stderr belongs to
+ * update parents and log captures, which keep their current output; stdout never changes.
+ */
+export function createDoctorLintProgress(
+  env: NodeJS.ProcessEnv = process.env,
+  stderrIsTTY = process.stderr.isTTY,
+): DoctorLintProgress {
+  if (!stderrIsTTY || isUpdateDoctorLintPass(env) || resolveUpdateRehearsalRoot(env)) {
+    return noDoctorLintProgress;
+  }
+  let stopCurrent = () => {};
+  return {
+    phase(label) {
+      stopCurrent();
+      stopCurrent = startDoctorProgress(`lint ${label}`, true);
+    },
+    stop() {
+      stopCurrent();
+      stopCurrent = () => {};
+    },
+  };
+}
 
 export function detectDoctorLintOutputMode(opts: DoctorLintCliOptions): "human" | "json" {
   return opts.json === true || !process.stdout.isTTY ? "json" : "human";

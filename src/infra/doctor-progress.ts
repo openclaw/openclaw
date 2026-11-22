@@ -39,6 +39,21 @@ export type DoctorProgressMeasure = <T>(
   run: () => T | Promise<T>,
 ) => Promise<T>;
 
+/** Report a slow Doctor step on stderr, repeating it every 10s until the returned stop runs. */
+export function startDoctorProgress(label: string, enabled: boolean): () => void {
+  if (!enabled) {
+    return () => {};
+  }
+  const started = performance.now();
+  const report = (suffix = "") => process.stderr.write(`Doctor: ${label}${suffix}\n`);
+  report();
+  const timer = setInterval(() => {
+    report(` (${Math.floor((performance.now() - started) / 1000)}s elapsed)`);
+  }, 10_000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 export function formatDoctorProgressPhase(phase: DoctorProgressPhase): string {
   return phase.replace(/^doctor\./u, "").replaceAll(/[.-]/gu, " ");
 }

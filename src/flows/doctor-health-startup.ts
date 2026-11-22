@@ -9,7 +9,11 @@ import type { DoctorDatabasePreflight } from "../commands/doctor-database-prefli
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
-import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
+import {
+  formatDoctorProgressPhase,
+  startDoctorProgress,
+  type DoctorProgressMeasure,
+} from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
@@ -47,20 +51,11 @@ export async function withDoctorProgress<T>(
   run: () => T | Promise<T>,
   enabled: boolean,
 ): Promise<T> {
-  if (!enabled) {
-    return await run();
-  }
-  const started = performance.now();
-  const report = (suffix = "") => process.stderr.write(`Doctor: ${label}${suffix}\n`);
-  report();
-  const timer = setInterval(() => {
-    report(` (${Math.floor((performance.now() - started) / 1000)}s elapsed)`);
-  }, 10_000);
-  timer.unref();
+  const stop = startDoctorProgress(label, enabled);
   try {
     return await run();
   } finally {
-    clearInterval(timer);
+    stop();
   }
 }
 

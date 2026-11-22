@@ -595,6 +595,118 @@ describe("runDoctorLintCli", () => {
     );
   });
 
+  describe("progress on an interactive stderr", () => {
+    const originalStderrIsTTY = process.stderr.isTTY;
+    let stderr: MockInstance<typeof process.stderr.write>;
+    const progressLines = () =>
+      stderr.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.startsWith("Doctor: lint "));
+    const setStderrTTY = (value: boolean) =>
+      Object.defineProperty(process.stderr, "isTTY", { configurable: true, value });
+
+    beforeEach(() => {
+      stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    });
+    afterEach(() => {
+      setStderrTTY(originalStderrIsTTY);
+    });
+
+    function registerPendingCheck(id: string) {
+      let release: () => void = () => {};
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      registerHealthCheck({
+        id,
+        kind: "plugin",
+        description: "waits until the test releases it",
+        detect: async () => {
+          await pending;
+          return [];
+        },
+      });
+      return () => release();
+    }
+
+    it("names the pending check on stderr and keeps the JSON report on stdout", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      const release = registerPendingCheck("test/pending-check");
+
+      const run = runDoctorLintCli(runtime, { json: true, onlyIds: ["test/pending-check"] });
+      await vi.waitFor(() =>
+        expect(progressLines()).toContain("Doctor: lint check 1/1 test/pending-check\n"),
+      );
+      expect(progressLines().slice(0, 2)).toEqual([
+        "Doctor: lint preparing state snapshot\n",
+        "Doctor: lint loading config and checks\n",
+      ]);
+      expect(stdout).not.toHaveBeenCalled();
+
+      release();
+      expect(await run).toBe(0);
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1, findings: [] });
+    });
+
+    it("shows preparation as pending while the config snapshot is still loading", async () => {
+      let resolveSnapshot: () => void = () => {};
+      mocks.readConfigFileSnapshot.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveSnapshot = () => resolve(createTestConfigSnapshot({}));
+          }),
+      );
+      setStderrTTY(true);
+      registerHealthCheck({
+        id: "test/after-preparation",
+        kind: "plugin",
+        description: "runs after preparation",
+        detect: async () => [],
+      });
+
+      const run = runDoctorLintCli(runtime, { json: true, onlyIds: ["test/after-preparation"] });
+      await vi.waitFor(() =>
+        expect(progressLines().at(-1)).toBe("Doctor: lint loading config and checks\n"),
+      );
+      expect(progressLines().some((line) => line.includes(" check "))).toBe(false);
+
+      resolveSnapshot();
+      expect(await run).toBe(0);
+      expect(progressLines()).toContain("Doctor: lint check 1/1 test/after-preparation\n");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
+    });
+
+    it("writes no progress when stderr is not a terminal", async () => {
+      mockConfig();
+      setStderrTTY(false);
+      registerHealthCheck({
+        id: "test/piped",
+        kind: "plugin",
+        description: "piped run",
+        detect: async () => [],
+      });
+
+      expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/piped"] })).toBe(0);
+      expect(progressLines()).toEqual([]);
+    });
+
+    it("writes no progress during an update Doctor lint pass", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = "1";
+      registerHealthCheck({
+        id: "test/update-pass",
+        kind: "plugin",
+        description: "update pass",
+        detect: async () => [],
+      });
+
+      await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/update-pass"] });
+      expect(progressLines()).toEqual([]);
+    });
+  });
+
   it("rejects invalid severity thresholds", async () => {
     await expect(runDoctorLintCli(runtime, { severityMin: "warnng" })).rejects.toThrow(
       "Invalid --severity-min value",

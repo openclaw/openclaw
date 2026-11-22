@@ -92,6 +92,8 @@ export interface DoctorLintRunOptions {
   readonly skipIds?: ReadonlySet<string> | readonly string[];
   readonly onlyIds?: ReadonlySet<string> | readonly string[];
   readonly includeAllChecks?: boolean;
+  /** Called before each selected check runs, so a caller can show which check is pending. */
+  readonly onCheckStart?: (check: HealthCheck, index: number, total: number) => void;
 }
 
 interface DoctorLintRunResult {
@@ -138,7 +140,8 @@ export async function runDoctorLintChecks(
       path: id,
     });
   }
-  for (const check of selected) {
+  for (const [index, check] of selected.entries()) {
+    opts.onCheckStart?.(check, index, selected.length);
     try {
       const out = await check.detect(ctx);
       for (const f of out) {
