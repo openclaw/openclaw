@@ -666,6 +666,7 @@ src/config/gateway-portal-ingress.ts
 src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/implicit-agent-roster.ts
+src/config/implicit-primary-era.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
 src/config/io.audit.ts
