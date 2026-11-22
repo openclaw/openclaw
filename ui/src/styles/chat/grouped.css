@@ -2067,6 +2067,13 @@ button.chat-reply-attribution__target:disabled {
 
 /* Optional two-sided conversation skin. Keep activity/tool surfaces and
    forwarded identities with their existing owners rather than nesting cards. */
+.chat--bubbles {
+  --chat-assistant-bubble-bg: light-dark(
+    oklch(from var(--bg) calc(l - 0.028) c h),
+    oklch(from var(--bg) calc(l + 0.045) c h)
+  );
+}
+
 .chat--bubbles .chat-group:is(.user, .assistant) {
   --chat-message-column-max: 88%;
 }
@@ -2100,9 +2107,9 @@ button.chat-reply-attribution__target:disabled {
   .chat-group.assistant:not(.chat-group--forwarded)
   .chat-bubble:not(.chat-bubble--tool-shell) {
   padding: 14px 18px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
-  background: var(--bg-elevated);
+  background: var(--chat-assistant-bubble-bg);
   box-shadow: none;
 }
 
@@ -2159,9 +2166,9 @@ button.chat-reply-attribution__target:disabled {
   min-height: 40px;
   justify-content: center;
   padding: 10px 16px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 18px;
-  background: var(--bg-elevated);
+  background: var(--chat-assistant-bubble-bg);
 }
 
 .chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
