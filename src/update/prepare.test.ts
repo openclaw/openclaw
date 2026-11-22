@@ -131,6 +131,36 @@ describe("release preparation", () => {
     });
   });
 
+  it("builds with the target's pnpm when no pnpm is on PATH", async () => {
+    // Installers bootstrap pnpm only for their own build; the update must provision it again.
+    const target = await repository();
+    const pnpm = path.join(root, "pnpm-from-corepack");
+    await fs.rename(path.join(bin, "pnpm"), pnpm);
+    await executable(
+      "corepack",
+      `
+const fs = require('node:fs'); const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('0.34.0'); process.exit(0); }
+if (args[0] !== 'enable' || args.at(-1) !== 'pnpm') process.exit(5);
+fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-directory') + 1], 'pnpm'));
+`,
+    );
+    const [git = ""] = (
+      await exec(process.platform === "win32" ? "where" : "which", ["git"])
+    ).stdout
+      .trim()
+      .split(/\r?\n/u);
+    await fs.symlink(git, path.join(bin, "git"));
+    vi.stubEnv("PATH", bin);
+    const staging = path.join(root, "staging");
+    const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
+    expect(result).toMatchObject({ ok: true, version: "2026.11.21", buildId: "fixture-build" });
+    expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
+      "install --frozen-lockfile\nbuild\nui:build\n",
+    );
+  });
+
   it("removes failed staging and Git registration while preserving the stderr tail", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
