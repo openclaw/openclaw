@@ -40,10 +40,7 @@ const RETIRED_GENERATED_TEMPLATE_SHA256: Readonly<Record<string, readonly string
     "c6eb0f06a061f3797a56d8e3810f9c47549da5b2c1c5123774a6bb229446624b",
   ],
   [DEFAULT_SOUL_FILENAME]: ["4f9042f259b076e429d0f01ce39340030f47ea5b7f5befe306296c36baf1f60f"],
-  [DEFAULT_IDENTITY_FILENAME]: [
-    "59b223766c8dd978162044e333a684c72e22af753d1ba3dc3bff4b2d915c54e2",
-    "d1b9cea71ba4214fdd266b2b2a28adcada0489b2845858aaaae23eb4aaf4c981",
-  ],
+  [DEFAULT_IDENTITY_FILENAME]: ["59b223766c8dd978162044e333a684c72e22af753d1ba3dc3bff4b2d915c54e2"],
 };
 
 export async function isGeneratedTemplateContent(
