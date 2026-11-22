@@ -252,7 +252,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }
 
   function InstalledDetail(detailProps: { pluginId: string }) {
-    const components = () => page().state.detail?.inspection?.components;
+    const inspection = () => page().state.detail?.inspection;
+    const components = () => inspection()?.components;
     const skills = createMemo(
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
@@ -269,7 +270,20 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           promptBusy={page().recommendedPrompts.pending}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
-          inspection={page().state.detail?.inspection ?? null}
+          inspection={inspection() ?? null}
+          onConnectProvider={
+            inspection()?.plugin.id === detailProps.pluginId &&
+            inspection()?.providerSignIn &&
+            canCallGatewayMethod(page().gateway.snapshot, "models.authLogin", "operator.admin")
+              ? () =>
+                  page().context.navigate("model-providers", {
+                    search: `?${new URLSearchParams({
+                      connect: "1",
+                      plugin: detailProps.pluginId,
+                    }).toString()}`,
+                  })
+              : undefined
+          }
           mcpLoginBusy={page().mcpLogin.busy}
           canMcpLogin={canCallGatewayMethod(
             page().gateway.snapshot,
