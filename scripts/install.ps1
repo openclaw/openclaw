@@ -1867,7 +1867,8 @@ function Publish-TextFileAtomically {
     [System.IO.File]::WriteAllText($temporaryPath, $Contents, $encoding)
     try {
         if (Test-Path -LiteralPath $Path) {
-            [System.IO.File]::Replace($temporaryPath, $Path, $null)
+            # PowerShell passes $null to a .NET string parameter as "", which File.Replace rejects as a backup path.
+            [System.IO.File]::Replace($temporaryPath, $Path, [NullString]::Value)
         } else {
             [System.IO.File]::Move($temporaryPath, $Path)
         }
