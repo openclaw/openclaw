@@ -6,6 +6,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -31,7 +32,7 @@ type DictationSessionResult = {
 };
 
 type ComposerDictationSessionCallbacks = {
-  onError: (message: string, preservesText: boolean) => void;
+  onError: (message: string, preservesText: boolean) => void | (() => void);
   onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
@@ -69,6 +70,23 @@ export class ComposerDictationCommits {
     return this.sessions.size;
   }
 
+  get transcribing(): boolean {
+    return [...this.sessions].some((session) => !session.recovery || session.retrying);
+  }
+
+  get recovery(): ComposerDictationSession | undefined {
+    return [...this.sessions].find((session) => session.recovery);
+  }
+
+  retireRecoveries(): void {
+    for (const session of this.sessions) {
+      if (session.recovery) {
+        this.sessions.delete(session);
+        void session.cancel().catch(() => undefined);
+      }
+    }
+  }
+
   has(session: ComposerDictationSession): boolean {
     return this.sessions.has(session);
   }
@@ -77,15 +95,25 @@ export class ComposerDictationCommits {
   add(
     session: ComposerDictationSession,
     deliver: (transcript: string) => boolean,
+    result = session.finish(true),
   ): Promise<boolean> {
     const previous = this.tail;
     this.sessions.add(session);
-    const settled = session
-      .finish(true)
+    const settled = result
       .catch(() => "")
       .then(async (transcript) => {
         await previous;
-        return this.sessions.delete(session) && deliver(transcript);
+        session.retrying = false;
+        if (!this.sessions.has(session)) {
+          return false;
+        }
+        // A failed recording leaves the normal ordered drain before explicit retry.
+        // Retry joins the current tail; it never reorders already-delivered text.
+        session.recovery = !transcript && session.hasRecording ? session : undefined;
+        if (!session.recovery) {
+          this.sessions.delete(session);
+        }
+        return deliver(transcript);
       })
       .catch(() => false);
     this.tail = settled;
@@ -98,11 +126,13 @@ export class ComposerDictationCommits {
     }
   }
 
-  retire(): void {
+  retire(recording?: ComposerDictationSession): void {
     for (const session of this.sessions) {
-      void session.cancel().catch(() => undefined);
+      if (!recording || recording === session) {
+        this.sessions.delete(session);
+        void session.cancel().catch(() => undefined);
+      }
     }
-    this.sessions.clear();
   }
 }
 
@@ -192,6 +222,10 @@ export class ComposerDictationSession {
   private stopped = false;
   private discarded = false;
   private failed = false;
+  private readonly recording: string[] = [];
+  recovery: ComposerDictationSession | undefined;
+  retrying = false;
+  private dismissFailure: (() => void) | undefined;
   private gatewayDisconnected = false;
   private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
   private pauseFinalDrain: (() => void) | null = null;
@@ -229,6 +263,14 @@ export class ComposerDictationSession {
     // Claim the Gateway session before the microphone opens. Stopped recordings
     // hold their sessions while they transcribe, so a full connection must refuse
     // here rather than after the user has started speaking.
+    await this.createRemote();
+    if (this.stopped) {
+      return;
+    }
+    await this.startCapture(inputDeviceId);
+  }
+
+  private async createRemote(): Promise<void> {
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
       mode: "transcription",
       transport: "gateway-relay",
@@ -237,9 +279,6 @@ export class ComposerDictationSession {
     });
     this.sessionId = result.sessionId;
     this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
-    if (this.stopped) {
-      return;
-    }
     if (
       result.audio?.inputEncoding !== DICTATION_ENCODING ||
       result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
@@ -247,6 +286,9 @@ export class ComposerDictationSession {
       await this.closeRemote();
       throw new Error(t("chat.composer.dictationAudioUnsupported"));
     }
+  }
+
+  private async startCapture(inputDeviceId: string | undefined): Promise<void> {
     // Listen before awaiting the permission prompt: a provider failure while it is
     // open must stop startup instead of capturing against a removed session.
     this.unsubscribe = this.client.addEventListener((frame) => {
@@ -329,11 +371,52 @@ export class ComposerDictationSession {
         ),
       );
     }
+    if (text || !requireTranscript) {
+      this.recording.length = 0;
+    }
     return text;
+  }
+
+  get hasRecording(): boolean {
+    return !this.discarded && this.recording.length > 0;
+  }
+
+  async retry(playback: GatewaySpeechPlayback, superseded: () => void): Promise<string> {
+    playback.prepare(this.client, superseded);
+    this.retrying = true;
+    this.callbacks.onTranscriptChange();
+    this.gatewayDisconnected = false;
+    await this.stopAndClose(false);
+    if (this.discarded || this.gatewayDisconnected) {
+      return "";
+    }
+    this.failed = false;
+    this.sessionId = null;
+    this.transcriptionSessionId = null;
+    this.closeRequest = null;
+    this.finalTranscripts.length = 0;
+    this.currentPartial = "";
+    this.startPromise = this.createRemote().then(() => {
+      if (this.discarded || this.gatewayDisconnected) {
+        return;
+      }
+      this.pauseFinalDrain?.();
+      for (const audio of this.recording) {
+        this.appendAudio(audio);
+      }
+    });
+    const transcript = await this.finish(true);
+    if (transcript) {
+      this.dismissFailure?.();
+      this.dismissFailure = undefined;
+    }
+    return transcript;
   }
 
   async cancel(): Promise<void> {
     this.discarded = true;
+    this.recovery = undefined;
+    this.recording.length = 0;
     this.settleLateFinalDrain?.(true);
     await this.stopAndClose(false);
   }
@@ -344,7 +427,7 @@ export class ComposerDictationSession {
     if (!this.discarded || !this.sessionId) {
       await this.startPromise?.catch((error: unknown) => {
         if (reportStartFailure && !isAbortError(error)) {
-          this.reportFailure(formatDictationError(error));
+          this.reportFailure(describeDictationStartError(error)[0]);
         }
       });
     }
@@ -380,8 +463,13 @@ export class ComposerDictationSession {
     if (!this.sessionId) {
       return;
     }
-    const sessionId = this.sessionId;
     const audioBase64 = bytesToBase64(floatToG711Ulaw(samples));
+    this.recording.push(audioBase64);
+    this.appendAudio(audioBase64);
+  }
+
+  private appendAudio(audioBase64: string): void {
+    const sessionId = this.sessionId;
     this.appendChain = this.appendChain
       .then(async () => {
         if (this.discarded) {
@@ -400,7 +488,8 @@ export class ComposerDictationSession {
     }
     this.failed = true;
     this.settleLateFinalDrain?.(false);
-    this.callbacks.onError(message, this.hasTranscript());
+    this.dismissFailure?.();
+    this.dismissFailure = this.callbacks.onError(message, this.hasTranscript()) || undefined;
   }
 
   private hasTranscript(): boolean {

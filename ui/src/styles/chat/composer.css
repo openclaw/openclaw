@@ -611,13 +611,18 @@
   font-size: 12px;
 }
 
+.agent-chat__dictation-status[data-recovery] {
+  flex-wrap: wrap;
+}
+
 /* Once the pickers return, a narrow toolbar needs a full line for the status. */
 @container chat-composer (max-width: 480px) {
-  .agent-chat__composer-footer:has([data-transcribing]) {
+  .agent-chat__composer-footer:has([data-transcribing], [data-recovery]) {
     flex-wrap: wrap;
   }
 
-  .agent-chat__input--mobile-toolbar [data-transcribing] {
+  .agent-chat__input--mobile-toolbar [data-transcribing],
+  .agent-chat__input--mobile-toolbar [data-recovery] {
     flex-basis: 100%;
   }
 }

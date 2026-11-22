@@ -62,7 +62,7 @@ export function createComposerDictationOptions(
     ) => {
       if (failure.kind === "busy") {
         setError(message);
-        return;
+        return undefined;
       }
       const recovery =
         failure.kind === "interrupted" && failure.preservesText

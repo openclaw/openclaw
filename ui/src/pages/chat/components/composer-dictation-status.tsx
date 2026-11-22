@@ -36,39 +36,62 @@ export function ActiveDictationStatus(props: {
         ? "thinking"
         : "listening";
   });
+  const recovery = () => !props.readDictation()?.active && props.readDictation()?.recovery;
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div
-          class="agent-chat__dictation-status"
-          data-transcribing={current === "thinking" ? "" : undefined}
-          role={current === "listening" ? undefined : "status"}
-          aria-live={current === "listening" ? undefined : "polite"}
-          aria-atomic={current === "listening" ? undefined : "true"}
+    <Show when={phase() || recovery()}>
+      <div
+        class="agent-chat__dictation-status"
+        data-transcribing={phase() === "thinking" ? "" : undefined}
+        data-recovery={recovery() ? "" : undefined}
+        role={phase() === "listening" ? undefined : "status"}
+        aria-live={phase() === "listening" ? undefined : "polite"}
+        aria-atomic={phase() === "listening" ? undefined : "true"}
+      >
+        <span
+          class={[
+            "agent-chat__dictation-phase",
+            { "agent-chat__dictation-phase--listening text-shimmer": phase() === "listening" },
+          ]}
+          style={{ "--text-shimmer-duration": "4s" }}
         >
-          <span
-            class={[
-              "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
-            ]}
-            // Listening can last a while, so its shimmer sweeps slower than running work.
-            // Set here rather than in CSS: the shared stylesheet is at its size ceiling.
-            style={{ "--text-shimmer-duration": "4s" }}
+          {props.readDictation()?.recovery?.retrying ? (
+            t("chat.dictation.retrying")
+          ) : phase() === "connecting" ? (
+            <DictationStartingLabel />
+          ) : phase() === "thinking" ? (
+            t("chat.composer.dictationFinalizing")
+          ) : phase() === "listening" ? (
+            t("chat.composer.dictationListening")
+          ) : (
+            t("chat.dictation.retained")
+          )}
+        </span>
+        <Show when={phase()} keyed>
+          {(current) => (
+            <MicrophoneActivity
+              status={current}
+              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
+            />
+          )}
+        </Show>
+        <Show when={recovery()}>
+          <button
+            type="button"
+            class="btn btn--sm"
+            disabled={props.readDictation()?.recovery?.retrying}
+            onClick={() => void props.readDictation()?.retry()}
           >
-            {current === "connecting" ? (
-              <DictationStartingLabel />
-            ) : current === "thinking" ? (
-              t("chat.composer.dictationFinalizing")
-            ) : (
-              t("chat.composer.dictationListening")
-            )}
-          </span>
-          <MicrophoneActivity
-            status={current}
-            inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
-          />
-        </div>
-      )}
+            {t("chat.dictation.retry")}
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm"
+            onClick={() => props.readDictation()?.discardRecovery()}
+          >
+            {t("chat.dictation.discard")}
+          </button>
+        </Show>
+      </div>
     </Show>
   );
 }

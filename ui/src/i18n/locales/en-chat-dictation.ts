@@ -6,6 +6,10 @@ const enChatDictation = {
   chat: {
     dictation: {
       busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
+      retry: "Retry recording",
+      discard: "Discard recording",
+      retained: "Recording kept for retry.",
+      retrying: "Retrying transcription…",
     },
   },
 } satisfies TranslationMap;

@@ -354,3 +354,10 @@ it("keeps a newer preview provisional when earlier dictation text arrives", () =
     "base first second final words",
   );
 });
+
+it("placeComposerDictation spaces inserted and replaced selections", () => {
+  const place = (start: number, end: number, spoken: string) =>
+    placeComposerDictation(spoken, null, { start, end, value: "hello world" });
+  expect(place(6, 6, "brave new")).toMatchObject({ value: "hello brave new world", caret: 16 });
+  expect(place(6, 11, "there")).toMatchObject({ value: "hello there", caret: 11 });
+});
