@@ -16,7 +16,6 @@ import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
-import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
 import {
   getOpenClawStateRuntimeSchema,
   getOpenClawStatePredecessorSchema,
@@ -90,6 +89,11 @@ describe("generated SQLite schema catalogs", () => {
   it("keeps predecessor schemas free of objects introduced after their version", () => {
     // A state schema edit without a matching predecessor transform retires every
     // derived hash, stranding real databases on the previous layout.
+    const predecessor41 = getOpenClawStatePredecessorSchema(41);
+    expect(createHash("sha256").update(predecessor41).digest("hex")).toBe(
+      "f410ba904b7af3414751f66fa320d9263f708b0eedeecb4cf1f49fa73ef67022",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor41)).toBeDefined();
     const predecessor40 = getOpenClawStatePredecessorSchema(40);
     expect(predecessor40).not.toContain("requested_by_profile_id");
     expect(createHash("sha256").update(predecessor40).digest("hex")).toBe(
@@ -134,9 +138,7 @@ describe("generated SQLite schema catalogs", () => {
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
-      const predecessor = withLegacyWorkerProvisionSource(
-        withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL),
-      );
+      const predecessor = withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40));
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
             { includeVersionLazyAdditiveTables: flags[0], includeAgentDeletionJournal: flags[1] },
@@ -156,7 +158,7 @@ describe("generated SQLite schema catalogs", () => {
     const historical = getOpenClawStateRuntimeSchema(
       options,
       withLegacyWorkspaceBootstrapDeferred(
-        withLegacyWorkerProvisionSource(withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL)),
+        withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40)),
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(

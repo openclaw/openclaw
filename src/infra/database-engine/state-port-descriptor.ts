@@ -29,6 +29,7 @@ import { withLegacyWorkerRetention } from "../../state/openclaw-state-db-schema-
 import { withLegacyWorkspaceBootstrapDeferred } from "../../state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import { withLegacyApprovalProfile } from "../../state/openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "../../state/openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -86,8 +87,10 @@ function createStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 41 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 42 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41].includes(
+        sourceVersion,
+      )
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -108,11 +111,16 @@ function createStatePortDescriptor(
   const legacyRetention = sourceVersion < 39;
   const legacyProvisionSource = sourceVersion < 40;
   const legacyApprovalProfile = sourceVersion < 41;
+  const legacyWorkerLoss = sourceVersion < 42;
   const currentCatalog: PostgresCatalogFact[] = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
+      (!legacyWorkerLoss ||
+        fact.table !== "worker_session_placements" ||
+        !isColumn(fact) ||
+        fact.value.name !== "confirmed_loss_recovery_json") &&
       (!legacyApprovalProfile ||
         fact.table !== "operator_approvals" ||
         !isColumn(fact) ||
@@ -172,7 +180,8 @@ function createStatePortDescriptor(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const approval = legacyApprovalProfile ? withLegacyApprovalProfile(sql) : sql;
+    const loss = legacyWorkerLoss ? withLegacyWorkerLossRecovery(sql) : sql;
+    const approval = legacyApprovalProfile ? withLegacyApprovalProfile(loss) : loss;
     const bootstrap = hasBootstrapDeferred
       ? approval
       : withLegacyWorkspaceBootstrapDeferred(approval);

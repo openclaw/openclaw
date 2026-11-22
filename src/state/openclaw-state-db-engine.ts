@@ -51,6 +51,7 @@ import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker
 import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
 import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -176,9 +177,13 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
-  const statePostgresSchemaV40 = {
+  const statePostgresSchemaV41 = {
     ...statePostgresSchema,
-    postgres: withLegacyApprovalProfile(statePostgresSchema.postgres),
+    postgres: withLegacyWorkerLossRecovery(statePostgresSchema.postgres),
+  };
+  const statePostgresSchemaV40 = {
+    ...statePostgresSchemaV41,
+    postgres: withLegacyApprovalProfile(statePostgresSchemaV41.postgres),
   };
   const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres);
   const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
@@ -425,9 +430,16 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 41,
       fromSchema: statePostgresSchemaV40,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV41,
       sql: `ALTER TABLE operator_approvals ADD COLUMN requested_by_profile_id text COLLATE "C";
         ${statePostgresVersionSql(41)}`,
+    },
+    {
+      version: 42,
+      fromSchema: statePostgresSchemaV41,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE worker_session_placements ADD COLUMN confirmed_loss_recovery_json text COLLATE "C";
+        ${statePostgresVersionSql(42)}`,
     },
   ];
 }

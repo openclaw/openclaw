@@ -1174,6 +1174,7 @@ CREATE TABLE "worker_session_placements" (
   "state_changed_at_ms" bigint NOT NULL,
   "terminal_reason" text COLLATE "C",
   "terminal_at_ms" bigint,
+  "confirmed_loss_recovery_json" text COLLATE "C",
   PRIMARY KEY ("session_id"),
   CHECK (("execution_mode" IN ('worker-turn', 'remote-exec'))),
   CHECK (("state" IN ('local', 'requested', 'provisioning', 'syncing', 'starting', 'active', 'draining', 'reconciling', 'reclaimed', 'failed'))),

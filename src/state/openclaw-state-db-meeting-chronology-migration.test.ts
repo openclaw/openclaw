@@ -247,6 +247,7 @@ it.each(["runtime", "doctor"] as const)(
       ...backupTables,
       ...stateTemplateNamesMigration.tables,
       "operator_approvals",
+      "worker_session_placements",
       "acp_replay_events",
       "device_identities",
       "device_auth_tokens",
