@@ -2,13 +2,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 
 const sent = vi.hoisted(() => [] as unknown[]);
+const install = vi.hoisted(() => ({ kind: "git" }));
+const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
 vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
     root: "/tmp/openclaw-checkout",
     status: {
       root: "/tmp/openclaw-checkout",
-      installKind: "git",
+      installKind: install.kind,
       packageManager: "pnpm",
       git: { upstream: "origin/main", tag: "v2026.11.6", branch: null },
     },
@@ -31,9 +33,9 @@ vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
   getUpdateRunAsync: async () => ({
-    status: "skipped",
+    ...localRun,
+    runId: "run-cli",
     reason: "already-current",
-    phase: "finished",
     steps: [],
     after: {},
     origin: {},
@@ -43,6 +45,10 @@ const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: async (request: { method: string; params: unknown }) => {
+    if (request.method === "gateway.restart.request") {
+      sent.push(request);
+      return { ok: true };
+    }
     if (request.method === "update.run") {
       sent.push(request.params);
       return runsGet.length
@@ -57,6 +63,9 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 }));
 
 afterEach(() => {
+  install.kind = "git";
+  localRun.status = "skipped";
+  localRun.phase = "finished";
   sent.length = 0;
   prepared.length = 0;
   runsGet.length = 0;
@@ -143,4 +152,48 @@ it("says the update is still running when the --timeout budget ends first", asyn
     "The update did not finish in time. Run `openclaw update status` to see it.",
   ]);
   expect(process.exitCode).toBe(1);
+});
+
+it("uses the package channel default and preserves an explicit tag without delegating", async () => {
+  install.kind = "package";
+  const { runReleaseUpdateCli } = await import("./cli.js");
+  await runReleaseUpdateCli({
+    json: true,
+    restart: true,
+    runningRoot: "/tmp/openclaw-package",
+    tag: "2026.11.6",
+    acceptCapabilities: true,
+  });
+  expect(sent).toEqual([]);
+  expect(prepared).toEqual([
+    expect.objectContaining({
+      runningRoot: "/tmp/openclaw-package",
+      channel: "stable",
+      tag: "2026.11.6",
+      acceptCapabilities: true,
+    }),
+  ]);
+});
+
+it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
+  install.kind = "package";
+  localRun.status = "running";
+  localRun.phase = "activating";
+  runsGet.push(() => ({
+    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+  }));
+  const { runReleaseUpdateCli } = await import("./cli.js");
+  await runReleaseUpdateCli({
+    json: true,
+    restart: true,
+    runningRoot: "/tmp/openclaw-package",
+    tag: "2026.11.6",
+  });
+  expect(sent).toEqual([
+    expect.objectContaining({
+      method: "gateway.restart.request",
+      params: { reason: "update.run" },
+    }),
+  ]);
+  expect(process.exitCode).toBe(0);
 });

@@ -11,10 +11,13 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as serviceConversion from "./convert-service.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
 import { prepareUpdate } from "./run.js";
+import { readTrial, resolvePrefix } from "./store.js";
+import * as targets from "./target.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
@@ -146,55 +149,206 @@ describe("release preparation", () => {
     );
   });
 
-  it("installs a package with lifecycle scripts enabled and without the migration marker", async () => {
-    const npm = await executable(
-      "npm",
-      `
+  it.each([">=1", ">=999"])(
+    "checks package Node %s before installing production dependencies",
+    async (engine) => {
+      const packedRoot = path.join(root, "packed", "package");
+      await fs.mkdir(packedRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(packedRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.11.21", engines: { node: engine } }),
+      );
+      const archive = path.join(root, "openclaw.tgz");
+      await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
+      const npm = await executable(
+        "npm",
+        `
 const fs = require('node:fs'); const path = require('node:path');
 const args = process.argv.slice(2);
-if (process.env.OPENCLAW_UPDATE_IN_PROGRESS || !args.includes('--ignore-scripts=false')) process.exit(7);
-const prefix = args[args.indexOf('--prefix') + 1];
-const root = path.join(prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules', 'openclaw');
-fs.mkdirSync(root, {recursive:true});
-fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name:'openclaw',version:'2026.11.21'}));
-fs.writeFileSync(path.join(root, 'argv.json'), JSON.stringify(args));
+if (process.env.OPENCLAW_UPDATE_IN_PROGRESS) process.exit(7);
+if (args[0] === 'pack') {
+  fs.copyFileSync(${JSON.stringify(archive)}, 'openclaw.tgz');
+  console.log(JSON.stringify([{filename:'openclaw.tgz',name:'openclaw',version:'2026.11.21'}]));
+} else {
+  if (process.cwd().split(path.sep).includes('node_modules')) process.exit(8);
+  if (!args.includes('--ignore-scripts=false') || !args.includes('--omit=dev') || args.includes('-g')) process.exit(9);
+  fs.writeFileSync(${JSON.stringify(path.join(root, "dependencies-installed"))}, 'yes');
+  fs.writeFileSync('argv.json', JSON.stringify(args));
+}
 `,
-    );
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-    const staging = path.join(root, "staging");
-    const result = await preparePackage({
+      );
+      expect(
+        await resolveTarget({ kind: "package", channel: "stable", tag: `file:${archive}` }),
+      ).toEqual({
+        kind: "package",
+        spec: `file:${archive}`,
+        version: "2026.11.21",
+        engines: { node: engine },
+      });
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+      const staging = path.join(root, "staging");
+      const result = await preparePackage({
+        spec: "openclaw@2026.11.21",
+        staging,
+        npm,
+        node,
+        timeoutMs: 10_000,
+      });
+      if (engine === ">=999") {
+        expect(result).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
+        await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
+        return;
+      }
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.stderrTail);
+      }
+      expect(
+        JSON.parse(await fs.readFile(path.join(result.releaseRoot, "argv.json"), "utf8")),
+      ).toEqual(["install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"]);
+      expect(result.releaseRoot).toBe(path.join(staging, "openclaw"));
+      await expect(fs.stat(path.join(staging, "openclaw.tgz"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const published = path.join(root, "published");
+      await fs.rename(staging, published);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(published, path.relative(staging, result.releaseRoot), "package.json"),
+            "utf8",
+          ),
+        ).version,
+      ).toBe("2026.11.21");
+    },
+  );
+});
+
+describe("package release conversion", () => {
+  it("refuses an unwritable global package before preparing or forwarding it", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    const runningRoot = path.join(root, "global-package");
+    await fs.mkdir(runningRoot);
+    vi.spyOn(targets, "resolveTarget").mockResolvedValue({
+      kind: "package",
+      version: "2026.11.21",
       spec: "openclaw@2026.11.21",
-      staging,
-      npm,
-      node,
-      timeoutMs: 10_000,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(result.stderrTail);
+    const access = vi.mocked(fs.access).getMockImplementation()!;
+    vi.mocked(fs.access).mockImplementation(async (file, mode) => {
+      if (file === runningRoot) {
+        throw Object.assign(new Error("Read-only global package"), { code: "EACCES" });
+      }
+      return access(file, mode);
+    });
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.6" } });
+      expect(
+        await prepareUpdate({
+          runId: run.runId,
+          runningRoot,
+          runningVersion: "2026.11.6",
+          channel: "stable",
+          node,
+        }),
+      ).toMatchObject({ status: "failed", reason: "package-not-writable" });
+      expect(await fs.readdir(runningRoot)).toEqual([]);
+      expect(await readTrial()).toBeNull();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
     }
-    expect(
-      JSON.parse(await fs.readFile(path.join(result.releaseRoot, "argv.json"), "utf8")),
-    ).toEqual([
-      "install",
-      "-g",
-      "--prefix",
-      staging,
-      "openclaw@2026.11.21",
-      "--no-fund",
-      "--no-audit",
-      "--ignore-scripts=false",
-    ]);
-    const published = path.join(root, "published");
-    await fs.rename(staging, published);
-    expect(
-      JSON.parse(
-        await fs.readFile(
-          path.join(published, path.relative(staging, result.releaseRoot), "package.json"),
-          "utf8",
-        ),
-      ).version,
-    ).toBe("2026.11.21");
+  });
+
+  it("stages a same-version artifact and forwards both global entries without activating its trial", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    const runningRoot = path.join(root, "global", "node_modules", "openclaw");
+    await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(runningRoot, "package.json"), '{"type":"module"}');
+    await fs.copyFile(
+      new URL("../../release-launcher-forward.mjs", import.meta.url),
+      path.join(runningRoot, "release-launcher-forward.mjs"),
+    );
+    for (const entry of ["openclaw.mjs", "dist/index.js"]) {
+      const relative = entry === "openclaw.mjs" ? "./" : "../";
+      await fs.writeFile(
+        path.join(runningRoot, entry),
+        `import { forwardToReleaseLauncher } from '${relative}release-launcher-forward.mjs';
+if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) console.log('running');`,
+      );
+    }
+    await fs.writeFile(path.join(runningRoot, "dist", "entry.js"), "console.log('running');");
+    const packedRoot = path.join(root, "packed", "package");
+    await fs.mkdir(packedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packedRoot, "package.json"),
+      '{"name":"openclaw","version":"2026.11.21","type":"module"}',
+    );
+    await fs.writeFile(
+      path.join(packedRoot, "openclaw.mjs"),
+      `console.log(JSON.stringify(process.argv[3] === 'check-release'
+  ? {ok:true,surfaces:[]}
+  : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
+    );
+    const archive = path.join(root, "candidate.tgz");
+    await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
+    await executable(
+      "npm",
+      `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') console.log('11.0.0');
+else if (args[0] === 'view') console.log('{}');
+else if (args[0] === 'pack') {
+  fs.copyFileSync(${JSON.stringify(archive)}, 'candidate.tgz');
+  console.log('[{"filename":"candidate.tgz"}]');
+}`,
+    );
+    vi.spyOn(targets, "resolveTarget").mockResolvedValue({
+      kind: "package",
+      version: "2026.11.21",
+      spec: archive,
+      engines: {},
+    });
+    const prefix = resolvePrefix();
+    // Native service publication has its own backup/reload proof. At its boundary the
+    // running link must already work, while the global package must not yet forward.
+    vi.spyOn(serviceConversion, "stageReleaseService").mockImplementation(async () => {
+      expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(await fs.realpath(runningRoot));
+      await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.21" } });
+      const outcome = await prepareUpdate({
+        runId: run.runId,
+        runningRoot,
+        runningVersion: "2026.11.21",
+        channel: "stable",
+        node,
+      });
+      expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+      expect(await readTrial(prefix)).toMatchObject({
+        phase: "pending",
+        previous: runningRoot,
+      });
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCLAW_")),
+      );
+      for (const entry of ["openclaw.mjs", "dist/index.js"]) {
+        const result = await exec(node, [path.join(runningRoot, entry), "--version"], { env });
+        expect(result.stdout.trim()).toBe("running");
+      }
+      expect((await readTrial(prefix))?.phase).toBe("pending");
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 });
 
@@ -290,6 +444,27 @@ describe("update preflight", () => {
       await preflight({
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
+        prefix: root,
+        stateDir: root,
+        node,
+      }),
+    ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
+  });
+
+  it("uses an artifact target's engine metadata without querying it as a registry version", async () => {
+    await executable(
+      "npm",
+      "if (process.argv[2] !== '--version') process.exit(91); console.log('11.0.0');",
+    );
+    expect(
+      await preflight({
+        kind: "package",
+        target: {
+          kind: "package",
+          spec: path.join(root, "release.tgz"),
+          version: "2026.11.21",
+          engines: { node: ">=999" },
+        },
         prefix: root,
         stateDir: root,
         node,

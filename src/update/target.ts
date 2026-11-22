@@ -1,5 +1,12 @@
+import path from "node:path";
+import { readArchiveEntry } from "../infra/archive.js";
+import { packNpmSpecToArchive, withInstallWorkspace } from "../infra/install-source-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { fetchNpmTagVersion, resolveNpmChannelTag } from "../infra/update-check.js";
+import {
+  canResolveRegistryVersionForPackageTarget,
+  resolveGlobalInstallSpec,
+} from "../infra/update-global.js";
 import { fetchGitUpdateTarget, selectChannelTag } from "../infra/update-runner-git-target.js";
 import type { RunStepOptions } from "../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
@@ -7,7 +14,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 
 export type UpdateTarget =
   | { kind: "git"; checkout: string; sha: string; version: string }
-  | { kind: "package"; spec: string; version: string };
+  | { kind: "package"; spec: string; version: string; engines?: { node?: string } };
 
 /** Resolve once; preparation and engine checks consume the same pinned target. */
 export async function resolveTarget(params: {
@@ -22,6 +29,42 @@ export async function resolveTarget(params: {
   if (params.kind === "package") {
     if (params.sha) {
       throw new Error("A Git SHA requires a Git install.");
+    }
+    if (params.tag && !canResolveRegistryVersionForPackageTarget(params.tag)) {
+      let spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: params.tag });
+      // Packing uses a private workspace; local artifact paths belong to the invoking cwd.
+      if (spec.startsWith("file:")) {
+        spec = `file:${path.resolve(spec.slice(5))}`;
+      } else if (spec.startsWith(".") || path.isAbsolute(spec)) {
+        spec = path.resolve(spec);
+      }
+      return await withInstallWorkspace("openclaw-update-target-", async (cwd) => {
+        const packed = await packNpmSpecToArchive({
+          spec,
+          cwd,
+          timeoutMs,
+          workTimeoutMs: timeoutMs,
+        });
+        if (!packed.ok) {
+          throw new Error(packed.error);
+        }
+        if (packed.metadata.name !== "openclaw" || !packed.metadata.version) {
+          throw new Error("The update artifact must contain the openclaw package and a version.");
+        }
+        const manifest: { engines?: { node?: string } } = JSON.parse(
+          (
+            await readArchiveEntry(packed.archivePath, "package/package.json", {
+              maxBytes: 1024 * 1024,
+            })
+          ).toString("utf8"),
+        );
+        return {
+          kind: "package",
+          spec,
+          version: packed.metadata.version,
+          engines: manifest.engines ?? {},
+        };
+      });
     }
     const selected = params.tag
       ? await fetchNpmTagVersion({ tag: params.tag, timeoutMs })

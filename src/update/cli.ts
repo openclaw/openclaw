@@ -1,4 +1,4 @@
-// `openclaw update` for Git installs, after the update command's refusals: a client of the
+// `openclaw update`, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
@@ -24,13 +24,15 @@ const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 export type ReleaseUpdateOptions = {
   json: boolean;
   restart: boolean;
-  /** The Git checkout the update command admitted. */
+  /** The installation the update command admitted. */
   runningRoot: string;
   /** Requested with --channel; persisted before the update. */
   channel?: UpdateChannel;
   /** The saved `update.channel`, used when nothing was requested. */
   storedChannel?: UpdateChannel;
   sha?: string;
+  /** Explicit package target; the current RPC has no package-target field. */
+  tag?: string;
   /** `--timeout`: one overall budget for preparing and following the run. */
   timeoutMs?: number;
   /** `--accept-capabilities`, for plugin maintenance in this process. */
@@ -38,6 +40,7 @@ export type ReleaseUpdateOptions = {
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
+  const startedAt = Date.now();
   const { channel } = opts;
   if (channel) {
     await mutateConfigFileWithRetry({
@@ -61,16 +64,55 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
+  // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
-  const record = runId
+  const runId =
+    opts.restart && !opts.tag ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
+  let record = runId
     ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
     : await updateWithoutGateway(opts);
+  if (
+    opts.tag &&
+    opts.restart &&
+    isPendingActivation(record) &&
+    (await requestLocalGatewayRestart(
+      Math.max(1, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+    )) &&
+    record
+  ) {
+    record = await followRun(
+      record.runId,
+      opts.json,
+      Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+    );
+  }
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
       : 1;
+}
+
+async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> {
+  if (!(await isImplicitLocalGatewayTarget({}))) {
+    return false;
+  }
+  try {
+    const response = await callGateway<{ ok: boolean }>({
+      method: "gateway.restart.request",
+      params: { reason: "update.run" },
+      timeoutMs: Math.min(30_000, timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error("The Gateway refused to restart into the prepared release.");
+    }
+    return true;
+  } catch (error) {
+    if (isGatewayTransportError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function requestGatewayUpdate(
@@ -155,7 +197,7 @@ async function updateWithoutGateway(
   const channel = resolveEffectiveUpdateChannel({
     configChannel: opts.channel ?? opts.storedChannel,
     currentVersion: VERSION,
-    installKind: "git",
+    installKind: status.installKind,
     git: status.git,
   }).channel;
   const outcome = await prepareUpdate({
@@ -164,9 +206,13 @@ async function updateWithoutGateway(
     runningVersion: VERSION,
     channel,
     sha: opts.sha,
+    tag: opts.tag,
     timeoutMs: opts.timeoutMs,
     acceptCapabilities: opts.acceptCapabilities,
   });
+  if (opts.tag && opts.restart && outcome.status === "current" && outcome.pluginsChanged) {
+    await requestLocalGatewayRestart();
+  }
   if (outcome.status === "pending" && !opts.json) {
     defaultRuntime.log(
       `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,

@@ -1,6 +1,7 @@
 // One update, as the running release does it: admit, resolve, preflight, prepare, check with
 // the new code, publish a pending trial. Everything after that belongs to the launcher (the
 // switch and its trial) and to the new build (migration at boot, `ready`).
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
@@ -13,8 +14,13 @@ import {
   recordUpdateRunPhaseAsync,
   recordUpdateRunStepAsync,
 } from "../infra/update-run-write.async.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { checkRelease } from "./check-release.js";
+import { stageReleaseService } from "./convert-service.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
@@ -139,6 +145,16 @@ export async function prepareUpdate(params: {
         { env },
       );
     }
+    try {
+      await createSystemPackageOwnershipInspection(
+        Math.max(1, deadline - Date.now()),
+      ).assertUnowned(params.runningRoot);
+    } catch (error) {
+      if (error instanceof SystemPackageOwnershipError) {
+        return await fail(error.reason, error.message);
+      }
+      throw error;
+    }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
     const install = await detectInstall(params.runningRoot);
@@ -167,7 +183,11 @@ export async function prepareUpdate(params: {
       },
       { env },
     );
-    if (target.kind === "package" && target.version === params.runningVersion) {
+    if (
+      target.kind === "package" &&
+      target.engines === undefined &&
+      target.version === params.runningVersion
+    ) {
       return await current(target.version);
     }
     // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
@@ -175,6 +195,28 @@ export async function prepareUpdate(params: {
     const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
     if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
       return await current(target.version);
+    }
+    // System-level services can keep their definition: both package entry points already
+    // forward through this marker. Refuse an unwritable global package before preparing.
+    if (
+      install.kind === "package" &&
+      !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
+    ) {
+      const marker = path.join(params.runningRoot, ".openclaw-launcher");
+      try {
+        const exists = await fs.stat(marker).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+          return null;
+        });
+        await fs.access(exists ? marker : params.runningRoot, fsConstants.W_OK);
+      } catch {
+        return await fail(
+          "package-not-writable",
+          `The global package at ${params.runningRoot} is not writable. Update it as its owning user.`,
+        );
+      }
     }
     const checked = await preflight({
       kind: install.kind,
@@ -211,6 +253,7 @@ export async function prepareUpdate(params: {
             npm: npmBesideNode(node),
             node,
             timeoutMs: Math.max(1, deadline - Date.now()),
+            env,
             onStep,
           });
     if (!prepared.ok) {
@@ -254,6 +297,25 @@ export async function prepareUpdate(params: {
       await switchLink(path.relative(prefix, params.runningRoot), prefix);
     }
     const previous = await fs.readlink(slot);
+    if (
+      install.kind === "package" &&
+      !params.runningRoot.startsWith(path.join(prefix, "releases") + path.sep)
+    ) {
+      const warnings: string[] = [];
+      await stageReleaseService({
+        runningRoot: params.runningRoot,
+        launcher,
+        env,
+        warn: (message) => warnings.push(message),
+      });
+      if (warnings.length > 0) {
+        await recordUpdateRunStepAsync(
+          params.runId,
+          { step: "service-definition", status: "completed", detail: warnings.join("\n") },
+          { env },
+        );
+      }
+    }
     await markForwarding(params.runningRoot, launcher, prefix);
     // Last before the trial: the restart loads the new core and its plugins together.
     await maintainPlugins({

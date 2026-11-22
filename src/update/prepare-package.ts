@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { satisfies } from "semver";
+import { extractArchive } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readPackageVersion } from "../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { PrepareResult } from "./prepare-git.js";
@@ -12,43 +13,89 @@ export async function preparePackage(params: {
   npm: string;
   node: string;
   timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
   onStep?: (name: string) => void | Promise<void>;
 }): Promise<PrepareResult> {
-  const releaseRoot = path.join(
-    params.staging,
-    ...(process.platform === "win32" ? [] : ["lib"]),
-    "node_modules",
-    "openclaw",
-  );
+  const releaseRoot = path.join(params.staging, "openclaw");
+  const deadline = Date.now() + params.timeoutMs;
+  const baseEnv = params.env ?? process.env;
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PATH: `${path.dirname(params.node)}${path.delimiter}${process.env.PATH ?? ""}`,
+    ...baseEnv,
+    PATH: `${path.dirname(params.node)}${path.delimiter}${baseEnv.PATH ?? ""}`,
   };
   // The old updater's marker makes Windows postinstall enter its migration path.
   delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+  let reason = "package-install-failed";
   try {
     await fs.mkdir(params.staging, { recursive: true });
+    await params.onStep?.("pack");
+    const packed = await runCommandWithTimeout(
+      [params.npm, "pack", params.spec, "--json", "--ignore-scripts"],
+      {
+        cwd: params.staging,
+        baseEnv: env,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        killProcessTree: true,
+      },
+    );
+    if (packed.code !== 0 || packed.killed || packed.signal) {
+      throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
+    }
+    const packages: unknown = JSON.parse(packed.stdout);
+    const filename =
+      Array.isArray(packages) && packages.length === 1 ? packages[0]?.filename : undefined;
+    if (typeof filename !== "string" || path.basename(filename) !== filename) {
+      throw new Error("npm pack did not return one package archive.");
+    }
+    const archivePath = path.join(params.staging, filename);
+    await fs.mkdir(releaseRoot);
+    await extractArchive({
+      archivePath,
+      destDir: releaseRoot,
+      kind: "tar",
+      stripComponents: 1,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      tarGzip: true,
+      durable: false,
+    });
+    await fs.rm(archivePath);
+    const manifest: { version?: string; engines?: { node?: string } } = JSON.parse(
+      await fs.readFile(path.join(releaseRoot, "package.json"), "utf8"),
+    );
+    const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
+    if (!version) {
+      throw new Error("Prepared package has no package version.");
+    }
+    if (manifest.engines?.node) {
+      const runtime = await runCommandWithTimeout([params.node, "--version"], {
+        baseEnv: env,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        killProcessTree: true,
+      });
+      if (
+        runtime.code !== 0 ||
+        runtime.killed ||
+        runtime.signal ||
+        !satisfies(runtime.stdout.trim(), manifest.engines.node, { includePrerelease: true })
+      ) {
+        reason = "node-engine-mismatch";
+        throw new Error(
+          `The new release requires Node ${manifest.engines.node}; the service uses ${runtime.stdout.trim() || params.node}. Upgrade the service's Node and retry.`,
+        );
+      }
+    }
     await params.onStep?.("install");
     const result = await runCommandWithTimeout(
-      [
-        params.npm,
-        "install",
-        "-g",
-        "--prefix",
-        params.staging,
-        params.spec,
-        "--no-fund",
-        "--no-audit",
-        "--ignore-scripts=false",
-      ],
-      { baseEnv: env, timeoutMs: params.timeoutMs, killProcessTree: true },
+      [params.npm, "install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"],
+      {
+        cwd: releaseRoot,
+        baseEnv: env,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        killProcessTree: true,
+      },
     );
     if (result.code !== 0 || result.killed || result.signal) {
       throw new Error(result.stderr || result.stdout || `npm exited ${result.code}`);
-    }
-    const version = await readPackageVersion(releaseRoot);
-    if (!version) {
-      throw new Error("Prepared package has no package version.");
     }
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
@@ -56,7 +103,7 @@ export async function preparePackage(params: {
     await fs.rm(params.staging, { recursive: true, force: true });
     return {
       ok: false,
-      reason: "package-install-failed",
+      reason,
       stderrTail: formatErrorMessage(error).slice(-8192),
     };
   }

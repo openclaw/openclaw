@@ -145,23 +145,28 @@ export async function preflight(params: {
         );
       }
     }
-    reason = "target-metadata-unavailable";
-    const metadata = await runCommandWithTimeout(
-      params.target.kind === "git"
-        ? ["git", "-C", params.target.checkout, "show", `${params.target.sha}:package.json`]
-        : ["npm", "view", params.target.spec, "engines", "--json"],
-      { env, timeoutMs: 30_000, killProcessTree: true },
-    );
-    if (metadata.code !== 0) {
-      return refuse(
-        reason,
-        metadata.stderr.slice(-8192) || "Could not read the target's Node requirements.",
+    let engine: string | undefined;
+    if (params.target.kind === "package" && params.target.engines) {
+      engine = params.target.engines.node;
+    } else {
+      reason = "target-metadata-unavailable";
+      const metadata = await runCommandWithTimeout(
+        params.target.kind === "git"
+          ? ["git", "-C", params.target.checkout, "show", `${params.target.sha}:package.json`]
+          : ["npm", "view", params.target.spec, "engines", "--json"],
+        { env, timeoutMs: 30_000, killProcessTree: true },
       );
+      if (metadata.code !== 0) {
+        return refuse(
+          reason,
+          metadata.stderr.slice(-8192) || "Could not read the target's Node requirements.",
+        );
+      }
+      const parsed: { engines?: { node?: string }; node?: string } = JSON.parse(
+        metadata.stdout || "{}",
+      );
+      engine = params.target.kind === "git" ? parsed.engines?.node : parsed.node;
     }
-    const parsed: { engines?: { node?: string }; node?: string } = JSON.parse(
-      metadata.stdout || "{}",
-    );
-    const engine = params.target.kind === "git" ? parsed.engines?.node : parsed.node;
     const node = params.node ?? process.execPath;
     const runtime = await runCommandWithTimeout([node, "--version"], {
       env,
