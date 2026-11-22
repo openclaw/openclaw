@@ -12,7 +12,9 @@ import { settlePreparedCliRun } from "./cli-run-settlement.js";
 import { createCliExitFailoverError } from "./exit-error.js";
 
 const authProfiles = vi.hoisted(() => ({
-  markAuthProfileFailure: vi.fn(async () => {}),
+  markAuthProfileFailure: vi.fn<typeof import("../auth-profiles.js").markAuthProfileFailure>(
+    async () => {},
+  ),
   markAuthProfileSuccess: vi.fn(async () => {}),
 }));
 vi.mock("../auth-profiles.js", async (importOriginal) => ({
@@ -74,9 +76,7 @@ async function settleWithSavedLogin(error: unknown): Promise<string[]> {
   await expect(settlePreparedCliRun({ context, run: () => Promise.reject(error) })).rejects.toBe(
     error,
   );
-  return authProfiles.markAuthProfileFailure.mock.calls.map(
-    ([params]) => (params as { reason: string }).reason,
-  );
+  return authProfiles.markAuthProfileFailure.mock.calls.map(([params]) => params.reason);
 }
 
 /** The reply runner's failure owner: the chat message and the card's failure notice. */
