@@ -329,7 +329,7 @@ describe("models.authLogin ownership", () => {
     expect(await h.next()).toMatchObject({
       done: true,
       status: "error",
-      error: expect.stringMatching(/sign-in was saved.*\/login refresh/),
+      error: expect.stringMatching(/sign-in was saved.*reopen Models/),
     });
     expect(hooks.login).toHaveBeenCalledTimes(1);
   });

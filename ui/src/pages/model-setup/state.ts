@@ -82,7 +82,7 @@ type ModelSetupWizardPhase =
     }
   | { phase: "done" }
   | { phase: "cancelled"; message: string }
-  | { phase: "error"; message: string };
+  | { phase: "error"; message: string; reason?: string };
 
 // authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
 export type ModelSetupWizardState = ModelSetupWizardPhase & {
@@ -217,10 +217,14 @@ export function wizardStateFromResult(
   const cancelled = result.status === "cancelled";
   // The Gateway ends its own wizard sessions with the bare word "cancelled"; show our sentence instead.
   const error = cancelled && result.error?.trim().toLowerCase() === "cancelled" ? "" : result.error;
-  return {
-    phase: cancelled ? "cancelled" : "error",
-    message: formatUiExternalText(error, fallbackError),
-  };
+  const message = formatUiExternalText(error, fallbackError);
+  return cancelled
+    ? { phase: "cancelled", message }
+    : {
+        phase: "error",
+        message,
+        ...("reason" in result && result.reason ? { reason: result.reason } : {}),
+      };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

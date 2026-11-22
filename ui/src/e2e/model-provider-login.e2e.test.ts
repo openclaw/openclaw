@@ -734,22 +734,14 @@ suite.define(() => {
                   quickApiKeySetup: true,
                   loginOptions: [
                     {
-                      id: "openai-device-code",
+                      id: "openai",
                       brandId: "openai",
                       groupLabel: "OpenAI",
-                      label: "Codex login (device code)",
-                      hint: "Use a browser code when OpenClaw runs on a remote VM",
+                      label: "Codex login",
+                      hint: "Sign in with your ChatGPT account using a one-time code",
                       kind: "device-code",
                       featured: true,
                       docsUrl: "https://docs.openclaw.ai/providers/openai/authentication",
-                    },
-                    {
-                      id: "openai",
-                      brandId: "openai",
-                      label: "Codex login (browser)",
-                      hint: "Sign in to Codex locally with your ChatGPT account",
-                      kind: "oauth",
-                      featured: false,
                     },
                     {
                       id: "openai-token-sharing",
@@ -813,7 +805,7 @@ suite.define(() => {
             has: page.locator("strong").filter({ hasText: label }),
           });
         expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
-          ["Codex login (device code)", "Codex login (browser)", "Sign in with ChatGPT"],
+          ["Codex login", "Sign in with ChatGPT"],
         );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
