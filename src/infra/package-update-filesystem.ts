@@ -677,6 +677,11 @@ export async function discardPackageUpdateBackup(
     if (error === cleanupExpired || performance.now() >= cleanupDeadlineAtMs) {
       return fsSync.lstatSync(backup, { throwIfNoEntry: false }) ? expiredMessage : null;
     }
+    // Snapshot attribution lives in the ledger at its original path. Moving it
+    // into npm's disposable namespace would make later update cleanup lose it.
+    if (backupPath.endsWith(".databases")) {
+      return `preserved ${label} at ${backupPath} for delayed cleanup: ${formatErrorMessageWithCode(error)}`;
+    }
     const retiredPath = path.join(
       retiredParent,
       path.basename(backupPath).replace(/^\.openclaw\./, ".openclaw-"),

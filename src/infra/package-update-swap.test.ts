@@ -169,12 +169,11 @@ describe("retained package backup retirement", () => {
       return removeEntry.call(this, relativePath, options);
     });
     const completion = await transaction.complete({ activationVerified: true }, () => {});
-    const retained = snapshots.replace(".openclaw.package-backup-", ".openclaw-package-backup-");
     expect(completion).toMatchObject({
       exitCode: 1,
-      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(retained) },
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(snapshots) },
     });
-    expect(await readText(retained, "snapshot.sqlite")).toBe("pre-migration bytes");
+    expect(await readText(snapshots, "snapshot.sqlite")).toBe("pre-migration bytes");
     expect(await transaction.complete({ activationVerified: true }, () => {})).toBe(completion);
   });
 });

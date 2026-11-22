@@ -1281,7 +1281,11 @@ check passed), cleanup deletes at once:
   that rebuilt a Git checkout in place kept their snapshots in the checkout's
   `.artifacts` directory, and cleanup finds those the same way. Update history
   records no usable location for a checkout outside the home directory, so
-  cleanup does not find that checkout's snapshots.
+  cleanup does not find that checkout's snapshots. If activation-time removal of a
+  package snapshot fails, the updater keeps it at that recorded location so a
+  later cleanup can retry after a verified update. This requires the installed
+  updater to contain the fix; snapshots older updaters already renamed into the
+  disposable package namespace still need manual inspection.
 - superseded original-state captures, by the rules above.
 
 Doctor backups whose manifest predates `updateRunId` keep their previous rules: they
