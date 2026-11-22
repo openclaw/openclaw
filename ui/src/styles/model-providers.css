@@ -475,12 +475,13 @@
   /* Filtering must not resize the dialog under the field being typed in. */
   height: min(480px, 60dvh);
   padding-block-start: 0;
+
+  &:has(.model-provider-login__providers:not(:empty)) {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
 }
 
 .model-provider-login__search {
-  position: sticky;
-  z-index: 1;
-  top: 0;
   padding-block: var(--space-3) var(--space-2);
   background: var(--overlay-modal-surface);
 }
@@ -490,7 +491,16 @@
 }
 
 .model-provider-login__providers {
-  margin: 0 calc(-1 * var(--space-2));
+  /* Scroll only the options, never a focused provider beneath the search field. */
+  display: grid;
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  /* Leave room for the ring, including rows scrolled to an edge by Tab. */
+  scroll-padding-block: var(--space-1);
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-3));
+  padding: var(--space-1);
 }
 
 /* Catalog rows reach past the column so their text lines up with the title and field. */
@@ -608,15 +618,11 @@
 
 /* Provider access: one master list. Each connected provider is a dense summary
  * row that expands in place; providers without credentials sit below, quieter. */
-.provider-list,
-.model-provider-login__providers {
+.provider-list {
   display: grid;
+  margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.provider-list {
-  margin: 0;
 }
 
 .provider-list__section {

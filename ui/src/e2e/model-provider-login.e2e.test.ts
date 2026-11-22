@@ -39,6 +39,67 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it("keeps each keyboard-focused provider visible below search in a long catalog", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        reducedMotion: "reduce",
+      },
+      async ({ page }) => {
+        const providers = Array.from({ length: 20 }, (_, i) => {
+          const id = "studio-" + String(i + 1).padStart(2, "0");
+          return {
+            provider: id,
+            quickApiKeySetup: true,
+            loginOptions: [
+              {
+                id: id + "-login",
+                brandId: id,
+                groupLabel: "Studio " + (i + 1),
+                label: "Sign in with account",
+                kind: "oauth",
+                featured: true,
+              },
+            ],
+          };
+        });
+        await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "models.authLogin",
+            "models.authSetApiKey",
+          ],
+          methodResponses: {
+            "models.authStatus": { ts: 1, providers: [], providerCapabilities: providers },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/model-providers?connect=1");
+        const catalog = page.locator(".model-provider-login--catalog");
+        const rows = catalog.locator("[data-models-login-provider]");
+        await rows.last().waitFor();
+        await rows.last().focus();
+        for (let i = providers.length - 2; i >= 0; i--) {
+          await page.keyboard.press("Shift+Tab");
+          const visible = await rows.nth(i).evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            return (
+              el === document.activeElement &&
+              el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2))
+            );
+          });
+          expect(visible).toBe(true);
+        }
+        await page.keyboard.press("Shift+Tab");
+        expect(
+          await catalog
+            .locator("[data-models-login-search]")
+            .evaluate((el) => el === document.activeElement),
+        ).toBe(true);
+      },
+    );
+  });
   it("anchors text sign-in actions while retaining the stable dialog height", async () => {
     await suite.withPage(
       { viewport: { width: 1400, height: 900 }, reducedMotion: "reduce" },
