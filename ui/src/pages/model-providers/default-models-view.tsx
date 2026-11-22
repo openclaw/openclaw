@@ -558,10 +558,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           data-models-more-settings
           onClick={() => setMoreOpen(!moreOpen())}
         >
-          <span class="settings-row__title">{t("modelProviders.defaults.moreSettings")}</span>
-          <span class="settings-row__chevron">
-            <Icon name="chevronRight" />
-          </span>
+          <div class="settings-row__text">
+            <span class="settings-row__title">{t("modelProviders.defaults.moreSettings")}</span>
+          </div>
+          <div class="settings-row__control">
+            <span class="settings-row__chevron">
+              <Icon name="chevronRight" />
+            </span>
+          </div>
         </button>
         <Show when={moreOpen()}>
           <FallbackModel

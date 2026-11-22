@@ -305,7 +305,7 @@
 }
 
 .model-providers__defaults {
-  .settings-row__control {
+  .settings-row__control:where(:not(.settings-row--nav > *)) {
     flex: 0 1 auto;
     width: 340px;
   }
@@ -343,13 +343,13 @@
   }
 
   @media (max-width: 640px) {
-    .settings-row {
+    .settings-row:not(.settings-row--nav) {
       flex-direction: column;
       align-items: stretch;
       gap: var(--space-2);
     }
 
-    .settings-row__control {
+    .settings-row__control:where(:not(.settings-row--nav > *)) {
       width: 100%;
       max-width: none;
     }
