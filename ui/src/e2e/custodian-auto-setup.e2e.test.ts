@@ -323,6 +323,44 @@ suite.define(() => {
     });
   });
 
+  it("keeps the chosen provider after a failed API-key activation", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await installGateway(page, {
+        methodResponses: {
+          "openclaw.setup.activate.start": {
+            sequence: [
+              { done: true, status: "error", error: "API key rejected" },
+              activated("anthropic/claude-sonnet"),
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+      const card = page.locator(".custodian-setup");
+      await nextStep(card, "Where should your assistant run?");
+      await nextStep(card, "Connect your AI");
+      await card.getByRole("button", { name: "Another provider", exact: true }).click();
+      const provider = card.getByLabel("Provider and access method");
+      const key = card.getByLabel("API key or token");
+      const connect = card.getByRole("button", { name: "Connect", exact: true });
+      await provider.selectOption({ label: "Anthropic: API key" });
+      await key.fill("sk-test-rejected");
+      await connect.click();
+      await card.getByRole("alert").getByText("AI setup didn’t complete").waitFor();
+      expect
+        .soft(await provider.locator("option:checked").textContent())
+        .toBe("Anthropic: API key");
+      expect(await key.inputValue()).toBe("");
+
+      await key.fill("sk-test-retry");
+      await connect.click();
+      expect(
+        (await gateway.waitForRequest("openclaw.setup.activate.start", { after: 1 })).params,
+      ).toMatchObject({ authChoice: "anthropic-api-key", apiKey: "sk-test-retry" });
+      await card.getByRole("heading", { name: "You’re all set!" }).waitFor();
+    });
+  });
+
   it.each([true, false])("signs in with ChatGPT from the AI step (succeeds=%s)", async (ok) => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await installGateway(page, {

@@ -177,28 +177,32 @@ function ProviderForm(props: {
   onConnect: (provider: SetupManualProvider, key: string) => void;
   onSignIn?: (option: SetupAuthOption) => void;
 }) {
-  const choices = () => [
+  const choices = createMemo(() => [
     ...props.keys.map((provider) => ({ id: `key:${provider.id}`, provider })),
     ...(props.signIns ?? []).map((option) => ({ id: `sign-in:${option.id}`, option })),
-  ];
+  ]);
   const [selectedId, setSelectedId] = createSignal<string>();
-  const selected = () => choices().find((entry) => entry.id === selectedId()) ?? choices()[0];
+  const selected = createMemo(
+    () => choices().find((entry) => entry.id === selectedId()) ?? choices()[0],
+  );
   return (
     <form
       class="custodian-setup__stack"
       onSubmit={(event) => {
         event.preventDefault();
-        const form = event.currentTarget;
         const current = selected();
         if (current && "option" in current) {
           props.onSignIn?.(current.option);
           return;
         }
-        const value = new FormData(form).get("key");
-        const key = typeof value === "string" ? value.trim() : "";
-        if (current && key) {
+        const input = event.currentTarget.elements.namedItem("key");
+        if (!current || !(input instanceof HTMLInputElement) || input.disabled) {
+          return;
+        }
+        const key = input.value.trim();
+        if (key) {
+          input.value = "";
           props.onConnect(current.provider, key);
-          form.reset();
         }
       }}
     >
@@ -213,7 +217,7 @@ function ProviderForm(props: {
               {(entry) => {
                 const item = "option" in entry ? entry.option : entry.provider;
                 return (
-                  <option value={entry.id}>
+                  <option value={entry.id} selected={entry.id === selected()?.id}>
                     {item.groupLabel ? `${item.groupLabel}: ${item.label}` : item.label}
                   </option>
                 );
