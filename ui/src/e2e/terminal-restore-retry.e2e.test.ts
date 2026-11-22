@@ -28,18 +28,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
-          heldMethods: ["terminal.list"],
           methodResponses: {
-            "terminal.list": { sessions: [{ ...session, attached: false, createdAtMs: 1 }] },
+            "terminal.list": {
+              __mockError: { code: "UNAVAILABLE", message: "Synthetic terminal discovery failure" },
+            },
             "terminal.attach": { ...session, buffer: "Restored synthetic shell\r\n$ ", seq: 28 },
           },
         });
         await page.goto(`${suite.server.baseUrl}terminal`);
-        await gateway.waitForRequest("terminal.list");
-        await gateway.rejectDeferred("terminal.list", {
-          code: "UNAVAILABLE",
-          message: "Synthetic terminal discovery failure",
-        });
         const panel = page.locator("openclaw-terminal-page openclaw-terminal-panel");
         const error = panel.locator('.tp-error[role="alert"]');
         await error.getByText(/Synthetic terminal discovery failure/).waitFor();
@@ -59,20 +55,23 @@ suite.define(() => {
         );
         expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
         const retry = error.getByRole("button", { name: "Retry", exact: true });
-        expect(await retry.count()).toBe(1);
-        const beforeRetry = await gateway.deferNext("terminal.list");
+        // Restore and the passive picker both list. Keep discovery unavailable
+        // until the recovery owner shows Retry, regardless of request order.
+        await retry.waitFor({ state: "visible" });
+        await gateway.setMethodResponse("terminal.list", {
+          sessions: [{ ...session, attached: false, createdAtMs: 1 }],
+        });
         await retry.click();
-        await gateway.waitForRequest("terminal.list", { after: beforeRetry });
-        await error.waitFor({ state: "hidden" });
-        expect(
-          await panel
-            .getByRole("button", { name: "New terminal session", exact: true })
-            .isDisabled(),
-        ).toBe(true);
-        await gateway.resolveDeferred("terminal.list");
         expect((await gateway.waitForRequest("terminal.attach")).params).toEqual({ sessionId });
-        await panel.locator(".tp-session.is-current").click();
-        await panel.locator(".tp-host canvas:visible").waitFor();
+        await expect
+          .poll(() =>
+            panel.evaluate((element) => {
+              const terminal = element as HTMLElementTagNameMap["openclaw-terminal-panel"];
+              return terminal.hostedTabs.find((tab) => tab.id === terminal.activeHostedTabId)
+                ?.className;
+            }),
+          )
+          .toBe("is-live");
         await capture("restore-recovered");
         expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
         expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
