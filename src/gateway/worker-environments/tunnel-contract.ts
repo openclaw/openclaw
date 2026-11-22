@@ -45,6 +45,8 @@ export class WorkerTunnelOwnerDisconnectedError extends Error {
 
 export class WorkerRunnerUnavailableError extends Error {
   readonly code = "runner-offline";
+  /** Set only when the worker-turn launcher knows handoff never happened. */
+  providerDispatchStarted?: false;
 
   constructor() {
     super(

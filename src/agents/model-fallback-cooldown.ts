@@ -1,12 +1,29 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
+import {
+  shouldAllowCooldownProbeForReason,
+  shouldUseTransientCooldownProbeSlot,
+} from "./failover-policy.js";
 import type { FailoverReason } from "./failover/signal.js";
-import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
-import type { ModelCandidate } from "./model-fallback.types.js";
+import { isAgentHarnessPreflightError } from "./harness/errors.js";
+import type {
+  ModelFallbackAuthRuntime,
+  ModelFallbackRunOptions,
+} from "./model-fallback-attempt.js";
+import type { ModelFallbackDecisionParams } from "./model-fallback-observation.js";
+import type { ModelFallbackCandidate, ModelCandidate } from "./model-fallback.types.js";
 
-const lastProbeAttempt = new Map<string, number>();
+type ProbeAttempt = { at: number; token: symbol };
+
+export type ProbeAttemptReservation = Readonly<{
+  throttleKey: string;
+  token: symbol;
+}>;
+
+const lastProbeAttempt = new Map<string, ProbeAttempt>();
 const MIN_PROBE_INTERVAL_MS = 30_000;
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
@@ -18,14 +35,168 @@ export function resolveProbeThrottleKey(provider: string, agentDir?: string): st
 }
 
 function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
-  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  const lastProbe = lastProbeAttempt.get(throttleKey)?.at ?? 0;
   return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
 }
 
-export function markProbeAttempt(now: number, throttleKey: string): void {
+export function markProbeAttempt(now: number, throttleKey: string): ProbeAttemptReservation {
+  const token = Symbol("probe-attempt");
   lastProbeAttempt.delete(throttleKey);
-  lastProbeAttempt.set(throttleKey, now);
+  lastProbeAttempt.set(throttleKey, { at: now, token });
   pruneMapToMaxSize(lastProbeAttempt, MAX_PROBE_KEYS);
+  return { throttleKey, token };
+}
+
+export function releaseProbeAttempt(reservation: ProbeAttemptReservation): void {
+  if (lastProbeAttempt.get(reservation.throttleKey)?.token === reservation.token) {
+    lastProbeAttempt.delete(reservation.throttleKey);
+  }
+}
+
+export function isKnownPreDispatchProbeFailure(error: unknown): boolean {
+  if (isAgentHarnessPreflightError(error)) {
+    return true;
+  }
+  return (
+    error instanceof Error &&
+    error.name === "WorkerRunnerUnavailableError" &&
+    (error as Error & { providerDispatchStarted?: unknown }).providerDispatchStarted === false
+  );
+}
+
+export type CooldownProbeAttempt = {
+  skipCandidate?: true;
+  runOptions?: Pick<ModelFallbackRunOptions, "allowTransientCooldownProbe">;
+  attemptedDuringCooldown: boolean;
+  transientProbeProviderForAttempt: string | null;
+  probeReservation?: ProbeAttemptReservation;
+};
+
+export async function prepareCooldownProbeAttempt(params: {
+  candidate: ModelFallbackCandidate;
+  isPrimary: boolean;
+  requestedModel: boolean;
+  hasFallbackCandidates: boolean;
+  hasRemainingCandidate: boolean;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
+  candidateAuthProfileIds: string[];
+  cooldownProbeUsedProviders: Set<string>;
+  agentDir?: string;
+  sessionId?: string;
+  lane?: string;
+  pushSkippedAttempt: (error: string, reason: FailoverReason, authMode?: string) => void;
+  observeCandidateDecision: (
+    decision: ModelFallbackDecisionParams["decision"],
+    extra?: Partial<ModelFallbackDecisionParams>,
+  ) => Promise<void>;
+  onTerminalSessionSuspension: (reason: FailoverReason) => void;
+}): Promise<CooldownProbeAttempt> {
+  const state: CooldownProbeAttempt = {
+    attemptedDuringCooldown: false,
+    transientProbeProviderForAttempt: null,
+  };
+  const profileIds = params.candidateAuthProfileIds;
+  const isAnyProfileAvailable = profileIds.some(
+    (id) =>
+      !params.authRuntime.isProfileInCooldown(
+        params.authStore,
+        id,
+        undefined,
+        params.candidate.model,
+      ),
+  );
+  if (profileIds.length === 0 || isAnyProfileAvailable) {
+    return state;
+  }
+
+  const now = Date.now();
+  const probeThrottleKey = resolveProbeThrottleKey(params.candidate.provider, params.agentDir);
+  const decision = resolveCooldownDecision({
+    candidate: params.candidate,
+    isPrimary: params.isPrimary,
+    requestedModel: params.requestedModel,
+    hasFallbackCandidates: params.hasFallbackCandidates,
+    now,
+    probeThrottleKey,
+    authRuntime: params.authRuntime,
+    authStore: params.authStore,
+    profileIds,
+  });
+  const authMode =
+    decision.reason === "billing" ||
+    decision.reason === "auth" ||
+    decision.reason === "auth_permanent" ||
+    decision.reason === "session_expired"
+      ? resolveSubscriptionAuthModeForProfiles({ store: params.authStore, profileIds })
+      : undefined;
+
+  if (decision.type !== "attempt") {
+    const error =
+      decision.type === "skip"
+        ? decision.error
+        : `Provider ${params.candidate.provider} is in cooldown`;
+    params.pushSkippedAttempt(error, decision.reason, authMode);
+    if (decision.type === "suspend_session" && params.sessionId) {
+      emitFailoverEvent({
+        sessionId: params.sessionId,
+        lane: params.lane,
+        fromProvider: params.candidate.provider,
+        fromModel: params.candidate.model,
+        reason: decision.reason,
+        suspended: !params.hasRemainingCandidate,
+      });
+      if (!params.hasRemainingCandidate) {
+        params.onTerminalSessionSuspension(decision.reason);
+      }
+    }
+    await params.observeCandidateDecision("skip_candidate", {
+      reason: decision.reason,
+      error,
+      profileCount: profileIds.length,
+    });
+    return { ...state, skipCandidate: true };
+  }
+
+  if (shouldAllowCooldownProbeForReason(decision.reason)) {
+    const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
+    if (
+      isTransientCooldownReason &&
+      params.cooldownProbeUsedProviders.has(params.candidate.provider)
+    ) {
+      const error = `Provider ${params.candidate.provider} is in cooldown (check already attempted this run)`;
+      params.pushSkippedAttempt(error, decision.reason, authMode);
+      await params.observeCandidateDecision("skip_candidate", {
+        reason: decision.reason,
+        error,
+        profileCount: profileIds.length,
+      });
+      return { ...state, skipCandidate: true };
+    }
+    state.runOptions = { allowTransientCooldownProbe: true };
+    if (isTransientCooldownReason) {
+      state.transientProbeProviderForAttempt = params.candidate.provider;
+    }
+  }
+
+  if (decision.markProbe) {
+    // Reserve with the cooldown decision before observers can yield to another turn.
+    state.probeReservation = markProbeAttempt(now, probeThrottleKey);
+  }
+  state.attemptedDuringCooldown = true;
+  try {
+    await params.observeCandidateDecision("probe_cooldown_candidate", {
+      reason: decision.reason,
+      allowTransientCooldownProbe: state.runOptions?.allowTransientCooldownProbe,
+      profileCount: profileIds.length,
+    });
+  } catch (error) {
+    if (state.probeReservation) {
+      releaseProbeAttempt(state.probeReservation);
+    }
+    throw error;
+  }
+  return state;
 }
 
 type CooldownDecision =

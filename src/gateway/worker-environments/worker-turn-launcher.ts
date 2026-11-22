@@ -480,6 +480,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 () => execute(executionOptions),
               );
             } catch (error) {
+              if (!handedOff && error instanceof WorkerRunnerUnavailableError) {
+                error.providerDispatchStarted = false;
+              }
               if (
                 workspaceResolutionFailed ||
                 error instanceof AcceptedWorkspacePublicationIndeterminateError
@@ -519,16 +522,19 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   if (!recoveredAdmission) {
                     const waitTimeoutMs = Math.min(WORKER_ADMISSION_DEADLINE_MS, turn.timeoutMs);
                     if (waitTimeoutMs <= 0) {
-                      throw new WorkerRunnerUnavailableError();
+                      const unavailable = new WorkerRunnerUnavailableError();
+                      unavailable.providerDispatchStarted = false;
+                      throw unavailable;
                     }
                     const reconnect = new AbortController();
                     const reconnectSignal = turn.abortSignal
                       ? AbortSignal.any([turn.abortSignal, reconnect.signal])
                       : reconnect.signal;
-                    const timeout = setTimeout(
-                      () => reconnect.abort(new WorkerRunnerUnavailableError()),
-                      waitTimeoutMs,
-                    ).unref();
+                    const timeout = setTimeout(() => {
+                      const unavailable = new WorkerRunnerUnavailableError();
+                      unavailable.providerDispatchStarted = false;
+                      reconnect.abort(unavailable);
+                    }, waitTimeoutMs).unref();
                     try {
                       const admissionFacts = await options.placements.prepareRuntimeRefresh(
                         placement.sessionId,

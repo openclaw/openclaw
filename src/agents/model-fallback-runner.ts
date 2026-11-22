@@ -9,7 +9,6 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
-import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import {
   FailoverError,
@@ -19,11 +18,7 @@ import {
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "./failover-error.js";
-import {
-  shouldAllowCooldownProbeForReason,
-  shouldPreserveTransientCooldownProbeSlot,
-  shouldUseTransientCooldownProbeSlot,
-} from "./failover-policy.js";
+import { shouldPreserveTransientCooldownProbeSlot } from "./failover-policy.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import {
@@ -43,7 +38,6 @@ import {
   type ModelFallbackExhaustionResult,
   type ModelFallbackResultClassifier,
   type ModelFallbackRunFn,
-  type ModelFallbackRunOptions,
   type ModelFallbackRunResult,
   type ModelFallbackRuntimeContext,
   type ModelFallbackStepHandler,
@@ -63,9 +57,9 @@ import {
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
 import {
-  markProbeAttempt,
-  resolveCooldownDecision,
-  resolveProbeThrottleKey,
+  isKnownPreDispatchProbeFailure,
+  prepareCooldownProbeAttempt,
+  releaseProbeAttempt,
 } from "./model-fallback-cooldown.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -396,142 +390,117 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    let runOptions: Pick<ModelFallbackRunOptions, "allowTransientCooldownProbe"> | undefined;
-    let attemptedDuringCooldown = false;
-    let transientProbeProviderForAttempt: string | null = null;
-    if (
+    const cooldownProbe =
       authRuntime &&
       authStore &&
       candidateAuthProfileIds &&
       !quotaRequiresAuthPreparation &&
       !candidateHarnessAuth.skipsProviderAuthCooldown
-    ) {
-      const profileIds = candidateAuthProfileIds;
-      const isAnyProfileAvailable = profileIds.some(
-        (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
-      );
-
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        const now = Date.now();
-        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
-        const decision = resolveCooldownDecision({
-          candidate,
-          isPrimary,
-          requestedModel,
-          hasFallbackCandidates,
-          now,
-          probeThrottleKey,
-          authRuntime,
-          authStore,
-          profileIds,
-        });
-        const authMode =
-          decision.reason === "billing" ||
-          decision.reason === "auth" ||
-          decision.reason === "auth_permanent" ||
-          decision.reason === "session_expired"
-            ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
-            : undefined;
-
-        if (decision.type !== "attempt") {
-          const error =
-            decision.type === "skip"
-              ? decision.error
-              : `Provider ${candidate.provider} is in cooldown`;
-          pushSkippedAttempt(error, decision.reason, authMode);
-
-          // Only record terminal session suspension when no remaining candidate
-          // can serve the turn. Provider cooldown state prevents repeat probes.
-          if (decision.type === "suspend_session" && params.sessionId) {
-            emitFailoverEvent({
-              sessionId: params.sessionId,
-              lane: params.lane,
-              fromProvider: candidate.provider,
-              fromModel: candidate.model,
-              reason: decision.reason,
-              suspended: !hasRemainingCandidate,
-            });
-            if (!hasRemainingCandidate) {
+        ? await prepareCooldownProbeAttempt({
+            candidate,
+            isPrimary,
+            requestedModel,
+            hasFallbackCandidates,
+            hasRemainingCandidate,
+            authRuntime,
+            authStore,
+            candidateAuthProfileIds,
+            cooldownProbeUsedProviders,
+            agentDir: params.agentDir,
+            sessionId: params.sessionId,
+            lane: params.lane,
+            pushSkippedAttempt,
+            observeCandidateDecision,
+            onTerminalSessionSuspension: (reason) => {
+              if (!params.sessionId) {
+                return;
+              }
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
                 agentId: params.agentId,
                 agentDir: params.agentDir,
                 sessionId: params.sessionId,
-                reason: resolveSessionSuspensionReason(decision.reason),
+                reason: resolveSessionSuspensionReason(reason),
                 failedProvider: candidate.provider,
                 failedModel: candidate.model,
               });
-            }
-          }
-
-          await observeCandidateDecision("skip_candidate", {
-            reason: decision.reason,
-            error,
-            profileCount: profileIds.length,
-          });
-          continue;
-        }
-
-        if (decision.markProbe) {
-          markProbeAttempt(now, probeThrottleKey);
-        }
-        if (shouldAllowCooldownProbeForReason(decision.reason)) {
-          // Same-provider siblings share one transient cooldown probe per run.
-          const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
-          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
-            const error = `Provider ${candidate.provider} is in cooldown (check already attempted this run)`;
-            pushSkippedAttempt(error, decision.reason, authMode);
-            await observeCandidateDecision("skip_candidate", {
-              reason: decision.reason,
-              error,
-              profileCount: profileIds.length,
-            });
-            continue;
-          }
-          runOptions = { allowTransientCooldownProbe: true };
-          if (isTransientCooldownReason) {
-            transientProbeProviderForAttempt = candidate.provider;
-          }
-        }
-        attemptedDuringCooldown = true;
-        await observeCandidateDecision("probe_cooldown_candidate", {
-          reason: decision.reason,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          profileCount: profileIds.length,
-        });
-      }
-    }
-
-    if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
+            },
+          })
+        : undefined;
+    if (cooldownProbe?.skipCandidate) {
       continue;
     }
-    const attemptRun = await runFallbackAttempt({
-      run: params.run,
-      ...candidate,
-      attempts,
-      captureHarnessPreflight: true,
-      options: {
-        ...runOptions,
-        isFinalFallbackAttempt: rateLimit.isFinalAttempt(candidates, i, tlsFailedProviders),
-        modelRoutingProvenance: {
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          stage: isPrimary ? "initial" : "fallback",
-          selectionChanged,
-          fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
+    const runOptions = cooldownProbe?.runOptions;
+    const attemptedDuringCooldown = cooldownProbe?.attemptedDuringCooldown ?? false;
+    const transientProbeProviderForAttempt =
+      cooldownProbe?.transientProbeProviderForAttempt ?? null;
+    const probeReservation = cooldownProbe?.probeReservation;
+
+    let modelAllowed: boolean;
+    try {
+      modelAllowed = operatorAuthority?.modelPolicy?.allows(candidateRef) !== false;
+    } catch (error) {
+      if (probeReservation) {
+        releaseProbeAttempt(probeReservation);
+      }
+      throw error;
+    }
+    if (!modelAllowed) {
+      if (probeReservation) {
+        releaseProbeAttempt(probeReservation);
+      }
+      continue;
+    }
+    let attemptRun:
+      | { success: ModelFallbackRunResult<T>; stopped?: true }
+      | {
+          error: unknown;
+          classifiedResult?: ModelFallbackClassifiedResult<T>;
+          exhaustionResult?: ModelFallbackExhaustionResult<T>;
+        };
+    try {
+      attemptRun = await runFallbackAttempt({
+        run: params.run,
+        ...candidate,
+        attempts,
+        captureHarnessPreflight: true,
+        options: {
+          ...runOptions,
+          isFinalFallbackAttempt: rateLimit.isFinalAttempt(candidates, i, tlsFailedProviders),
+          modelRoutingProvenance: {
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            stage: isPrimary ? "initial" : "fallback",
+            selectionChanged,
+            fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
+          },
         },
-      },
-      // Keep the lane available while the outer loop still has another candidate.
-      deferSessionSuspension: hasRemainingCandidate,
-      onDeferredSessionSuspension: (suspension) => {
-        deferredSuspension.pending = suspension;
-      },
-      classifyResult: params.classifyResult,
-      ...attemptContext,
-      attribution: runAttribution,
-      abortSignal: params.abortSignal,
-    });
+        // Keep the lane available while the outer loop still has another candidate.
+        deferSessionSuspension: hasRemainingCandidate,
+        onDeferredSessionSuspension: (suspension) => {
+          deferredSuspension.pending = suspension;
+        },
+        classifyResult: params.classifyResult,
+        ...attemptContext,
+        attribution: runAttribution,
+        abortSignal: params.abortSignal,
+      });
+    } catch (error) {
+      // Coordination can fail after a provider request; release only when its owner proves
+      // this attempt stopped before provider dispatch.
+      if (probeReservation && isKnownPreDispatchProbeFailure(error)) {
+        releaseProbeAttempt(probeReservation);
+      }
+      throw error;
+    }
+    if (
+      probeReservation &&
+      !("success" in attemptRun) &&
+      isKnownPreDispatchProbeFailure(attemptRun.error)
+    ) {
+      releaseProbeAttempt(probeReservation);
+    }
     if ("success" in attemptRun) {
       if (!attemptRun.stopped && !selectionChanged) {
         stickyFallback?.record(candidate, attempts);
