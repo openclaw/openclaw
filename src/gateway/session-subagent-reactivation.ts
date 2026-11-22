@@ -13,6 +13,7 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../agents/subagents/registry/subagent-run-generation.js";
+import { isVisibleSpawnedSession } from "../agents/subagents/spawn/subagent-capabilities.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -47,6 +48,16 @@ export async function reactivateCompletedSubagentSession(params: {
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
+  // A visible spawned session is a chat once its delegated task completed: a person's later
+  // turn there is not owed to the requester and has no completion authority to report with.
+  // A paused (yielded) task still owes its requester, so its follow-up keeps that wake.
+  if (
+    !paused &&
+    admittedEntry &&
+    isVisibleSpawnedSession(params.sessionKey, { entry: admittedEntry })
+  ) {
+    return false;
+  }
   if (
     params.continuesPausedTask &&
     // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
