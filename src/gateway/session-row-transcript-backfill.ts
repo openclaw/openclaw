@@ -1,3 +1,4 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -5,7 +6,7 @@ import {
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
@@ -27,9 +28,10 @@ export function presentSessionRowTranscriptFields(
   params: BackfillParams,
   fields: Pick<
     SessionRowTranscriptProjection,
-    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
   >,
 ): {
+  hasMessages?: boolean;
   lastMessagePreview?: string;
   lastAssistantMessage?: SessionRowAssistantMessage;
   fallbackModel?: { provider: string; model: string };
@@ -45,6 +47,7 @@ export function presentSessionRowTranscriptFields(
       terminalModel: terminal && terminal.runId === sessionEntry.lastRunId ? terminal : null,
     });
   return {
+    hasMessages: fields.hasMessages,
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
       : {}),
@@ -70,7 +73,10 @@ export async function backfillSessionRowTranscriptFields(
       agentId: params.storeAgentId ?? params.agentId,
     }),
   );
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   const source = createSessionWorkerExecutionSource(
     () => signal?.throwIfAborted(),
     "Session row backfill retired",
@@ -78,16 +84,25 @@ export async function backfillSessionRowTranscriptFields(
   try {
     const fields = await runOpenClawAgentWorkerWrite(
       options,
-      () =>
-        execution.runExisting(source, (worker) =>
+      async () => {
+        const acquired = await captured;
+        if (!acquired.ok) {
+          throw acquired.error;
+        }
+        const execution = acquired.value;
+        return execution.runExisting(source, (worker) =>
           worker.execute({ type: "session.rowTranscript.backfill", input }),
-        ),
+        );
+      },
       undefined,
       signal,
       "background",
     );
     return fields ? presentSessionRowTranscriptFields(params, fields) : undefined;
   } finally {
-    await execution.release();
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
   }
 }

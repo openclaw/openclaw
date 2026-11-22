@@ -231,7 +231,7 @@ it.each([1440, 1024, 390].flatMap((width) => ["light", "dark"].map((theme) => ({
               )}
             </For>
             <WorkGroupSummary
-              item={{ key: "summary", durationMs: 2_000, groups: [] }}
+              item={{ key: "summary", durationMs: 2_000 }}
               options={{ expanded: false, onToggle: () => {} }}
             />
             <StreamGroup options={{}} parts={[stream]} />

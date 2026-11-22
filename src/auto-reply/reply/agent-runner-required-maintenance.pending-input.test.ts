@@ -363,7 +363,7 @@ it.each([
         ]);
       } finally {
         await waitForSessionMaintenance(sessionKey);
-        recorder?.finishPendingInput?.("cancelled");
+        recorder?.finishPendingInput?.("cancelled", "failed");
         await recorder?.waitForPendingInputSettlement?.();
         admissionOwner.close();
         const mcpManager = getSessionMcpRuntimeTestManager();

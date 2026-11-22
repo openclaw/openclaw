@@ -1,4 +1,7 @@
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
@@ -13,8 +16,11 @@ type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 
 type CliTurnMemoryAudience = {
   memoryAudience?: MemoryAudience;
-  /** This turn's resolution for a grant on its own session; other sessions resolve their own. */
-  forGrant: (sessionKey: string | undefined) => { memoryAudience?: MemoryAudience } | undefined;
+  /**
+   * The audience a loopback grant on `sessionKey` carries: this turn's resolution for
+   * its own session, otherwise that session's own resolution, leased by the turn.
+   */
+  forGrant: (sessionKey: string) => Promise<{ memoryAudience?: MemoryAudience }>;
 };
 
 /**
@@ -35,6 +41,7 @@ export async function prepareCliTurnHookContext(
   },
 ) {
   const turnAudience = await resolveCliTurnMemoryAudience(run, facts);
+  const { requesterDeviceId, execRequestOwners } = buildAgentHookContextIdentityFields(run);
   return {
     turnAudience,
     promptBuildHookContext: {
@@ -50,6 +57,8 @@ export async function prepareCliTurnHookContext(
       inputProvenance: run.inputProvenance,
       ...buildAgentHookMemoryAudienceFields(turnAudience.memoryAudience, run.sessionKey),
       ...buildAgentHookContextChannelFields(run),
+      ...(requesterDeviceId ? { requesterDeviceId } : {}),
+      ...(execRequestOwners ? { execRequestOwners } : {}),
     },
   };
 }
@@ -58,22 +67,23 @@ async function resolveCliTurnMemoryAudience(
   run: RunCliAgentParams,
   options: { agentId: string; skip: boolean; resources: DisposableStack },
 ): Promise<CliTurnMemoryAudience> {
+  const resolve = async (sessionKey: string) => {
+    // A scheduled run's memory parent exists only on its admitted context. Admission
+    // is idempotent, so admitting here leaves the run's later admissions unchanged.
+    const admitted = await admitCliRunParams(run, options.agentId);
+    const { memoryAudience, release } = await resolveCliMcpMemoryAudience(admitted, {
+      agentId: options.agentId,
+      sessionKey,
+    });
+    options.resources.defer(release);
+    return { memoryAudience };
+  };
   const sessionKey = run.sessionKey;
-  if (options.skip || !sessionKey) {
-    return { forGrant: () => undefined };
-  }
-  // A scheduled run's memory parent exists only on its admitted context. Admission
-  // is idempotent, so admitting here leaves the run's later admissions unchanged.
-  const admitted = await admitCliRunParams(run, options.agentId);
-  const { memoryAudience, release } = await resolveCliMcpMemoryAudience(admitted, {
-    agentId: options.agentId,
-    sessionKey,
-  });
-  options.resources.defer(release);
+  const own = options.skip || !sessionKey ? undefined : await resolve(sessionKey);
   return {
-    memoryAudience,
-    forGrant: (grantSessionKey) =>
-      grantSessionKey === sessionKey ? { memoryAudience } : undefined,
+    memoryAudience: own?.memoryAudience,
+    forGrant: async (grantSessionKey) =>
+      own && grantSessionKey === sessionKey ? own : await resolve(grantSessionKey),
   };
 }
 

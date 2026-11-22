@@ -10,7 +10,8 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: () => ({ revision: 1, value: process.env.SUBQ_API_KEY }),
 }));
 
-it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_KEY))(
+const model = process.env.SUBQ_DECISION_MODEL;
+it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_KEY && model))(
   "evaluates a mixed synthetic batch through the registered SubQ endpoint",
   async () => {
     let provider: DecisionProviderV1 | undefined;
@@ -46,7 +47,7 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_
         },
       },
       {
-        model: "subq-snap-preview",
+        model: model!,
         signal: new AbortController().signal,
         deadlineMonotonicMs: performance.now() + 30_000,
       },
@@ -55,7 +56,7 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.SUBQ_API_
     if (outcome.status !== "ok") {
       throw new Error("SubQ live evaluation unavailable: " + outcome.reason);
     }
-    expect(outcome.result.model).toBe("subq-snap-preview");
+    expect(outcome.result.model).toBeTruthy();
     expect(outcome.result.answers.red?.type).toBe("boolean");
     expect(outcome.result.answers.color?.type).toBe("choice");
     expect(outcome.result.answers.count?.type).toBe("score");

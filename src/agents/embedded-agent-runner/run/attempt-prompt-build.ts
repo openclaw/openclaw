@@ -21,6 +21,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import type { McpToolCatalogDiagnostic } from "../../agent-bundle-mcp-catalog.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -32,6 +33,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { wrapUntrustedPromptDataBlock } from "../../sanitize-for-prompt.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   appendModelIdentitySystemPrompt,
@@ -406,6 +408,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
   systemPromptRuntimeContextFragments?: readonly RuntimeContextFragment[];
+  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
@@ -471,6 +474,14 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),
+    ...(input.mcpDiagnostics ?? []).map((diagnostic): RuntimeContextFragment => ({
+      kind: "conversation-data",
+      text: wrapUntrustedPromptDataBlock({
+        label: "MCP server availability",
+        text: `MCP server ${diagnostic.serverName} unavailable: ${diagnostic.message}. Check server reachability or retry on a later turn.`,
+        maxChars: 2_000,
+      }),
+    })),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments

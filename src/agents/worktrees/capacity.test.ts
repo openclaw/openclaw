@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
@@ -109,6 +113,25 @@ describe("worktree Git size estimates", () => {
     clock.mockReturnValue(now + 30_000);
     expect((await resolveBase(clone)).commit).toBe(commit);
     expect(scans()).toHaveLength(1);
+  });
+
+  it("hydrates missing contents with 20,000 unrelated repository config entries", async () => {
+    const { clone, commit, missing } = await partialClone();
+    const common = path.join(path.dirname(clone), process.platform === "win32" ? "meta" : "meta ");
+    await git(clone, "init", "--template=", `--separate-git-dir=${common}`);
+    await fs.appendFile(
+      path.join(common, "config"),
+      Array.from(
+        { length: 10_000 },
+        (_, index) =>
+          `[branch "session-${index}"]\nremote = origin\n[remote "unused-${index}"]\nurl = https://example.invalid/repository.git\n`,
+      ).join(""),
+    );
+    await hydrateCommitObjects(clone, commit, missing);
+    for (const object of missing) {
+      await expect(runGit(clone, ["cat-file", "-e", object])).resolves.toMatchObject({ code: 0 });
+    }
+    expect(await estimateWorktreeGitBytes(clone, commit)).toBe(16_384);
   });
 
   it("preserves admitted caller ownership config through text and buffered sizing without changing defaults", async () => {
@@ -261,20 +284,44 @@ describe("worktree Git size estimates", () => {
     expect(spawned.filter((argv) => argv[1] === "maintenance" || argv[1] === "gc")).toEqual([]);
   });
 
+  it("hydrates missing objects while a shared ref writer is held", async ({ signal }) => {
+    const { clone, commit, missing } = await partialClone();
+    const refs = await git(clone, "show-ref");
+    const started = createDeferred();
+    const release = createDeferred();
+    const held = gitExec.enqueueGitRefMutation(clone, ".git", async () => {
+      started.resolve();
+      await release.promise;
+    });
+    await started.promise;
+    const pending = estimateWorktreeGitBytes(clone, commit);
+    try {
+      await expect(withinTest(pending, signal)).resolves.toBe(16_384);
+      for (const object of missing) {
+        expect((await runGit(clone, ["cat-file", "-e", object])).code).toBe(0);
+      }
+      expect(await git(clone, "show-ref")).toBe(refs);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, pending]);
+    }
+  });
+
   it.each(["cancel", "revoke"] as const)(
-    "keeps hydration behind queued ref writes and honors %s before fetching",
+    "honors %s before fetching through the transport queue",
     async (action) => {
       const { clone, commit, missing } = await partialClone();
       const started = createDeferred();
       const release = createDeferred();
       const discovered = createDeferred();
-      const held = gitExec.enqueueGitRefMutation(clone, ".git", async () => {
-        started.resolve();
-        await release.promise;
-      });
-      await started.promise;
+      let held: Promise<void> | undefined;
       const enqueue = gitExec.enqueueGitRefMutation;
-      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation(async (...args) => {
+        held ??= enqueue(args[0], args[1], async () => {
+          started.resolve();
+          await release.promise;
+        });
+        await started.promise;
         const queued = enqueue(...args);
         discovered.resolve();
         return queued;

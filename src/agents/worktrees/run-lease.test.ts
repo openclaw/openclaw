@@ -9,6 +9,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
 import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import * as pathExistence from "../../infra/path-existence.js";
 import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -418,6 +419,30 @@ describe("worktree run lease", () => {
     await expectCustody(false);
   });
 
+  it("resolves candidate aliases without probing canonical registry paths", async () => {
+    const nested = path.join(created.path, "workspace");
+    const alias = path.join(root, "workspace-alias");
+    await fs.mkdir(nested);
+    await fs.symlink(nested, alias, process.platform === "win32" ? "junction" : "dir");
+    const resolve = vi.spyOn(pathExistence, "realpathOrResolve");
+    for (const candidate of [alias, nested, `${created.path}-sibling`]) {
+      resolve.mockClear();
+      const selected = await resolveWorktreeForPath({
+        candidatePaths: [undefined, candidate, candidate],
+      });
+      expect(selected?.record.id).toBe(candidate.endsWith("-sibling") ? undefined : created.id);
+      expect(resolve.mock.calls).toEqual([[candidate]]);
+    }
+    await service.remove({ id: created.id, reason: "manual-delete", allowSnapshotLoss: true });
+    expect(await resolveWorktreeForPath({ candidatePaths: [nested] })).toBeUndefined();
+    await expect(
+      resolveWorktreeForPath({
+        sessionEntry: { worktree: { id: created.id } },
+        candidatePaths: [alias],
+      }),
+    ).rejects.toThrow("managed worktree was removed");
+  });
+
   it("prunes a dead owner lease so removal can proceed", async () => {
     seedRunLease("dead-owner", 2_147_483_647, 4242);
     expect(live()).toBe(false);
@@ -614,6 +639,11 @@ describe("worktree run lease", () => {
     await claim("remover-b");
 
     await abortWorktreeRemoval(env, created.id, "remover-a");
-    await expect(acquire()).rejects.toThrow(`managed worktree was removed: ${created.path}`);
+    await expect(acquire()).rejects.toThrow(
+      `managed worktree removal is in progress: ${created.path}`,
+    );
+    await abortWorktreeRemoval(env, created.id, "remover-b");
+    const lease = await acquire();
+    await lease.release();
   });
 });

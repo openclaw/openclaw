@@ -506,7 +506,7 @@ describe("sessions view", () => {
 
     const details = expectDefined(query(".session-details-panel"), "session details");
     expect(text(".session-details-panel__eyebrow", details)).toBe("Session details");
-    expect(text(".session-details-panel__title", details)).toBe("agent:main:main");
+    expect(text(".session-details-panel__title", details)).toBe("Main session");
     expect(
       texts(".session-details-panel__badges > *", details).map((s) => s?.replace(/\s+/g, " ")),
     ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);
@@ -739,10 +739,8 @@ describe("sessions transcript search view", () => {
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
-      expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(trigger?.getAttribute("aria-label")).toBe(
-        available ? "Search transcripts" : unavailable,
-      );
+      expect(rosterFilter?.getAttribute("aria-label")).toBe("Search sessions…");
+      expect(trigger?.getAttribute("aria-label")).toBe(available ? "Search chats" : unavailable);
       expect(trigger?.disabled).toBe(!available);
       expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
       expect(connectionStatus()?.textContent).toBe(available ? undefined : unavailable);
@@ -883,7 +881,7 @@ describe("sessions view at phone width", () => {
     expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
     expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
     const search = getInput(".sessions-search input");
-    expect(search?.placeholder).toBe("Search sessions");
+    expect(search?.placeholder).toBe("Search sessions…");
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");

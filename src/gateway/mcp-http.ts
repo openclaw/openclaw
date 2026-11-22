@@ -6,7 +6,6 @@ import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-i
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -25,7 +24,6 @@ import { logDebug, logWarn } from "../logger.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -39,6 +37,10 @@ import {
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
 import {
+  resolveInMcpGrantRequestScope,
+  runInMcpGrantRequestScope,
+} from "./mcp-http.grant-generation.js";
+import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
   markMcpLoopbackRequestClassified,
@@ -51,7 +53,7 @@ import {
   setActiveMcpLoopbackRuntime,
   updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
-import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
+import { jsonRpcError, jsonRpcResult, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   logMcpLoopbackTraffic,
   resolveMcpCliCaptureKey,
@@ -363,9 +365,10 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   withManagementScope(resolveTools),
                 );
               scopedTools = await (boundClientGrant.requestScope
-                ? withPluginRuntimeGatewayRequestScope(
+                ? resolveInMcpGrantRequestScope(
                     boundClientGrant.requestScope,
                     constructAsCaller,
+                    requestAbort.signal,
                   )
                 : constructAsCaller());
             } else {
@@ -431,6 +434,17 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               }
               continue;
             }
+            if (message.method === "tools/call" && requestContext.toolCallsRefused) {
+              if (shouldSendJsonRpcResponse(message)) {
+                responses.push(
+                  jsonRpcResult(readJsonRpcRequestId(message), {
+                    content: [{ type: "text", text: "Tools are not callable during compaction." }],
+                    isError: true,
+                  }),
+                );
+              }
+              continue;
+            }
             const cliCaptureHandle = cliCaptureHandles[messageIndex];
             let response: object | null;
             try {
@@ -455,10 +469,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     turnSourceTo: requestContext.currentChannelId,
                     turnSourceAccountId: requestContext.accountId,
                     turnSourceThreadId: requestContext.currentThreadTs,
-                    loopDetection: resolveToolLoopDetectionConfig({
-                      cfg,
-                      agentId: scopedTools.agentId,
-                    }),
                   },
                   signal,
                   authorizeToolCall,
@@ -484,10 +494,15 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>
                 withGatewayToolCallerIdentity(callerIdentity, () =>
-                  runWithTrackedCancellation(requestAbort.signal, handleRequest),
+                  runWithTrackedCancellation(
+                    // Runtime shutdown must reach a cooperating tool while it still holds the
+                    // response open; the request signal alone waits for the socket to close.
+                    AbortSignal.any([requestAbort.signal, work.signal]),
+                    handleRequest,
+                  ),
                 );
               response = await (runRequestScope
-                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                ? runInMcpGrantRequestScope(runRequestScope, handleAsCaller)
                 : handleAsCaller());
             } finally {
               markMcpLoopbackToolCallFinished(cliCaptureHandle);
@@ -612,6 +627,9 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     // Stop admitting this runtime's child grants before draining accepted
     // requests. A delayed old-server close cannot revoke a successor runtime.
     cleanup();
+    // Abort in-flight request work as soon as shutdown starts; do not wait on
+    // the socket layer to finish draining before signaling cancellation.
+    work.beginClose();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));

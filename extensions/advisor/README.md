@@ -1,6 +1,6 @@
 # Advisor (plugin)
 
-Experimental and off by default. Advisor watches user-directed work and steps
+Off by default. Advisor watches user-directed work and steps
 in while the agent goes off course: repeating failing steps, waiting on
 finished work, working around a blocker it could fix, drifting beyond the
 request, or claiming results the tools do not show.
@@ -30,11 +30,12 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
   of "off course". Changes apply to the next review.
 
 A due review waits until every running tool call has its result, so the fork never
-sees a missing or synthetic tool outcome. Only the main agent's user-triggered runs
-are reviewed; subagent sessions are not, because the main agent sees their results
-and can redirect them. A later review in the same run is told the correction it
-already gave and does not repeat it. Each conversation has at most one review
-in flight; the run ending or a new user message cancels it. Gateway info logs
-record review token usage and whether a correction was steered.
+sees a missing or synthetic tool outcome. User-triggered runs are reviewed,
+including subagent runs (also those a cron run spawns), each in its own session.
+A later review in the same run is told the correction it already gave and does
+not repeat it. Each conversation has at most one review in flight; the run
+ending or a new user message cancels it. Gateway info logs record review token
+usage, whether a correction was steered, and each cancelled review with its
+reason and running time.
 
-Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor
+Docs: https://docs.openclaw.ai/plugins/reference/advisor

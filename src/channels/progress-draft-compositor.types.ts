@@ -71,3 +71,16 @@ export type ChannelProgressDraftCompositorParams = {
   /** Channel-specific formatter policy; event/lifecycle ownership remains in the compositor. */
   buildProgressEventLine?: ChannelProgressDraftEventLineBuilder;
 };
+
+export type ChannelProgressDraftNoteOptions = {
+  toolName?: string;
+  startImmediately?: boolean;
+  flush?: boolean;
+  /**
+   * The line renders the open reasoning itself (a channel projecting
+   * `mergeReasoningProgress` into its own rows), so admitting it must not close
+   * the reasoning burst the way admitted work does, and a quiet draft stores it
+   * like the approvals it keeps.
+   */
+  reasoningLine?: boolean;
+};

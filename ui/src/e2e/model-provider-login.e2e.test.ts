@@ -215,7 +215,7 @@ suite.define(() => {
                     {
                       id: "openai-login",
                       brandId: "openai",
-                      label: "Sign in with ChatGPT (Beta)",
+                      label: "Sign in with ChatGPT",
                       kind: "oauth",
                       featured: true,
                     },
@@ -426,6 +426,15 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
           heldMethods: ["wizard.next"],
           methodResponses: {
+            // An agent with a model: this sign-in only adds the account.
+            "config.get": {
+              config: { agents: { defaults: { model: "example/existing" } } },
+              sourceConfig: { agents: { defaults: { model: "example/existing" } } },
+              hash: "models-login-callback",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "example/existing" } } }),
+              valid: true,
+            },
             "models.authStatus": { ts: 1, providers: [], providerCapabilities },
             "models.authLogin": { done: false, status: "running" },
           },
@@ -681,6 +690,15 @@ suite.define(() => {
             "wizard.cancel",
           ],
           methodResponses: {
+            // The agent already has a model, so adding an account only saves it.
+            "config.get": {
+              config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              hash: "models-login-accounts",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.5" } } }),
+              valid: true,
+            },
             "models.authStatus": {
               ts: now,
               providers: [
@@ -736,8 +754,8 @@ suite.define(() => {
                     {
                       id: "openai-token-sharing",
                       brandId: "openai",
-                      label: "Sign in with ChatGPT (Beta)",
-                      hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+                      label: "Sign in with ChatGPT",
+                      hint: "Use your ChatGPT plan for eligible Responses API requests",
                       kind: "oauth",
                       featured: false,
                     },
@@ -795,7 +813,7 @@ suite.define(() => {
             has: page.locator("strong").filter({ hasText: label }),
           });
         expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
-          ["Codex login (device code)", "Codex login (browser)", "Sign in with ChatGPT (Beta)"],
+          ["Codex login (device code)", "Codex login (browser)", "Sign in with ChatGPT"],
         );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
@@ -819,7 +837,7 @@ suite.define(() => {
         }
         await gateway.deferNext("wizard.next", { answer: { stepId: "instructions" } });
         const popupReady = page.waitForEvent("popup");
-        await connectionMethod("Sign in with ChatGPT (Beta)").click();
+        await connectionMethod("Sign in with ChatGPT").click();
         const login = await gateway.waitForRequest("models.authLogin");
         expect(login.params).toEqual({
           sessionId: expect.any(String),

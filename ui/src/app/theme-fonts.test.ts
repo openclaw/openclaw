@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
   loadTypefaceStylesheet,
@@ -32,7 +31,6 @@ describe("typeface presentation", () => {
       link.remove();
     }
     applyTypefaceOverrides();
-    applyChatFontSmoothing("system");
   }
 
   // Shared UI workers preserve document.head between files.
@@ -111,17 +109,5 @@ describe("typeface presentation", () => {
 
   it.each(["serif; color: red", null])("ignores invalid override %j", (value) => {
     expect(normalizeTypefaceOverride(value)).toBeUndefined();
-  });
-
-  it("opts chat prose into auto smoothing only while the resolved chat face is a serif", () => {
-    const style = document.documentElement.style;
-    for (const serif of ["lora", "fraunces"] as const) {
-      applyChatFontSmoothing(serif);
-      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("auto");
-    }
-    for (const nonSerif of ["instrument-sans", "jetbrains-mono", "system"] as const) {
-      applyChatFontSmoothing(nonSerif);
-      expect(style.getPropertyValue("--chat-font-smoothing")).toBe("");
-    }
   });
 });

@@ -134,7 +134,6 @@ export function useQueuedCollectorFixture() {
           normalizedSpawned: {},
           requestDeliveryHint: undefined,
           expectedExistingSessionId: entry?.sessionId,
-          hasRestoredCronContinuation: false,
           resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
           now: Date.now(),
           isSystemGatewayRun: true,

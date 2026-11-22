@@ -250,7 +250,11 @@ export type PreparedCliRunContext = {
   contextEngine?: ContextEngine;
   deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
+  /** Set after bootstrap; sent as current-turn context so the system prompt stays cacheable. */
+  contextEngineSystemPromptAddition?: string;
   promptContext?: CliBackendPromptContext;
+  /** This run's before_model_request gate; absent on isolated and control runs. */
+  beforeModelRequest?: import("./model-request-hook.js").CliModelRequestGate;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
   modelId: string;
@@ -270,8 +274,8 @@ export type PreparedCliRunContext = {
   /** Only the exact resumed native session may receive these newly committed conversation rows. */
   resumeContext?: string;
   transcriptCursor?: CliSessionBinding["transcriptCursor"];
-  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
-  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
+  /** The account this turn runs under and whether saved history may enter its prompt. */
+  cliHistoryAdmission?: import("./history-boundary.js").CliHistoryAdmission;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

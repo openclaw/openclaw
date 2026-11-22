@@ -22,7 +22,10 @@ import {
   isControlUiVersionedPublicAsset,
 } from "../src/gateway/control-ui-root-assets.ts";
 import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
-import { shouldPrecompressControlUiAsset } from "./config/control-ui-asset-compression.ts";
+import {
+  gzipControlUiAsset,
+  shouldPrecompressControlUiAsset,
+} from "./config/control-ui-asset-compression.ts";
 import {
   collectControlUiBootAssets,
   controlUiBootPreloadsPlugin,
@@ -117,9 +120,7 @@ export async function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Prefer maximum gzip effort for shipped assets; benchmark the added build cost.
-      source: Buffer.from(gzip(body, 12)),
+      source: Buffer.from(gzipControlUiAsset(body, bootAssets.has(fileName))),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);

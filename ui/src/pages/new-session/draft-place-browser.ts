@@ -34,7 +34,7 @@ export type BrowserProjectRegistration = Readonly<{
 }>;
 
 type DraftPickerKind = "where" | "project" | "checkout";
-export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
+export type ProjectBrowserFocus = Partial<Record<"browse" | "path" | "search", HTMLElement>>;
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -57,43 +57,43 @@ type DraftPlaceBrowserCallbacks = {
 
 export class DraftPlaceBrowser {
   readonly projectFocus: ProjectBrowserFocus = {};
-  private projectCatalog: ProjectCatalog | undefined;
-  private projectCatalogCleanup: (() => void) | undefined;
-  private projectCatalogGateway: ApplicationContext["gateway"] | undefined;
-  private lastProjectResult: ProjectCatalog["snapshot"]["result"] = null;
-  private projectSelection: DraftProjectSelection = null;
-  private selectedProjectRecord: ProjectRecord | undefined;
-  private projectQueryValue = "";
-  private environmentQueryValue = "";
-  private debouncedProjectQuery = "";
-  private browserOpenValue = false;
+  #projectCatalog: ProjectCatalog | undefined;
+  #projectCatalogCleanup: (() => void) | undefined;
+  #projectCatalogGateway: ApplicationContext["gateway"] | undefined;
+  #lastProjectResult: ProjectCatalog["snapshot"]["result"] = null;
+  #projectSelection: DraftProjectSelection = null;
+  #selectedProjectRecord: ProjectRecord | undefined;
+  #projectQueryValue = "";
+  #environmentQueryValue = "";
+  #debouncedProjectQuery = "";
+  #browserMode: "browse" | "enter-path" | null = null;
   // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
-  private browserNodeIdValue = "";
-  private browserProjectPathValue: string | null = null;
-  private browserRegistration: {
+  #browserNodeIdValue = "";
+  #browserProjectPathValue: string | null = null;
+  #browserRegistration: {
     retire: () => void;
     client: GatewayBrowserClient;
     epoch: number;
   } | null = null;
-  private openPopoverValue: DraftPickerKind | null = null;
-  private focusRequestId = 0;
-  private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  #openPopoverValue: DraftPickerKind | null = null;
+  #focusRequestId = 0;
+  #projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   readonly browser: PlaceBrowserState;
 
-  private projectSearchArgs: readonly unknown[] = [];
-  private projectSearchReadValue: ProjectSearchRead | null = null;
-  private finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
-  private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
+  #projectSearchArgs: readonly unknown[] = [];
+  #projectSearchReadValue: ProjectSearchRead | null = null;
+  #finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
+  readonly #projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
     task: ([client, query]: readonly [GatewayBrowserClient, string], { signal }) =>
       client.request<ProjectsSearchRemoteResult>("projects.searchRemote", { query }, { signal }),
     onComplete: (result) => {
-      this.finishProjectSearch?.({ result });
-      this.finishProjectSearch = undefined;
+      this.#finishProjectSearch?.({ result });
+      this.#finishProjectSearch = undefined;
     },
     onError: (error) => {
-      this.finishProjectSearch?.({ error });
-      this.finishProjectSearch = undefined;
+      this.#finishProjectSearch?.({ error });
+      this.#finishProjectSearch = undefined;
     },
   });
 
@@ -105,18 +105,18 @@ export class DraftPlaceBrowser {
     this.browser = new PlaceBrowserState(
       (path) => {
         const snapshot = this.read().context?.gateway.snapshot;
-        if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
+        if (snapshot?.phase !== "connected" || !snapshot.client || this.#browserMode !== "browse") {
           return Promise.reject(new Error("Folder browser is unavailable"));
         }
         return snapshot.client.request<FsListDirResult>("fs.listDir", {
-          ...(this.browserNodeIdValue ? { nodeId: this.browserNodeIdValue } : {}),
+          ...(this.#browserNodeIdValue ? { nodeId: this.#browserNodeIdValue } : {}),
           ...(path ? { path } : {}),
         });
       },
       this.callbacks.changed,
       (listing) => {
-        this.browserProjectPathValue = null;
-        if (this.browserNodeIdValue) {
+        this.#browserProjectPathValue = null;
+        if (this.#browserNodeIdValue) {
           // Gateway folder approval and project registration apply only to Gateway paths.
           return;
         }
@@ -137,7 +137,7 @@ export class DraftPlaceBrowser {
           .then((branches) => {
             // Typing keeps this listing valid; replacement or reset retires its probe.
             if (this.browser.listing === listing && branches.repositoryStatus === "git") {
-              this.browserProjectPathValue = listing.path;
+              this.#browserProjectPathValue = listing.path;
               this.callbacks.changed();
             }
           })
@@ -147,23 +147,23 @@ export class DraftPlaceBrowser {
   }
 
   synchronize() {
-    const registration = this.browserRegistration;
+    const registration = this.#browserRegistration;
     if (
       registration &&
       (!this.gateway.connected ||
         registration.client !== this.gateway.client ||
         registration.epoch !== this.gateway.connectionEpoch)
     ) {
-      this.retireRegistration();
+      this.#retireRegistration();
     }
-    this.bindProjectCatalog();
-    const args = this.projectSearchInput();
-    if (!args.every((arg, index) => Object.is(arg, this.projectSearchArgs[index]))) {
-      this.searchProjects(args);
+    this.#bindProjectCatalog();
+    const args = this.#projectSearchInput();
+    if (!args.every((arg, index) => Object.is(arg, this.#projectSearchArgs[index]))) {
+      this.#searchProjects(args);
     }
   }
 
-  private projectSearchInput() {
+  #projectSearchInput() {
     return [
       this.read().context && this.gateway.connected ? this.gateway.client : null,
       canCallGatewayMethod(
@@ -171,58 +171,58 @@ export class DraftPlaceBrowser {
         "projects.searchRemote",
         "operator.read",
       ),
-      this.debouncedProjectQuery,
+      this.#debouncedProjectQuery,
       this.gateway.connectionEpoch,
     ] as const;
   }
 
-  private searchProjects(args = this.projectSearchInput()) {
-    this.projectSearchArgs = args;
-    this.projectSearchRequest.cancel();
+  #searchProjects(args = this.#projectSearchInput()) {
+    this.#projectSearchArgs = args;
+    this.#projectSearchRequest.cancel();
     // A cancelled transport may never settle; retire its presentation immediately.
-    this.finishProjectSearch?.(null);
-    this.finishProjectSearch = undefined;
-    this.projectSearchReadValue = null;
+    this.#finishProjectSearch?.(null);
+    this.#finishProjectSearch = undefined;
+    this.#projectSearchReadValue = null;
     const [client, advertised, query] = args;
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
     const completion = Promise.withResolvers<ProjectSearchOutcome>();
-    this.projectSearchReadValue = { query, completed: completion.promise };
-    this.finishProjectSearch = completion.resolve;
-    void this.projectSearchRequest.run([client, query]);
+    this.#projectSearchReadValue = { query, completed: completion.promise };
+    this.#finishProjectSearch = completion.resolve;
+    void this.#projectSearchRequest.run([client, query]);
   }
 
   get projects(): readonly ProjectRecord[] {
-    return this.projectCatalog?.snapshot.result?.projects ?? [];
+    return this.#projectCatalog?.snapshot.result?.projects ?? [];
   }
 
   get projectsReady(): boolean {
-    return this.projectCatalog?.snapshot.ready ?? false;
+    return this.#projectCatalog?.snapshot.ready ?? false;
   }
 
   get projectCatalogError(): unknown {
-    return this.projectCatalog?.snapshot.error ?? null;
+    return this.#projectCatalog?.snapshot.error ?? null;
   }
 
   get projectsLoading(): boolean {
-    return this.projectCatalog?.loading ?? false;
+    return this.#projectCatalog?.loading ?? false;
   }
 
   get projectRead(): Promise<void> | null {
-    return this.projectCatalog?.pendingRead ?? null;
+    return this.#projectCatalog?.pendingRead ?? null;
   }
 
   get projectRecents(): readonly ProjectRecent[] | undefined {
-    return this.projectCatalog?.snapshot.result?.recents;
+    return this.#projectCatalog?.snapshot.result?.recents;
   }
 
   get githubHost(): string | undefined {
-    return this.projectCatalog?.snapshot.result?.githubHost;
+    return this.#projectCatalog?.snapshot.result?.githubHost;
   }
 
   get defaultRemoteProject(): DraftRemoteProject | null {
-    const configured = this.projectCatalog?.snapshot.result?.defaultRepository;
+    const configured = this.#projectCatalog?.snapshot.result?.defaultRepository;
     return configured
       ? {
           identity: configured.identity,
@@ -233,11 +233,11 @@ export class DraftPlaceBrowser {
   }
 
   get defaultRemoteProjectProfileId(): string {
-    return this.projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
+    return this.#projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
   }
 
   get projectId(): string {
-    return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
+    return this.#projectSelection?.kind === "local" ? this.#projectSelection.id : "";
   }
 
   /** Remote and pasted repositories open through operator.write projectGitUrl. */
@@ -246,34 +246,38 @@ export class DraftPlaceBrowser {
   }
 
   get remoteProject(): DraftRemoteProject | null {
-    return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
+    return this.#projectSelection?.kind === "remote" ? this.#projectSelection.project : null;
   }
 
   get projectQuery(): string {
-    return this.projectQueryValue;
+    return this.#projectQueryValue;
   }
 
   get environmentQuery(): string {
-    return this.environmentQueryValue;
+    return this.#environmentQueryValue;
   }
 
   changeEnvironmentQuery(query: string) {
-    this.environmentQueryValue = query;
+    this.#environmentQueryValue = query;
     this.callbacks.changed();
   }
 
   get projectSearchRead(): ProjectSearchRead | null {
-    return this.projectSearchReadValue?.query === this.projectQueryValue.trim()
-      ? this.projectSearchReadValue
+    return this.#projectSearchReadValue?.query === this.#projectQueryValue.trim()
+      ? this.#projectSearchReadValue
       : null;
   }
 
   get browserOpen(): boolean {
-    return this.browserOpenValue;
+    return this.#browserMode !== null;
+  }
+
+  get devicePathEntryOpen(): boolean {
+    return this.#browserMode === "enter-path";
   }
 
   get browserNodeId(): string {
-    return this.browserNodeIdValue;
+    return this.#browserNodeIdValue;
   }
 
   get browserProjectPath(): string | null {
@@ -282,39 +286,39 @@ export class DraftPlaceBrowser {
     // so the action stays available for a retry.
     return this.browser.loading || !this.browser.draftInLoadedDirectory()
       ? null
-      : this.browserProjectPathValue;
+      : this.#browserProjectPathValue;
   }
 
   get browserRegistering(): boolean {
-    return this.browserRegistration !== null;
+    return this.#browserRegistration !== null;
   }
 
   popoverOpen(kind: DraftPickerKind): boolean {
-    return this.openPopoverValue === kind;
+    return this.#openPopoverValue === kind;
   }
 
   popoverCallbacks(kind: DraftPickerKind) {
     return {
       popoverOpen: this.popoverOpen(kind),
-      onPopoverShow: () => this.transitionPopover(kind, true),
-      onPopoverHide: () => this.transitionPopover(kind, false),
+      onPopoverShow: () => this.#transitionPopover(kind, true),
+      onPopoverHide: () => this.#transitionPopover(kind, false),
       onPopoverAfterHide: this.callbacks.changed,
     };
   }
 
-  private bindProjectCatalog() {
+  #bindProjectCatalog() {
     const gateway = this.gateway.connected ? this.read().context?.gateway : undefined;
-    if (gateway === this.projectCatalogGateway) {
+    if (gateway === this.#projectCatalogGateway) {
       return;
     }
-    this.projectCatalogCleanup?.();
-    this.projectCatalogGateway = gateway;
-    this.projectCatalog = gateway ? projectsForGateway(gateway) : undefined;
-    this.lastProjectResult = null;
+    this.#projectCatalogCleanup?.();
+    this.#projectCatalogGateway = gateway;
+    this.#projectCatalog = gateway ? projectsForGateway(gateway) : undefined;
+    this.#lastProjectResult = null;
     const update = () => {
-      const result = this.projectCatalog?.snapshot.result ?? null;
-      if (result && result !== this.lastProjectResult) {
-        this.lastProjectResult = result;
+      const result = this.#projectCatalog?.snapshot.result ?? null;
+      if (result && result !== this.#lastProjectResult) {
+        this.#lastProjectResult = result;
         if (this.projectId && !result.projects.some((project) => project.id === this.projectId)) {
           this.callbacks.onProjectMissing();
         }
@@ -322,37 +326,37 @@ export class DraftPlaceBrowser {
       this.callbacks.changed();
     };
     // Catalog receipts clear vanished project selections before the next draft read.
-    this.projectCatalogCleanup = this.projectCatalog?.subscribe(update);
+    this.#projectCatalogCleanup = this.#projectCatalog?.subscribe(update);
     update();
   }
 
   async refreshProjects(invalidate = false): Promise<void> {
-    this.bindProjectCatalog();
-    await this.projectCatalog?.refresh(invalidate);
+    this.#bindProjectCatalog();
+    await this.#projectCatalog?.refresh(invalidate);
   }
 
   selectedProject(): ProjectRecord | undefined {
     return (
       this.projects.find((project) => project.id === this.projectId) ??
-      (this.gateway.connected ? undefined : this.selectedProjectRecord)
+      (this.gateway.connected ? undefined : this.#selectedProjectRecord)
     );
   }
 
   selectProject(selection: Exclude<DraftProjectSelection, null>) {
-    this.projectSelection = selection;
-    this.selectedProjectRecord = this.projects.find((project) => project.id === this.projectId);
+    this.#projectSelection = selection;
+    this.#selectedProjectRecord = this.projects.find((project) => project.id === this.projectId);
   }
 
   recordRemoteProjectId(cloneUrl: string, projectId: string) {
     const project = this.remoteProject;
     if (project?.cloneUrl === cloneUrl) {
-      this.projectSelection = { kind: "remote", project: { ...project, projectId } };
+      this.#projectSelection = { kind: "remote", project: { ...project, projectId } };
     }
   }
 
   clearProjectSelection() {
-    this.projectSelection = null;
-    this.selectedProjectRecord = undefined;
+    this.#projectSelection = null;
+    this.#selectedProjectRecord = undefined;
   }
 
   resolveProjectRecents(params: {
@@ -408,10 +412,10 @@ export class DraftPlaceBrowser {
   }
 
   changeProjectQuery(query: string) {
-    this.projectQueryValue = query;
-    this.clearProjectSearchTimer();
-    this.debouncedProjectQuery = "";
-    this.searchProjects([null, false, "", this.gateway.connectionEpoch]);
+    this.#projectQueryValue = query;
+    this.#clearProjectSearchTimer();
+    this.#debouncedProjectQuery = "";
+    this.#searchProjects([null, false, "", this.gateway.connectionEpoch]);
     const normalized = query.trim();
     const context = this.read().context;
     if (
@@ -427,28 +431,28 @@ export class DraftPlaceBrowser {
     }
     const client = this.gateway.client;
     const connectionEpoch = this.gateway.connectionEpoch;
-    this.projectSearchTimer = globalThis.setTimeout(() => {
-      this.projectSearchTimer = undefined;
+    this.#projectSearchTimer = globalThis.setTimeout(() => {
+      this.#projectSearchTimer = undefined;
       if (client !== this.gateway.client || connectionEpoch !== this.gateway.connectionEpoch) {
         return;
       }
-      this.debouncedProjectQuery = normalized;
-      this.searchProjects([client, true, normalized, connectionEpoch]);
+      this.#debouncedProjectQuery = normalized;
+      this.#searchProjects([client, true, normalized, connectionEpoch]);
       this.callbacks.changed();
     }, PICKER_INPUT_DEBOUNCE_MS);
     this.callbacks.changed();
   }
 
   resetProjectSearch() {
-    this.clearProjectSearchTimer();
-    this.projectQueryValue = "";
-    this.debouncedProjectQuery = "";
+    this.#clearProjectSearchTimer();
+    this.#projectQueryValue = "";
+    this.#debouncedProjectQuery = "";
     this.callbacks.changed();
   }
 
   resetProjects(resetSelection = true) {
     // The shared catalog retires connection/principal results at its owner.
-    if (this.projectCatalog) {
+    if (this.#projectCatalog) {
       void this.refreshProjects(true);
     }
     if (!resetSelection) {
@@ -459,31 +463,39 @@ export class DraftPlaceBrowser {
   }
 
   close() {
-    this.resetBrowser(true);
+    this.#resetBrowser(true);
   }
 
   showRoot() {
-    const wasBrowsing = this.browserOpenValue;
-    this.resetBrowser(false);
+    const wasBrowsing = this.browserOpen;
+    const focus = this.#browserNodeIdValue ? "search" : "browse";
+    this.#resetBrowser(false);
     if (wasBrowsing) {
-      this.focusProjectView("browse");
+      this.#focusProjectView(focus);
     }
   }
 
   selectGatewayBrowser(path?: string) {
-    this.openBrowser("", path);
+    this.#openBrowser("", path);
   }
 
   selectDeviceBrowser(nodeId: string, path?: string) {
-    this.openBrowser(nodeId, path);
+    this.#openBrowser(nodeId, path);
   }
 
-  private openBrowser(nodeId: string, path?: string) {
-    this.browserOpenValue = true;
-    this.browserNodeIdValue = nodeId;
-    this.browserProjectPathValue = null;
+  enterDevicePath(nodeId: string) {
+    this.#browserMode = "enter-path";
+    this.#browserNodeIdValue = nodeId;
+    this.callbacks.changed();
+    this.#focusProjectView("path");
+  }
+
+  #openBrowser(nodeId: string, path?: string) {
+    this.#browserMode = "browse";
+    this.#browserNodeIdValue = nodeId;
+    this.#browserProjectPathValue = null;
     void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
-    this.focusProjectView("path");
+    this.#focusProjectView("path");
   }
 
   async registerBrowserProject(
@@ -506,7 +518,7 @@ export class DraftPlaceBrowser {
     const retirement = Promise.withResolvers<void>();
     const epoch = this.gateway.connectionEpoch;
     const operation = { retire: retirement.resolve, client, epoch };
-    this.browserRegistration = operation;
+    this.#browserRegistration = operation;
     const isCurrentBrowser = () =>
       this.gateway.connected &&
       this.browser.listing === listing &&
@@ -514,7 +526,7 @@ export class DraftPlaceBrowser {
       client === this.gateway.client &&
       epoch === this.gateway.connectionEpoch;
     const isCurrentRegistration = () =>
-      this.browserRegistration === operation && isCurrentBrowser();
+      this.#browserRegistration === operation && isCurrentBrowser();
     this.browser.error = null;
     // Retire the preceding directory error without hiding reads started during registration.
     this.browser.readCompletion = null;
@@ -536,21 +548,21 @@ export class DraftPlaceBrowser {
         this.browser.error = formatUiError(error);
       }
     } finally {
-      if (this.browserRegistration === operation) {
-        this.browserRegistration = null;
+      if (this.#browserRegistration === operation) {
+        this.#browserRegistration = null;
         this.callbacks.changed();
       }
     }
   }
 
-  private transitionPopover(kind: DraftPickerKind, showing: boolean) {
+  #transitionPopover(kind: DraftPickerKind, showing: boolean) {
     if (showing) {
-      this.openPopoverValue = kind;
+      this.#openPopoverValue = kind;
       if (kind === "where") {
-        this.environmentQueryValue = "";
+        this.#environmentQueryValue = "";
       }
-    } else if (this.openPopoverValue === kind) {
-      this.openPopoverValue = null;
+    } else if (this.#openPopoverValue === kind) {
+      this.#openPopoverValue = null;
     }
     if (kind === "project") {
       this.showRoot();
@@ -560,53 +572,57 @@ export class DraftPlaceBrowser {
   }
 
   disconnect() {
-    this.focusRequestId += 1;
-    this.environmentQueryValue = "";
+    this.#focusRequestId += 1;
+    this.#environmentQueryValue = "";
     this.browser.reset();
-    this.retireRegistration();
-    this.clearProjectSearchTimer();
-    this.projectCatalogCleanup?.();
-    this.projectCatalogCleanup = undefined;
-    this.projectCatalogGateway = undefined;
-    this.projectCatalog = undefined;
-    this.searchProjects([null, false, "", -1]);
+    this.#retireRegistration();
+    this.#clearProjectSearchTimer();
+    this.#projectCatalogCleanup?.();
+    this.#projectCatalogCleanup = undefined;
+    this.#projectCatalogGateway = undefined;
+    this.#projectCatalog = undefined;
+    this.#searchProjects([null, false, "", -1]);
   }
 
-  private resetBrowser(closePopover: boolean) {
-    this.focusRequestId += 1;
+  #resetBrowser(closePopover: boolean) {
+    this.#focusRequestId += 1;
     this.browser.reset();
-    this.browserOpenValue = false;
-    this.browserNodeIdValue = "";
-    this.browserProjectPathValue = null;
-    this.retireRegistration();
+    this.#browserMode = null;
+    this.#browserNodeIdValue = "";
+    this.#browserProjectPathValue = null;
+    this.#retireRegistration();
     if (closePopover) {
-      this.openPopoverValue = null;
+      this.#openPopoverValue = null;
     }
     this.callbacks.changed();
   }
 
-  private retireRegistration() {
-    this.browserRegistration?.retire();
-    this.browserRegistration = null;
+  #retireRegistration() {
+    this.#browserRegistration?.retire();
+    this.#browserRegistration = null;
   }
 
-  private clearProjectSearchTimer() {
-    globalThis.clearTimeout(this.projectSearchTimer);
-    this.projectSearchTimer = undefined;
+  #clearProjectSearchTimer() {
+    globalThis.clearTimeout(this.#projectSearchTimer);
+    this.#projectSearchTimer = undefined;
   }
 
-  private focusProjectView(kind: keyof ProjectBrowserFocus) {
-    const requestId = ++this.focusRequestId;
+  #focusProjectView(kind: keyof ProjectBrowserFocus) {
+    const requestId = ++this.#focusRequestId;
     const origin = this.callbacks.activeElement();
     void this.callbacks.updateComplete().then(() => {
-      if (requestId !== this.focusRequestId || this.openPopoverValue !== "project") {
+      if (requestId !== this.#focusRequestId || this.#openPopoverValue !== "project") {
         return;
       }
       const active = this.callbacks.activeElement();
       const target = this.projectFocus[kind];
+      // The root view's search field focuses itself on arrival; that is not the user moving on.
       if (
         target?.isConnected &&
-        (!active || active === origin || active === active.ownerDocument.body)
+        (!active ||
+          active === origin ||
+          active === active.ownerDocument.body ||
+          active === this.projectFocus.search)
       ) {
         target.focus({ preventScroll: true });
       }

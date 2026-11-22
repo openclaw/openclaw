@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
@@ -33,7 +37,7 @@ import {
   sendGatewayLifecycleNoticeMock as sendNotice,
   resolveGatewayLifecycleNoticeRouteMock as resolveNoticeRoute,
   scheduleGatewayRestartMock as scheduleRestart,
-  readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsyncMock,
   invokeUpdateRun,
   captureUpdateRunPayload,
   mockGlobalInstallSurface,
@@ -322,6 +326,63 @@ describe("update.run acknowledgement", () => {
     expect(response?.ackDelivered).toBe(false);
     expect(startHandoff).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    [GATEWAY_CLIENT_IDS.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, true],
+    [GATEWAY_CLIENT_IDS.MACOS_APP, GATEWAY_CLIENT_MODES.UI, true],
+    [GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_MODES.UI, false],
+  ] as const)(
+    "keeps the update receipt out of the chat only for desktop and browser (%s)",
+    async (id, mode, inApp) => {
+      managedPackage();
+      const sessionId = "app-update-notice";
+      const { sessionKey: internalSessionKey, storePath } = await internalSession(sessionId);
+      const respond = vi.fn();
+      await invokeUpdateRun(
+        { sessionKey: internalSessionKey, requester: { channel: INTERNAL_MESSAGE_CHANNEL } },
+        respond,
+        undefined,
+        {},
+        {
+          client: { connect: { client: { id, mode } } } as NonNullable<
+            Parameters<typeof invokeUpdateRun>[4]
+          >["client"],
+        },
+      );
+      const run = expectDefined(listUpdateRuns()[0], "update run receipt");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: run.runId }),
+        undefined,
+      );
+      const events = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+      const messages = events.filter(
+        (event) =>
+          event !== null &&
+          typeof event === "object" &&
+          "type" in event &&
+          event.type === "message",
+      );
+      if (inApp) {
+        expect(messages).toEqual([]);
+        expect(run.origin.noticeSurface).toBe("app");
+      } else {
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            message: expect.objectContaining({
+              idempotencyKey: `update-run-ack:${run.runId}`,
+            }),
+          }),
+        );
+        expect(run.origin.noticeSurface).toBeUndefined();
+      }
+    },
+  );
 
   it("persists the internal activating notice through the transferred helper before parking", async () => {
     const sessionId = "internal-managed-update";
@@ -681,14 +742,14 @@ describe("update.run prepared foreground handoff", () => {
     const { delivered: notice, started: noticeStarted } = deferNotice();
     const parking = handoff.beforePark?.();
     await noticeStarted.promise;
-    claimHandoff.mockReturnValue(false);
+    claimHandoff.mockResolvedValue(false);
     notice.resolve(true);
     await expect(parking).rejects.toThrow("authority changed");
     expect(scheduleRestart).not.toHaveBeenCalled();
   });
 
   it("does not hand off an unverified foreground process", async () => {
-    readGatewayOwnerLeaseMock.mockReturnValueOnce(undefined);
+    readGatewayOwnerLeaseAsyncMock.mockResolvedValueOnce(undefined);
     const payload = await captureUpdateRunPayload();
     expect(payload?.ok).toBe(false);
     expect(startHandoff).not.toHaveBeenCalled();

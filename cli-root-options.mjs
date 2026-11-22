@@ -2,7 +2,7 @@
 export const FLAG_TERMINATOR = "--";
 
 const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+export const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
 
 /** Returns whether a token can be consumed as a root option value. */
 export function isValueToken(arg) {

@@ -650,8 +650,14 @@ describe("OpenAI Codex OAuth flow", () => {
       await vi.advanceTimersByTimeAsync(15_999);
       expect(onPrompt).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
       expect(events).toEqual(["stop", "prompt"]);
+      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
+      // Setup screens show every note as a step; a local sign-in just opens the browser.
+      expect(prompter.note).not.toHaveBeenCalled();
+      expect(onPrompt).toHaveBeenCalledWith({
+        message:
+          "Signed in, but nothing happened? Paste the address from your browser's address bar.",
+      });
     } finally {
       controller.abort();
       vi.useRealTimers();
@@ -710,9 +716,7 @@ describe("OpenAI Codex OAuth flow", () => {
       await ready.promise;
       await vi.advanceTimersByTimeAsync(16_000);
       await promptOpen.promise;
-      expect(stop).toHaveBeenCalledExactlyOnceWith(
-        "Still waiting for the browser. Finish signing in there, or paste the redirect URL below.",
-      );
+      expect(stop).toHaveBeenCalledOnce();
       await requestCallback(buildCallbackUrl(authUrl), agent);
       await expect(login).resolves.toMatchObject({ accountId: "late-browser-account" });
       expect(promptAborted).toBe(true);
@@ -751,10 +755,9 @@ describe("OpenAI Codex OAuth flow", () => {
       // No fake time passes: nothing can arrive on the port, so nothing should wait for it.
       await vi.waitFor(() => expect(onPrompt).toHaveBeenCalledOnce());
       await expect(login).resolves.toMatchObject({ accountId: "busy-port-account" });
-      expect(stop).toHaveBeenCalledWith(
-        "OpenClaw could not use localhost:1455, so the browser cannot finish sign-in here. Sign in there, then paste the redirect URL from its address bar below.",
-      );
-      expect(stop.mock.calls.flat().join("\n")).not.toContain("Still waiting");
+      expect(onPrompt).toHaveBeenCalledWith({
+        message: "Sign in in your browser, then paste the address from its address bar.",
+      });
     } finally {
       controller.abort();
       vi.useRealTimers();

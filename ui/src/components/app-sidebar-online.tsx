@@ -1,6 +1,7 @@
 import { Dynamic } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { USERS_SECTION_PLUGIN_PAGES } from "../app-navigation.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import {
@@ -34,12 +35,9 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
   return (
     <section
       class="sidebar-online"
-      aria-label={t("presence.usersTitle")}
+      aria-label={t("presence.peopleTitle")}
       data-session-section={sectionId}
     >
-      {host.peopleView?.directory()?.loading && (
-        <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
-      )}
       {Boolean(host.peopleView?.directory()?.error) && (
         <button
           type="button"
@@ -49,12 +47,43 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
           {t("presence.directoryFailed")}
         </button>
       )}
-      <div class="sidebar-online__list">
+      {/* The Users section opens on Activity, its overview, above the people. */}
+      <div class="sidebar-online__overview">
+        {host.sidebarMenus.renderRoute("activity", host)}
+        <For
+          each={host
+            .pluginNavigation()
+            .filter((entry) => USERS_SECTION_PLUGIN_PAGES.has(entry.key))}
+        >
+          {(entry) => (
+            <openclaw-plugin-contributions
+              prop:kind={"navigation"}
+              prop:navigationKey={entry.key}
+              prop:navigationChildren={false}
+              prop:navigationMenus={host.sidebarMenus}
+            />
+          )}
+        </For>
+      </div>
+      {/* The people below follow the filter: who is online, or every user. */}
+      <div class="sidebar-section-heading">
+        <span class="sidebar-recent-sessions__label-text">
+          {host.people.presenceFilter === "online"
+            ? t("presence.rosterTitle")
+            : t("presence.usersTitle")}
+        </span>
+      </div>
+      <div
+        class="sidebar-online__list"
+        aria-busy={host.peopleView?.directory()?.loading ? "true" : undefined}
+      >
         {listUsers().length === 0 ? (
           <span class="sidebar-session-empty-hint">
-            {counts() === null
-              ? t("presence.sessions.unavailable")
-              : t("presence.filters.noMatches")}
+            {host.peopleView?.directory()?.loading
+              ? t("common.loading")
+              : counts() === null
+                ? t("presence.sessions.unavailable")
+                : t("presence.filters.noMatches")}
           </span>
         ) : undefined}
         <For each={listUsers()} keyed={presenceUserKey}>

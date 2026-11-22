@@ -140,7 +140,7 @@ suite.define(() => {
       await page.locator(".chat-queue__item").waitFor();
       await page
         .locator(".sidebar-shell__connection .gateway-status")
-        .getByText("Reconnecting… · 1 queued", { exact: true })
+        .getByText("Reconnecting · 1 queued", { exact: true })
         .waitFor();
       expect(
         await page

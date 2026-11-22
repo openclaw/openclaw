@@ -617,12 +617,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         rpcSourceTesting.deleteExpected(execution.params.runId, entry);
       }
       const lostRegistration = successor !== undefined && registration !== "foreign";
-      const recovery = createGate();
       const disposal = createGate();
-      execution.params.releaseCronContinuationClaimWithRecovery = async () => {
-        await recovery.wait();
-        return true;
-      };
       execution.runtimeRelease.mockImplementation(disposal.wait);
       const replyObserved = vi.fn();
       const reply = owner.take().then((result) => {
@@ -633,12 +628,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const finished = vi.fn();
       const completion = startAgentRunExecution(execution.params).then(finished);
       try {
-        await Promise.race([recovery.entered, completion]);
-        expectCalls(0, dispatchAgentRunFromGateway, execution.params.io.emitFinal);
-        expect(execution.params.context.dedupe.size).toBe(0);
-        expectCalls(0, replyObserved, execution.abortCleanup);
-        recovery.resolve();
         await Promise.race([settlement.entered, completion]);
+        expectCalls(0, dispatchAgentRunFromGateway, replyObserved);
         expectCalls(0, execution.params.io.emitFinal, execution.abortCleanup);
         expect(execution.params.context.dedupe.size).toBe(0);
         settlement.resolve();
@@ -663,7 +654,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
           );
         }
       } finally {
-        recovery.resolve();
         settlement.resolve();
         disposal.resolve();
         await completion.catch(() => {});

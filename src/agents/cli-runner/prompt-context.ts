@@ -28,7 +28,6 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareAgentPromptRepoRoot } from "../prompt-projects.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { cliBackendLog } from "./log.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
@@ -323,13 +322,6 @@ export async function prepareCliPromptSources(params: {
   preparedSkills: Awaited<ReturnType<typeof resolveCliSkillsPrompt>>;
 }> {
   const { run, workspaceDir, cwd, agentId } = params;
-  const assertCurrent = run.admittedRunContext
-    ? createCliRunCurrentAssertion({ ...run, admittedRunContext: run.admittedRunContext })
-    : () => {
-        run.assertCurrent?.();
-        run.abortSignal?.throwIfAborted();
-        run.preparedRunAdmission?.assertSourceCurrent();
-      };
   const [openClawReferences, preparedSkills] = await settleCurrentReadPreparations([
     params.skipTurnPreparation
       ? { docsPath: null, sourcePath: null }
@@ -344,7 +336,6 @@ export async function prepareCliPromptSources(params: {
     params.skipTurnPreparation || params.skipSkills
       ? { prompt: "" }
       : resolveCliSkillsPrompt({
-          assertCurrent,
           run,
           workspaceDir,
           executionWorkspaceDir: cwd,
@@ -353,6 +344,5 @@ export async function prepareCliPromptSources(params: {
           sessionKey: run.sessionKey?.trim() || run.sessionId,
         }),
   ] as const);
-  assertCurrent();
   return { openClawReferences, preparedSkills };
 }

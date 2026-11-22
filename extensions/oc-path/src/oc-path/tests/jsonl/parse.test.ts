@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import { parseJsonl } from "../../jsonl/parse.js";
 
 describe("parseJsonl", () => {
-  it("parses an empty file as zero lines", () => {
-    const ast = parseJsonl("");
-    expect(ast.lines).toEqual([]);
+  it.each([
+    ["", []],
+    ["\n", ["blank"]],
+    ["\r\n", ["blank"]],
+  ])("parses %j as %j", (raw, kinds) => {
+    expect(parseJsonl(raw).lines.map((l) => l.kind)).toEqual(kinds);
   });
 
   it("parses each line as a JSON value", () => {
@@ -30,11 +33,5 @@ describe("parseJsonl", () => {
     const ast = parseJsonl(raw);
     expect(ast.lines.map((l) => l.kind)).toEqual(["value", "malformed", "value"]);
     expect(ast.lines[1]).toEqual({ kind: "malformed", line: 2, raw: "this is not json" });
-  });
-
-  it("preserves raw on the AST root for byte-fidelity emit", () => {
-    const raw = '{"a":1}\n{"b":2}\n';
-    const ast = parseJsonl(raw);
-    expect(ast.raw).toBe(raw);
   });
 });

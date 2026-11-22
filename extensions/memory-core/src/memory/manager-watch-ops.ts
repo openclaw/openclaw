@@ -73,7 +73,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       settings: this.settings,
       onDirty: () => this.markMemoryWatchDirty(),
       onChange: () => {
-        this.markMemoryWatchDirty();
+        if (!this.dirty) {
+          return undefined;
+        }
         return this.syncBackground({ reason: "watch" });
       },
       onUnavailable: () => {

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import { captureSessionControllerSourceSettlement as settleSource } from "../../../sessions/session-controller.mailbox.js";
 import {
   admitFollowupRunLifecycle as admit,
@@ -31,6 +32,39 @@ it("keeps the public deferral callback free of internal observation arguments", 
   expect(markEnqueued(run)).toBe(true);
   expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
 });
+
+it.each([false, true])(
+  "checks queued=%s authority once per single-flight adoption",
+  async (enqueued) => {
+    const release = queue.gate();
+    const failure = new Error("source adoption failed");
+    const reauthorize = vi.fn();
+    const onAdopted = vi.fn(release.wait).mockRejectedValueOnce(failure);
+    run.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "operator",
+      scopes: ["operator.write"],
+      source: {},
+      assertCurrent: () => {},
+      reauthorize,
+    });
+    run.turnAdoptionLifecycle = { onAdopted };
+    if (enqueued) {
+      expect(markEnqueued(run)).toBe(true);
+    }
+    await expect(admit(run)).rejects.toThrow(failure);
+    expect(reauthorize).toHaveBeenCalledTimes(enqueued ? 1 : 0);
+    const retry = admit(run);
+    const concurrent = admit(run);
+    await release.entered;
+    expect(reauthorize).toHaveBeenCalledTimes(enqueued ? 2 : 0);
+    expect(onAdopted).toHaveBeenCalledTimes(2);
+    release.resolve();
+    await Promise.all([retry, concurrent]);
+    await admit(run);
+    expect(reauthorize).toHaveBeenCalledTimes(enqueued ? 2 : 0);
+    expect(onAdopted).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each(["abandonment", "publication failure", "adoption"] as const)(
   "retains source custody during pending %s",

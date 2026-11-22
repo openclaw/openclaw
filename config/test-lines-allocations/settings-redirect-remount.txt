@@ -1,3 +1,0 @@
-# Retain the outgoing page through /settings and all ten moved-section redirects.
-# Covers real router/outlet mount-dispose behavior, shared URL policy, and raw loader fallbacks.
-159
