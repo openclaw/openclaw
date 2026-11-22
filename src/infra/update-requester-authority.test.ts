@@ -308,6 +308,8 @@ it("releases worker-held state readers before the helper waits on Doctor", async
   // The managed handoff helper outlives this check while Doctor and rollback take
   // native exclusion; an idle retained WAL reader would hold their shared lock.
   const run = create();
+  // Only the authority check may hold a connection when exclusion is attempted.
+  await closeOpenClawStateDatabaseAsync();
   vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
     await getUpdateRunForProgressAsync(run.runId, { env });
   });
