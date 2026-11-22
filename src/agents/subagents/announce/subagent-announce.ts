@@ -481,12 +481,12 @@ async function runSubagentAnnounceFlowBound(
               throw new Error("Subagent child-session effects are no longer current.");
             }
           },
-          { excludeSuspendedDelivery: true },
+          { excludeSettledDelivery: true },
         )) > 0)
     ) {
       // Coordination can admit a child after the earlier descendant check.
       // Recheck now so cleanup cannot retire the orchestrator before its return.
-      // A suspended descendant cannot hold this completion (upstream #197323).
+      // A settled descendant cannot hold this completion (upstream #197323, #203102).
       shouldDeleteChildSession = false;
       return "retryable";
     }

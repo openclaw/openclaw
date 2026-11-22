@@ -104,7 +104,9 @@ const { registry } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
-    countPendingDescendantRuns: vi.fn((_key: string, _assert?: unknown, _options?: unknown) => 0),
+    countPendingDescendantRuns: vi.fn(
+      (_key: string, _assert?: unknown, _options?: { excludeSettledDelivery?: boolean }) => 0,
+    ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -861,7 +863,9 @@ describe("subagent announce formatting", () => {
     registry.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(
       mode === "completed parent",
     );
-    registry.countPendingDescendantRuns.mockImplementation((_k, _a, opts) => (opts ? 0 : 1));
+    registry.countPendingDescendantRuns.mockImplementation((_k, _a, opts) =>
+      opts?.excludeSettledDelivery ? 0 : 1,
+    );
     if (destination) {
       registry.resolveRequesterForChildSession.mockReturnValue({
         requesterSessionKey: destination,
