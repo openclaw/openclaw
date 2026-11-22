@@ -1520,7 +1520,8 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
+            # Interactive: Homebrew asks for the admin password and confirmation on the terminal.
+            run_with_safe_stdin run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then

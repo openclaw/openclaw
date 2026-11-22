@@ -3730,6 +3730,33 @@ if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo
     expect(result.status).toBe(0);
     expect(readFileSync(stdinLog, "utf8").trim()).toBe("devnull");
   });
+
+  it("keeps the interactive Homebrew bootstrap on the terminal", () => {
+    const dir = tempDirs.make("openclaw-install-sh-homebrew-stdin-");
+    const stdinLog = join(dir, "stdin-source");
+    const stdinPath = join(dir, "stdin");
+    writeFileSync(stdinPath, "terminal input\n");
+
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      OS=macos
+      needs_stdin_isolation() { return 1; }
+      is_macos_admin_user() { return 0; }
+      command() { [[ "$1" == "-v" && "$2" == "brew" ]] && return 1; builtin command "$@"; }
+      run_remote_bash() {
+        if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+      }
+      install_homebrew
+    `,
+      { STDIN_FIXTURE_PATH: stdinPath },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinLog, "utf8").trim()).toBe("other");
+  });
 });
 
 describe("install.sh duplicate OpenClaw install detection", () => {
