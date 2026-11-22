@@ -3,8 +3,14 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import {
+  clearRuntimeConfigSnapshot,
+  readRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { createLazyPluginRuntime } from "../plugins/loader-module-runtime.js";
 import type { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
 import {
   createOpenClawTestState,
@@ -322,4 +328,90 @@ it("rebuilds one agent at a time when the host allows no fanout", async () => {
   const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
   expect(syncs.peak()).toBe(1);
   expectStatuses(results, { alpha: "rebuilt", beta: "rebuilt", gamma: "rebuilt" });
+});
+
+it("prepares the runtime config snapshot for local embedding service acquisition when absent", async () => {
+  const stores = await agentStores(["main"]);
+  const baseUrl = "https://ollama.example.invalid";
+  await state.writeConfig({
+    agents: { entries: { main: {} } },
+    models: { providers: { "ollama-cloud": { baseUrl, models: [] } } },
+  });
+  clearRuntimeConfigSnapshot();
+
+  const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+  const target = { providerId: "ollama-cloud", baseUrl };
+  let acquireError: unknown;
+  let acquired = false;
+  plugin.open.mockResolvedValue({
+    manager: manager({
+      sync: async () => {
+        try {
+          await runtime.llm.acquireLocalService(target);
+          acquired = true;
+        } catch (error) {
+          acquireError = error;
+          throw error;
+        }
+      },
+    }),
+    searchRuntimeRegistered: true,
+  });
+
+  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+  expect(acquireError).toBeUndefined();
+  expect(acquired).toBe(true);
+  expectStatuses(results, { main: "rebuilt" });
+  expect(readRuntimeConfig().models?.providers?.["ollama-cloud"]?.baseUrl).toBe(baseUrl);
+});
+
+it("replaces an older pre-port runtime config snapshot before local service acquisition", async () => {
+  const stores = await agentStores(["main"]);
+  const prePortBaseUrl = "http://127.0.0.1:11434";
+  const destinationBaseUrl = "https://embeddings.destination.invalid";
+  setRuntimeConfigSnapshot({
+    agents: { entries: { main: {} } },
+    models: {
+      providers: {
+        "local-embed": {
+          baseUrl: prePortBaseUrl,
+          models: [],
+          localService: { command: "/pre-port-unused-provider" },
+        },
+      },
+    },
+  });
+  await state.writeConfig({
+    agents: { entries: { main: {} } },
+    models: {
+      providers: {
+        "local-embed": { baseUrl: destinationBaseUrl, models: [] },
+      },
+    },
+  });
+
+  const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+  const target = { providerId: "local-embed", baseUrl: destinationBaseUrl };
+  let acquireError: unknown;
+  let acquired = false;
+  plugin.open.mockResolvedValue({
+    manager: manager({
+      sync: async () => {
+        try {
+          await runtime.llm.acquireLocalService(target);
+          acquired = true;
+        } catch (error) {
+          acquireError = error;
+          throw error;
+        }
+      },
+    }),
+    searchRuntimeRegistered: true,
+  });
+
+  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+  expect(acquireError).toBeUndefined();
+  expect(acquired).toBe(true);
+  expectStatuses(results, { main: "rebuilt" });
+  expect(readRuntimeConfig().models?.providers?.["local-embed"]?.baseUrl).toBe(destinationBaseUrl);
 });
