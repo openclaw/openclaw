@@ -538,7 +538,6 @@ export class SidebarSessionProjection {
       }
       observed.add(session.key);
       staleKeys.delete(session.key);
-      this.children.observe(session, input.listLoaded);
       this.#observeSubtitle(session, input.subtitle);
       pending.push(...session.children);
     }
