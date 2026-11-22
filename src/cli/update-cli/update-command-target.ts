@@ -59,11 +59,8 @@ import {
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
-import {
-  captureUpdateCommandExecutorAuthority,
-  type UpdateCommandExecutor,
-} from "./update-command-executor.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
+import { admitUpdatePackageRoot } from "./update-command-package-activation.js";
 import {
   inspectCheckoutLinkPackageSwitch,
   inspectNpmGlobalDestination,
@@ -362,23 +359,8 @@ export async function resolveUpdateCommandTarget(
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
-      const admitPackageRoot = async () => {
-        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-        const fence = await executor.enter(root, {
-          preflight: true,
-          serviceRoot: managedServiceRoot,
-        });
-        if (opts.run) {
-          opts.run.executorFence = fence;
-        }
-        fence.assertCurrent();
-        assertUpdatePackageActivationAdmission(
-          captureUpdateCommandExecutorAuthority(fence).installKey,
-          { serviceRoot: managedServiceRoot },
-        );
-      };
       if (updateInstallKind === "package" && !switchToPackage && !opts.dryRun) {
-        await admitPackageRoot();
+        await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
       }
 
       const currentVersion = await readPackageVersion(root);
@@ -453,9 +435,17 @@ export async function resolveUpdateCommandTarget(
           if (switchToPackage && packageInstallTarget.packageRoot) {
             // A switch from Git updates the package destination, which owns this update's
             // lease and publication recovery; the installed target's continuation checks them.
+            // A Gateway service on the Git install is retained and rebound after verification.
+            if (
+              managedServicePlan?.service &&
+              prepared.shouldRestart &&
+              process.platform !== "win32"
+            ) {
+              managedServiceRoot ??= discoveredRoot;
+            }
             root = packageInstallTarget.packageRoot;
             if (!opts.dryRun) {
-              await admitPackageRoot();
+              await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
