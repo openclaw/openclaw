@@ -8,6 +8,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   candidate,
   config,
@@ -60,7 +61,7 @@ describe.skipIf(process.platform === "win32")(
         expect(config().gateway).toEqual({ mode: "local" });
         expect(settled(ctx.admitted[0])).toMatch(/kept, because its Gateway was verified/u);
         expect(replacedWarning(killed.runId)).toBe(
-          `Plugin recovery was settled (commit) from a replacing installation: the package directory this update recorded, ${home(install.key)}, no longer exists, its install path ${home(install.slot)} resolves to the installation at ${home(successor)}, its driver exited, and it recorded OpenClaw ${candidate} serving.`,
+          `Plugin recovery was settled from a replacing installation: the package directory this update recorded, ${home(install.key)}, no longer exists, its install path ${home(install.slot)} resolves to the installation at ${home(successor)}, its driver exited, and it recorded OpenClaw ${candidate} serving.`,
         );
         // History reconciliation then closes the dead run and keeps the warning.
         await reconcileAbandonedUpdateRunsAsync({});
@@ -89,11 +90,32 @@ describe.skipIf(process.platform === "win32")(
         expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
           expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
         );
-        expect(replacedWarning(killed.runId)).toMatch(/^Plugin recovery was settled \(commit\)/u);
+        expect(replacedWarning(killed.runId)).toMatch(
+          /^Plugin recovery was settled from a replacing/u,
+        );
 
         await nextUpdate(install.slot);
         expect(mocks.proceed).toHaveBeenCalledOnce();
         expect(settled(ctx.admitted[0])).toBeUndefined();
+      }));
+
+    it("finishes a commit the dead update had begun after a later build replaced it", () =>
+      fixtures.lifetime.run(async () => {
+        const install = await linkedInstallation();
+        const killed = await updater(install.key, { ...verified, root: install.slot });
+        // It died after selecting commit and before removing its recovery; the operator
+        // then installed a later fixed build, which is not the version that update verified.
+        writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
+          ...loadPluginCohortRecovery(killed.runId)!.cohort,
+          disposition: "commit",
+        });
+        await replacePackageDirectory(install, { version: "2026.12.2" });
+
+        await runRepair(install.slot);
+
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(config().gateway).toEqual({ mode: "local" });
+        expect(replacedWarning(killed.runId)).toContain(`recorded OpenClaw ${candidate} serving.`);
       }));
 
     // Each control removes one piece of evidence; both entries refuse and change nothing.
@@ -108,10 +130,10 @@ describe.skipIf(process.platform === "win32")(
       dead?: Updater;
       /** Run the dead update from its package directory rather than the install path. */
       fromPackageDirectory?: true;
-      keepPrevious?: true;
       otherInstallation?: true;
       control?: (killed: Dead) => unknown;
-      why: string;
+      /** The missing fact, given the install path the dead update ran from. */
+      why: string | ((slot: string) => string);
       next?: { update: string; repair: string };
     }>([
       {
@@ -171,7 +193,7 @@ describe.skipIf(process.platform === "win32")(
       {
         name: "another installation is asking",
         otherInstallation: true,
-        why: "which is not this installation.",
+        why: (slot) => `its update ran from ${slot}, which is not this installation.`,
       },
     ])("is refused when $name", (control) =>
       fixtures.lifetime.run(async () => {
@@ -188,13 +210,15 @@ describe.skipIf(process.platform === "win32")(
           : install.slot;
         const before = reserved(killed.runId);
         const next = control.next ?? { update: triage, repair: triage };
+        const why = typeof control.why === "string" ? control.why : control.why(install.slot);
 
-        const refusal = `this installation cannot show it replaced that one: `;
-        await expect(nextUpdate(asking)).rejects.toThrow(refusal);
-        await expect(nextUpdate(asking)).rejects.toThrow(`${control.why} ${triage}`);
-        await expect(nextUpdate(asking)).rejects.toThrow(next.update);
-        await expect(runRepair(asking)).rejects.toThrow(refusal);
-        await expect(runRepair(asking)).rejects.toThrow(`${control.why} ${next.repair}`);
+        const refusal = `which no longer exists, and this installation cannot show it replaced that one: `;
+        const updateRefusal = String(await nextUpdate(asking).catch((error: unknown) => error));
+        const repairRefusal = String(await runRepair(asking).catch((error: unknown) => error));
+
+        expect(updateRefusal).toContain(`${refusal}${why} ${triage}`);
+        expect(updateRefusal).toContain(next.update);
+        expect(repairRefusal).toContain(`${refusal}${why} ${next.repair}`);
 
         expect(mocks.proceed).not.toHaveBeenCalled();
         expect(reserved(killed.runId)).toEqual(before);

@@ -286,13 +286,16 @@ export async function linkedInstallation(name = "prefix") {
   fs.symlinkSync(previous, slot, "dir");
   return { slot, key: fs.realpathSync(previous) };
 }
-/** What pnpm's activation does: the candidate gets its own directory, the previous one leaves. */
+/**
+ * What pnpm's activation does: the candidate gets its own directory, the previous one leaves.
+ * `version` installs a later build instead, as `pnpm add -g` of a fixed build does.
+ */
 export async function replacePackageDirectory(
   { slot, key }: { slot: string; key: string },
-  { keepPrevious = false } = {},
+  { keepPrevious = false, version = candidate } = {},
 ) {
-  const next = path.join(path.dirname(path.dirname(key)), "candidate", "openclaw");
-  await writePackageRoot(next, candidate);
+  const next = path.join(path.dirname(path.dirname(key)), version, "openclaw");
+  await writePackageRoot(next, version);
   fs.rmSync(slot);
   fs.symlinkSync(next, slot, "dir");
   if (!keepPrevious) {

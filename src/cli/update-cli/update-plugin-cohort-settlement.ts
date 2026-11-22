@@ -292,7 +292,8 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const installed = (core: { version: string; buildId: string | null }) =>
     version === core.version && (buildId ?? null) === core.buildId;
   const { from, to } = current.reservation;
-  if (current.cohort.disposition === "commit" && !installed(to)) {
+  // A proven successor may be a different build installed after the candidate served.
+  if (current.cohort.disposition === "commit" && !installed(to) && !params.replaced) {
     throw new Error(
       "Plugin cohort commit does not match the installed candidate version and build.",
     );
@@ -336,8 +337,9 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   });
   assertCurrent();
   if (params.replaced) {
-    // History reconciliation then closes the run; this says which installation settled it and why.
-    const warning = `Plugin recovery was settled (${action}) from a replacing installation: ${params.replaced.warning}`;
+    // History reconciliation then closes the run; this says which installation settled it and
+    // why. The cohort owner may finish a rollback it began, so the outcome is not named here.
+    const warning = `Plugin recovery was settled from a replacing installation: ${params.replaced.warning}`;
     defaultRuntime.error(`Warning: ${warning}`);
     try {
       recordUpdateRunDiagnostic(
