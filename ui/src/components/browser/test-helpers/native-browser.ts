@@ -60,6 +60,7 @@ export function fakeNativeBrowser(tabs: Bridge.NativeBrowserTab[] = [], legacy =
       case "forward":
       case "navigate":
       case "present":
+      case "overlay-cutouts":
       case "release-scope":
       case "reload":
       case "stop":
