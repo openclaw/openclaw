@@ -544,7 +544,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const runEmbeddedAgent = answeringAgent("Done.");
     setConsultCall();
 
-    const handler = await startConsult(config, createConsultRuntime(runEmbeddedAgent));
+    // An unset responseModel inherits the agent model, which now has no implicit fallback.
+    const handler = await startConsult(config, createConsultRuntime(runEmbeddedAgent), {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    });
     expect(realtimeArgs()[7]).toBeInstanceOf(DtmfElevationGate);
 
     await handler({ question: "Check my calendar." }, "call-1", { toolPolicy: "safe-read-only" });
