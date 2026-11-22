@@ -1473,39 +1473,52 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("suppresses command cron NO_REPLY output before announce delivery", async () => {
-    const cfg = createCronConfig("server-cron-command-no-reply");
-    await withCronService(cfg, async (state) => {
-      const job = await addCommandJob(
-        state,
-        "silent-command",
-        "process.stdout.write('NO_REPLY\\n')",
-        {
-          deleteAfterRun: false,
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
-        },
-      );
+  it.each([
+    { exitCode: 0, status: "ok", completionStatus: "succeeded", error: undefined },
+    {
+      exitCode: 1,
+      status: "error",
+      completionStatus: "failed",
+      error: "command exited with code 1",
+    },
+  ])(
+    "suppresses command cron NO_REPLY before announce delivery (exit $exitCode)",
+    async ({ exitCode, status, completionStatus, error }) => {
+      const cfg = createCronConfig("server-cron-command-no-reply");
+      await withCronService(cfg, async (state) => {
+        const job = await addCommandJob(
+          state,
+          "silent-command",
+          `process.stdout.write('NO_REPLY\\n', () => process.exit(${exitCode}))`,
+          {
+            deleteAfterRun: false,
+            delivery: { mode: "announce", channel: "telegram", to: "123" },
+          },
+        );
 
-      await state.cron.run(job.id, "force");
+        await state.cron.run(job.id, "force");
 
-      expect(state.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
-      expect(state.cron.getJob(job.id)?.state).toMatchObject({
-        lastRunStatus: "ok",
-        lastDeliveryStatus: "not-delivered",
-        lastDelivered: false,
-        deliverySuppressionReason: "silent",
-      });
-      expect(mocks.announce).not.toHaveBeenCalled();
-      expect(mocks.changed.mock.calls.map(([event]) => event)).toContainEqual(
-        expect.objectContaining({
-          jobId: job.id,
-          action: "finished",
-          completionStatus: "succeeded",
+        const jobState = state.cron.getJob(job.id)?.state;
+        expect(jobState?.lastDeliveryError).toBeUndefined();
+        expect(jobState?.lastError).toBe(error);
+        expect(jobState).toMatchObject({
+          lastRunStatus: status,
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
           deliverySuppressionReason: "silent",
-        }),
-      );
-    });
-  });
+        });
+        expect(mocks.announce).not.toHaveBeenCalled();
+        expect(mocks.changed.mock.calls.map(([event]) => event)).toContainEqual(
+          expect.objectContaining({
+            jobId: job.id,
+            action: "finished",
+            completionStatus,
+            deliverySuppressionReason: "silent",
+          }),
+        );
+      });
+    },
+  );
 
   registerGatewayCronCompletionTests({
     createCronConfig,

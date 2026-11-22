@@ -177,8 +177,10 @@ export async function runCronCommandJob(params: {
         : result.stdout.trim()
           ? result.stdout
           : result.stderr;
+    const terminal = prepareAgentRunTerminalReply({ rawText: rawOutput });
+    // Honor explicit silence while retaining the existing summary for visible command failures.
     const prepared =
-      status === "ok" ? prepareAgentRunTerminalReply({ rawText: rawOutput }) : undefined;
+      status === "ok" || terminal.terminalReply.disposition === "silent" ? terminal : undefined;
     const summary =
       prepared && prepared.text !== rawOutput ? prepared.text || undefined : rawSummary;
     const error = ok
