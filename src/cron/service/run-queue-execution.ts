@@ -215,7 +215,6 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)
