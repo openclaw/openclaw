@@ -5,6 +5,7 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createSessionShareGatewayCatalog } from "./gateway-catalog.js";
 
@@ -380,7 +381,7 @@ it.each([undefined, "primary", "missing"])(
   },
 );
 
-it("discovers peer filter support before sending and never retries a filter unscoped", async () => {
+it("discovers peer filter support and never turns transport errors into identity fallback", async () => {
   const { catalog, client } = await createSource();
   const profileRelation = {
     relationship: "involving",
@@ -389,9 +390,16 @@ it("discovers peer filter support before sending and never retries a filter unsc
   (client.options.onHelloOk as (hello: unknown) => void)({
     features: { methods: ["session-share.list", "session-share.read"] },
   });
-  client.request.mockResolvedValue({ sessions: [] });
+  const row = {
+    threadId: "shared",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  client.request.mockResolvedValue({ sessions: [row] });
   expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
-    sessions: [],
+    sessions: [row],
     error: { code: "FILTER_PARTIAL" },
   });
   expect(client.request).toHaveBeenLastCalledWith("session-share.list", { limit: 20 });
@@ -411,9 +419,71 @@ it("discovers peer filter support before sending and never retries a filter unsc
   });
   client.request.mockRejectedValueOnce(new Error("unknown profileRelation"));
   expect((await catalog.list({ profileRelation }))[0]?.error?.message).toContain(
-    "relationship filter",
+    "Shared Gateway unavailable",
   );
   expect(
     client.request.mock.calls.every(([method]) => method === "session-share.catalog.list"),
   ).toBe(true);
+});
+
+it("uses the advertised Gateway catalog pair without a filter and rejects original paths", async () => {
+  const { catalog, client } = await createSource();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
+  });
+  const row = {
+    threadId: "one",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  client.request.mockResolvedValue({ sessions: [row] });
+  expect((await catalog.list({}))[0]?.sessions).toEqual([row]);
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", { limit: 20 });
+  client.request.mockResolvedValue({ threadId: "one", items: [] });
+  await catalog.read({ hostId: "gateway:team", threadId: "one" });
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.read", {
+    threadId: "one",
+    limit: 20,
+  });
+  client.request.mockResolvedValue({ sessions: [{ ...row, originalPath: "/chat/main/one" }] });
+  expect((await catalog.list({}))[0]).toMatchObject({
+    sessions: [],
+    error: { code: "SOURCE_UNAVAILABLE" },
+  });
+});
+
+it("retains authorized rows and the fallback mode across Gateway cursor pages", async () => {
+  const { catalog, client } = await createSource();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
+  });
+  const profileRelation = {
+    relationship: "owned",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const row = {
+    threadId: "shared",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  const sourceCursor = sessionCatalogPaging.encodeCursor(20);
+  client.request
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Unresolved profile"), { code: "FILTER_UNAVAILABLE" }),
+    )
+    .mockResolvedValueOnce({ sessions: [row], nextCursor: sourceCursor });
+  const host = (await catalog.list({ profileRelation }))[0]!;
+  expect(host).toMatchObject({ sessions: [row], error: { code: "FILTER_PARTIAL" } });
+  expect(host.profileRelation).toBeUndefined();
+  client.request.mockResolvedValue({ sessions: [row] });
+  await catalog.list({ profileRelation, cursors: { "gateway:team": host.nextCursor! } });
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", {
+    limit: 20,
+    cursor: sourceCursor,
+  });
+  expect(client.request).toHaveBeenCalledTimes(3);
 });

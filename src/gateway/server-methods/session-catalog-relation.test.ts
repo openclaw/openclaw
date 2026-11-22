@@ -3,6 +3,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import {
   catalogHost,
   catalogProvider,
+  catalogSession,
   expectCatalog,
 } from "./session-catalog.fixtures.test-support.js";
 import { call, hoisted, resetSessionCatalogTestState } from "./session-catalog.test-helpers.js";
@@ -63,7 +64,10 @@ it("separates shared queries while leaving local listing to its existing client-
 
 it("keeps local catalogs available when a shared relationship cannot resolve", async () => {
   const localList = vi.fn<SessionCatalogProvider["list"]>(async () => [catalogHost()]);
-  const sharedList = vi.fn<SessionCatalogProvider["list"]>(async () => [catalogHost()]);
+  const row = catalogSession("authorized-legacy-row");
+  const sharedList = vi.fn<SessionCatalogProvider["list"]>(async () => [
+    catalogHost({ sessions: [row] }),
+  ]);
   hoisted.activeRegistry.sessionCatalogs = [
     { provider: catalogProvider("local", { list: localList }) },
     { provider: catalogProvider("shared", { supportsProfileRelation: true, list: sharedList }) },
@@ -81,7 +85,7 @@ it("keeps local catalogs available when a shared relationship cannot resolve", a
         id: "shared",
         hosts: [
           expect.objectContaining({
-            sessions: expect.any(Array),
+            sessions: [row],
             error: expect.objectContaining({ code: "FILTER_PARTIAL" }),
           }),
         ],

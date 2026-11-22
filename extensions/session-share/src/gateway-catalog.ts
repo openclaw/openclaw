@@ -219,16 +219,32 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               assertCurrent(source, connectionVersion);
               let relation = source.supportsProfileRelation ? query.profileRelation : undefined;
               let partial = Boolean(query.profileRelation && !relation);
+              let cursor = query.cursors?.[source.hostId];
+              if (cursor && query.profileRelation) {
+                const decoded = sessionCatalogPaging.decodeScopedCursor(
+                  cursor,
+                  query.profileRelation,
+                );
+                if (decoded?.startsWith("partial:")) {
+                  relation = undefined;
+                  partial = true;
+                  cursor = decoded.slice("partial:".length);
+                } else if (decoded?.startsWith("filtered:") && relation) {
+                  cursor = decoded.slice("filtered:".length);
+                } else {
+                  throw new Error("Invalid relationship page cursor. Refresh the catalog.");
+                }
+              }
               const requestPage = () =>
                 source.client.request(
-                  relation ? "session-share.catalog.list" : "session-share.list",
+                  source.supportsProfileRelation
+                    ? "session-share.catalog.list"
+                    : "session-share.list",
                   {
                     ...(relation ? { profileRelation: relation } : {}),
                     limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
                     ...(query.search ? { searchTerm: query.search } : {}),
-                    ...(query.cursors?.[source.hostId]
-                      ? { cursor: query.cursors[source.hostId] }
-                      : {}),
+                    ...(cursor ? { cursor } : {}),
                   },
                 );
               let raw: unknown;
@@ -240,16 +256,26 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   !(error instanceof Error) ||
                   !("code" in error) ||
                   error.code !== "FILTER_UNAVAILABLE"
-                )
+                ) {
                   throw error;
+                }
                 relation = undefined;
                 partial = true;
+                cursor = undefined;
                 raw = await requestPage();
               }
               const page = parseSessionSharePage(raw, false, relation);
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
+                ...(page.nextCursor && query.profileRelation
+                  ? {
+                      nextCursor: sessionCatalogPaging.encodeScopedCursor(
+                        `${relation ? "filtered:" : "partial:"}${page.nextCursor}`,
+                        query.profileRelation,
+                      ),
+                    }
+                  : {}),
                 ...(relation ? { profileRelation: relation } : {}),
                 ...(partial
                   ? {
@@ -280,9 +306,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   message:
                     error instanceof SourceConfigurationChangedError
                       ? error.message
-                      : query.profileRelation
-                        ? "Cannot apply this relationship filter. Check the verified identity link on both Gateways, or choose All owners."
-                        : "Shared Gateway unavailable. Refresh the catalog.",
+                      : "Shared Gateway unavailable. Refresh the catalog.",
                 },
               });
             }
@@ -304,7 +328,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       }
       try {
         const raw = await source.client.request(
-          request.profileRelation ? "session-share.catalog.read" : "session-share.read",
+          source.supportsProfileRelation ? "session-share.catalog.read" : "session-share.read",
           {
             ...(request.profileRelation ? { profileRelation: request.profileRelation } : {}),
             threadId: request.threadId,

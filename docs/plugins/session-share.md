@@ -70,9 +70,10 @@ configured `share.involvingProfileId`; it never grants access to other sessions.
 
 The receiver resolves the selected local profile through its verified numeric
 GitHub account ID. The source must link that account to exactly one canonical
-profile. Missing or ambiguous links fail with guidance instead of returning an
-unfiltered shared catalog. This does not prevent local catalogs from using their
-existing client-side filters. Reads and imports retain the same filter as the selected row.
+profile. Missing or ambiguous links retain the authorized legacy rows with visible
+partial-filter guidance and existing client-side matching. Local catalogs keep their
+existing client-side filters. Reads and imports retain the source-applied filter
+of the selected host; a fallback host does not claim source filtering.
 
 Node sources must advertise and the receiver must approve both optional commands:
 
@@ -80,18 +81,20 @@ Node sources must advertise and the receiver must approve both optional commands
 - `openclaw.sessions.catalog.read.v1`
 
 The original `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1` commands
-remain unchanged. Filtered listing uses direct, query-scoped pages rather than the
-unfiltered node snapshot. Outbound Gateway sources must advertise both
+remain unchanged. Filtered node snapshots are query-scoped and use the same
+bounded refresh permit pool as ordinary node discovery. Pages and lookups reuse
+that snapshot; pending discovery reports a retryable loading state. Outbound Gateway sources must advertise both
 `session-share.catalog.list` and `session-share.catalog.read` in their
 connection capabilities. Those filtered methods require the same publication-read
 host switch, approved device, groups and configured `share.involvingProfileId` as
 ordinary Gateway publication. A request target is a selector, not an authentication
 claim, and can only narrow that source-owned selection.
 
-Older or unapproved sources show an unavailable message. Update and approve the
-source to use relationship filters, or deliberately choose **All owners** for
-ordinary browsing. The receiver never retries a rejected filter as an unfiltered
-request.
+Older or unapproved sources retain authorized rows with partial-filter guidance.
+Only an unavailable identity link or an unapproved optional command permits a
+legacy-list fallback; timeouts, cursor mismatches and other access errors do not.
+Update and approve the source for complete relationship filtering, or choose
+**All owners** for ordinary browsing.
 
 ## Outbound Gateway pull
 
@@ -200,7 +203,8 @@ openclaw devices approve <requestId>
 openclaw nodes list
 ```
 
-Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. A node set up for [Open original](#open-original-on-a-paired-node) also declares `openclaw.sessions.catalog.list.v1`. The catalog only recognizes nodes advertising both commands. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
+Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. A node set up for [Open original](#open-original-on-a-paired-node) also declares both optional catalog commands. The catalog recognizes nodes
+advertising both legacy commands; the optional pair enables links and relationship filters. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
 
 ## Read shared sessions
 
@@ -310,7 +314,7 @@ Nothing is enabled by default, and both machines need a release that includes th
 
 The source returns only a source-relative path, and only for a session that its current routing still resolves to the stored session. The receiver joins that path to the origin you configured. Links follow the source's current routing; they are not permanent session addresses.
 
-While any step is missing, the receiver keeps using the ordinary list command. Shared sessions stay readable, and the menu shows **Open original** disabled with setup guidance.
+The receiver uses the catalog pair for every list/read when both commands are advertised, and the legacy pair only when the pair is absent. It requests original paths only when the pair and `controlUiOrigin` are configured. A missing allow or approval denies the catalog call with visible setup guidance; it does not bypass that denial through a legacy command.
 
 ### Relationship filtering
 
@@ -321,10 +325,11 @@ command variants are needed. List accepts `profileRelation` and
 The relationship is `owned` or `involving`, with a numeric `github-account` target.
 Gateway sources advertise `session-share.catalog.list` and
 `session-share.catalog.read` in `features.methods`; legacy `session-share.list`
-and `session-share.read` remain unchanged.
+and `session-share.read` remain unchanged. Gateway catalog list does not accept
+`includeOriginalPath`, and Gateway sources cannot supply original links.
 
-When a source is older, the commands are not approved, or an identity cannot be
-linked, the receiver keeps authorized legacy rows and client-side matching with
+When a source is older or an identity cannot be linked, the receiver keeps
+authorized rows and client-side matching with
 visible partial-results guidance. This is not a complete source-side involvement
 query. Slow refreshes remain pending and can be retried; failures do not imply
 an empty source. Each host records whether it actually applied the relation.

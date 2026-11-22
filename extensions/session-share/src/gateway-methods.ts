@@ -1,5 +1,6 @@
 import { prepareGatewayPublicationReaderV1 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   sessionShareGatewayDeviceIds,
   sessionShareGatewaySourceEnabled,
@@ -47,6 +48,13 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
             }
           };
           assertCurrent();
+          if (
+            method === "session-share.catalog.list" &&
+            isRecord(request.params) &&
+            Object.hasOwn(request.params, "includeOriginalPath")
+          ) {
+            throw new Error("Gateway catalog lists do not support original paths");
+          }
           // The reader remains a device. The supplied person narrows publication; it never changes reader authority.
           // Respond inside the source owner's final synchronous disclosure callback.
           const handler = createSessionShareNodeCommands(api, {

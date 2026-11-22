@@ -112,8 +112,6 @@ export const SessionCatalogHostSchema = closedObject({
 });
 
 export const SessionCatalogSchema = closedObject({
-  /** The selection actually applied to this page, not a capability claim. */
-  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogDescriptorSchema.properties,
   shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),

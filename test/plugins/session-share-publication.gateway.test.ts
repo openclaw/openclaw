@@ -267,11 +267,14 @@ it.each([false, true])(
     cleanup.defer(() => gatewayClient.disconnectGatewayClient(client));
     expect(edgeHeadersSeen).toBe(true);
     expect(advertised.toSorted()).toEqual([
-      "session-share.list",
       "session-share.catalog.list",
-      "session-share.read",
       "session-share.catalog.read",
+      "session-share.list",
+      "session-share.read",
     ]);
+    await expect(
+      client.request("session-share.catalog.list", { includeOriginalPath: false }),
+    ).rejects.toThrow("Session Share request denied or source unavailable");
     const list = () =>
       client.request<{ sessions: { threadId: string }[] }>("session-share.list", {});
     const read = (name = "shared") =>

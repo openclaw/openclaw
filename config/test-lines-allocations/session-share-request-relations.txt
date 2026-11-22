@@ -1,5 +1,5 @@
-# Request-scoped shared session filters: additional transport-capability, no-fallback,
-# canonical identity, query-bound paging/read/import and real browser navigation regressions.
-# The browser fixture verifies source-only rows absent from the local roster; the existing
-# signed-device WSS suite adds filtered calls without another server startup.
-277
+# Request-scoped catalog consolidation: real registrar/default invoke policy,
+# source relation and cursor boundaries, slow cached pages, partial-row retention,
+# older-Gateway capability checks, and both browser navigation/links fixtures.
+# Exact measured net test-line growth minus the standard 400-line allowance.
+732

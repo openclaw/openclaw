@@ -1,8 +1,4 @@
 import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
-import {
-  areDiagnosticsEnabledForProcess,
-  createSubsystemLogger,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginServiceContextV2,
@@ -19,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { prepareSessionCatalogGitHubLinker } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { observeCatalogRefresh } from "./catalog-refresh-diagnostics.js";
 import { sessionShareNodeBinding } from "./config.js";
 import {
   SESSION_SHARE_CATALOG_LIST_COMMAND,
@@ -34,6 +31,18 @@ import {
 } from "./wire.js";
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+function selectNodeCommands(node: CatalogNode) {
+  const catalog = [SESSION_SHARE_CATALOG_LIST_COMMAND, SESSION_SHARE_CATALOG_READ_COMMAND].every(
+    (command) => node.commands?.includes(command),
+  );
+  return catalog
+    ? {
+        catalog,
+        list: SESSION_SHARE_CATALOG_LIST_COMMAND,
+        read: SESSION_SHARE_CATALOG_READ_COMMAND,
+      }
+    : { catalog, list: SESSION_SHARE_LIST_COMMAND, read: SESSION_SHARE_READ_COMMAND };
+}
 type GitHubLinker = Awaited<ReturnType<typeof prepareSessionCatalogGitHubLinker>>;
 type CatalogIdentity = NonNullable<NonNullable<SessionCatalogSession["createdActor"]>["identity"]>;
 type NodeSnapshot = {
@@ -66,64 +75,6 @@ class SnapshotLimitError extends Error {
   }
 }
 
-const log = createSubsystemLogger("gateway/session-catalog");
-const nodeErrorCodes = new Set([
-  "TIMEOUT",
-  "NOT_CONNECTED",
-  "PAIRING_CHANGED",
-  "ROUTE_CHANGED",
-  "ABORTED",
-  "UNAVAILABLE",
-  "POLICY_CHANGED",
-  "APPROVAL_AUTHORITY_CLOSED",
-]);
-
-async function observeCatalogRefresh<T>(operation: () => Promise<T>, warn: () => boolean) {
-  if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
-    return operation();
-  }
-  const started = performance.now();
-  const finish = (outcome: "resolved" | "rejected", error?: unknown) => {
-    try {
-      if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
-        return;
-      }
-      const elapsedMs = performance.now() - started;
-      if (elapsedMs < 1_000 || !warn()) {
-        return;
-      }
-      const details = asOptionalRecord(asOptionalRecord(error)?.details);
-      const nodeError = asOptionalRecord(details?.nodeError);
-      const nodeErrorCode = nodeError?.code;
-      log.warn("slow Session Share catalog refresh", {
-        elapsedMs: Math.round(elapsedMs),
-        outcome,
-        ...(nodeError
-          ? {
-              nodeErrorCode:
-                typeof nodeErrorCode === "string" && nodeErrorCodes.has(nodeErrorCode)
-                  ? nodeErrorCode
-                  : "unknown",
-            }
-          : {}),
-        ...(typeof details?.nodeCommandDispatched === "boolean"
-          ? { nodeCommandDispatched: details.nodeCommandDispatched }
-          : {}),
-      });
-    } catch {
-      // A diagnostic sink must not replace the catalog result or error.
-    }
-  };
-  try {
-    const value = await operation();
-    finish("resolved");
-    return value;
-  } catch (error) {
-    finish("rejected", error);
-    throw error;
-  }
-}
-
 function namespaceIdentity(identity: CatalogIdentity, hostId: string): CatalogIdentity {
   // The receiver owns this namespace; the wire domain is untrusted and must not alias another node.
   return identity.type === "remote" && identity.pluginId === "session-share"
@@ -136,9 +87,8 @@ function nodeLabel(node: CatalogNode): string {
 }
 
 function isSessionHost(node: CatalogNode): boolean {
-  return [SESSION_SHARE_LIST_COMMAND, SESSION_SHARE_READ_COMMAND].every((command) =>
-    node.commands?.includes(command),
-  );
+  const { list, read } = selectNodeCommands(node);
+  return [list, read].every((command) => node.commands?.includes(command));
 }
 
 function bindSession(
@@ -218,8 +168,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     node?.connected &&
     isSessionHost(node) &&
     node.connectedAtMs === entry.node.connectedAtMs &&
-    node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND) ===
-      entry.node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND);
+    selectNodeCommands(node).catalog === selectNodeCommands(entry.node).catalog;
 
   function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
     if (entry.pending) {
@@ -237,6 +186,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       delayMs: 0,
       async run() {
         const releasePermit = await refreshes.acquire({ signal });
+        const previousError = entry.error;
         try {
           if (!releasePermit || !current(entry)) {
             return;
@@ -245,14 +195,14 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             async () => {
               const deadline = performance.now() + REFRESH_BUDGET_MS;
               const sessions: SessionShareSession[] = [];
+              let commands = selectNodeCommands(entry.node);
               let includeLinks =
-                Boolean(bindingFor(entry.node.nodeId).controlUiOrigin) &&
-                entry.node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND) === true;
+                commands.catalog && Boolean(bindingFor(entry.node.nodeId).controlUiOrigin);
               let cursor: string | undefined;
               let bytes = 0;
               let relation = entry.profileRelation;
               entry.error = undefined;
-              let retry = false;
+              let retry: boolean;
               do {
                 retry = false;
                 if (!current(entry) || !owner.invokeNode) {
@@ -266,10 +216,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 try {
                   raw = await owner.invokeNode({
                     nodeId: entry.node.nodeId,
-                    command:
-                      includeLinks || relation
-                        ? SESSION_SHARE_CATALOG_LIST_COMMAND
-                        : SESSION_SHARE_LIST_COMMAND,
+                    command: commands.list,
                     params: {
                       limit: 100,
                       ...(includeLinks ? { includeOriginalPath: true } : {}),
@@ -292,9 +239,20 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                   if (!relation || (!unresolved && !unapproved)) {
                     throw error;
                   }
-                  // This is a new legacy read under its own policy, never an authorization bypass.
+                  if (unapproved) {
+                    // Only refreshed advertisement can select the legacy pair; a rejected
+                    // catalog command is not permission to bypass the pair selection.
+                    const latest = (await api.runtime.nodes.list()).nodes.find(
+                      (node) => node.nodeId === entry.node.nodeId,
+                    );
+                    if (!latest?.connected || selectNodeCommands(latest).catalog) {
+                      throw error;
+                    }
+                    entry.node = latest;
+                    commands = selectNodeCommands(latest);
+                    includeLinks = false;
+                  }
                   relation = undefined;
-                  if (unapproved) includeLinks = false;
                   cursor = undefined;
                   sessions.length = 0;
                   bytes = 0;
@@ -349,9 +307,11 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           entry.sessions = snapshot;
           entry.refreshedAt = performance.now();
           entry.retryMs = REFRESH_MS;
-          if (entry.error?.code !== "FILTER_PARTIAL") entry.error = undefined;
+          if (entry.error?.code !== "FILTER_PARTIAL") {
+            entry.error = undefined;
+          }
         } catch (error) {
-          entry.retryMs = entry.error ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
+          entry.retryMs = previousError ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
           entry.error =
             error instanceof SnapshotLimitError
               ? { code: "CATALOG_TOO_LARGE", message: error.message }
@@ -488,10 +448,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     if (!node.connected) {
       return failed("NODE_OFFLINE", "Paired node is offline");
     }
-    const supported = [
-      SESSION_SHARE_CATALOG_LIST_COMMAND,
-      SESSION_SHARE_CATALOG_READ_COMMAND,
-    ].every((command) => node.commands?.includes(command));
+    const supported = selectNodeCommands(node).catalog;
     const appliedRelation = supported ? query.profileRelation : undefined;
     const partial =
       query.profileRelation && !supported
@@ -636,10 +593,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         )
         .slice(0, MAX_SNAPSHOTS);
       for (const node of eligible) {
-        const supported = [
-          SESSION_SHARE_CATALOG_LIST_COMMAND,
-          SESSION_SHARE_CATALOG_READ_COMMAND,
-        ].every((command) => node.commands?.includes(command));
+        const supported = selectNodeCommands(node).catalog;
         admit([node], supported ? query.profileRelation : undefined);
       }
       const owner = context;
@@ -672,16 +626,15 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           "OpenClaw session node is unavailable. Reconnect it and refresh the catalog.",
         );
       }
-      if (request.profileRelation && !node.commands?.includes(SESSION_SHARE_CATALOG_READ_COMMAND)) {
+      const commands = selectNodeCommands(node);
+      if (request.profileRelation && !commands.catalog) {
         throw new Error(
           "This node does not support relationship filters. Update and approve the source commands, or choose All owners.",
         );
       }
       const raw = await api.runtime.nodes.invoke({
         nodeId,
-        command: request.profileRelation
-          ? SESSION_SHARE_CATALOG_READ_COMMAND
-          : SESSION_SHARE_READ_COMMAND,
+        command: commands.read,
         timeoutMs: 30_000,
         scopes: ["operator.write"],
         params: {

@@ -451,7 +451,7 @@ export async function refreshSessionCatalogsLive(params: {
         ...(selected.length
           ? params.catalogs().filter((catalog) => !selected.includes(catalog.id))
           : []),
-        ...results.flatMap((result) => result.catalogs),
+        ...results.flatMap(({ catalogs }) => catalogs),
       ],
     };
     if (!requestIsCurrent() || !result?.catalogs) {

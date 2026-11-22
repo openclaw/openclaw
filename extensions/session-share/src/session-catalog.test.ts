@@ -104,7 +104,7 @@ async function catalogFixture() {
     scheduler,
   };
   await service.start(serviceContext);
-  let readDelayMs = 2;
+  const readDelayMs = 2;
   const readList = async (query: CatalogQuery = {}) => {
     const listing = catalog.list(query);
     void listing.catch(() => {});
@@ -135,10 +135,12 @@ async function catalogFixture() {
       return { done: () => Promise.all(publications), onHost };
     },
     paginate: (sessions: SessionCatalogSession[], delayMs = 0) => {
-      readDelayMs = Math.ceil(sessions.length / 100) * delayMs + 2;
       invoke.mockImplementation(async ({ params }) => {
-        const { cursor } = params as { cursor?: string };
-        const offset = decodeCursor(cursor);
+        const { cursor, profileRelation } = params as {
+          cursor?: string;
+          profileRelation?: CatalogQuery["profileRelation"];
+        };
+        const offset = decodeCursor(cursor, profileRelation);
         if (delayMs) {
           await new Promise<void>((resolve) => {
             setTimeout(resolve, delayMs);
@@ -146,7 +148,9 @@ async function catalogFixture() {
         }
         return {
           sessions: sessions.slice(offset, offset + 100),
-          ...(offset + 100 < sessions.length ? { nextCursor: encodeCursor(offset + 100) } : {}),
+          ...(offset + 100 < sessions.length
+            ? { nextCursor: encodeCursor(offset + 100, profileRelation) }
+            : {}),
         };
       });
     },
@@ -234,27 +238,57 @@ it("restarts after retiring queued refreshes before dispatch", async () => {
   await f.expectSessions();
 });
 
-it.each(["München", "Mu\u0308nchen"])("pages and finds %s", async (title) => {
-  const sessions = rows(601);
-  sessions[100]!.name = title;
-  f.paginate(sessions, 5_000);
-  expect((await f.begin())[0]?.pending).toBe(true);
-  await advance(35_005);
-  const first = (await f.host({ limitPerHost: 100 }))!;
-  expect(first.sessions).toEqual(sessions.slice(0, 100));
-  expect(first.error).toBeUndefined();
-  await f.expectSessions(sessions.slice(100, 200), {
-    limitPerHost: 100,
-    cursors: { "node:alpha": first.nextCursor! },
-  });
-  await f.expectSessions(sessions.slice(600), { cursors: { "node:alpha": encodeCursor(600) } });
-  const query = title === "München" ? "Mu\u0308nchen" : "München";
-  await f.expectSessions([sessions[100]!], { search: query.toUpperCase() });
-  await f.expectSessions([sessions[100]!], { search: "MAIN:100" });
-  f.invoke.mockResolvedValue({ sessions: [] });
-  await advance(30_000);
-  await f.expectSessions([]);
-});
+it.each([
+  { title: "München", profileRelation: undefined },
+  {
+    title: "Mu\u0308nchen",
+    profileRelation: {
+      relationship: "involving",
+      target: { type: "github-account", id: "101" },
+    } as const,
+  },
+])(
+  "caches slow pages and finds $title (relation: $profileRelation)",
+  async ({ title, profileRelation }) => {
+    if (profileRelation) {
+      f.list.mockResolvedValue({
+        nodes: [
+          {
+            ...makeNode("alpha"),
+            commands: [
+              ...commands,
+              "openclaw.sessions.catalog.list.v1",
+              "openclaw.sessions.catalog.read.v1",
+            ],
+          },
+        ],
+      });
+    }
+    const sessions = rows(601);
+    sessions[100]!.name = title;
+    f.paginate(sessions, 5_000);
+    expect((await f.begin({ profileRelation }))[0]?.pending).toBe(true);
+    await advance(35_005);
+    const first = (await f.host({ limitPerHost: 100, profileRelation }))!;
+    expect(first.sessions).toEqual(sessions.slice(0, 100));
+    expect(first.error).toBeUndefined();
+    await f.expectSessions(sessions.slice(100, 200), {
+      limitPerHost: 100,
+      cursors: { "node:alpha": first.nextCursor! },
+      profileRelation,
+    });
+    await f.expectSessions(sessions.slice(600), {
+      cursors: { "node:alpha": encodeCursor(600, profileRelation) },
+      profileRelation,
+    });
+    const query = title === "München" ? "Mu\u0308nchen" : "München";
+    await f.expectSessions([sessions[100]!], { search: query.toUpperCase(), profileRelation });
+    await f.expectSessions([sessions[100]!], { search: "MAIN:100", profileRelation });
+    f.invoke.mockResolvedValue({ sessions: [] });
+    await advance(30_000);
+    await f.expectSessions([], { profileRelation });
+  },
+);
 
 it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
   const total = budget === "rows" ? 10_100 : 1_500;
@@ -289,6 +323,7 @@ it.each(["failure", "config", "connection", "disconnect"])(
     await f.expectSessions();
     const gate = createDeferred<unknown>();
     f.invoke.mockImplementationOnce(() => gate.promise);
+    await advance(30_005);
     const { done, onHost } = await f.watch();
     expect((await f.begin())[0]).toMatchObject({ sessions: [], pending: true });
     await advance();
@@ -488,7 +523,8 @@ it("preserves eligible host order and separates offline and failed sources", asy
     { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
   ]);
   expect(hosts[0]?.sessions).toEqual([nativeSession]);
-  expect(f.invoke).toHaveBeenCalledTimes(4);
+  expect(f.invoke).toHaveBeenCalledTimes(3);
+  expect(f.invoke.mock.calls.filter(([request]) => request.nodeId === "alpha")).toHaveLength(1);
   expect(f.catalog.continueSession).toBeUndefined();
   expect(f.catalog.archive).toBeUndefined();
   expect(f.catalog.openTerminal).toBeUndefined();
@@ -647,7 +683,7 @@ it("keeps configured owner and portable identity attribution on filtered node pa
   expect((await f.host())?.sessions).toEqual(filtered?.sessions);
 });
 
-describe("optional source-link command", () => {
+describe("catalog pair and optional original links", () => {
   const linkedCommand = "openclaw.sessions.catalog.list.v1";
   const originalPath = "/chat/main/shared";
   const configure = () => {
@@ -665,32 +701,56 @@ describe("optional source-link command", () => {
       },
     });
   };
-  const linkedNode = { nodeId: "alpha", connected: true, commands: [...commands, linkedCommand] };
+  const linkedNode = {
+    nodeId: "alpha",
+    connected: true,
+    commands: [linkedCommand, "openclaw.sessions.catalog.read.v1"],
+  };
 
-  it.each([false, true])("uses the advertised link variant (filtered: %s)", async (filtered) => {
-    configure();
-    const command = filtered ? "openclaw.sessions.catalog.list.v1" : linkedCommand;
-    const profileRelation = filtered
-      ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
-      : undefined;
-    f.list.mockResolvedValue({
-      nodes: [
-        {
-          ...linkedNode,
-          commands: [
-            ...linkedNode.commands,
-            "openclaw.sessions.catalog.list.v1",
-            "openclaw.sessions.catalog.read.v1",
-            command,
-          ],
-        },
-      ],
-    });
-    f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
-    expect((await f.host({ profileRelation }))?.sessions).toEqual([
-      { ...nativeSession, originalUrl: "https://source.example/control/chat/main/shared" },
-    ]);
-    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command }));
+  it.each([false, true])(
+    "requests original paths only with the advertised pair and configured origin (filtered: %s)",
+    async (filtered) => {
+      configure();
+      const command = filtered ? "openclaw.sessions.catalog.list.v1" : linkedCommand;
+      const profileRelation = filtered
+        ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
+        : undefined;
+      f.list.mockResolvedValue({ nodes: [linkedNode] });
+      f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
+      expect((await f.host({ profileRelation }))?.sessions).toEqual([
+        { ...nativeSession, originalUrl: "https://source.example/control/chat/main/shared" },
+      ]);
+      expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          command,
+          params: {
+            limit: 100,
+            includeOriginalPath: true,
+            ...(profileRelation ? { profileRelation } : {}),
+          },
+        }),
+      );
+    },
+  );
+
+  it("uses the catalog pair for plain list/read without requesting original paths", async () => {
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    f.invoke.mockResolvedValue(wire({ sessions: [nativeSession] }));
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: linkedCommand,
+        params: { limit: 100 },
+      }),
+    );
+    f.invoke.mockResolvedValue(wire(transcript({})));
+    await f.read();
+    expect(f.invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: "openclaw.sessions.catalog.read.v1",
+        params: { threadId: nativeSession.threadId, limit: 20 },
+      }),
+    );
   });
 
   it("keeps an old source readable with visible unavailable navigation", async () => {

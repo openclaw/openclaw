@@ -96,13 +96,18 @@ suite.define(() => {
               {
                 match: { profileRelation: { relationship: "owned", target: { type: "me" } } },
                 response: catalog(
-                  [],
-                  { relationship: "owned", target: { type: "me" } },
+                  [
+                    {
+                      ...entry("fallback", "Authorized fallback conversation"),
+                      createdActor: viewer,
+                    },
+                  ],
+                  undefined,
                   undefined,
                   {
-                    code: "FILTER_UNSUPPORTED",
+                    code: "FILTER_PARTIAL",
                     message:
-                      "This source does not support relationship filters. Update the source or choose All owners.",
+                      "Showing authorized rows with client-side matching. Check the source identity link.",
                   },
                 ),
               },
@@ -122,6 +127,19 @@ suite.define(() => {
       await selectAllSidebarSessions(page);
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
+      await expectBrowser(
+        page.locator(".sidebar").getByText("Unrelated source conversation", { exact: true }),
+      ).toBeVisible();
+      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const directory = artifacts
+        ? createControlUiE2eArtifactDir("catalog-relations", artifacts)
+        : undefined;
+      if (directory) {
+        await writeFile(
+          path.join(directory, "before-filter.png"),
+          await page.screenshot({ animations: "disabled" }),
+        );
+      }
       await chooseSidebarOwner(page, "involving-me");
       const sidebar = page.locator(".sidebar");
       const group = sidebar.locator('[data-session-section="catalog:openclaw"]');
@@ -137,9 +155,7 @@ suite.define(() => {
       ).toHaveCount(0);
       await group.getByRole("button", { name: "Show more", exact: true }).click();
       await expectBrowser(sidebar.getByText("Mentioned on source", { exact: true })).toBeVisible();
-      const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (parent) {
-        const directory = createControlUiE2eArtifactDir("catalog-relations", parent);
+      if (directory) {
         await writeFile(
           path.join(directory, "involving-me.png"),
           await page.screenshot({ animations: "disabled" }),
@@ -164,8 +180,11 @@ suite.define(() => {
       await expectBrowser(
         group.locator(".sidebar-session-group-toggle").first(),
       ).toHaveAccessibleName(
-        /This source does not support relationship filters\. Update the source or choose All owners\./,
+        /Showing authorized rows with client-side matching\. Check the source identity link\./,
       );
+      await expectBrowser(
+        sidebar.getByText("Authorized fallback conversation", { exact: true }),
+      ).toBeVisible();
       await expectBrowser(
         sidebar.getByText("Unrelated source conversation", { exact: true }),
       ).toHaveCount(0);

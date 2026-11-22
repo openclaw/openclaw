@@ -665,8 +665,9 @@ export function selectSessionCatalogProfileRelation(
   if (
     !catalogs.some((catalog) => catalog.capabilities.profileRelation) ||
     (!involvingMe && !ownerId)
-  )
+  ) {
     return undefined;
+  }
   return {
     relationship: involvingMe ? "involving" : "owned",
     target:
