@@ -39,8 +39,9 @@ export const ProjectsMoveSessionParamsSchema = closedObject({
   checkout: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
 });
 export const ProjectsMoveSessionResultSchema = closedObject({
-  /** The project opens, on its own branch, with the conversation's next message. */
-  status: Type.Literal("pending"),
+  /** The managed branch is ready when the move returns. */
+  status: Type.Literal("moved"),
+  branch: NonEmptyString,
   projectId: NonEmptyString,
   carried: Type.Optional(
     closedObject({

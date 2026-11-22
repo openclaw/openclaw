@@ -18,7 +18,7 @@ const catalog = {
         copyFiles: "Changes to {count} files will be copied.",
         moved: "Moved this conversation into {project}.",
         movedWithWork:
-          "Moved this conversation into {project}. Your work will be copied when you send your next message.",
+          "Moved this conversation into {project}. Your changes were copied to its checkout.",
         failed: "Couldn’t move this conversation. Try again.",
       },
     },

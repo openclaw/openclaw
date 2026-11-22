@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
@@ -103,8 +102,7 @@ export function createSessionProjectTool(options: {
         agentId: caller.agentId,
         sessionKey: caller.sessionKey,
       };
-      const { moveSessionIntoProject, openMovedSession } =
-        await import("../../gateway/session-project-move.js");
+      const { moveSessionIntoProject } = await import("../../gateway/session-project-move.js");
       const { handoffSessionTool } = await import("./session-tool-handoff.js");
       return handoffSessionTool({
         name: "Conversation move",
@@ -120,7 +118,7 @@ export function createSessionProjectTool(options: {
         fenceSuccessors: true,
         run: async ({ assertCurrent, signal: handoffSignal }) => {
           const requester = currentRequester();
-          const moved = await moveSessionIntoProject({
+          return moveSessionIntoProject({
             context,
             session,
             carrySource: carrySandbox
@@ -167,16 +165,6 @@ export function createSessionProjectTool(options: {
             assertCurrent,
             signal: handoffSignal,
           });
-          // The resumed turn is a session event, which never prepares a pending checkout.
-          const branch = await openMovedSession({
-            context,
-            session,
-            runId: options.runId ?? `session-project:${sessionId}`,
-            runSetupScript: !requester || requester.scopes.includes(ADMIN_SCOPE),
-            assertCurrent,
-            signal: handoffSignal,
-          });
-          return { ...moved, status: "moved", ...(branch ? { branch } : {}) };
         },
         formatResult: (result) =>
           result.status === "moved"

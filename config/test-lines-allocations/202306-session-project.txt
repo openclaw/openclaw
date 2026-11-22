@@ -4,4 +4,5 @@
 # Tool and prompt tests cover the default-workspace gate and the registered project catalog.
 # The SSH regression verifies that refusing a move leaves session and worktree state intact.
 # Chat Completions replay preserves a neighboring tool result when summarizing an earlier move.
-298
+# The checkout carry test checks admin and writer setup at move completion.
+292

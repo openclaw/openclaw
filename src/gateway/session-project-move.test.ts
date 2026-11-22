@@ -30,7 +30,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
-import { moveSessionIntoProject, openMovedSession } from "./session-project-move.js";
+import { moveSessionIntoProject } from "./session-project-move.js";
 import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.js";
 
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
@@ -82,9 +82,13 @@ it("refuses an SSH sandbox move before changing the stored conversation", async 
   });
 });
 
-it.each(["sandbox", "host"] as const)(
-  "carries an unbound %s conversation after the project advances, preserving its checkout work and running no Git programs on the host",
-  async (where) => {
+it.each([
+  ["sandbox", "operator.admin"],
+  ["host", "operator.admin"],
+  ["host", "operator.write"],
+] as const)(
+  "carries an unbound %s conversation with %s after the project advances and preserves setup authority",
+  async (where, scope) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
@@ -96,7 +100,7 @@ it.each(["sandbox", "host"] as const)(
       await fs.mkdir(path.join(repoRoot, ".openclaw"));
       await fs.writeFile(
         path.join(repoRoot, ".openclaw", "worktree-setup.sh"),
-        '#!/bin/sh\nset -e\ntest "$(cat kept.txt)" = "edited, not saved"\ntest -f draft.txt\n',
+        '#!/bin/sh\nset -e\ntest "$(cat kept.txt)" = "edited, not saved"\ntest -f draft.txt\nprintf ready > setup-result\n',
         { mode: 0o755 },
       );
       await requireGit(repoRoot, ["add", "."]);
@@ -212,7 +216,6 @@ it.each(["sandbox", "host"] as const)(
           : { kind: "sandbox", sandbox };
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       context.resolveGatewayContext = () => context;
-      // An owner run: no operator drives it, so the Gateway itself asks.
       const move = (projectId = project.id) =>
         moveSessionIntoProject({
           context,
@@ -220,7 +223,7 @@ it.each(["sandbox", "host"] as const)(
           carrySource: source,
           projectId,
           checkout: "work",
-          requester: undefined,
+          requester: { profileId: undefined, scopes: [scope] },
           assertCurrent() {},
         });
 
@@ -303,36 +306,25 @@ it.each(["sandbox", "host"] as const)(
             enqueue.mockRestore();
           }
         } else {
-          expect(await move()).toEqual({
-            status: "pending",
+          const moved = await move();
+          expect(moved).toMatchObject({
+            status: "moved",
             projectId: project.id,
             carried: { commit: carriedCommit, unsavedFiles: 5 },
           });
-          // The move only records intent until the next turn opens the checkout.
-          const pending = loadSessionEntryReadOnly(target);
-          assert(pending);
-          expect(pending).toMatchObject({
-            projectId: project.id,
-            pendingWorktree: {
-              workspace: project.repoRoot,
-              source: { kind: "project", id: project.id },
-              baseCommit: carriedCommit,
-            },
-          });
-          expect(pending.worktree).toBeUndefined();
-          branch = await openMovedSession({
-            context,
-            session: target,
-            runId: "next-turn",
-            assertCurrent() {},
-            runSetupScript: true,
-          });
+          branch = moved.branch;
         }
         await expect(move("another")).rejects.toThrow("moves into a project only once");
         const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
         assert(worktree, "The move must open a managed project checkout");
         if (where === "host") {
           expect(branch).toBe(worktree.branch);
+          const setup = fs.readFile(path.join(worktree.path, "setup-result"), "utf8");
+          if (scope === "operator.admin") {
+            await expect(setup).resolves.toBe("ready");
+          } else {
+            await expect(setup).rejects.toMatchObject({ code: "ENOENT" });
+          }
         }
         expect(loadSessionEntryReadOnly(target)).toMatchObject({
           projectId: project.id,

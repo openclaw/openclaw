@@ -1,13 +1,19 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { isUnboundProjectSession } from "../config/sessions/session-project-eligibility.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveRequesterProject } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
-import { prepareSessionWorkspaceForRun } from "./server-methods/session-create-project.js";
+import { assertRequiredWorkerSessionCreateCurrent } from "./server-methods/session-create-required-worker.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
+import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
 import {
   canChooseSessionProject,
   describeSessionProjectSandboxBlocker,
@@ -15,15 +21,21 @@ import {
   type SessionProjectRequester,
 } from "./session-project-move-policy.js";
 import { resolveSessionProjectRootForRecord } from "./session-project-source.js";
+import { resolveExplicitSessionName } from "./session-title-state.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { describeSessionWorkspaceBlocker } from "./session-work-blocker.js";
-import { deleteCarryRef, importCarriedWork, type CarrySource } from "./session-workspace-carry.js";
+import {
+  applyUnsavedWork,
+  deleteCarryRef,
+  importCarriedWork,
+  type CarrySource,
+} from "./session-workspace-carry.js";
+import {
+  canRunSessionWorktreeSetup,
+  prepareSessionWorktree,
+} from "./session-worktree-preparation.js";
 
-/**
- * Record a project and a pending checkout on a conversation that has neither. The
- * session's next turn opens the checkout through the same preparation as a session
- * created in the project; a named checkout's commit and unsaved files come along.
- */
+/** Prepare the checkout under the mover's authority, then publish the project and file roots together. */
 export async function moveSessionIntoProject(params: {
   context: GatewayRequestContext;
   session: { agentId: string; sessionKey: string };
@@ -59,18 +71,21 @@ export async function moveSessionIntoProject(params: {
     storePath: loaded.storePath,
   };
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
-  if (!isUnboundProjectSession(entry, target.agentId, workspaceDir)) {
-    // A retried move of the same conversation returns its recorded intent.
+  const assertUnbound = (current: InternalSessionEntry | undefined) => {
     if (
-      entry.projectId === params.projectId &&
-      entry.pendingWorktree?.source?.id === params.projectId
+      !current ||
+      current.sessionId !== entry.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision
     ) {
-      return { status: "pending" as const, projectId: params.projectId };
+      throw new Error("The conversation changed while preparing its checkout; retry the move.");
     }
-    throw new Error(
-      "This conversation already has a project or workspace, and a conversation moves into a project only once. Start a new session in the project instead (sessions_spawn with visible=true and projectId); nothing was moved.",
-    );
-  }
+    if (!isUnboundProjectSession(current, target.agentId, workspaceDir)) {
+      throw new Error(
+        "This conversation already has a project or workspace, and a conversation moves into a project only once. Start a new session in the project instead (sessions_spawn with visible=true and projectId); nothing was moved.",
+      );
+    }
+  };
+  assertUnbound(entry);
   const access = projectRequester(requester);
   if (!canChooseSessionProject(cfg, loaded.canonicalKey, entry, requester)) {
     throw new Error(
@@ -81,9 +96,17 @@ export async function moveSessionIntoProject(params: {
   if (sandboxBlocker) {
     throw new Error(sandboxBlocker);
   }
+  const requiredProfile = cfg.cloudWorkers?.requiredProfile;
+  const projectSelection = { projectId: params.projectId, worktree: true };
+  const runSetupScript = canRunSessionWorktreeSetup(requiredProfile, requester?.scopes);
   const assertCurrent = () => {
     signal?.throwIfAborted();
     params.assertCurrent();
+    assertRequiredWorkerSessionCreateCurrent(
+      context.getRuntimeConfig(),
+      requiredProfile,
+      projectSelection,
+    );
     const blocker = describeSessionWorkspaceBlocker({
       context,
       target,
@@ -96,126 +119,122 @@ export async function moveSessionIntoProject(params: {
     }
   };
   assertCurrent();
-  const project = await resolveRequesterProject(cfg, params.projectId, access, { fresh: true });
-  if (!project || project.source === "workspace") {
-    throw new Error(`Project ${params.projectId} is not available to you; nothing was moved.`);
-  }
-  const projectRoot = await resolveSessionProjectRootForRecord(project, true);
-  if (!projectRoot.ok) {
-    throw new Error(projectRoot.error.message);
-  }
-  // Earlier messages keep opening the files they named in the original workspace.
-  const oldFiles = await prepareSessionFileWorkspace(cfg, target.agentId, target.sessionKey, entry);
-  const { watermark } = await readSessionTranscriptAnchorsAsync(
-    { ...target, sessionId: entry.sessionId },
-    { entryIds: [], includeWatermark: true },
+  return runSessionMutation({
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      incarnation: entry.sessionId,
+    }),
+    policy: "allow-live",
     signal,
-  );
-  const fileRoot = oldFiles.root;
-  if (!fileRoot || !watermark) {
-    throw new Error("The conversation's earlier files are unavailable; retry the move.");
-  }
-  assertCurrent();
-  const source = params.carrySource;
-  using carryResources = new DisposableStack();
-  const carried = params.checkout
-    ? await importCarriedWork({
-        source:
-          typeof source === "function"
-            ? carryResources.use(
-                await source({ assertCurrent, skillsSnapshot: entry.skillsSnapshot }),
-              ).source
-            : source,
-        checkout: params.checkout,
-        projectRoot: projectRoot.value,
-        refName: `refs/openclaw/carry/${entry.sessionId}`,
-        signal,
-        assertCurrent,
-      })
-    : undefined;
-  // Accepted edge case: a move recorded but never opened leaves its carry ref behind.
-  const recorded = await patchSessionEntryCore(
-    target,
-    (current) => {
-      assertCurrent();
-      if (!isUnboundProjectSession(current, target.agentId, workspaceDir)) {
-        throw new Error("This conversation already has a project or workspace; nothing was moved.");
+    assertCurrent,
+    run: async () => {
+      assertUnbound(await readSessionEntryReadOnlyInWorker(target, assertCurrent));
+      const project = await resolveRequesterProject(cfg, params.projectId, access, { fresh: true });
+      if (!project || project.source === "workspace") {
+        throw new Error(`Project ${params.projectId} is not available to you; nothing was moved.`);
       }
-      oldFiles.assertCurrent(context.getRuntimeConfig(), current);
-      return {
-        projectId: project.id,
-        pendingWorktree: {
+      const projectRoot = await resolveSessionProjectRootForRecord(project, true);
+      if (!projectRoot.ok) {
+        throw new Error(projectRoot.error.message);
+      }
+      // Earlier messages keep opening the files they named in the original workspace.
+      const oldFiles = await prepareSessionFileWorkspace(
+        cfg,
+        target.agentId,
+        target.sessionKey,
+        entry,
+      );
+      const { watermark } = await readSessionTranscriptAnchorsAsync(
+        { ...target, sessionId: entry.sessionId },
+        { entryIds: [], includeWatermark: true },
+        signal,
+      );
+      const fileRoot = oldFiles.root;
+      if (!fileRoot || !watermark) {
+        throw new Error("The conversation's earlier files are unavailable; retry the move.");
+      }
+      assertCurrent();
+      const source = params.carrySource;
+      using carryResources = new DisposableStack();
+      const carried = params.checkout
+        ? await importCarriedWork({
+            source:
+              typeof source === "function"
+                ? carryResources.use(
+                    await source({ assertCurrent, skillsSnapshot: entry.skillsSnapshot }),
+                  ).source
+                : source,
+            checkout: params.checkout,
+            projectRoot: projectRoot.value,
+            refName: `refs/openclaw/carry/${entry.sessionId}`,
+            signal,
+            assertCurrent,
+          })
+        : undefined;
+      try {
+        const prepared = await prepareSessionWorktree({
+          cfg,
+          target: {
+            ...target,
+            key: target.sessionKey,
+            entry,
+            projectId: project.id,
+            sandboxRequired: entry.sandbox === "required",
+          },
           workspace: projectRoot.value,
-          source: { kind: "project", id: project.id },
-          ...(carried ? { baseCommit: carried.commit } : {}),
-          titleSource: "",
-          ...(carried ? { carried: { ref: carried.refName, work: carried.work } } : {}),
-          prior: {
+          acceptedSource: { kind: "project", id: project.id },
+          checkoutCommit: carried?.commit,
+          label: resolveExplicitSessionName(entry),
+          runSetupScript,
+          signal,
+          commitGuard: assertCurrent,
+          prepareCheckout: carried
+            ? (worktreePath, guard) => applyUnsavedWork(carried.work, worktreePath, guard)
+            : undefined,
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.error.message);
+        }
+        const worktree = prepared.value.worktree;
+        if (!worktree) {
+          await prepared.value.rollback?.();
+          throw new Error("The project checkout was not allocated.");
+        }
+        await commitPreparedSessionWorkspace({
+          prepared: prepared.value,
+          projectId: project.id,
+          priorWorkspace: {
+            sessionId: entry.sessionId,
+            worktreeId: worktree.id,
             workspaceDir,
             fileRoot,
             through: watermark,
           },
-        },
-      };
+          target,
+          signal,
+          assertCurrent,
+          assertEntry: (current) => {
+            assertUnbound(current);
+            oldFiles.assertCurrent(context.getRuntimeConfig(), current);
+          },
+          missingSessionMessage: "The conversation disappeared during the project move.",
+        });
+        emitSessionsChanged(context, { ...target, reason: "project" });
+        return {
+          status: "moved" as const,
+          projectId: project.id,
+          branch: worktree.branch,
+          ...(carried
+            ? { carried: { commit: carried.commit, unsavedFiles: carried.unsavedFiles } }
+            : {}),
+        };
+      } finally {
+        if (carried) {
+          await deleteCarryRef(projectRoot.value, carried.refName);
+        }
+      }
     },
-    { requireWriteSuccess: true, skipMaintenance: true },
-  ).catch(async (error: unknown) => {
-    if (carried) {
-      await deleteCarryRef(projectRoot.value, carried.refName);
-    }
-    throw error;
   });
-  if (!recorded) {
-    throw new Error("The conversation disappeared during the project move; nothing was moved.");
-  }
-  emitSessionsChanged(context, { ...target, reason: "project" });
-  return {
-    status: "pending" as const,
-    projectId: project.id,
-    ...(carried ? { carried: { commit: carried.commit, unsavedFiles: carried.unsavedFiles } } : {}),
-  };
-}
-
-/**
- * Open a recorded move now, through the same preparation a session's next chat turn
- * runs, for callers whose next turn does not prepare workspaces. Returns the new branch.
- */
-export async function openMovedSession(params: {
-  context: GatewayRequestContext;
-  session: { agentId: string; sessionKey: string };
-  runId: string;
-  runSetupScript: boolean;
-  assertCurrent: () => void;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  const cfg = params.context.getRuntimeConfig();
-  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-    cfg,
-    agentId: params.session.agentId,
-    key: params.session.sessionKey,
-    projection: "full",
-  });
-  const entry = loaded.entry;
-  if (!entry) {
-    throw new Error("This conversation could not be found.");
-  }
-  if (!entry.pendingWorktree) {
-    return entry.worktree?.branch;
-  }
-  // The worker snapshot is immutable. Preparation updates the caller's entry
-  // with the committed checkout details, just as it does for chat.send.
-  const preparedEntry = { ...entry };
-  await prepareSessionWorkspaceForRun({
-    entry: preparedEntry,
-    cfg,
-    agentId: loaded.agentId,
-    runId: params.runId,
-    sessionKey: loaded.canonicalKey,
-    storePath: loaded.storePath,
-    context: params.context,
-    signal: params.signal ?? new AbortController().signal,
-    assertCurrent: params.assertCurrent,
-    runSetupScript: params.runSetupScript,
-  });
-  return preparedEntry.worktree?.branch;
 }

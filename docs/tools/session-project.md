@@ -28,12 +28,11 @@ workspace, the tool is removed from its tool list.
 
 - The conversation keeps its key, transcript, model and permissions.
 - For sandboxed conversations, project moves require Docker or Podman.
-- The move records the project and a new [worktree](/concepts/managed-worktrees)
-  on the conversation, the same intent a session created in the project with a
-  new worktree carries, and opens it the same way: the setup script, ignored
-  files, sandbox and project context (`AGENTS.md`, project skills) follow the
-  rules of a session created in the project. The resumed turn runs in the new
-  checkout.
+- The move prepares the same [managed worktree](/concepts/managed-worktrees)
+  as a new project session. When the move succeeds, Files can open the checkout
+  immediately, including after a Gateway restart. Carried edits arrive before
+  repository setup. Host setup requires the moving operator's administrator
+  scope and follows the same worker and sandbox rules as session creation.
 - Files from before the move stay in the original workspace. Links in earlier
   messages still open them there.
 - Without `checkout`, the new branch starts from the project's default branch.

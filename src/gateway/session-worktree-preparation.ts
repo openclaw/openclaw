@@ -46,6 +46,7 @@ import { listWorkspaceProjects } from "../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
   canRequesterUseRepositoryUrl,
   hasFullProjectAccess,
@@ -114,6 +115,14 @@ export async function resolveSessionWorktreeBase(
       ),
     );
   }
+}
+
+/** Only an explicit administrator may run repository setup on the Gateway host. */
+export function canRunSessionWorktreeSetup(
+  requiredProfile: string | undefined,
+  scopes: readonly string[] | undefined,
+): boolean {
+  return !requiredProfile && scopes?.includes(ADMIN_SCOPE) === true;
 }
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */

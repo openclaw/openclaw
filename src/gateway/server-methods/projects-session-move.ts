@@ -19,6 +19,7 @@ import {
 import { moveSessionIntoProject } from "../session-project-move.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { listCarryCheckouts, type CarrySource } from "../session-workspace-carry.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -28,7 +29,7 @@ function requester(client: GatewayClient | null) {
   return client
     ? {
         profileId: client.authenticatedUserProfile?.profileId,
-        scopes: client.connect.scopes ?? [],
+        scopes: [...(client.connect.scopes ?? [])],
       }
     : undefined;
 }
@@ -137,7 +138,8 @@ export const projectsSessionMoveHandlers: GatewayRequestHandlers = {
   "projects.moveSession": defineValidatedGatewayHandler(
     "projects.moveSession",
     validateProjectsMoveSessionParams,
-    async ({ params, respond, context, client, signal, sessionAccessAuthority }) => {
+    async (options) => {
+      const { params, respond, context, client, signal, sessionAccessAuthority } = options;
       const target = moveTarget(sessionAccessAuthority, signal);
       if (!target) {
         respond(false, undefined, NO_ACCESS);
@@ -150,7 +152,7 @@ export const projectsSessionMoveHandlers: GatewayRequestHandlers = {
           return;
         }
         using carrySource = resolved;
-        // The person's next message opens the project, as for a session created in it.
+        const authority = readGatewayRequestMutationAuthority(options);
         const moved = await moveSessionIntoProject({
           context,
           session: target.access.target,
@@ -158,7 +160,10 @@ export const projectsSessionMoveHandlers: GatewayRequestHandlers = {
           projectId: params.projectId,
           ...(params.checkout ? { checkout: params.checkout } : {}),
           requester: requester(client),
-          assertCurrent: target.assertCurrent,
+          assertCurrent: () => {
+            authority.assertCurrent();
+            target.assertCurrent();
+          },
           signal,
         });
         respond(true, moved);

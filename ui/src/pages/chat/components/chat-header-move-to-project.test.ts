@@ -82,7 +82,9 @@ it.each([
     if (method === "projects.moveSessionOptions") {
       return { available: true, projects };
     }
-    return method === "projects.moveSession" ? { status: "pending", projectId: "project-2" } : {};
+    return method === "projects.moveSession"
+      ? { status: "moved", projectId: "project-2", branch: "openclaw/moved" }
+      : {};
   });
   const menu = renderMenu(request, scope, projectId);
   await selectNativeMenu(menu, "quick:move-to-project");
