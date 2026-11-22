@@ -18,6 +18,7 @@ import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { describePastProjectMoves } from "../project-move-replay.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -122,7 +123,7 @@ export async function prepareEmbeddedAttemptHistory(
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
     // Keep each keyed user row intact until prompt() has resolved the current turn.
     // The stream boundary merges projected rows for providers requiring alternation.
-    const validated = await validateReplayTurns({
+    let validated = await validateReplayTurns({
       ...replayContext(),
       messages: prior,
       preserveUserTurns: true,
@@ -142,6 +143,9 @@ export async function prepareEmbeddedAttemptHistory(
         assertActive,
       );
       assertActive();
+      if (sessionEntry?.priorWorkspace && attempt.model.api === "openai-completions") {
+        validated = describePastProjectMoves(validated);
+      }
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
         const entries = await readSessionEntrySummariesInWorker({
