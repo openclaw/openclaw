@@ -300,6 +300,7 @@ export async function runProviderChannelLoginFlow(params: {
   sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
   signal?: AbortSignal;
   readConfig?: () => OpenClawConfig;
+  runLoginFlow?: typeof runModelsAuthLoginFlow;
 }): Promise<ModelsAuthLoginFlowResult> {
   const openUrl = async (url: string) => {
     browser.assertCurrent();
@@ -333,7 +334,7 @@ export async function runProviderChannelLoginFlow(params: {
   try {
     const choice = params.choice;
     const { createProviderAuthNodes } = await import("../gateway/server-plugins.js");
-    return await runModelsAuthLoginFlow({
+    return await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
       provider: choice.providerId,
       method: choice.methodId,
       ownerPluginId: choice.pluginId,

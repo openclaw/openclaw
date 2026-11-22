@@ -72,12 +72,20 @@ vi.mock("./bot-native-command-menu.js", async (importOriginal) => ({
     ...args: Parameters<typeof nativeCommandMocks.syncTelegramMenuCommands>
   ) => nativeCommandMocks.syncTelegramMenuCommands(...args),
 }));
-// The chat sign-in runtime loads this core module lazily; mock the module, not a hook.
-vi.mock("../../../src/commands/models/auth.js", () => ({
-  runModelsAuthLoginFlowCore: (
-    ...args: Parameters<typeof nativeCommandMocks.runModelsAuthLoginFlow>
-  ) => nativeCommandMocks.runModelsAuthLoginFlow(...args),
-}));
+vi.mock("openclaw/plugin-sdk/provider-auth-login-flow-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-login-flow-runtime")>();
+  return {
+    ...actual,
+    runProviderChannelLoginFlow: (
+      params: Parameters<typeof actual.runProviderChannelLoginFlow>[0],
+    ) =>
+      actual.runProviderChannelLoginFlow({
+        ...params,
+        runLoginFlow: (...args) => nativeCommandMocks.runModelsAuthLoginFlow(...args),
+      }),
+  };
+});
 vi.mock("./send-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./send-runtime.js")>()),
   loadTelegramSendModule: async () => ({
@@ -149,10 +157,10 @@ export function createNativeCommandTestParams(
     .mockReset()
     .mockResolvedValue({ messageId: "999", chatId: "100" });
   nativeCommandMocks.runModelsAuthLoginFlow.mockReset().mockImplementation(async (...args) => {
-    const actual = await vi.importActual<typeof import("../../../src/commands/models/auth.js")>(
-      "../../../src/commands/models/auth.js",
-    );
-    return await actual.runModelsAuthLoginFlowCore(...args);
+    const actual = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/provider-auth-login-flow-runtime")
+    >("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
+    return await actual.runModelsAuthLoginFlow(...args);
   });
   nativeCommandMocks.editMessageTelegram.mockReset().mockImplementation(async () => {
     throw new Error("Native menu fixtures do not edit progress messages");

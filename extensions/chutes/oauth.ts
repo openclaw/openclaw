@@ -10,8 +10,8 @@ import {
 import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowProviderError,
+  ProviderHttpError,
   readProviderJsonResponse,
-  type ProviderHttpError,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildOAuthRequestSignal,
@@ -73,7 +73,10 @@ async function requestChutesTokenGrant(params: {
     if (params.responseLabel === "Chutes token exchange") {
       // RFC 6749 section 5.2: 400 is a rejected grant, 401 a rejected client.
       await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`).catch(
-        (error: ProviderHttpError) => {
+        (error: unknown) => {
+          if (!(error instanceof ProviderHttpError)) {
+            throw error;
+          }
           const reason =
             error.status === 400
               ? "grant_rejected"

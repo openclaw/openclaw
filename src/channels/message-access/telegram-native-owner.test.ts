@@ -139,8 +139,7 @@ it("lets a started login finish after the owner is demoted", () =>
         await notified.promise;
       }
     }
-  }),
-);
+  }));
 
 const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
 

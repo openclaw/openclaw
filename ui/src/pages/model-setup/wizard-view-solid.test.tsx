@@ -301,7 +301,9 @@ it.each([
   const alert = container.querySelector("[role=alert]");
   expect(alert?.textContent).toBe(message);
   // The waiting dialog keeps its way back to the provider; the paste field shows it beneath.
-  expect(container.querySelector(".wizard-sign-in")?.contains(alert!)).toBe(!externalAuthInput);
+  expect(container.querySelector(".wizard-sign-in, .wizard-sign-in--paste")?.contains(alert!)).toBe(
+    !externalAuthInput,
+  );
   if (externalAuthInput) {
     const input = container.querySelector("#model-setup-wizard-text-input")!;
     expect(input.compareDocumentPosition(alert!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

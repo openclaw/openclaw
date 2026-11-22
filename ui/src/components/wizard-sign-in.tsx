@@ -40,11 +40,20 @@ function ProviderBadge(props: {
   brandId?: string;
   providerLabel?: string;
   waiting: boolean;
+  compact?: boolean;
 }) {
   const iconProvider = () =>
     props.brandId && resolveProviderIconName(props.brandId) ? props.brandId : undefined;
   return (
-    <div class={["wizard-sign-in__badge", { "wizard-sign-in__badge--waiting": props.waiting }]}>
+    <div
+      class={[
+        "wizard-sign-in__badge",
+        {
+          "wizard-sign-in__badge--waiting": props.waiting,
+          "wizard-sign-in__badge--compact": props.compact,
+        },
+      ]}
+    >
       <Show when={props.waiting}>
         <span class="wizard-sign-in__ring" aria-hidden="true" />
       </Show>
@@ -78,14 +87,15 @@ export function PasteSignIn(props: {
   titled: boolean;
 }) {
   return (
-    <div class="wizard-sign-in wizard-sign-in--paste">
-      <div class="wizard-sign-in__header">
+    <div class="wizard-sign-in--paste stack">
+      <div class="row">
         {/* The ring shows that a callback arriving by itself still finishes sign-in. */}
         <ProviderBadge
           icon={props.icon}
           brandId={props.brandId}
           providerLabel={props.providerLabel}
           waiting
+          compact
         />
         <Show when={props.titled}>
           {/* Like other setup dialogs, the sign-in choice's own label names it. */}
@@ -94,13 +104,13 @@ export function PasteSignIn(props: {
           </h2>
         </Show>
       </div>
-      <p class="wizard-sign-in__lead">{t("modelSetup.wizard.pasteDescription")}</p>
+      <div class="muted">{t("modelSetup.wizard.pasteDescription")}</div>
       <span class="sr-only" role="status" aria-live="polite">
         {props.providerLabel
           ? t("modelSetup.wizard.waitingForProvider", { provider: props.providerLabel })
           : t("modelSetup.wizard.waiting")}
       </span>
-      <div class="wizard-sign-in__paste-actions">
+      <div class="row">
         <a
           class="btn btn--sm wizard-step__external-link"
           data-link-reader-external
