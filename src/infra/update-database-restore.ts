@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
@@ -21,6 +20,7 @@ import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
@@ -29,6 +29,7 @@ import {
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
 import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
+import { enableSqliteWalJournalMode } from "./sqlite-wal.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -139,16 +140,11 @@ async function reestablishRestoredDatabaseJournalMode(databasePath: string): Pro
   if (resolvePathJournalPolicy(databasePath) !== "wal") {
     return;
   }
-  // sqlite-allow-raw -- one-shot offline journal-mode conversion; the caller
-  // holds the database exclusion window, so this process is the only holder.
-  const database = new DatabaseSync(databasePath);
+  // The caller retains database exclusion; reuse native admission and the WAL
+  // owner without starting long-lived checkpoint maintenance for this handle.
+  const database = openNodeSqliteDatabase(databasePath);
   try {
-    const row = database.prepare("PRAGMA journal_mode = WAL").get() as
-      | { journal_mode?: unknown }
-      | undefined;
-    if (String(row?.journal_mode).toLowerCase() !== "wal") {
-      throw new Error(`journal_mode reported ${String(row?.journal_mode)}`);
-    }
+    enableSqliteWalJournalMode(database, 0, { databasePath });
   } finally {
     database.close();
   }
