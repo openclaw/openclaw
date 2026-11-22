@@ -86,13 +86,13 @@ async function startSignIn(
       },
     },
   );
-  // First-run setup lands here with the picker open; a reload reopens the same address.
   const pluginQuery = replies.pluginEntry ? "&plugin=example" : "";
   await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1${pluginQuery}`);
-  if (!replies.pluginEntry) {
-    await page.locator('[data-models-login-provider="example"]').click();
+  if (replies.pluginEntry) {
+    await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
+  } else {
+    await page.locator('[data-models-catalog-provider="example"] button').click();
   }
-  await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
   const login = await gateway.waitForRequest("models.authLogin");
   const params = login.params;
   assert(params && typeof params === "object" && "sessionId" in params);
@@ -185,7 +185,7 @@ suite.define(() => {
       await dialog.getByText("This sign-in session ended.", { exact: false }).waitFor();
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
       await page.reload();
-      await page.locator("[data-models-login-provider]").first().waitFor();
+      await page.locator("[data-models-catalog-provider]").first().waitFor();
       expect(await dialog.getByText("This sign-in session ended.").count()).toBe(0);
     });
   });

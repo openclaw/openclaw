@@ -282,7 +282,6 @@ suite.define(() => {
 
         const detectCountBeforeDismiss = (await gateway.getRequests(rpc.detect)).length;
         await page.getByRole("button", { name: "Back to Models" }).click();
-        await page.locator("[data-models-connect]").click();
         await page.locator("[data-models-login-discover]").click();
         await pollRequestCount(gateway, rpc.detect).toBe(detectCountBeforeDismiss + 1);
         await openProviderMenu();

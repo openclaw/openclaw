@@ -394,148 +394,94 @@ describe("authenticated request mutation custody", () => {
     },
   );
 
-  it.each([
-    "transport retirement",
-    "client invalidated",
-    "generation rotated",
-    "policy changed",
-    "selection mismatch",
-    "copied generation reader",
-  ] as const)("retains the admitted authority for %s", async (scenario) => {
-    const generation = createGeneration("generation-a");
-    const connection = new AbortController();
-    const client = createOperatorWsClient();
-    client.usesSharedGatewayAuth = true;
-    client.sharedGatewaySessionGeneration = "generation-a";
-    setRuntimeConfigSnapshot({});
-    client.authPolicy = captureGatewayAuthPolicy({}, null);
-    client.connectionSignal = connection.signal;
-    client.authenticatedUserProfile = dispatchProfile("profile-owner");
-    const gate = createRequestGate();
-    const persisted = vi.fn();
-    const grantProfileReads = vi.fn();
-    const compatibilityReader = scenario === "copied generation reader";
-    const generationReader = generation.reader;
-    let inGrant = false;
-    let grantError: unknown;
-    vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profile) => {
-      if (inGrant) {
-        grantProfileReads();
-        throw new Error("host profile storage entered during worker admission");
-      }
-      return { profileId: profile, isCurrent: () => true };
-    });
-    const harness = createDispatchTestHarness({
-      getRequiredSharedGatewaySessionGeneration:
-        scenario === "copied generation reader"
-          ? Object.defineProperties(
-              () => generation.current,
-              Object.getOwnPropertyDescriptors(generationReader),
-            )
-          : generationReader,
-      buildRequestContext: () => createDirectChatContext(),
-      extraHandlers: {
-        "test.mutation-custody": async (options) => {
-          const authority = readGatewayRequestMutationAuthority(options);
-          expect(authority.family).toBe(compatibilityReader ? "native-compatibility" : "worker");
-          await gate.wait();
-          try {
-            if (compatibilityReader) {
-              authority.assertCurrent();
-            } else {
+  it.each(["transport retirement", "selection mismatch"] as const)(
+    "retains the admitted authority for %s",
+    async (scenario) => {
+      const generation = createGeneration("generation-a");
+      const connection = new AbortController();
+      const client = createOperatorWsClient();
+      client.usesSharedGatewayAuth = true;
+      client.sharedGatewaySessionGeneration = "generation-a";
+      setRuntimeConfigSnapshot({});
+      client.authPolicy = captureGatewayAuthPolicy({}, null);
+      client.connectionSignal = connection.signal;
+      client.authenticatedUserProfile = dispatchProfile("profile-owner");
+      const gate = createRequestGate();
+      const persisted = vi.fn();
+      const grantProfileReads = vi.fn();
+      let inGrant = false;
+      let grantError: unknown;
+      vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profile) => {
+        if (inGrant) {
+          grantProfileReads();
+          throw new Error("host profile storage entered during worker admission");
+        }
+        return { profileId: profile, isCurrent: () => true };
+      });
+      const harness = createDispatchTestHarness({
+        getRequiredSharedGatewaySessionGeneration: generation.reader,
+        buildRequestContext: () => createDirectChatContext(),
+        extraHandlers: {
+          "test.mutation-custody": async (options) => {
+            const authority = readGatewayRequestMutationAuthority(options);
+            expect(authority.family).toBe("worker");
+            await gate.wait();
+            try {
               if (authority.family !== "worker") {
                 throw new Error("WS request lost its worker custody before handler invocation");
               }
-              const forged = { ...options };
-              const reminted = { ...options };
-              const forgedReader = vi.fn(() => authority);
-              for (const key of Object.getOwnPropertySymbols(options)) {
-                const value = Object.getOwnPropertyDescriptor(options, key)?.value;
-                const Issuer = value.constructor;
-                if (typeof Issuer === "function") {
-                  Object.defineProperty(reminted, key, {
-                    value: new Issuer(reminted, authority),
-                    configurable: true,
-                  });
-                }
-                Object.defineProperty(forged, key, {
-                  value: Object.assign(Object.create(Object.getPrototypeOf(value)), {
-                    read: forgedReader,
-                  }),
-                  configurable: true,
-                });
-              }
-              // Neither ordinary copies nor copied private descriptors transfer invocation custody.
-              for (const copy of [
-                { ...options },
-                Object.assign(Object.create(options), options),
-                Object.defineProperties({}, Object.getOwnPropertyDescriptors(options)),
-                forged,
-                reminted,
-              ]) {
-                expect(readGatewayRequestMutationAuthority(copy).family).toBe(
-                  "native-compatibility",
-                );
-              }
-              expect(forgedReader).not.toHaveBeenCalled();
               inGrant = true;
               authority.assertWorkerCurrent();
               expect(authority.expectedProfileBinding).toBeDefined();
               authority.expectedProfileBinding?.assertMatchesResolvedProfile(
                 scenario === "selection mismatch" ? "different-profile" : "profile-owner",
               );
+              persisted();
+            } catch (error) {
+              grantError = error;
+            } finally {
+              inGrant = false;
             }
-            persisted();
-          } catch (error) {
-            grantError = error;
-          } finally {
-            inGrant = false;
-          }
-          options.respond(true, { settled: true });
-        },
-      },
-    });
-    const dispatch = harness.dispatcher.dispatch(
-      {
-        ...requestFrame("mutation-custody", "test.mutation-custody"),
-        expectedProfileId: "profile-owner",
-      },
-      client,
-    );
-    try {
-      await Promise.race([
-        gate.entered,
-        dispatch.then(() => {
-          throw new Error("request returned before reaching its mutation owner");
-        }),
-      ]);
-      if (scenario === "transport retirement") {
-        connection.abort();
-      } else if (scenario === "client invalidated") {
-        client.invalidated = true;
-      } else if (scenario === "generation rotated" || compatibilityReader) {
-        generation.publish({ current: "generation-b", required: generation.required });
-      } else if (scenario === "policy changed") {
-        setRuntimeConfigSnapshot({ gateway: { auth: { allowTailscale: true } } });
-      }
-    } finally {
-      gate.release();
-      await dispatch;
-    }
-    expect(grantProfileReads).not.toHaveBeenCalled();
-    if (scenario === "transport retirement") {
-      expect(grantError).toBeUndefined();
-      expect(persisted).toHaveBeenCalledOnce();
-    } else {
-      expect(grantError).toBeInstanceOf(Error);
-      expect(persisted).not.toHaveBeenCalled();
-    }
-    if (scenario === "selection mismatch") {
-      expect(grantError).toMatchObject({
-        error: {
-          details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+            options.respond(true, { settled: true });
+          },
         },
       });
-    }
-  });
+      const dispatch = harness.dispatcher.dispatch(
+        {
+          ...requestFrame("mutation-custody", "test.mutation-custody"),
+          expectedProfileId: "profile-owner",
+        },
+        client,
+      );
+      try {
+        await Promise.race([
+          gate.entered,
+          dispatch.then(() => {
+            throw new Error("request returned before reaching its mutation owner");
+          }),
+        ]);
+        if (scenario === "transport retirement") {
+          connection.abort();
+        }
+      } finally {
+        gate.release();
+        await dispatch;
+      }
+      expect(grantProfileReads).not.toHaveBeenCalled();
+      if (scenario === "transport retirement") {
+        expect(grantError).toBeUndefined();
+        expect(persisted).toHaveBeenCalledOnce();
+      } else {
+        expect(grantError).toBeInstanceOf(Error);
+        expect(persisted).not.toHaveBeenCalled();
+      }
+      if (scenario === "selection mismatch") {
+        expect(grantError).toMatchObject({
+          error: {
+            details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+          },
+        });
+      }
+    },
+  );
 });

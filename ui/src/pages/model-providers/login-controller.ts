@@ -22,13 +22,15 @@ import { createProviderModelSelection, verifiedStarterModel } from "./login-comp
 import { createLoginSavingPresentation } from "./login-presentation.ts";
 import {
   buildLoginProviders,
+  directEntry,
   filterLoginProviders,
-  loginProviderAccounts,
+  providerAccounts,
   resolveLoginSelection,
+  type LoginChoice,
+  type LoginProvider,
 } from "./login-providers.ts";
 import { createLoginSignIn } from "./login-sign-in.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
-import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -218,9 +220,10 @@ export function createModelProviderLogin(options: {
     });
   }
 
+  /** Opens the picker, optionally selecting a provider's methods. */
   async function open(
     providers?: string[],
-    { pluginId }: { pluginId?: string } = {},
+    { pluginId, select }: { pluginId?: string; select?: string } = {},
   ): Promise<void> {
     if (!options.canStart() || busy()) {
       return;
@@ -272,8 +275,9 @@ export function createModelProviderLogin(options: {
         }));
       if (inventoryRequest === request && isCurrent()) {
         const available = loginProviders(providers, authStatus, allowSetup, pluginId);
-        const provider =
-          (providers || pluginId) && available.length === 1 ? available[0] : undefined;
+        const only =
+          (providers || pluginId) && available.length === 1 ? available[0]?.id : undefined;
+        const provider = available.find((group) => group.id === (select ?? only));
         setProvider(provider?.id ?? "");
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
@@ -384,9 +388,7 @@ export function createModelProviderLogin(options: {
       ? loginProviders(picker.providers, authStatus, picker.allowSetup, picker.pluginId)
       : [];
     const provider = groups.find((group) => group.id === providerSelection());
-    const accountsFor = (group: (typeof groups)[number] | undefined) =>
-      loginProviderAccounts(group, authStatus);
-    const accounts = accountsFor(provider);
+    const accounts = provider ? providerAccounts(provider, authStatus) : [];
     const docsUrl =
       provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
       "https://docs.openclaw.ai/concepts/model-providers";
@@ -407,6 +409,8 @@ export function createModelProviderLogin(options: {
       disabled: !authStatus || !picker.isCurrent(),
       canStart: options.canStart(),
       showDiscover: !picker.providers && !picker.pluginId && Boolean(options.onDiscover),
+      // Back returns to the dialog's own catalog, so it shows only when the dialog opened there.
+      showBack: !picker.providers,
       discoverDisabled: !picker.isCurrent(),
       description: recovery
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
@@ -420,20 +424,9 @@ export function createModelProviderLogin(options: {
         setQuery(value);
       },
       onProvider: (providerId: string) => {
-        if (!canSelect()) {
-          return;
-        }
         const selected = groups.find((group) => group.id === providerId);
-        // Only a key and nothing saved: the method step would be one button, so go to the form.
-        if (
-          selected?.apiKeyProvider &&
-          !selected.choices.length &&
-          !authStatus?.unavailable &&
-          !hasProviderAccounts(accountsFor(selected))
-        ) {
-          const apiKeyProvider = selected.apiKeyProvider;
-          reset();
-          options.onApiKey?.(apiKeyProvider);
+        // In the picker only a lone key skips ahead; a sign-in method keeps its method step.
+        if (!canSelect() || !selected || (selected.apiKeyProvider && enter(selected, authStatus))) {
           return;
         }
         setProvider(providerId);
@@ -441,19 +434,7 @@ export function createModelProviderLogin(options: {
         notify();
         onSettled(focusPickerTarget);
       },
-      onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
-        if (!canSelect()) {
-          return;
-        }
-        if (selected.kind === "setup-secret") {
-          reset();
-          options.onManualProvider?.(selected.id);
-          return;
-        }
-        currentPicker = null;
-        refreshWarning = null;
-        signIn.choose(selected, picker.allowSetup);
-      },
+      onChoice: (selected: LoginChoice) => canSelect() && startChoice(selected, picker.allowSetup),
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
           return;
@@ -485,6 +466,34 @@ export function createModelProviderLogin(options: {
         onSettled(focusPickerTarget);
       },
     };
+  }
+
+  /** Starts one sign-in method; the picker, if any, closes as the wizard takes over. */
+  function startChoice(selected: LoginChoice, allowSetup: boolean): void {
+    if (selected.kind === "setup-secret") {
+      reset();
+      options.onManualProvider?.(selected.id);
+      return;
+    }
+    currentPicker = null;
+    refreshWarning = null;
+    signIn.choose(selected, allowSetup);
+  }
+
+  /** Starts a provider's only way in; false when it has a method step. */
+  function enter(
+    group: LoginProvider,
+    authStatus = options.getScope().authStatus,
+    allowSetup = Boolean(options.onManualProvider) || !selection().modelRef,
+  ): boolean {
+    const entry = directEntry(group, authStatus);
+    if (entry && "choice" in entry) {
+      startChoice(entry.choice, allowSetup);
+    } else if (entry) {
+      reset();
+      options.onApiKey?.(entry.apiKeyProvider);
+    }
+    return entry !== null;
   }
 
   function showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
@@ -724,6 +733,7 @@ export function createModelProviderLogin(options: {
       apiKeyChoice = element;
     },
     open,
+    enter,
     invalidateInventory,
     reset: () => (signIn.active ? signIn.synchronize() : reset()),
   };

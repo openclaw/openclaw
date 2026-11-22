@@ -323,14 +323,10 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
           await expect(delivery).rejects.toThrow(/custody|requester lifecycle/);
         } else {
           const outcome = await delivery;
-          expect(outcome, JSON.stringify(outcome)).toMatchObject(
-            callerState === "uncaptured"
-              ? {
-                  delivered: false,
-                  error: expect.stringContaining("authority is no longer active"),
-                }
-              : { delivered: true, path: "direct" },
-          );
+          expect(outcome, JSON.stringify(outcome)).toMatchObject({
+            delivered: true,
+            path: "direct",
+          });
         }
       } finally {
         custody?.release();

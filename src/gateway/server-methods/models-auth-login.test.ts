@@ -307,6 +307,32 @@ describe("models.authLogin ownership", () => {
     },
   );
 
+  it("reports a saved sign-in whose model check failed with the activation's one sentence", async () => {
+    const h = harness();
+    hooks.catalog.mockResolvedValue({
+      models: [{ provider: "fixture", id: "best", name: "Best", available: true }],
+    });
+    const error =
+      "Your sign-in is saved. The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again.";
+    hooks.activate.mockResolvedValue({
+      ok: false,
+      status: "rate_limit",
+      error,
+      disposition: "rejected-before-promotion",
+    });
+    await h.invoke("models.authLogin", {
+      sessionId: "login",
+      authChoice: "fixture/fixture-device",
+      selectModel: true,
+    });
+    expect(await h.next()).toEqual({
+      done: true,
+      status: "error",
+      error,
+      activationRejection: { disposition: "rejected-before-promotion", status: "rate_limit" },
+    });
+  });
+
   it("returns the recovery message without the error class name through wizard.next", async () => {
     hooks.login.mockRejectedValueOnce(
       Object.assign(new Error("Connection settings changed. Open Model Setup to try again."), {
