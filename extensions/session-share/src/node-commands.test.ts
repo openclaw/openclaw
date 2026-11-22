@@ -88,6 +88,11 @@ it("registers one legacy and one optional catalog pair with strict options", asy
   await expect(commands[0]!.handle(JSON.stringify({ includeOriginalPath: true }))).rejects.toThrow(
     "Unknown session list parameter: includeOriginalPath",
   );
+  await expect(
+    commands[1]!.handle(
+      JSON.stringify({ threadId: "agent:main:shared", cursor: "a".repeat(1201) }),
+    ),
+  ).rejects.toThrow("cursor is invalid");
   await expect(commands[2]!.handle(JSON.stringify({ includeOriginalPath: "yes" }))).rejects.toThrow(
     "includeOriginalPath must be a boolean",
   );

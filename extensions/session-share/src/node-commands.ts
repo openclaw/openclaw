@@ -385,7 +385,7 @@ export function createSessionShareNodeCommands(
         const params = sessionCatalogPaging.parseReadParams(parseNodeParams(paramsJSON), {
           threadIdMaxLength: 512,
           threadIdPattern: /^[^\0\r\n]+$/,
-          cursorMaxLength: 2048,
+          cursorMaxLength: catalog ? 2048 : 1200,
           messages: parameterMessages,
           supportsProfileRelation: catalog,
         });
