@@ -58,6 +58,17 @@
   /* In this row, scroll the tabs rather than pushing the settings page sideways. */
   > .config-sections-hub-tabs {
     flex-shrink: 1;
+
+    /* The strip clips outer shadows. Keep focus inside the tab and selection below it. */
+    .hub-tab:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--ring);
+
+      &[active] {
+        box-shadow:
+          inset 0 0 0 2px var(--ring),
+          0 2px 0 var(--indicator-color);
+      }
+    }
   }
 }
 
