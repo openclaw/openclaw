@@ -38,7 +38,7 @@ import {
   switchLink,
   type ReleaseKind,
 } from "./store.js";
-import { resolveTarget } from "./target.js";
+import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 
 /** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
@@ -48,6 +48,7 @@ export type InstallKind = { kind: ReleaseKind; checkout?: string };
 
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }
+  | { status: "published"; target: { version: string }; releaseRoot: string }
   | { status: "current"; version: string; pluginsChanged: boolean }
   | { status: "failed"; reason: string; message: string };
 
@@ -225,6 +226,13 @@ export async function prepareUpdate(params: {
         );
       }
     }
+    const releaseAwareGit =
+      target.kind !== "git" ||
+      (await gitTargetSupportsReleaseUpdates(
+        target.checkout,
+        target.sha,
+        Math.max(1, deadline - Date.now()),
+      ));
     const checked = await preflight({
       kind: install.kind,
       target,
@@ -271,7 +279,19 @@ export async function prepareUpdate(params: {
       );
     }
     await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
-    const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+    // Older targets use the same release layout, but cannot complete a readiness trial.
+    // Command failures are never a compatibility signal.
+    const modules =
+      target.kind === "package" ? await fs.readdir(path.join(prepared.releaseRoot, "dist")) : [];
+    const releaseAware =
+      target.kind === "git"
+        ? releaseAwareGit
+        : ["check-release", "gateway-trial"].every((name) =>
+            modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
+          );
+    const verdict = releaseAware
+      ? await runCheckRelease(prepared.releaseRoot, node, env)
+      : { ok: true };
     if (!verdict.ok) {
       return await fail(
         "release-check-failed",
@@ -334,6 +354,30 @@ export async function prepareUpdate(params: {
       timeoutMs: Math.max(1, deadline - Date.now()),
       acceptCapabilities: params.acceptCapabilities,
     });
+    if (!releaseAware) {
+      await recordUpdateRunStepAsync(
+        params.runId,
+        {
+          step: "legacy-target",
+          status: "completed",
+          detail: "This version predates release updates and has no automatic rollback.",
+        },
+        { env },
+      );
+      await switchLink(path.relative(prefix, releaseRoot), prefix);
+      await finishUpdateRunAsync(
+        params.runId,
+        {
+          status: "succeeded",
+          after: {
+            version: prepared.version,
+            ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
+          },
+        },
+        { env },
+      );
+      return { status: "published", target: { version: prepared.version }, releaseRoot };
+    }
     await createTrialPending(
       {
         runId: params.runId,

@@ -31,6 +31,8 @@ import {
   runCommandWithTimeout,
 } from "./update-cli-modules.test-support.js";
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
+import * as channelConfig from "./update-cli/update-command-config.js";
+import * as legacyTarget from "./update-cli/update-command-target.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -74,6 +76,56 @@ describe("update-cli", () => {
       expect(packageInstallCommandCall()).toBeUndefined();
     },
   );
+
+  it.each([true, false])(
+    "keeps %s explicit dev selection at the existing Git conversion owner",
+    async (explicit) => {
+      await mockPackageInstallAtCaseDir();
+      const config = await channelConfig.readUpdateChannelConfig(false);
+      vi.spyOn(channelConfig, "readUpdateChannelConfig").mockResolvedValue({
+        ...config,
+        storedChannel: explicit ? null : "dev",
+      });
+      const resolveLegacyTarget = vi
+        .spyOn(legacyTarget, "resolveUpdateCommandTarget")
+        .mockResolvedValue(undefined);
+      const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
+
+      await updateCommand({ yes: true, channel: explicit ? "dev" : undefined });
+
+      expect(resolveLegacyTarget).toHaveBeenCalledOnce();
+      expect(runRelease).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an explicit one-off package tag on the release path despite saved dev", async () => {
+    await mockPackageInstallAtCaseDir();
+    const config = await channelConfig.readUpdateChannelConfig(false);
+    vi.spyOn(channelConfig, "readUpdateChannelConfig").mockResolvedValue({
+      ...config,
+      storedChannel: "dev",
+    });
+    const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
+
+    await updateCommand({ yes: true, tag: "latest" });
+
+    expect(runRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ tag: "latest", storedChannel: "dev" }),
+    );
+  });
+
+  it("keeps explicit local packaged-code replay at its mutable owner", async () => {
+    await mockPackageInstallAtCaseDir();
+    const resolveLegacyTarget = vi
+      .spyOn(legacyTarget, "resolveUpdateCommandTarget")
+      .mockResolvedValue(undefined);
+    const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
+
+    await updateCommand({ yes: true, reapplyLocalOverrides: true });
+
+    expect(resolveLegacyTarget).toHaveBeenCalledOnce();
+    expect(runRelease).not.toHaveBeenCalled();
+  });
 
   it("refuses --tag main before dry-run package resolution", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update-main-refusal"));

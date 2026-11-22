@@ -7,7 +7,8 @@ import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "../../infra/update-check-lifecycle.js";
-import { getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { getUpdateRunAsync, listUpdateRunsAsync } from "../../infra/update-run-reader.js";
+import { finishUpdateRunAsync } from "../../infra/update-run-write.async.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -152,6 +153,35 @@ it("prepares package installs through the release path on the stable channel", a
       }),
     ),
   );
+});
+
+it("restarts a published older release without reopening its completed run", async () => {
+  scheduleGatewayRestart.mockClear();
+  prepareUpdate.mockImplementationOnce((async ({ runId }: { runId: string }) => {
+    await finishUpdateRunAsync(runId, {
+      status: "succeeded",
+      after: { version: "2026.10.1" },
+    });
+    return {
+      status: "published",
+      target: { version: "2026.10.1" },
+      releaseRoot: "/tmp/release",
+    };
+  }) as never);
+  const { payload } = await invoke({ restartDelayMs: 7000 });
+  await vi.waitFor(() =>
+    expect(scheduleGatewayRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "update.run", delayMs: 7000 }),
+    ),
+  );
+  expect(await listUpdateRunsAsync()).toEqual([
+    expect.objectContaining({
+      runId: payload.runId,
+      status: "succeeded",
+      phase: "finished",
+      after: expect.objectContaining({ version: "2026.10.1" }),
+    }),
+  ]);
 });
 
 it("refuses an unrecognized installation before recording or preparing an update", async () => {

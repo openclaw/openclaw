@@ -19,7 +19,7 @@ import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, normalizeTag, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
-  assertReleaseInstallOwner,
+  assertReleaseUpdateAdmission,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -99,14 +99,24 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  // Package installs and Git installs staying on Git prepare releases after the owner refusals.
-  // Channel switches from Git and dry runs retain the existing flow.
+  // Channel conversions and dry runs retain their existing owners.
+  const channelConfig =
+    prepared.installKind === "package" && !inputOpts.dryRun
+      ? await (await import("./update-command-config.js")).readUpdateChannelConfig(false)
+      : undefined;
+  const switchesToGit =
+    prepared.requestedChannel === "dev" ||
+    (prepared.requestedChannel === null &&
+      channelConfig?.storedChannel === "dev" &&
+      normalizeTag(inputOpts.tag) === null);
   const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
   if (
-    (prepared.installKind === "package" || (prepared.installKind === "git" && staysGit)) &&
-    !inputOpts.dryRun
+    ((prepared.installKind === "package" && !switchesToGit) ||
+      (prepared.installKind === "git" && staysGit)) &&
+    !inputOpts.dryRun &&
+    !inputOpts.reapplyLocalOverrides
   ) {
-    await assertReleaseInstallOwner({
+    await assertReleaseUpdateAdmission({
       root: prepared.discoveredRoot,
       installKind: prepared.installKind,
       timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
@@ -132,7 +142,8 @@ async function updateCommandWithRuntime(
       restart: prepared.shouldRestart,
       runningRoot: prepared.discoveredRoot,
       channel: prepared.requestedChannel ?? undefined,
-      storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
+      storedChannel:
+        (channelConfig ?? (await readUpdateChannelConfig(false))).storedChannel ?? undefined,
       sha: inputOpts.sha,
       tag,
       yes: Boolean(inputOpts.yes),

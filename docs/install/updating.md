@@ -20,6 +20,11 @@ Git installs build a detached worktree; package installs download and extract th
 package outside `node_modules`, then install its production dependencies.
 The new release checks its own configuration and plugin surfaces with
 `update check-release` and maintains plugins with `update plugins`.
+Targets from before the release-update commands and launcher readiness contract
+still prepare beside the serving installation, but switch directly without
+automatic rollback. The update history records this limitation.
+Explicit `--reapply-local-overrides` uses the existing in-place updater so trusted
+packaged-code edits retain their existing replay behavior.
 
 A resident launcher selects the pending release when the Gateway next starts.
 The Gateway migrates state at boot and confirms that it is ready. If the new

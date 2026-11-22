@@ -3,6 +3,7 @@ import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/ind
 import type * as UpdateCliShared from "../cli/update-cli/shared.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import { defaultRuntime } from "../runtime.js";
+import { runReleaseUpdateCli as runPreparedReleaseUpdateCli } from "./cli.js";
 
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
@@ -40,11 +41,19 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
+const publishedTarget = vi.hoisted(() => ({ enabled: false }));
 // mock-isolation: preparation builds a real release; this test checks only the channel it is given.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
+    if (publishedTarget.enabled) {
+      return {
+        status: "published",
+        target: { version: "2026.11.6" },
+        releaseRoot: "/tmp/prepared",
+      };
+    }
     return { status: "current", version: "2026.11.6", pluginsChanged: false };
   },
 }));
@@ -92,6 +101,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 
 afterEach(() => {
   install.kind = "git";
+  publishedTarget.enabled = false;
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
@@ -103,6 +113,20 @@ afterEach(() => {
   prepared.length = 0;
   runsGet.length = 0;
   process.exitCode = undefined;
+});
+
+it("restarts a directly published older target without requesting another update", async () => {
+  publishedTarget.enabled = true;
+  localRun.status = "succeeded";
+  await runPreparedReleaseUpdateCli({
+    json: true,
+    yes: true,
+    tag: "2026.11.6",
+    restart: true,
+    runningRoot: "/tmp/openclaw-checkout",
+  });
+  expect(createRun).toHaveBeenCalledOnce();
+  expect(sent).toEqual([expect.objectContaining({ method: "gateway.restart.request" })]);
 });
 
 it("sends a pinned commit and the --timeout budget that the Gateway protocol accepts", async () => {

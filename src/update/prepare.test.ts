@@ -56,7 +56,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function repository(failBuild = false, engine = ">=1") {
+async function repository(failBuild = false, engine = ">=1", releaseAware = false) {
   const source = path.join(root, "source");
   const bare = path.join(root, "remote.git");
   const checkout = path.join(root, "checkout");
@@ -75,6 +75,16 @@ async function repository(failBuild = false, engine = ">=1") {
     }),
   );
   await fs.writeFile(path.join(source, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+  if (releaseAware) {
+    await fs.mkdir(path.join(source, "src", "update"), { recursive: true });
+    await fs.writeFile(path.join(source, "src", "update", "check-release.ts"), "");
+  }
+  await fs.writeFile(
+    path.join(source, "openclaw.mjs"),
+    `if (process.argv[3] === 'check-release') {
+      ${releaseAware ? "console.log(JSON.stringify({ok:true,surfaces:[]}));" : "throw new Error('unsupported command');"}
+    } else console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
+  );
   await fs.writeFile(
     path.join(source, "build.cjs"),
     failBuild
@@ -111,6 +121,11 @@ process.exit(result.status ?? 1);
 }
 
 describe("release preparation", () => {
+  it("keeps the repository HEAD recognizable as release-aware", async () => {
+    const checkout = await fs.realpath(new URL("../../", import.meta.url));
+    expect(await targets.gitTargetSupportsReleaseUpdates(checkout, "HEAD", 30_000)).toBe(true);
+  });
+
   it("builds the pinned revision in a detached worktree without changing the checkout", async () => {
     const target = await repository();
     const staging = path.join(root, "staging");
@@ -248,6 +263,42 @@ if (args[0] === 'pack') {
 });
 
 describe("package release conversion", () => {
+  it.each([true, false])("publishes a Git target with release support %s", async (releaseAware) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    const target = await repository(false, ">=1", releaseAware);
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.6" } });
+      const outcome = await prepareUpdate({
+        runId: run.runId,
+        runningRoot: target.checkout,
+        runningVersion: "2026.11.6",
+        channel: "dev",
+        node,
+      });
+      expect(outcome.status).toBe(releaseAware ? "pending" : "published");
+      if (releaseAware) {
+        expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
+      } else {
+        expect((await getUpdateRunAsync(run.runId))?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ step: "legacy-target", status: "completed" }),
+          ]),
+        );
+        expect((await getUpdateRunAsync(run.runId))?.status).toBe("succeeded");
+        expect(await readTrial()).toBeNull();
+        if (outcome.status === "published") {
+          expect(await fs.realpath(path.join(resolvePrefix(), "openclaw"))).toBe(
+            outcome.releaseRoot,
+          );
+        }
+      }
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+
   it("refuses an unwritable global package before preparing or forwarding it", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const runningRoot = path.join(root, "global-package");
@@ -284,7 +335,7 @@ describe("package release conversion", () => {
     }
   });
 
-  it("stages a same-version artifact and forwards both global entries without activating its trial", async () => {
+  it.each([true, false])("prepares a package with release support %s", async (releaseAware) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const runningRoot = path.join(root, "global", "node_modules", "openclaw");
     await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
@@ -304,6 +355,12 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
     await fs.writeFile(path.join(runningRoot, "dist", "entry.js"), "console.log('running');");
     const packedRoot = path.join(root, "packed", "package");
     await fs.mkdir(packedRoot, { recursive: true });
+    await fs.mkdir(path.join(packedRoot, "dist"));
+    if (releaseAware) {
+      for (const name of ["check-release", "gateway-trial"]) {
+        await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
+      }
+    }
     await fs.writeFile(
       path.join(packedRoot, "package.json"),
       '{"name":"openclaw","version":"2026.11.21","type":"module"}',
@@ -352,6 +409,21 @@ else if (args[0] === 'pack') {
         channel: "stable",
         node,
       });
+      if (!releaseAware) {
+        expect(outcome).toMatchObject({ status: "published", target: { version: "2026.11.21" } });
+        expect(await readTrial(prefix)).toBeNull();
+        if (outcome.status === "published") {
+          expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(outcome.releaseRoot);
+        }
+        expect((await getUpdateRunAsync(run.runId))?.status).toBe("succeeded");
+        expect((await getUpdateRunAsync(run.runId))?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ step: "legacy-target", status: "completed" }),
+          ]),
+        );
+        expect(serviceConversion.stageReleaseService).toHaveBeenCalledOnce();
+        return;
+      }
       expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
       expect(await readTrial(prefix)).toMatchObject({
         phase: "pending",

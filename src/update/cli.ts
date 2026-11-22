@@ -259,6 +259,9 @@ async function updateWithoutGateway(
     timeoutMs: opts.timeoutMs,
     acceptCapabilities: opts.acceptCapabilities,
   });
+  if (outcome.status === "published" && opts.restart) {
+    await requestLocalGatewayRestart();
+  }
   if (opts.tag && opts.restart && outcome.status === "current" && outcome.pluginsChanged) {
     await requestLocalGatewayRestart();
   }

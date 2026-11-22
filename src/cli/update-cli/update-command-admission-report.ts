@@ -38,8 +38,8 @@ import { GatewayServiceUpdateOwnershipError } from "./update-command-service-pla
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 
-/** Keep unowned-install refusals read-only before a release client delegates to the Gateway. */
-export async function assertReleaseInstallOwner(
+/** Keep release-client refusals read-only before delegation to the Gateway. */
+export async function assertReleaseUpdateAdmission(
   params: Parameters<typeof assertGlobalUpdateOwner>[0] &
     Pick<UpdateAdmissionReportParams, "opts" | "controlPlaneUpdateSentinelMeta">,
 ): Promise<void> {

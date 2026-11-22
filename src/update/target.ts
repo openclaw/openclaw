@@ -16,6 +16,19 @@ export type UpdateTarget =
   | { kind: "git"; checkout: string; sha: string; version: string }
   | { kind: "package"; spec: string; version: string; engines?: { node?: string } };
 
+/** The check command and launcher readiness sender were introduced together. */
+export async function gitTargetSupportsReleaseUpdates(
+  checkout: string,
+  sha: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const result = await runCommandWithTimeout(
+    ["git", "-C", checkout, "cat-file", "-e", `${sha}:src/update/check-release.ts`],
+    { timeoutMs },
+  );
+  return result.code === 0;
+}
+
 /** Resolve once; preparation and engine checks consume the same pinned target. */
 export async function resolveTarget(params: {
   kind: UpdateTarget["kind"];

@@ -150,6 +150,28 @@ describe("automatic release campaigns", () => {
     expect(restart).toHaveBeenCalledExactlyOnceWith({ reason: "update.auto" });
   });
 
+  it("restarts a published older release without reopening or duplicating its completed run", async () => {
+    prepare.mockImplementationOnce(async ({ runId }) => {
+      finishUpdateRun(runId, { status: "succeeded", after: { version: "2026.10.1" } });
+      return {
+        status: "published",
+        target: { version: "2026.10.1" },
+        releaseRoot: "/tmp/release",
+      };
+    });
+    const { runId } = createUpdateRun({ trigger: "campaign" });
+    await expect(runAdmittedUpdate(runId)).resolves.toEqual({ status: "handoff" });
+    expect(restart).toHaveBeenCalledExactlyOnceWith({ reason: "update.auto" });
+    expect(listUpdateRuns()).toEqual([
+      expect.objectContaining({
+        runId,
+        status: "succeeded",
+        phase: "finished",
+        after: expect.objectContaining({ version: "2026.10.1" }),
+      }),
+    ]);
+  });
+
   it.each([false, true])(
     "restarts an already-current release only when plugin maintenance changed it (%s)",
     async (pluginsChanged) => {
