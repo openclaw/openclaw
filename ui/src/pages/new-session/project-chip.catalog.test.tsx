@@ -311,6 +311,8 @@ it.each([
   const manage = view.container.querySelector<HTMLAnchorElement>(
     ".new-session-page__manage-projects",
   );
+  // Gateway folder browsing needs operator.write, so restricted roles never see it.
+  expect(view.container.querySelector('[data-value="browse"]') === null).toBe(!write);
   if (!admin) {
     expect(manage).toBeNull();
     return;

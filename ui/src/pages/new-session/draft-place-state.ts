@@ -747,8 +747,12 @@ export class DraftPlaceState {
     this.repositoryState.synchronizeProjectCheckout();
   }
 
+  /** Gateway-host fs.listDir needs operator.write; outside agent workspaces it needs admin. */
   browseAvailable(): boolean {
-    return this.gateway.connected && (this.isAdmin() || Boolean(this.workspacePath()));
+    return (
+      this.gateway.connected &&
+      (this.isAdmin() || (this.canWrite() && Boolean(this.workspacePath())))
+    );
   }
 
   worktreeAvailable(): boolean {

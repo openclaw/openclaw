@@ -676,15 +676,18 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               <div class="new-session-page__menu-note">{t("newSession.projectsAdminHint")}</div>
             ) : undefined}
           </div>
-          <div class="new-session-page__picker-foot">
-            {view().browseNeedsAdmin ? (
-              <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
-                {browseButton()}
-              </openclaw-tooltip>
-            ) : (
-              browseButton()
-            )}
-          </div>
+          {/* Gateway-host folder browsing needs operator.write; restricted roles pick shared projects. */}
+          <Show when={props.params.place.canWrite()}>
+            <div class="new-session-page__picker-foot">
+              {view().browseNeedsAdmin ? (
+                <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
+                  {browseButton()}
+                </openclaw-tooltip>
+              ) : (
+                browseButton()
+              )}
+            </div>
+          </Show>
         </div>
       )}
     </>

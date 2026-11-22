@@ -74,6 +74,7 @@ suite.define(() => {
       "No projects are shared with your role. Ask an admin to share one.",
     );
     expect(await picker.getByRole("link", { name: "Manage projects" }).count()).toBe(0);
+    expect(await picker.getByRole("button", { name: "Browse folders" }).count()).toBe(0);
     await captureProjectUiProof(suite, page, "project-access-restricted-empty.png");
   });
 
