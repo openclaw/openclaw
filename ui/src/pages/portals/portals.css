@@ -247,7 +247,7 @@ openclaw-portals-page[embedded],
 .portals-embedded .portals-preview__frame,
 .portals-embedded .portals-preview__notice,
 .portals-embedded .portals-preview__state,
-.portals-embedded .portals-empty {
+openclaw-portals-page[embedded] .portals-empty {
   flex: 1;
   min-height: 0;
 }
