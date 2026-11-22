@@ -122,6 +122,8 @@ export async function preparePackage(params: {
     if (changed) {
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     }
+    // Bun also imports checkout workspaces from pnpm's configuration.
+    await fs.rm(path.join(releaseRoot, "pnpm-workspace.yaml"), { force: true });
     await params.onStep?.("install");
     // Bun rejects --production with --trust; this manifest already has no development dependencies.
     const result = await runCommandWithTimeout(

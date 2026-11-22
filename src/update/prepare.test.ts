@@ -193,6 +193,7 @@ describe("release preparation", () => {
           scripts: { prepare: "node development-only.mjs", postinstall: "node production.mjs" },
         }),
       );
+      await fs.writeFile(path.join(packedRoot, "pnpm-workspace.yaml"), "packages:\n  - ui\n");
       const archive = path.join(root, "openclaw.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       const installScript = `
@@ -212,6 +213,7 @@ if (args[0] === 'pack') {
   if (args.includes('-g')) process.exit(12);
   const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
   if ('devDependencies' in manifest || 'workspaces' in manifest || 'prepare' in manifest.scripts) process.exit(10);
+  if (fs.existsSync('pnpm-workspace.yaml')) process.exit(13);
   if (manifest.dependencies['fixture-runtime'] !== '2.0.0' || manifest.scripts.postinstall !== 'node production.mjs') process.exit(11);
   fs.writeFileSync(${JSON.stringify(path.join(root, "dependencies-installed"))}, 'yes');
   fs.writeFileSync('argv.json', JSON.stringify(args));
