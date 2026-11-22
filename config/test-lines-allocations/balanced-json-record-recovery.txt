@@ -1,4 +1,4 @@
 # Complete-record recovery, original JSON string ownership and external ANSI boundaries.
 # Covers default compatibility, malformed input, CRLF and bounded scanner progress.
-# Native formatting leaves 1315 net regression-test lines against the field-policy parent.
-915
+# Native formatting leaves 1399 net regression-test lines against the field-policy parent.
+999
