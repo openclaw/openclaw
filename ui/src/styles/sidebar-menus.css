@@ -217,15 +217,15 @@
 .session-actions__label small {
   margin-top: 1px;
   max-width: 100%;
-  overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.333;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .session-actions-page {
+  font-size: var(--control-ui-text-md);
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -236,7 +236,7 @@
 .session-actions-page h3 {
   margin: 12px 12px 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
