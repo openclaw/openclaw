@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
+import { WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS } from "./inbound/send-api.js";
 import { createWaSocket } from "./session.js";
 import * as baileys from "./session.runtime.js";
 
@@ -40,6 +41,8 @@ g3jJFhhV9i6pH+3gQ6cRDnXzQuqhRANCAAR3Gq4w66O4uoei8K86L+rKXx1+qiGn
 JpXo7VbUJEtrv25TRC/HDefe6k0RuxRFpw/newYpnqvF9CsFOvmqvABQ
 -----END ${privateKeyLabel}-----`;
 
+const AGENT_IDLE_TIMEOUT_MS = 200;
+const SLOW_UPLOAD_RESPONSE_MS = 600;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const suiteTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const mediaBytes = Buffer.from("WhatsApp upload boundary fixture\n");
@@ -71,6 +74,7 @@ describe("WhatsApp session media upload", () => {
   const agents = new Set<NonNullable<SocketOptions["agent"]>>();
   let originalCas: string[];
   let originPort: number;
+  let slowOriginPort: number;
   let plainOriginPort: number;
   let redirectUrl: string | undefined;
   let httpProxyUrl: string;
@@ -176,6 +180,22 @@ describe("WhatsApp session media upload", () => {
         (request, response) => receiveUpload(request, response, redirectUrl),
       ),
     );
+    // WhatsApp answers only after the whole body arrives; on a slow uplink that can be many
+    // seconds after the client has written its last byte into the socket buffer.
+    slowOriginPort = await listen(
+      https.createServer(
+        { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
+        (req, res) => {
+          req.resume();
+          req.on("end", () => {
+            setTimeout(() => {
+              res.writeHead(200, { "content-type": "application/json", connection: "close" });
+              res.end(JSON.stringify(receipt));
+            }, SLOW_UPLOAD_RESPONSE_MS);
+          });
+        },
+      ),
+    );
     plainOriginPort = await listen(
       http.createServer((request, response) => receiveUpload(request, response)),
     );
@@ -238,7 +258,11 @@ describe("WhatsApp session media upload", () => {
     return { options, filePath };
   }
 
-  async function upload(session: Awaited<ReturnType<typeof createUploadSession>>, host: string) {
+  async function upload(
+    session: Awaited<ReturnType<typeof createUploadSession>>,
+    host: string,
+    { port = originPort, timeoutMs }: { port?: number; timeoutMs?: number } = {},
+  ) {
     const warnings: unknown[][] = [];
     const uploadMedia = getWAUploadToServer(
       {
@@ -253,13 +277,14 @@ describe("WhatsApp session media upload", () => {
         auth: "fixture-auth",
         ttl: 60,
         fetchDate: new Date(0),
-        hosts: [{ hostname: `${host}:${originPort}`, maxContentLengthBytes: 1024 }],
+        hosts: [{ hostname: `${host}:${port}`, maxContentLengthBytes: 1024 }],
       }),
     );
     try {
       const result = await uploadMedia(session.filePath, {
         mediaType: "image",
         fileEncSha256B64: "fixture-sha256",
+        timeoutMs,
       });
       expect(result).toMatchObject({ mediaUrl: receipt.url, directPath: receipt.direct_path });
     } catch (cause) {
@@ -305,6 +330,26 @@ describe("WhatsApp session media upload", () => {
         { host: `127.0.0.1:${originPort}`, body: mediaBytes },
       ]);
       expect(proxyRequests).toEqual([`127.0.0.1:${originPort}`, `127.0.0.1:${originPort}`]);
+    }
+  });
+
+  it("keeps a slow upload open past Node's default agent idle timeout", async () => {
+    // Without a proxy, Baileys uploads through https.globalAgent, whose sockets time out after
+    // 5s idle (Node >= 19). Shorten that idle timeout so the slow-uplink case runs quickly.
+    const nodeIdleTimeout = https.globalAgent.options.timeout;
+    https.globalAgent.options.timeout = AGENT_IDLE_TIMEOUT_MS;
+    try {
+      const session = await createUploadSession();
+      expect(session.options.fetchAgent).toBeUndefined();
+      await expect(upload(session, "127.0.0.1", { port: slowOriginPort })).rejects.toThrow(
+        /Upload timeout/,
+      );
+      await upload(session, "127.0.0.1", {
+        port: slowOriginPort,
+        timeoutMs: WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS,
+      });
+    } finally {
+      https.globalAgent.options.timeout = nodeIdleTimeout;
     }
   });
 

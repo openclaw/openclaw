@@ -1,4 +1,4 @@
-import type { AnyMessageContent, WAMessage } from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
@@ -18,6 +18,11 @@ import {
   type WhatsAppSendResult,
 } from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
+
+// Baileys uploads pass no socket timeout unless given one, so Node's default agent idle
+// timeout (5s since Node 19) applies. On a slow uplink a multi-MB upload sits idle in the
+// send buffer for longer than that and Baileys aborts with "Media upload failed on all hosts".
+export const WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS = 60_000;
 
 type StructuredContactSend = {
   displayName: string;
@@ -151,19 +156,25 @@ export function createWebSendApi(params: {
       });
       const kind = mediaBuffer ? "media" : "text";
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
+      const payloadOpts = mediaBuffer
+        ? { ...quotedOpts, mediaUploadTimeoutMs: WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS }
+        : quotedOpts;
       return await runAcceptedSend(kind, accountId, async (capture) => {
-        const sendPayload = async (content: AnyMessageContent) =>
-          quotedOpts
-            ? await params.sock.sendMessage(jid, content, quotedOpts)
+        const sendPayload = async (
+          content: AnyMessageContent,
+          opts: MiscMessageGenerationOptions | undefined,
+        ) =>
+          opts
+            ? await params.sock.sendMessage(jid, content, opts)
             : await params.sock.sendMessage(jid, content);
-        capture(await sendPayload(payload), kind);
+        capture(await sendPayload(payload, payloadOpts), kind);
         if (shouldSendAudioText) {
           const resolvedAudioText = await resolveMentions(jid, text);
           const textPayload = addWhatsAppOutboundMentionsToContent(
             { text: resolvedAudioText.text },
             resolvedAudioText.mentionedJids,
           );
-          capture(await sendPayload(textPayload), "text");
+          capture(await sendPayload(textPayload, quotedOpts), "text");
         }
       });
     },
