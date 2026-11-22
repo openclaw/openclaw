@@ -250,14 +250,16 @@ it("terminalizes a native command account merge during fresh transcript approval
   expect.soft(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
     ok: false,
     payload: { runId, status: "error" },
-    error: { message: expect.stringContaining("Message injection authority is no longer current") },
+    error: {
+      message: expect.stringContaining("Authenticated profile verification is unavailable"),
+    },
   });
   expect.soft(fixture.context.broadcast).toHaveBeenCalledWith(
     "chat",
     expect.objectContaining({
       runId,
       state: "error",
-      errorMessage: expect.stringContaining("Message injection authority is no longer current"),
+      errorMessage: expect.stringContaining("Authenticated profile verification is unavailable"),
     }),
     expect.anything(),
   );

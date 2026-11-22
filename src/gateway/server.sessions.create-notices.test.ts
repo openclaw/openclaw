@@ -23,7 +23,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
   const profileId = ensureProfileForEmail("session-creator@example.test").id;
   const profile = { profileId, displayName: "Test Operator" };
   const client = {
-    connect: { scopes: ["operator.read", "operator.write"] },
+    connect: { scopes: ["operator.read", "operator.write"], client: { id: "test" } },
     authenticatedUserProfile: { ...profile, hasAvatar: false, updatedAt: 1 },
   };
   attachGatewayLocalUserIngress(
@@ -39,7 +39,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
     directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
   const syntheticClient = (sessionCreation?: TrustedSessionCreation) => ({
     client: {
-      connect: { scopes: ["operator.write"] },
+      connect: { scopes: ["operator.write"], client: { id: "test" } },
       internal: { syntheticClient: true, sessionCreation },
     } as never,
   });

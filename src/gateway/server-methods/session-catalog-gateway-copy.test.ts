@@ -110,7 +110,7 @@ function copyParams(
     agentId: "main",
     clientScopes: ["operator.read", "operator.write"],
     client: {
-      connect: { scopes: ["operator.read", "operator.write"] },
+      connect: { scopes: ["operator.read", "operator.write"], client: { id: "test" } },
     } as never,
     context: {
       getRuntimeConfig: () => ({
@@ -277,7 +277,7 @@ describe("copySessionCatalogToGateway", () => {
           ? { signal: controller.signal }
           : {
               client: {
-                connect: { scopes: ["operator.read", "operator.write"] },
+                connect: { scopes: ["operator.read", "operator.write"], client: { id: "test" } },
                 connectionSignal: controller.signal,
               } as never,
             },

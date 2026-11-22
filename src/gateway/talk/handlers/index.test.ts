@@ -2922,7 +2922,7 @@ describe("role-required Talk session creation", () => {
         params,
         client: {
           connId: "conn-required",
-          connect: { scopes: ["operator.talk"] },
+          connect: { scopes: ["operator.talk"], client: { id: "test" } },
           authenticatedUserProfile: { profileId: profile.id },
         },
         context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
