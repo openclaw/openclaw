@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
+import type { SessionWorktreeObservation } from "../agents/worktrees/session-lifecycle.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
@@ -22,6 +23,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { resolveGatewaySessionActiveModel } from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
@@ -42,31 +44,28 @@ export type ProjectionOptions = {
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
 };
 
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+type SharedFacts = {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
+  worktree?: SessionWorktreeObservation | null;
 };
 
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & SharedFacts;
+
 /** Undefined shared facets await their owner; null is acknowledged absence. */
-export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<
-    Pick<
-      PreparedSessionRowDatabaseFacts,
-      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
-    >
-  >;
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts & Partial<SharedFacts>;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
 ): facts is PreparedSessionRowDatabaseFacts {
   return (
-    facts !== undefined &&
-    facts.acpMeta !== undefined &&
+    facts?.acpMeta !== undefined &&
     facts.runtimeOwnership !== undefined &&
     facts.runtimeOwnershipDependencies !== undefined &&
-    facts.repositoryWorkspace !== undefined
+    facts.repositoryWorkspace !== undefined &&
+    (!facts.entry?.worktree || facts.worktree !== undefined)
   );
 }
 
@@ -422,7 +421,7 @@ export function publishTranscriptFields(
   context: SessionListRowContext,
 ): boolean {
   // Same-generation metadata may change while transcript work is awaiting publication.
-  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+  const fallbackModel = resolveGatewaySessionActiveModel({
     cfg,
     agentId: row.agentId,
     sessionId: row.entry.sessionId,

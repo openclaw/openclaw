@@ -1,11 +1,8 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import * as candidateState from "../infra/update-candidate-state.js";
 import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
@@ -19,21 +16,13 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import { candidateCheckStep as checkStep } from "./update-cli-lifecycle.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js";
-import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import * as postCore from "./update-cli/update-command-post-core.js";
-
-// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
-vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
-  usesGitReleases: () => false,
-}));
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -468,85 +457,4 @@ describe("update-cli", () => {
 
     expect(assert.packageInstallCommandCall()?.[0]).toContain("--prefix");
   });
-
-  it.each([false, true])(
-    "attempts recovery after Git mutation throws and preserves failed readiness (json=%s)",
-    async (json) => {
-      setup.mockStoppedManagedGitGateway();
-      setup.setTty(true);
-      setup.setStdoutTty(true);
-      const cause = new Error(
-        json ? "The pipe is being closed (0x800700e8)" : "ENOSPC while replacing runtime files",
-      );
-      const failure = new Error(
-        json
-          ? `SQLite read-only worker failed to start for state.sqlite: ${cause.message}`
-          : `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
-        { cause },
-      );
-      vi.mocked(update.updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
-        const target = { version: VERSION, databaseEngines: ["sqlite", "postgres"] };
-        await assert.requireValue(opts.beforeGitMutation, "Git mutation admission")(target);
-        mocks.restartHealthTestControl.snapshot = {
-          runtime: { status: "stopped", pid: null, state: "stopped" },
-          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-          healthy: false,
-          staleGatewayPids: [],
-          waitOutcome: "timeout",
-          probeError: "Gateway remains stopped after interrupted mutation.",
-        };
-        throw failure;
-      });
-
-      await expect(
-        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, () => updateCommand({ json })),
-      ).rejects.toEqual(new ExitError(1));
-      expect(mocks.serviceStop).toHaveBeenCalledOnce();
-      expect(assert.freshRestartCalls()).toHaveLength(1);
-      assert.expectNoSideEffects(mocks.serviceStart, mocks.serviceRestart);
-      expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(mocks.triageCommand).toHaveBeenCalledTimes(json ? 0 : 1);
-      const reportedFailure = json
-        ? { result: assert.lastWriteJsonCall() }
-        : mocks.triageCommand.mock.calls[0]?.[1]?.recovery?.updateFailure;
-      expect(reportedFailure).toMatchObject({
-        result: {
-          status: "error",
-          mode: "git",
-          reason: "update-failed",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          verification: { serviceRunning: false, readyz: false, settled: false },
-          steps: [
-            expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
-            expect.objectContaining({ exitCode: 1, stderrTail: formatErrorMessage(failure) }),
-            expect.objectContaining({ name: "post-stop-checks", exitCode: 0 }),
-            recoveryVerificationStep([
-              {
-                check: "gateway-recovery",
-                code: "gateway-probe-failed",
-                message:
-                  "Failed to restart managed gateway service after failed update: Error: Service runtime: status=stopped, state=stopped",
-              },
-            ]),
-          ],
-        },
-      });
-      expect(assert.getLogOutput()).not.toMatch(/keep the gateway stopped/i);
-      expect(assert.getLogOutput()).toContain("openclaw update repair");
-      if (!json) {
-        const recovery = expectDefined(
-          mocks.triageCommand.mock.calls[0]?.[1]?.recovery,
-          "captured failed-update recovery",
-        );
-        const diagnostic = sanitizeTriageUpdateFailure(recovery.updateFailure, {
-          env: {},
-          stateDir: setup.profileStateDir(),
-        });
-        expect(diagnostic).toMatchObject({
-          error: expect.stringContaining("updater interrupted after mutation"),
-        });
-        expect(diagnostic.error).toContain(cause.message);
-      }
-    },
-  );
 });

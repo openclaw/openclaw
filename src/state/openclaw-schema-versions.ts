@@ -20,6 +20,7 @@ export const AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION = 43;
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 44;
 
+// v41 retains the trusted approval requester profile without inferring historical identity.
 // v40 retains the original provisioning source before worker allocation and recovery.
 // v39 retains worker policy and uncertain pause/resume operations across restart.
 // v38 retains repository disk authority and the original authority of pending results.
@@ -56,7 +57,7 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 44;
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 40;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 41;
 
 export type OpenClawSchemaVersions = {
   state: number;

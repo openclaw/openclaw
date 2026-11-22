@@ -5,6 +5,7 @@ import { isUnconfiguredConfigSource } from "../cli/fresh-install-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatUserCliCommand } from "../daemon/durable-service-entrypoint.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -401,6 +402,11 @@ async function runGuidedOnboardingFlow(
     activate,
   });
   const skippedInference = resultLines === null;
+  const resolveNextStepCommands = async () => ({
+    onboardCommand: await formatUserCliCommand("onboard"),
+    channelsCommand: await formatUserCliCommand("channels add"),
+    dashboardCommand: await formatUserCliCommand("dashboard"),
+  });
   if (localOnboarding && (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))) {
     const { withConfigMutationExclusive } = await import("../config/config.js");
     // A verified existing route may need no config write. Claim before provisioning
@@ -429,7 +435,10 @@ async function runGuidedOnboardingFlow(
   if (!custodianMode) {
     if (skippedInference) {
       await prompter.note(
-        t("wizard.guided.nextStepsWithoutAi", { workspace }),
+        t("wizard.guided.nextStepsWithoutAi", {
+          workspace,
+          ...(await resolveNextStepCommands()),
+        }),
         t("wizard.guided.nextStepsTitle"),
       );
       return null;
@@ -612,7 +621,10 @@ async function runGuidedOnboardingFlow(
     : appliedWorkspace;
   if (skippedInference) {
     await prompter.note(
-      t("wizard.guided.nextStepsWithoutAi", { workspace: agentWorkspace }),
+      t("wizard.guided.nextStepsWithoutAi", {
+        workspace: agentWorkspace,
+        ...(await resolveNextStepCommands()),
+      }),
       t("wizard.guided.nextStepsTitle"),
     );
     await prompter.outro(t("wizard.guided.setupDone"));
@@ -640,7 +652,7 @@ async function runGuidedOnboardingFlow(
     })?.modelTarget === "utility";
   if (setupOnly) {
     await prompter.note(
-      "Your setup and utility model is ready. It can help finish setup here. Choose a primary model in Model Setup or run openclaw onboard before regular agent chat.",
+      `Your setup and utility model is ready. It can help finish setup here. Choose a primary model in Model Setup or run ${await formatUserCliCommand("onboard")} before regular agent chat.`,
       "Setup and utility inference",
     );
   }

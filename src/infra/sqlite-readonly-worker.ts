@@ -11,6 +11,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
 import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
+import { withSelectedSqliteLibraryEnv } from "./bun-sqlite-library.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -236,7 +237,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
       resolveRuntimeProcessEntrypointUrl("sqliteReadOnly"),
     ).runtimeGeneration,
     env: {
-      ...resolveNodeCompileCacheEnv(env),
+      ...withSelectedSqliteLibraryEnv(resolveNodeCompileCacheEnv(env)),
       // Auth readers pin this default explicitly; equivalent roots share one child.
       OPENCLAW_STATE_DIR: resolveStateDir(env),
     },
@@ -461,7 +462,7 @@ export function runOneShotSqliteInspection<T>(
 ): Promise<T> {
   assertChildRuntimeAvailable();
   const pathname = params.mode === "staging-sweep" ? "snapshot staging" : params.pathname;
-  const env = params.env ?? resolveNodeCompileCacheEnv();
+  const env = withSelectedSqliteLibraryEnv(params.env ?? resolveNodeCompileCacheEnv());
   const executable = process.execPath;
   const cwd = params.cwd ?? tryProcessCwd();
   let stopped = false;
@@ -598,7 +599,7 @@ export function runSqliteReadOnlyWorkerSync(
       encoding: "utf8",
       windowsHide: true,
       stdio: "pipe",
-      env: resolveNodeCompileCacheEnv(),
+      env: withSelectedSqliteLibraryEnv(resolveNodeCompileCacheEnv()),
       maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
       timeout: timeoutMs,
       killSignal: "SIGKILL",

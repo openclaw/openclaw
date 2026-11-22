@@ -198,7 +198,7 @@ not grant access during a policy failure.
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.experimental.customPlugins`: allow native browser UI from enabled user-installed plugins, including local development plugins. Default: `true`, with no Labs switch. This existing key remains an advanced opt-out: explicit `false` values stay off on upgrade; omission and `true` allow native UI. Native UI runs with each signed-in viewer’s Gateway authority, so install only trusted plugins. Enabled bundled views, backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected by the opt-out. Changes hot-apply and refresh connected browser tabs. After disabling, reload tabs to clear JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
-- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `false`. Enable through **Settings → Labs → Templates** or set this boolean to `true`. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Turning the switch off blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
+- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `true`, with no Labs or replacement settings switch. This historical key remains an advanced opt-out: explicit `false` stays off on upgrade, and unset or `true` permits discovery and Add. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Setting it to `false` blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway browser connections. When omitted, defaults to `gateway.publicOrigin` if configured. An explicit list, including `[]`, replaces this default. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.newSessionModelDefaults`: `"last-used"` (default) restores remembered new-session model, runtime, and reasoning choices. Set `"configured"` to start fresh drafts with the selected agent’s configured defaults instead. Applies to `/new` and the command palette in the UI served by this Gateway, after browser refresh or reconnect. Explicit choices remain editable and survive reload with the current unsent draft; submitting that draft retires its choices so the next fresh draft uses configured defaults. Existing conversations are untouched. Workspace, placement, and Fast Mode preferences are preserved; stored preferences are not deleted. Configure the desired model and `thinkingDefault` on the agent (or `agents.defaults`); this setting does not force a particular model or reasoning level.
@@ -382,3 +382,37 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+## `gateway.resources.profile`
+
+```json5
+{ gateway: { resources: { profile: "auto" } } }
+```
+
+- `auto` (default): choose `lean` when effective memory is **below 8 GiB**;
+  exactly 8 GiB or more selects `standard`. Automatic selection is enabled by default
+  and depends only on memory, not CPU count.
+- `standard` or `lean`: explicitly override automatic selection.
+- Memory is the smallest visible cgroup v2 `memory.max` across the process's cgroup
+  and ancestors, bounded by total host RAM. Without a finite readable limit,
+  total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
+  `memory.high`, swap and current free memory do not select
+  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+- Changing the setting requires a Gateway restart.
+
+**Both profiles currently use identical worker behavior.** This setting is the
+foundation for subsequent lean resource changes, not a memory cap or OOM guarantee.
+
+`openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
+report the active profile, selection reason, effective memory limit/source and CPU
+count. Their live census reports direct worker kind, count, retained idle floor,
+normal cap, point-read cap, idle policy and sampled heap usage. Floors are retained
+after first use, not eager startup counts. A zero idle timeout means until-close;
+warm-worker grace can extend configured timeouts. Workers remain counted until
+native exit, including pending retirement.
+
+Heap samples reuse the existing diagnostic sampler; unavailable or partial samples
+are labeled rather than reported as zero. Workers outside task pools have unknown
+policy fields. The census covers directly registered workers, not subprocesses or
+nested workers; it is not a process RSS breakdown. Offline status does not substitute
+the CLI's own resource profile for the Gateway's.

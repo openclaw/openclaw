@@ -4,7 +4,10 @@ import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
-import { isDeliverySuspended, isDeliverySuspendedUnbound } from "./subagent-delivery-state.js";
+import {
+  isDeliverySuspendedUnbound,
+  isDeliveryTerminalForRequesterSettle,
+} from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
   resolveControllerSessionKey,
@@ -17,20 +20,6 @@ import {
   hasSubagentRunEnded,
   isRetainedUnendedSubagentRun,
 } from "./subagent-run-liveness.js";
-
-function isDeliveryTerminalForRequesterSettle(
-  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
-): boolean {
-  return (
-    isDeliverySuspended(entry) ||
-    entry.delivery?.status === "delivered" ||
-    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
-    entry.delivery?.status === "discarded" ||
-    entry.delivery?.disposition === "delivered" ||
-    entry.delivery?.disposition === "intentional_non_delivery" ||
-    entry.delivery?.disposition === "permanent_failure"
-  );
-}
 
 /** Lists runs of a requester chat, optionally scoped to a requester run. */
 export function listRunsForRequesterFromRuns(
@@ -161,7 +150,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
   hasUnendedRuns(rootSessionKey: string): boolean;
   countPendingDescendantRuns(
     rootSessionKey: string,
-    options?: { excludeSuspendedDelivery?: boolean },
+    options?: { excludeSettledDelivery?: boolean },
   ): number;
   hasDescendantRunAwaitingSettle(
     rootSessionKey: string,
@@ -280,8 +269,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       options?: {
         excludeRunId?: string;
         settledBefore?: number;
-        excludeSuspendedDelivery?: boolean;
-        treatSuspendedDeliveryAsSettled?: boolean;
+        excludeSettledDelivery?: boolean;
         stopAtFirst?: boolean;
       },
     ): number => {
@@ -307,9 +295,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
           ? typeof entry.cleanupCompletedAt !== "number" &&
             // Continuation: no session at its recorded requester key waits on this outcome.
             !isDeliverySuspendedUnbound(entry) &&
-            !(options?.excludeSuspendedDelivery === true && isDeliverySuspended(entry)) &&
             !(
-              options?.treatSuspendedDeliveryAsSettled === true &&
+              options?.excludeSettledDelivery === true &&
               isDeliveryTerminalForRequesterSettle(entry)
             )
           : isRetainedReadRun(entry, clock);
@@ -326,7 +313,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     const cachedDescendantCount = (
       rootSessionKey: string,
       counts: Map<string, number>,
-      options?: { excludeSuspendedDelivery?: boolean },
+      options?: { excludeSettledDelivery?: boolean },
     ): number => {
       const root = rootSessionKey.trim();
       const descendants = getDescendantKeys(root);
@@ -367,12 +354,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     };
     const countPendingDescendantRuns = (
       rootSessionKey: string,
-      options?: { excludeSuspendedDelivery?: boolean },
+      options?: { excludeSettledDelivery?: boolean },
     ) =>
-      // Admission can settle suspended delivery while cleanup still retains the result.
+      // Admission follows delivery settlement while cleanup may still retain the result.
       cachedDescendantCount(
         rootSessionKey,
-        options?.excludeSuspendedDelivery
+        options?.excludeSettledDelivery
           ? admissionPendingDescendantCountBySessionKey
           : pendingDescendantCountBySessionKey,
         options,
@@ -386,7 +373,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       countDescendantRuns(getDescendantKeys(rootSessionKey), {
         excludeRunId,
         settledBefore,
-        treatSuspendedDeliveryAsSettled: true,
+        excludeSettledDelivery: true,
         stopAtFirst: true,
       }) > 0;
 

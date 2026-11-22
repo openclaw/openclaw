@@ -12,7 +12,6 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   SESSION_NAVIGATION_KEY_PARAM,
   resolveSessionPreferredFace,
@@ -31,8 +30,6 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
-  personalSidebarGroupRows,
-  personalGroupSessionReferences,
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
@@ -80,7 +77,6 @@ import {
   storeSidebarSessionSortMode,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
-  type SidebarPinZone,
   type SidebarToolActivity,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -248,7 +244,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionOwnershipVisibility = { filters: false, avatars: false };
 
   private readonly sessionSelection = createSidebarSessionSelection(
-    () => this.visibleSessionAppearancesInOrder(),
+    () => this.visibleSessionRowsInOrder(),
     () => this.invalidate(),
   );
   get selectedSessionKeys(): ReadonlySet<string> {
@@ -501,29 +497,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     return personalSidebarZone(this, liveRows);
   }
 
-  resolvePersonalGroupSession(key: string): SidebarRecentSession | undefined {
-    // Startup snapshots are presentation only; group membership resolves through current access.
-    return this.sidebarSnapshot ? undefined : this.reconciledSidebarZone().sessionRows.get(key);
-  }
-
-  collapsedPersonalSessionGroups: ReadonlySet<string> = new Set();
-
-  togglePersonalSessionGroup(id: string): void {
-    const next = new Set(this.collapsedPersonalSessionGroups);
-    if (!next.delete(id)) {
-      next.add(id);
-    }
-    this.collapsedPersonalSessionGroups = next;
-    this.invalidate();
-  }
-
-  personalGroupSessionReferences = () => personalGroupSessionReferences(this);
-
-  personalGroupSessionRows = (group: PersonalSessionGroup, zone?: SidebarPinZone) =>
-    personalSidebarGroupRows(this, group, zone, () =>
-      this.selectedAgentSessionRows(this.getSessionNavigationState()),
-    );
-
   /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {
     const serialized = serializeSidebarEntry({ type: "session", key });
@@ -533,24 +506,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.onUpdateSidebarEntries?.(this.sidebarEntries.filter((entry) => entry !== serialized));
   }
 
-  /** Shift ranges retain each visible occurrence, including repeated group membership. */
-  private visibleSessionAppearancesInOrder(): SidebarRecentSession[] {
+  protected visibleSessionRowsInOrder = (): SidebarRecentSession[] => {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     const { visibleRows } = this.zonedVisibleSections(rows);
-    const personalRows = (this.context.navigation.snapshot.personalSessionGroups ?? [])
-      .filter((group) => !this.collapsedPersonalSessionGroups.has(group.id))
-      .flatMap((group) => this.personalGroupSessionRows(group));
-    return sidebarVisibleRowsInOrder(
-      this.reconciledSidebarZone(rows),
-      visibleRows,
-      this,
-      personalRows,
-    );
-  }
-
-  /** A session shown in several places still has only one batch target and live-data owner. */
-  protected visibleSessionRowsInOrder = (): SidebarRecentSession[] =>
-    distinctSidebarSessionRows(this.visibleSessionAppearancesInOrder());
+    return sidebarVisibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows, this);
+  };
 
   protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
     return this.sessionProjection.visibleTree(this.visibleSessionRowsInOrder(), this);

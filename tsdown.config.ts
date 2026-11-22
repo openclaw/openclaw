@@ -597,6 +597,9 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "auto-reply/reply/agent-runner-run": "src/auto-reply/reply/agent-runner-run.ts",
     "auto-reply/continuation/lazy.runtime": "src/auto-reply/continuation/lazy.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    // The catalog publish gate runs each release's own refresh from this file
+    // (RELEASED_READER_ENTRIES in scripts/lib/catalog-compare-released-gate.mts).
+    "model-catalog/remote-refresh": "src/model-catalog/remote-refresh.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "infra/device-identity": "src/infra/device-identity.ts",

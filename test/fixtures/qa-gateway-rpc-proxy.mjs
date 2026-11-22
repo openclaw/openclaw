@@ -20,8 +20,6 @@ if (command === "models") {
   let sequence = 0;
   let connection = 0;
   let dropResponse = false;
-  let holdHello = false;
-  let held;
   const record = (kind, facts = {}) => {
     if (events.length >= 256) {
       throw new Error("proxy evidence limit exceeded");
@@ -53,27 +51,11 @@ if (command === "models") {
           writeFileSync(recordPath, "");
         } else if (action === "drop-response") {
           dropResponse = true;
-        } else if (action === "hold-reconnect") {
-          holdHello = true;
-          for (const peer of peers) {
-            peer.front.terminate();
-            peer.back.terminate();
-          }
-        } else if (action === "release-hello") {
-          if (!held) {
-            throw new Error("no held hello");
-          }
-          record("hello-released", { connection: held.connection });
-          const releasing = held;
-          held = undefined;
-          for (const raw of releasing.frames) {
-            releasing.front.send(raw);
-          }
         } else if (action !== "snapshot") {
           throw new Error("unknown fixture action");
         }
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ events, held: Boolean(held), pid: process.pid }));
+        res.end(JSON.stringify({ events, pid: process.pid }));
       })().catch(() => res.writeHead(500).end("fixture control failed"));
       return;
     }
@@ -140,27 +122,13 @@ if (command === "models") {
           return;
         }
       }
-      if (frame.type === "res" && method === "connect" && frame.ok && holdHello) {
-        holdHello = false;
-        held = { connection: id, front, frames: [raw] };
-        record("hello-held", { connection: id });
-        return;
-      }
-      if (held?.front === front) {
-        if (held.frames.length >= 128) {
-          throw new Error("held frame limit exceeded");
-        }
-        held.frames.push(raw);
-      } else if (front.readyState === WebSocket.OPEN) {
+      if (front.readyState === WebSocket.OPEN) {
         front.send(raw);
       }
     });
     front.on("close", () => {
       back.terminate();
       peers.delete(peer);
-      if (held?.front === front) {
-        held = undefined;
-      }
     });
     back.on("close", () => front.terminate());
     front.on("error", () => back.terminate());

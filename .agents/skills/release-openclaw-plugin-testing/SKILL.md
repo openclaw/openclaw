@@ -98,7 +98,7 @@ package SHA/version, and skipped-live reason.
 ## Package Acceptance Plan
 
 Full Release Validation owns final candidate qualification with admitted Q
-(default Q=C, or an explicit reviewed main-ancestor Q) and the
+(default Q=C, or an explicit reviewed exact Q) and the
 exact publication tarballs. Use standalone Package Acceptance for diagnostics
 or postpublish confidence, not as a replacement candidate qualification:
 

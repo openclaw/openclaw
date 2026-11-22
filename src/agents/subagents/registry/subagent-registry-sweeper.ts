@@ -10,7 +10,6 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
-import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
   PROVISIONAL_KILL_RECONCILIATION_MS,
@@ -31,7 +30,8 @@ import {
   isSubagentSpawnArmed,
 } from "./subagent-registry-spawn-acceptance.js";
 import {
-  discardSuspendedPendingFinalDelivery,
+  discardExpiredSubagentDelivery,
+  settleSubagentCompletionReservation,
   isSuspendedPendingFinalDelivery,
   SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
   warnSuspendedDeliveryPressure,
@@ -363,7 +363,7 @@ export function createSubagentRegistrySweeper(params: {
           const expired =
             now - (entry.delivery?.suspendedAt ?? now) >= SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
           if (expired) {
-            await discardSuspendedPendingFinalDelivery({
+            await discardExpiredSubagentDelivery({
               ...params,
               runId,
               entry,

@@ -52,6 +52,7 @@ openclaw doctor
 
   </Accordion>
   <Accordion title="Job fired but no delivery">
+    - `followup queue: input withheld; refusing replay` means a queued continuation lost its original authority and was consumed without running again. The log identifies the session, job, and run when known, and lists the recorded history/session-notice paths or explicit reasons a path was unavailable. Inspect the run history and the session's `withheld` notice before starting fresh authorized work; the original occurrence's result is preserved.
     - A session queue capacity error means the target cannot admit another turn. Let its existing work settle before retrying. Main-session system events stay running until their turn settles; a restart before adoption records one interrupted error without replaying the reminder.
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
     - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.

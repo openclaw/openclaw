@@ -251,6 +251,7 @@ export function* assembleOpenClawCodingTools(
       ? yield {
           coreTools: {
             abortSignal: options?.abortSignal,
+            prepareHostFileMutation: options?.prepareHostFileMutation,
             attachmentReadRoot,
             codingRoot,
             containmentRoot,

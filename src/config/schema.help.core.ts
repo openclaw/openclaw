@@ -103,6 +103,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
+  "gateway.resources": "Gateway resource profile selection. Changes require a Gateway restart.",
+  "gateway.resources.profile":
+    "Resource profile: auto (default), standard, or lean. Auto selects lean below 8 GiB effective memory (the minimum of host RAM and visible cgroup-v2 memory.max limits); exactly 8 GiB selects standard. CPU count does not affect selection. Cgroup v1 limits are not detected; host RAM is used. Explicit profiles override detection. Both profiles currently use identical worker behavior.",
   "gateway.port":
     "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
@@ -139,8 +142,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.sessionControl":
     "Explicit opt-ins for session control surfaces. Authentication and saved device grants do not enable publication or active steering.",
+  "gateway.sessionControl.publicationWriteEnabled":
+    "Allows restricted publication-writer connections only when true (default: false). Independent of publication reads and host steering. Source plugins still require their own opt-in and device grant. Checked at each request admission; disabling denies new requests without revoking admitted work.",
   "gateway.sessionControl.publicationReadEnabled":
-    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
+    "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Checked when each connection or read request starts; disabling denies new requests without revoking an already admitted read.",
   "gateway.sessionControl.steeringEnabled":
     "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
@@ -173,6 +178,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
   "gateway.auth.trustedProxy.delegation.credentialFile":
     "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt":
+    "Opt-in check that each request's cf-access-jwt-assertion is signed by your Cloudflare Access team, is for this application, and has not expired. The user header must match the signed email claim. Without it, the Gateway trusts the identity headers from any trusted proxy source, including other local processes.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.issuer":
+    "Exact HTTPS origin of your Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Signing keys are fetched from its /cdn-cgi/access/certs endpoint.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.audience":
+    "Application Audience (AUD) tag from the Access application's overview page. Assertions issued for other applications are rejected.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
   "gateway.auth.trustedProxy.gitCoauthor":
@@ -195,6 +206,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant":
+    "When true, an approved CLI or TUI device behind the trusted proxy that requests more than its paired scopes connects within them instead of filing a scope-upgrade request, and the TUI receives a device token. Browser clients are unaffected. Default false.",
   "gateway.roles":
     "Named operator-role catalog. A default enables enforcement for all identified profiles. Without a default, only current linked OpenClaw ID members use their profile role across sign-in routes. Enforced profiles without a resolvable role cannot connect.",
   "gateway.roles.default":

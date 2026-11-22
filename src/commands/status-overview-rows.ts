@@ -30,6 +30,7 @@ import {
   countActiveStatusAgents,
   formatHostDesktopStatus,
 } from "./status-overview-values.ts";
+import { buildStatusResourceRows } from "./status-resources.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
@@ -45,6 +46,7 @@ type StatusDegradationSummary = Pick<
   | "childRuntime"
   | "secretEgressProxy"
   | "pluginReload"
+  | "resources"
 >;
 
 function buildStatusDegradationRows(
@@ -277,6 +279,7 @@ export function buildStatusCommandOverviewRows(params: {
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
+      ...buildStatusResourceRows(params.summary.resources),
       ...(params.updateRows ?? []),
       ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
       params.surface.databaseEngines?.source !== "unavailable"
@@ -381,6 +384,7 @@ export function buildStatusAllOverviewRows(params: {
     ],
     agentsValue: `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${countActiveStatusAgents({ agentStatus: params.agentStatus })} active · ${params.agentStatus.totalSessions} sessions`,
     suffixRows: [
+      ...buildStatusResourceRows(params.summary.resources),
       ...(params.surface.databaseEngines?.source !== "unavailable"
         ? [
             {

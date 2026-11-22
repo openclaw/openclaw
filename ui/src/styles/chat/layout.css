@@ -2778,6 +2778,10 @@ openclaw-chat-ci-details {
   color: inherit;
 }
 
+.agent-chat__workspace-restore-error {
+  color: var(--warn);
+}
+
 .agent-chat__disabled-banner-icon {
   display: inline-flex;
   flex: 0 0 auto;

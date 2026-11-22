@@ -134,6 +134,68 @@ hashes, failed samples, and per-cell results.
 
 ## Control UI warm interactions
 
+### Real-Gateway Usage opens
+
+`bench-usage-open.ts` measures a trusted click from Sessions → Usage with
+Research selected, then a same-document revisit. It uses the production Control
+UI served by each checkout's built Gateway, not a mocked RPC or static UI. The
+default fixture contains 6,000 session families, 858 retained SQLite windows,
+four agent stores, 180 days of history, archived rows, and skewed turn counts.
+An independent bill ledger supplies the selected agent's default 30-day totals,
+daily series, and top-row oracle. One run uses one fixture at its original
+physical paths because the persisted rollup keys include those paths. The
+driver restores a fresh copy before each isolated Gateway process and samples
+the revisions serially, reversing their order between pairs.
+
+```sh
+# The driver does not build. First build each clean source checkout with
+# pnpm build sourcePerformance and pnpm ui:build.
+TZ=UTC node --import ./scripts/tsx.mjs scripts/bench-usage-open.ts \
+  --seed --fixture .openclaw/tmp/usage-team-projected
+TZ=UTC node --import ./scripts/tsx.mjs scripts/bench-usage-open.ts \
+  --base <baseline-checkout> --head <candidate-checkout> \
+  --fixture .openclaw/tmp/usage-team-projected --out .openclaw/tmp/usage-open-proof \
+  --pairs 5 --preset --screenshots
+```
+
+Seed with `--unprojected` for the distinct missing-rollup backfill case, and
+report any `--deadline-ms` timeouts as censored rather than final. The fixture
+date must match the UTC day of the run. No production state, credentials, or
+model calls are needed. The harness retains per-sample RPCs, partial and final
+render frames, numeric worker dispatch counts, CPU, host load, and failures.
+The frame clock starts in the browser on the trusted click; request onset is
+observed by Playwright on the same local machine. Cold is first route entry on
+a fresh process and browser context after Sessions is usable, not an OS cache
+flush or cold browser launch. Warm is a route revisit on the same connection;
+`--preset` adds a separately verified 7d → 30d action after the warm revisit.
+
+For a **separate**, cold-only foreground responsiveness diagnostic, use the
+original 6,000-family missing-rollup fixture and fresh copies for each role:
+
+```sh
+TZ=UTC node --import ./scripts/tsx.mjs scripts/bench-usage-open.ts \
+  --base <baseline-checkout> --head <candidate-checkout> \
+  --fixture .openclaw/tmp/usage-team-empty-rollup \
+  --out .openclaw/tmp/usage-foreground-diagnostic \
+  --pairs 5 --deadline-ms 180000 --foreground-history
+```
+
+This opt-in opens a separate read-only Gateway peer and schedules up to eight
+ordinary `chat.history` reads (one in flight, 500 ms apart) for the same
+Research transcript after the first selected-scope `summarizing` reply. No
+history request runs during setup or after the complete reply. The probe
+checks the fixture session identity and all 64 returned user/assistant messages
+against the seed text and records decoded payload bytes. `foreground-history.json`
+retains each deadline, start/end, skipped slot or error;
+`foreground-history-summary.json` gives p50, nearest-rank p95, max, and overlap
+coverage. Only compare the same cadence slots that completed successfully wholly
+inside both roles’ observed partial-to-complete wire windows. Wire overlap
+shows that the report was still backfilling, not that each request overlapped
+a specific SQLite read. Treat errors or busy slots as evidence gaps, not as
+fast successes. The usual `result.json` retains Gateway CPU for the enclosing
+route interval; the diagnostic adds no profiler or ELU sampler. Do not mix
+these deliberately loaded timings into default acceptance runs.
+
 ### Real-Gateway Usage model filters
 
 `bench-usage-gateway.ts` measures the production Usage page against isolated

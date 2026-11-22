@@ -9,7 +9,10 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
-import { arePostgresSearchExtensionsAdmitted } from "../infra/database-engine/search-extension.js";
+import {
+  admitStoreSearchExtension,
+  arePostgresSearchExtensionsAdmitted,
+} from "../infra/database-engine/search-extension.js";
 import {
   isPostgresSqlConnection,
   type EngineConnection,
@@ -103,6 +106,7 @@ export function admitAgentEngineSearchExtensions(
   db: EngineConnection,
   definitions: Readonly<Record<string, SearchSchema>>,
   admit: (stage: "transaction" | "commit") => void,
+  rebuild = false,
 ): void {
   if (!isPostgresSqlConnection(db)) {
     return;
@@ -117,7 +121,7 @@ export function admitAgentEngineSearchExtensions(
     () => {
       admit("transaction");
       for (const [name, definition] of Object.entries(definitions)) {
-        admitStoreSearch(db, definition, { extension: name });
+        admitStoreSearchExtension(db, name, definition, rebuild);
       }
     },
     {
