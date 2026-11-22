@@ -558,7 +558,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       ...en,
       subtitles: registerRouteSubtitlesEnglish.catalog.subtitles,
       languages: registerSettingsEnglish.catalog.languages,
-      onboarding: registerMemoryImportEnglish.catalog.onboarding,
       execApproval: registerApprovalsEnglish.catalog.execApproval,
       browser: mergeControlUiTranslationMaps(en.browser, registerBrowserEnglish.catalog.browser),
       sessionProgressCard: registerSessionProgressEnglish.catalog.sessionProgressCard,

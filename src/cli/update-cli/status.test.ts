@@ -169,6 +169,7 @@ it.each([
   );
   if (remote) {
     vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      agents: { defaults: { model: { primary: "openai/gpt-5" } } },
       gateway: { mode: "remote" },
     });
   }
@@ -177,6 +178,7 @@ it.each([
 
   if (remote) {
     expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
+    expect(jsonResult()).not.toHaveProperty("configWarnings");
   } else if (json) {
     expect(jsonResult()).toMatchObject({
       lastGatewayInstallationReplacement: { reason, completedAtMs },

@@ -358,6 +358,7 @@ export function writeReply(
         },
       },
     ]);
+    return { id: `resp_${n}`, output: items };
   } else if (api === "google-generative-ai") {
     sse(response, [
       {
@@ -404,6 +405,8 @@ export function writeReply(
       ]),
     );
   }
+  // Only Responses returns its stored response, for `previous_response_id` expansion.
+  return undefined;
 }
 
 /**
@@ -413,7 +416,7 @@ export function writeReply(
 export function buildFakeProvider(
   api: FakeTransport,
   origin: string,
-  { reasoning = false }: { reasoning?: boolean } = {},
+  { reasoning = false, continuation = false }: { reasoning?: boolean; continuation?: boolean } = {},
 ) {
   const id = MODEL_IDS[api];
   const providerId = `fake-${api}`;
@@ -426,6 +429,9 @@ export function buildFakeProvider(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens: 4096,
+    ...(api === "openai-responses" && continuation
+      ? { compat: { supportsResponsesContinuation: true } }
+      : {}),
   });
   const baseUrl =
     api === "anthropic-messages" || api === "bedrock-converse-stream"

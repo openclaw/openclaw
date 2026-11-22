@@ -17,7 +17,7 @@ import { resolvePrefix } from "../../update/store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
-const install = vi.hoisted((): { root: string; kind: "git" | "package" } => ({
+const install = vi.hoisted((): { root: string; kind: "git" | "package" | "unknown" } => ({
   root: "/tmp/openclaw-checkout",
   kind: "git",
 }));
@@ -99,14 +99,20 @@ it("shows a Control UI update in the app instead of the conversation", async () 
   );
 });
 
-it("applies the commit a scheduled campaign pinned instead of the moving upstream", async () => {
+it.each(["git", "package"])("applies the %s target a scheduled campaign pinned", async (kind) => {
+  install.kind = kind;
   const sha = "c".repeat(40);
+  const version = "2026.11.6";
+  const target =
+    kind === "git"
+      ? { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 }
+      : { kind: "package", version };
   const bindRun = vi.fn();
   lifecycle.campaign = {
     adopt: () => ({
       status: "adopted",
       campaignId: "campaign-1",
-      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 },
+      target,
     }),
     bindRun,
     clear: vi.fn(),
@@ -117,11 +123,13 @@ it("applies the commit a scheduled campaign pinned instead of the moving upstrea
   expect(run).toMatchObject({
     trigger: "campaign",
     origin: { campaignId: "campaign-1" },
-    target: { sha },
+    target: kind === "git" ? { sha } : { version },
   });
   expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
   await vi.waitFor(() =>
-    expect(prepareUpdate).toHaveBeenCalledWith(expect.objectContaining({ sha })),
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining(kind === "git" ? { sha } : { tag: version }),
+    ),
   );
 });
 
@@ -214,4 +222,28 @@ it("retains package identity across release roots and forwards consent", async (
       expect.objectContaining({ runningRoot: install.root, acceptCapabilities: true }),
     ),
   );
+});
+it("prepares package installs through the release path on the stable channel", async () => {
+  install.kind = "package";
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runningRoot: "/tmp/openclaw-checkout",
+        channel: "stable",
+      }),
+    ),
+  );
+});
+
+it("refuses an unrecognized installation before recording or preparing an update", async () => {
+  install.kind = "unknown";
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({
+    ok: false,
+    runId: null,
+    code: "unmanaged-package-install",
+  });
+  expect(prepareUpdate).not.toHaveBeenCalled();
 });

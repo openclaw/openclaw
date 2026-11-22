@@ -69,10 +69,6 @@ const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-r
 const ExecApproval = lazy(() => import("../components/exec-approval-solid.tsx"), {
   export: "ExecApproval",
 });
-const OnboardingMemoryImport = lazy(
-  () => import("../components/onboarding-memory-import-solid.tsx"),
-  { export: "OnboardingMemoryImport" },
-);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -83,7 +79,6 @@ declare module "@solidjs/web" {
       "openclaw-exec-approval": ShellElementAttributes<
         NonNullable<ShellOwnedElements["approvalOverlay"]>
       >;
-      "openclaw-onboarding-memory-import": ShellElementAttributes;
     }
   }
 }
@@ -556,6 +551,7 @@ export function ApplicationShell(props: {
           prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
+          prop:firstUse={view().firstUse}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
           prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
@@ -616,11 +612,6 @@ export function ApplicationShell(props: {
             },
           }}
         />
-        <Show when={view().memoryImportActive}>
-          <ShellComponentBoundary label={t("onboarding.memoryImport.title")} showLoading>
-            <OnboardingMemoryImport active={true} context={view().context} />
-          </ShellComponentBoundary>
-        </Show>
         <openclaw-toast-host ref={(element) => (props.host.toastElement = element)} />
       </div>
     </div>
