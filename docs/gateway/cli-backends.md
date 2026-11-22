@@ -879,9 +879,14 @@ alone keeps the CLI on the Gateway, as described above.
 
 The key does not store a binding on the session: Gateway session views such as
 the session list and its files still show the session as Gateway-local, and
-turning the key off returns its next turn to the Gateway. The CLI on the node
-uses the node host's own credentials. Scheduled runs without a recorded account
-use only the node's native Claude login, as they do on the Gateway.
+turning the key off returns its next turn to the Gateway.
+
+Placing the CLI on a node does not keep a saved credential on the Gateway. When
+a turn selects a saved Claude credential (a subscription token or an API key
+auth profile), the Gateway forwards that credential to the node for the run, as
+`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. Without one, the CLI uses the
+node's native Claude login. Scheduled runs without a recorded account use only
+the node's native Claude login, as they do on the Gateway.
 
 When another backend passes configured MCP servers to its harness natively,
 `tools.allow` and `tools.deny` also constrain those servers.
