@@ -11,6 +11,52 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Logbook capture scope" });
 suite.define(() => {
+  it("keeps the fallback capture device ID clear of the tablet actions", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 820, height: 1180 } },
+      async ({ page }) => {
+        const day = "2026-11-18";
+        const nodeId = "7a94c6d0b81e52f34d0739ab96f2c1850de793a481b65f023c9a784e50b216df";
+        await page.clock.setFixedTime(new Date(day + "T12:00:00Z"));
+        await installMockGateway(page, {
+          communityInvite: false,
+          controlUiTabs: [
+            { group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" },
+          ],
+          methodResponses: {
+            "logbook.status": logbookStatus(day, { nodeId, todayCards: 0 }),
+            "logbook.timeline": logbookTimeline(day),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "plugin?plugin=logbook&id=logbook");
+        const device = page.locator(".logbook__chip").filter({ hasText: nodeId });
+        await device.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        expect(
+          await device.evaluate((chip, id) => {
+            const walker = document.createTreeWalker(chip, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const end = node.textContent?.indexOf(id) ?? -1;
+              if (end < 0) continue;
+              const range = document.createRange();
+              range.setStart(node, end + id.length - 1);
+              range.setEnd(node, end + id.length);
+              const rect = range.getBoundingClientRect();
+              return (
+                rect.width > 0 &&
+                chip.contains(
+                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+                )
+              );
+            }
+            return false;
+          }, nodeId),
+        ).toBe(true);
+      },
+    );
+  });
+
   it.each([
     { name: "desktop", width: 1280, height: 900 },
     { name: "phone", width: 400, height: 900 },

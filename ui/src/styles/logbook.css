@@ -30,7 +30,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  flex: 1;
+  flex: 1 1 min-content;
   min-width: 0;
 }
 
@@ -46,7 +46,19 @@
   white-space: nowrap;
 }
 
+.logbook__chip--device {
+  width: max-content;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.logbook__chip--device span {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .logbook__chip svg {
+  flex: none;
   width: 12px;
   height: 12px;
 }
