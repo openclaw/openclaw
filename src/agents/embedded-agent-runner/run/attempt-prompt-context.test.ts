@@ -625,7 +625,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         const fixture = createInput({
           attempt: createAttempt({
             config,
-            currentInboundContext: { text: verboseInbound, compactText: compactInbound },
+            currentInboundContext: {
+              text: verboseInbound,
+              compactText: compactInbound,
+              serializationStats: { removedSessionMessages: 2, deduplicatedMessages: 1 },
+            },
           }),
         });
 
@@ -635,7 +639,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         expect(contextSerialization.mode).toBe(mode);
         expect(carrier).toContain(mode === "compact" ? compactInbound : verboseInbound);
         expect(carrier).not.toContain(mode === "compact" ? verboseInbound : compactInbound);
-        expect(fixture.report.contextSerialization?.mode).toBe(mode);
+        expect(fixture.report.contextSerialization).toMatchObject({
+          mode,
+          removedSessionMessages: mode === "compact" ? 2 : 0,
+          deduplicatedMessages: mode === "compact" ? 1 : 0,
+        });
       },
     );
 
