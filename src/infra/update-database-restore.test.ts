@@ -265,7 +265,12 @@ it("completes credential rebinding when journal reconciliation fails", async () 
       const reportedFailures: string[][] = [];
       // Spy on the shared native prototype so createRequire-based SQLite owners
       // see the failure without replacing the real restoration boundary.
-      const prepare = DatabaseSync.prototype.prepare;
+      const prepare: (
+        database: DatabaseSync,
+        ...args: Parameters<DatabaseSync["prepare"]>
+      ) => ReturnType<DatabaseSync["prepare"]> = Function.prototype.call.bind(
+        DatabaseSync.prototype.prepare,
+      );
       const fault = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
         this: DatabaseSync,
         ...args: Parameters<DatabaseSync["prepare"]>
@@ -273,7 +278,7 @@ it("completes credential rebinding when journal reconciliation fails", async () 
         if (args[0].includes("journal_mode = WAL")) {
           throw new Error("injected sqlite-boundary conversion failure");
         }
-        return prepare.apply(this, args);
+        return prepare(this, ...args);
       });
       try {
         const displaced = await restoreUpdateDatabaseBackup({
