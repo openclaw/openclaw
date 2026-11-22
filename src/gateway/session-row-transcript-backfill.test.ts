@@ -185,6 +185,7 @@ describe("session row transcript backfill", () => {
           const hostSql = observeHostDataSql();
           try {
             await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+              hasMessages: true,
               lastMessagePreview: "Found the slow query",
               lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
             });
@@ -267,9 +268,13 @@ describe("session row transcript backfill", () => {
               try {
                 await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
                   storage === "media-only rewrite"
-                    ? { fallbackModel: { provider: "unit-test", model: "fallback" } }
+                    ? {
+                        hasMessages: true,
+                        fallbackModel: { provider: "unit-test", model: "fallback" },
+                      }
                     : storage === "current"
                       ? {
+                          hasMessages: true,
                           lastMessagePreview: "Finished with fallback",
                           lastAssistantMessage: {
                             text: "Finished with fallback",
@@ -279,12 +284,13 @@ describe("session row transcript backfill", () => {
                         }
                       : alias
                         ? {
+                            hasMessages: true,
                             lastMessagePreview: preview,
                             lastAssistantMessage: { text: preview, timestamp: expect.any(Number) },
                           }
                         : storage === "unavailable" || storage === "absent"
                           ? undefined
-                          : {},
+                          : { hasMessages: true },
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -445,6 +451,7 @@ describe("session row transcript backfill", () => {
       }, options);
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        hasMessages: true,
         lastMessagePreview: "Found the slow query",
         lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
       });
@@ -453,6 +460,7 @@ describe("session row transcript backfill", () => {
         const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
         try {
           expect(readFacts()).toMatchObject({
+            transcriptHasMessages: true,
             transcriptPreview: "Found the slow query",
             transcriptTerminalModel: null,
           });
@@ -488,6 +496,7 @@ describe("session row transcript backfill", () => {
       ).toEqual({ transcript_updated_at: transcriptMtimeMs + 1 });
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        hasMessages: true,
         lastMessagePreview: "Imported next",
       });
       expect(readFacts()?.transcriptPreview).toBe("Imported next");
@@ -612,7 +621,9 @@ describe("session row transcript backfill", () => {
     await withSession(
       async (params) => {
         await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName: "My title" }));
-        await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({});
+        await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+          hasMessages: true,
+        });
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe("My title");
         expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
       },

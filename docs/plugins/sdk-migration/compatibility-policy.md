@@ -72,6 +72,22 @@ successful cleanup; `drained` remains false while the backend is still settling.
 Cleanup preserves committed outcomes and successor sessions. If the writer cannot
 be safely revoked, `forceCleared` stays false and its custody remains retained.
 
+### Implicit default model
+
+OpenClaw no longer picks a model when config names none. As of November 21, 2026,
+`resolveDefaultModelForAgent` from `openclaw/plugin-sdk/agent-runtime` and
+`runtime.modelConfig.resolveDefaultModelForAgent` return `undefined` when no model
+is configured; a plugin that needs a model must handle that case, usually by telling
+the user to choose one. This return-type change ships without an alias because
+returning a model nobody configured was the defect.
+
+`openclaw/plugin-sdk/agent-runtime.DEFAULT_PROVIDER` and `runtime.agent.defaults`
+are deprecated under the `plugin-sdk-implicit-default-model` record. They keep
+their values (`openai` and the retired implicit model) until a later stable release,
+after a separately announced deprecation window and explicit maintainer approval
+for removal. `DEFAULT_PROVIDER` remains only the provider assumed for a legacy bare
+model id. Neither value is a configured model; do not run one as a fallback.
+
 ### Channel prepared tool policy
 
 `BuildChannelInboundEventContextParams.access.toolPolicy` and

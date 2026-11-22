@@ -17,10 +17,7 @@ import {
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
-import {
-  SAFETY_MARGIN,
-  createFixedRequestTokenEstimator,
-} from "../../sessions/context-token-pressure.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -109,14 +106,17 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
+    history: {
+      contextEnginePromptAuthority,
+      unwindowedContextEngineMessagesForPrecheck,
+      estimateFixedRequest,
+    },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
-  const estimateFixedRequest = createFixedRequestTokenEstimator();
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
   let systemPromptText = sessionRuntimeState.systemPromptText;
@@ -223,6 +223,7 @@ export async function runEmbeddedAttemptPromptPhase(
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
       systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
+      mcpDiagnostics: prepared.bundleTools.bundleMcpRuntime?.diagnostics,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,

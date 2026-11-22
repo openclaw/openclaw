@@ -67,6 +67,7 @@ export function createControlUiSessionFixtures(
     rows: ControlUiSessionFixture[];
     mainKey: string;
     models?: ModelCatalogEntry[];
+    hasMessages?: (row: Record<string, unknown>) => boolean | undefined;
   },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
@@ -116,11 +117,11 @@ export function createControlUiSessionFixtures(
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
-  // Match Gateway projection clocks so a cached descriptor cannot outrank a fresh list.
-  const sample = <T extends Record<string, unknown>>(row: T, now: number) => ({
-    ...row,
-    snapshotAt: row.snapshotAt ?? now,
-  });
+  // Sample history and projection clocks at read time; explicit row facts override defaults.
+  const sample = <T extends Record<string, unknown>>(row: T, now: number) =>
+    Object.assign({ hasMessages: input.hasMessages?.(row) }, row, {
+      snapshotAt: row.snapshotAt ?? now,
+    });
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };

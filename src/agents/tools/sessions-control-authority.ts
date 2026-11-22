@@ -1,6 +1,7 @@
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
@@ -106,6 +107,7 @@ export async function prepareSessionControlTarget(params: {
             profile.role,
             cfg,
             profile.githubLogin ?? null,
+            operatorRoleSubject(profile),
           ),
           aliases: new Set(profile.aliases),
         },

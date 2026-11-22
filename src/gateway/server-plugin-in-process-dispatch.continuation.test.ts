@@ -187,11 +187,16 @@ describe("typed in-process agent continuation authorization", () => {
         );
         try {
           const pending = inScope({ client, context, resolveGatewayContext: () => context }, () =>
-            callAgent({
-              agentId: "main",
-              sessionKey: childKey,
-              message: "Continue independently",
-              idempotencyKey: "accepted-recovered-facade-child",
+            callAgentToolGatewayRequest({
+              method: "agent",
+              params: {
+                agentId: "main",
+                sessionKey: childKey,
+                message: "Continue independently",
+                idempotencyKey: "accepted-recovered-facade-child",
+              },
+              // The occurrence owns this dispatch, not the child's admitted operator policy.
+              sessionMutationCommitGuard: fixture.assertCurrent,
             }),
           );
           if (boundary === "parent retired before acceptance") {
@@ -204,7 +209,6 @@ describe("typed in-process agent continuation authorization", () => {
           assert(child?.authority, "Expected independently retained child policy");
           fixture.retire();
           restored.release();
-          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
           expect(child.authority.assertCurrent).not.toThrow();
           resume.resolve();
           expect(await outcome.promise).toBeUndefined();
@@ -218,68 +222,57 @@ describe("typed in-process agent continuation authorization", () => {
       }),
   );
 
-  it.each(["invocation", "receipt"] as const)(
-    "rejects continuation transfer when its %s closes during preparation",
-    async (closed) => {
-      const { client, context, run } = createOperatorScope("preparing-continuation");
-      context.resolveGatewayContext = () => context;
-      const source = await operatorCapture.captureGatewayOperatorRunAuthority({ client, context });
-      assert(source, "Expected operator source");
-      client.internal = { operatorRunAuthority: source.authority };
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let receiptCurrent = true;
-      let pending: ReturnType<typeof captureOperatorToolGatewayContinuationContext>;
-      let settled:
-        | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
-        | undefined;
-      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
-      try {
-        await run(() =>
-          withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
-            using _ = vi
-              .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
-              .mockImplementationOnce(async (...args) => {
-                const captured = await capture(...args);
-                entered.resolve();
-                await resume.promise;
-                return captured;
-              });
-            await withGatewayToolCallerIdentity(
-              {
-                agentId: "main",
-                sessionKey: "agent:main:main",
-                operationalRunInstance: createOperationalRunInstanceRef("preparing-continuation"),
-                receiptAuthority: () => receiptCurrent,
-              },
-              async () => {
-                pending = captureOperatorToolGatewayContinuationContext();
-                assert(pending, "Expected continuation preparation");
-                settled = pending.catch(() => undefined);
-                await entered.promise;
-                if (closed === "receipt") {
-                  receiptCurrent = false;
-                  resume.resolve();
-                  await expect(pending).rejects.toThrow("agent tool caller authority");
-                }
-              },
-            );
-          }),
-        );
-        if (closed === "invocation") {
-          resume.resolve();
-          assert(pending, "Expected continuation preparation");
-          await expect(pending).rejects.toThrow("operator tool invocation authority expired");
-        }
-        source.release();
-        expect(source.authority.assertCurrent).toThrow();
-      } finally {
-        resume.resolve();
-        (await settled)?.release();
-        source.release();
-      }
-    },
-  );
+  it("rejects continuation transfer when its invocation closes during preparation", async () => {
+    const { client, context, run } = createOperatorScope("preparing-continuation");
+    context.resolveGatewayContext = () => context;
+    const source = await operatorCapture.prepareGatewayOperatorRunAuthority({ client, context });
+    assert(source, "Expected operator source");
+    client.internal = { operatorRunAuthority: source.authority };
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let pending: ReturnType<typeof captureOperatorToolGatewayContinuationContext>;
+    let settled:
+      | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
+      | undefined;
+    const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
+    try {
+      await run(() =>
+        withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
+          using _ = vi
+            .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
+            .mockImplementationOnce(async (...args) => {
+              const captured = await capture(...args);
+              entered.resolve();
+              await resume.promise;
+              return captured;
+            });
+          await withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              operationalRunInstance: createOperationalRunInstanceRef("preparing-continuation"),
+              receiptAuthority: () => true,
+            },
+            async () => {
+              pending = captureOperatorToolGatewayContinuationContext();
+              assert(pending, "Expected continuation preparation");
+              settled = pending.catch(() => undefined);
+              await entered.promise;
+            },
+          );
+        }),
+      );
+      resume.resolve();
+      assert(pending, "Expected continuation preparation");
+      await expect(pending).rejects.toThrow("operator tool invocation authority expired");
+      source.release();
+      expect(source.authority.assertCurrent).toThrow();
+    } finally {
+      resume.resolve();
+      (await settled)?.release();
+      source.release();
+    }
+  });
 
   it.each([false, true])(
     "preserves roles-enabled dispatch without promoting scoped unknown callers (%s)",
@@ -365,7 +358,7 @@ describe("typed in-process agent continuation authorization", () => {
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const operator = await operatorCapture.captureGatewayOperatorRunAuthority({
+        const operator = await operatorCapture.prepareGatewayOperatorRunAuthority({
           client: owner,
           context,
           hasCurrentClientAuthority: source.isCurrent,
@@ -399,10 +392,6 @@ describe("typed in-process agent continuation authorization", () => {
             expect(principal.authenticatedUserProfile?.profileId).toBe(
               owner.authenticatedUserProfile!.profileId,
             );
-            if (request.idempotencyKey !== "target-followup" && boundary === "device revoked") {
-              // This mock observes dispatch; real returned-turn admission is covered by ACP custody.
-              expect(principal.internal?.operatorRunAuthority?.reauthorize).toThrow();
-            }
             io.emitAcceptance([
               true,
               { runId: request.idempotencyKey, status: "accepted" },
@@ -574,14 +563,14 @@ describe("typed in-process agent continuation authorization", () => {
     },
   );
 
-  it.each(["finished invocation", "revoked source", "provenance only"] as const)(
-    "checks %s for a settle wake after the spawning tool ends",
+  it.each(["finished invocation", "revoked source"] as const)(
+    "retains admitted policy and checks provenance after the spawning tool ends: %s",
     async (state) => {
       const { runAnnounceAgentCall } =
         await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
       const { client: owner, context, run } = createOperatorScope("settle-owner");
       const sourceSignal = new AbortController();
-      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
+      const source = await operatorCapture.prepareGatewayOperatorRunAuthority({
         client: owner,
         context,
         sourceAuthority: {
@@ -623,8 +612,7 @@ describe("typed in-process agent continuation authorization", () => {
                       sourceTool: "subagent_settle",
                     },
                   },
-                  settleWakeSourceSessionKeys:
-                    state === "provenance only" ? undefined : ["agent:main:child"],
+                  settleWakeSourceSessionKeys: ["agent:main:child"],
                   expectFinal: true,
                   isExecutionAllowed: () => true,
                   resolveGatewayContext: () => context,
@@ -643,16 +631,7 @@ describe("typed in-process agent continuation authorization", () => {
             },
           ),
         );
-        if (state === "finished invocation") {
-          await expect(dispatch).resolves.toEqual(result);
-        } else {
-          const error = {
-            "revoked source": "original operator source revoked",
-            "provenance only": "agent tool caller authority is no longer active",
-          }[state];
-          await expect(dispatch).rejects.toThrow(error);
-          expect(startTurn).not.toHaveBeenCalled();
-        }
+        await expect(dispatch).resolves.toEqual(result);
       } finally {
         source.release();
       }

@@ -4,7 +4,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
-import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import type { UserTranscriptContext } from "./embedded-agent-runner/run/attempt-llm-boundary.types.js";
 
 /** Snapshot the input consumed by this assistant, before later steering arrives. */

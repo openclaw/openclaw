@@ -97,6 +97,7 @@ it.each<[changedPaths: string[], invalidates: boolean, reloadPlugins?: boolean]>
   [["agents.entries.main.tools"], false],
   [["agents.defaults.subagents.thinking"], false],
   [["logging.level"], false],
+  [["browser.profiles.temporary"], false],
   [[], true, true],
   [["logging.level", "agents.defaults.workspace"], true],
 ])(

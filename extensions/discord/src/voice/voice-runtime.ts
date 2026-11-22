@@ -4,8 +4,8 @@ import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { APIVoiceState, Client } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { formatMention } from "../target-parsing.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess, resolveDiscordVoiceAccessTarget } from "./owner-access.js";
@@ -90,7 +90,8 @@ export class DiscordVoiceManager {
     scheduler: PluginServiceSchedulerV1;
     readPolicy?: DiscordLivePolicyReader;
     client: Client;
-    cfg: OpenClawConfig;
+    /** Reads the current runtime config, so hot-reloaded media, model and TTS settings apply. */
+    readConfig: () => OpenClawConfig;
     discordConfig: DiscordAccountConfig;
     accountId: string;
     runtime: RuntimeEnv;
@@ -107,7 +108,10 @@ export class DiscordVoiceManager {
             { guildId, channelId, accountId: params.accountId },
             this,
           );
-    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess(params);
+    const { admissionAllowFrom, ownerAllowFrom } = resolveDiscordVoiceAccess({
+      ...params,
+      cfg: params.readConfig(),
+    });
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null

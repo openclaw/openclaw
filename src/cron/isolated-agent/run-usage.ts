@@ -75,8 +75,8 @@ export async function recordCronRunUsage(params: {
   if (billableRuns.length === 0) {
     return;
   }
-  const { estimateAggregateUsageCostAsync, captureModelCostPricing } =
-    await import("../../utils/usage-format.js");
+  const { estimateAggregateUsageCostAsync } = await import("../../utils/usage-format.js");
+  const { captureModelCostPricing } = await import("../../model-catalog/usage-pricing.js");
   let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
   let estimatedCostUsd: number | undefined = 0;
   let hasSessionUsage = false;

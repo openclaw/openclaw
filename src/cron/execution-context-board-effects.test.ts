@@ -115,7 +115,7 @@ async function admitChildRun() {
     sessionKey: RUN_KEY,
     jobId: "job-1",
     deliveryAttemptFence: null,
-    scheduledExecution: occurrence.mint({
+    scheduledExecution: await occurrence.mint({
       cfg: {},
       agentId: "main",
       runId: "run-1",

@@ -230,7 +230,7 @@ async function recoverContextPressure(
     return { action: "retry" };
   };
   const truncateToolResults = async () => {
-    const { sessionManager, assertActive } = await input.prepareRecoverySession(contextTokenBudget);
+    const { sessionManager, assertActive } = await input.prepareRecoverySession();
     if (!sessionManager) {
       return {
         truncated: false,
@@ -253,7 +253,9 @@ async function recoverContextPressure(
         maxCharsOverride: resolveLiveToolResultMaxChars({
           contextWindowTokens: contextTokenBudget,
         }),
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        protectTrailingToolResults:
+          !isPreflightRecovery && preflightRecovery?.route === "compact_then_truncate",
+        preserveSentToolResults: isPreflightRecovery,
         projectionState,
         ...target,
       });
@@ -363,7 +365,7 @@ async function recoverContextPressure(
         );
       }
       if (input.contextEngine.maintain) {
-        const transcript = await input.prepareRecoverySession(contextTokenBudget);
+        const transcript = await input.prepareRecoverySession();
         await runContextEngineMaintenance({
           ...transcript,
           contextEngine: input.contextEngine,
@@ -388,7 +390,7 @@ async function recoverContextPressure(
     if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
       input.state.lastCompactionTokensAfter = undefined;
       input.state.lastContextBudgetStatus = undefined;
-      const transcript = await input.prepareRecoverySession(contextTokenBudget);
+      const transcript = await input.prepareRecoverySession();
       await resetNoRealConversationTokenSnapshot({
         sessionTarget: transcript.sessionManager?.getSessionTarget(),
         sessionPersistence: runParams.sessionPersistence,
@@ -488,6 +490,7 @@ async function recoverContextPressure(
       messages: input.attempt.messagesSnapshot,
       contextWindowTokens: input.contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      preserveSentToolResults: isPreflightRecovery,
     });
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;

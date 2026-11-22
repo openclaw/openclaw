@@ -228,7 +228,10 @@ normal session navigation. This message grants no session access, accepts no
 arbitrary URL, and returns no credentials or session content. Standalone pages
 should retain an ordinary Control UI link as their non-embedded path. Use
 `buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
-that path.
+that path. For stored sessions, await `prepareStoredSessionControlUiPathResolver()`
+once, then use its synchronous resolver with the current config at disclosure. It
+returns a path only when normal read routing preserves the stored agent and key.
+`parseControlUiSessionPath` validates a received path without choosing an origin.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
