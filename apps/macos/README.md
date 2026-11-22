@@ -69,6 +69,16 @@ ledger and orphan cleanup across app instances, and port reservation inspects
 other profiles' Gateway service claims. Use a clean test account or VM when
 validation must not access or change operator state.
 
+In Local mode, a named profile only attaches to a listener it can identify as
+its own app child or managed Gateway service. `--attach-only` does not override
+that check, even if a foreground Gateway was started with the same profile name.
+To test against an independently managed foreground Gateway, keep its Local
+configuration unchanged and point only the app's `OPENCLAW_CONFIG_PATH` at a
+separate Remote configuration. Select `gateway.remote.transport: direct`, the
+Gateway's explicit WebSocket address (for example, `ws://127.0.0.1:58636` for a
+loopback-only listener), and its matching authentication. Use the same isolated
+state and profile for the app and CLI; do not put credentials in the command line.
+
 ## ClawHub catalog links (macOS)
 
 The app accepts the same identity-only contract for all three catalog families:
