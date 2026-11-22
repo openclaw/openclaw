@@ -1,5 +1,5 @@
 import { createSignal, For } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
@@ -144,9 +144,16 @@ function rail() {
 }
 
 it.each([
-  [390, "rtl"],
-  [1440, "ltr"],
-] as const)("fits and dismisses stacked context at %ipx (%s)", async (width, dir) => {
+  [390, "rtl", 1],
+  [390, "rtl", 1.4],
+  [1440, "ltr", 1],
+] as const)("fits stacked context at %ipx (%s, %sx)", async (width, dir, scale) => {
+  const rootStyle = document.documentElement.style;
+  const previous = rootStyle.getPropertyValue("--control-ui-text-scale");
+  rootStyle.setProperty("--control-ui-text-scale", String(scale));
+  onTestFinished(() => {
+    rootStyle.setProperty("--control-ui-text-scale", previous);
+  });
   await resize(width);
   container.dir = dir;
   const dismissed: string[] = [];
@@ -173,6 +180,7 @@ it.each([
   const composer = query(".agent-chat__input");
   const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
   for (const strip of strips) {
+    expect(Number.parseFloat(getComputedStyle(strip).fontSize)).toBeCloseTo(12 * scale, 1);
     const box = strip.getBoundingClientRect();
     expectInside(box, composer.getBoundingClientRect());
     expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);

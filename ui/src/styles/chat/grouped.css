@@ -334,7 +334,7 @@
    their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--chat-sender-name-color, var(--muted));
   min-width: 0;
   white-space: nowrap;
@@ -442,7 +442,7 @@
 }
 
 .chat-group-timestamp {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
   line-height: 1.2;
