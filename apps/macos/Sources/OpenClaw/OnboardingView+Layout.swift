@@ -51,6 +51,9 @@ extension OnboardingView {
         .onChange(of: currentPage) { _, newValue in
             self.updateMonitoring(for: self.activePageIndex(for: newValue))
         }
+        .onChange(of: showRemoteChoices) { _, _ in
+            self.updateDiscoveryMonitoring(for: self.activePageIndex)
+        }
         .onChange(of: state.connectionMode) { _, _ in
             self.handleConnectionModeChange()
         }

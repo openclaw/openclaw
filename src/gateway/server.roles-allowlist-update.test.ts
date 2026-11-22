@@ -375,11 +375,12 @@ test("update.run persists the accepted handoff before parking and restarting its
       const root = updateDirs.make("openclaw-update-role-");
       const entrypoint = path.join(root, "dist", "index.js");
       const foregroundOrigin = { owner: "role-update-owner", pid: process.pid, startedAt, port };
+      // Git installs update through prepared releases; package installs keep this handoff.
       const installation = vi
         .spyOn(installStatus, "resolveStartupInstallStatus")
         .mockResolvedValue({
           root,
-          status: { root, installKind: "git", packageManager: "pnpm" },
+          status: { root, installKind: "package", packageManager: "pnpm" },
           installReceipt: null,
         });
       // The shared server starts below the CLI run loop that publishes its owner.
@@ -418,7 +419,7 @@ test("update.run persists the accepted handoff before parking and restarting its
             kind: "update",
             status: "skipped",
             stats: {
-              mode: "git",
+              mode: "pnpm",
               root,
               runId: accepted?.runId,
               handoffId: identity.handoffId,

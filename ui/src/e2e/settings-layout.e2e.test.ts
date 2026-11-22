@@ -134,7 +134,7 @@ suite.define(() => {
         const settingsResponses: Response[] = [];
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
-          "Global model defaults and provider access for your agents.",
+          "Connect providers and choose the models your agents use.",
           "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
@@ -168,10 +168,11 @@ suite.define(() => {
           stopCapturing.push(() => page.off("response", captureScript));
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
-            ? page.getByRole("heading", { name: /^Provider access\b/ })
+            ? page.getByRole("heading", { name: /^Providers\b/ })
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
+            await page.locator("[data-models-more-settings]").click();
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility model",
             );
@@ -293,6 +294,8 @@ suite.define(() => {
           ),
           `${route} mobile content column`,
         ).toBe(12);
+        const subtitle = page.locator(".content-header--settings .page-subtitle").last();
+        expect((await subtitle.boundingBox())?.x, `${route} mobile subtitle column`).toBe(12);
       }
 
       for (const { route, contentSelector } of mobileGeometryCases) {
@@ -841,15 +844,16 @@ suite.define(() => {
             }
             const contentBox = content.getBoundingClientRect();
             const leadBox = lead.getBoundingClientRect();
-            const tabsBox = tabs.getBoundingClientRect();
+            const firstLabel = document.createRange();
+            firstLabel.selectNodeContents(tabs.querySelector('[role="tab"]')!);
             return {
               leadLeft: Math.round(leadBox.left),
               leadRightInset: Math.round(contentBox.left + content.clientWidth - leadBox.right),
-              tabsLeft: Math.round(tabsBox.left),
+              firstLabelLeft: Math.round(firstLabel.getBoundingClientRect().left),
             };
           }),
         )
-        .toEqual({ leadLeft: 12, leadRightInset: 12, tabsLeft: 12 });
+        .toEqual({ leadLeft: 12, leadRightInset: 12, firstLabelLeft: 12 });
     } finally {
       await context.close();
     }

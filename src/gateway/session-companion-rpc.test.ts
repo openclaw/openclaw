@@ -251,6 +251,8 @@ it.each([
 });
 
 it.each([
+  { reason: "timeout", details: { reason: "timeout" } },
+  { reason: "stopped", details: { reason: "stopped" } },
   { reason: "busy", details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY } },
   { reason: "context-unavailable", details: { reason: "context-unavailable" } },
 ] as const)("returns the typed retryable $reason detail", async ({ reason, details }) => {
@@ -259,6 +261,14 @@ it.each([
   });
   const respond = await invoke("ask", askParams, { ask });
   expectError(respond, "UNAVAILABLE", { retryable: true, details });
+});
+
+it("stops only the named ask and refuses a stop that did not match", async () => {
+  const reset = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+  const params = { sessionKey: askParams.sessionKey, cancelAskId: "question-id" };
+  success(await invoke("reset", params, { reset }), { ok: true });
+  expect(reset).toHaveBeenCalledWith({ ...params, agentId: "main", ownerId: "shared" });
+  expectError(await invoke("reset", params, { reset }), "UNAVAILABLE");
 });
 
 it.each(["state", "reset"] as const)(

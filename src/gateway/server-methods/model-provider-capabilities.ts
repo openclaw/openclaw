@@ -52,6 +52,7 @@ export function resolveModelProviderCapabilities(params: {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
+      ...(current?.featured || choice.onboardingFeatured === true ? { featured: true } : {}),
       ...(providerLoginOptions.length > 0 ? { loginOptions: providerLoginOptions } : {}),
     });
   }

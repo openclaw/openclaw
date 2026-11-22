@@ -126,6 +126,18 @@ runWithWindowsPowerShell(
     runHandoffFixture("launch");
   },
 );
+runWithWindowsPowerShell("accepts a Git checkout directly under a drive root", () => {
+  const define = (name: string) => `function ${name} {\n${body(name)}}`;
+  const result = runPowerShell([
+    "-Command",
+    `$ErrorActionPreference = 'Stop'
+${define("Resolve-PhysicalDirectoryPath")}
+${define("Resolve-GitCheckoutPath")}
+Resolve-GitCheckoutPath -RepoDir "$env:SystemDrive\\openclaw-drive-root-checkout"`,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^[A-Za-z]:\\openclaw-drive-root-checkout$/);
+});
 runWithPowerShell("restores a conflicted pull before continuing a Git install", () => {
   const result = runPowerShell([
     "-File",

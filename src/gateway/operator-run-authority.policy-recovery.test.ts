@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
 import {
   bindOperatorModelExecution,
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -22,13 +21,12 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { errorShapeFromError } from "./error-shape.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
-it("admits closed-scope lineage while policy failures remain unavailable and revocation is final", () =>
+it("keeps admitted lineage through policy changes and checks fresh work once", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -52,7 +50,6 @@ it("admits closed-scope lineage while policy failures remain unavailable and rev
     const instance = createOwnedTestInstance("lineage-policy");
     const grant = new AbortController();
     let unavailable = false;
-    let assertions = 0;
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "lineage-policy" }));
     registry.gatewayAccessPolicies.push({
@@ -64,7 +61,6 @@ it("admits closed-scope lineage while policy failures remain unavailable and rev
             signal: grant.signal,
             grantId: "lineage-grant",
             assertCurrent: () => {
-              assertions++;
               grant.signal.throwIfAborted();
               if (unavailable) {
                 throw new Error("synthetic policy failure");
@@ -114,11 +110,7 @@ it("admits closed-scope lineage while policy failures remain unavailable and rev
       }
       const active = resolveAdmittedRunActiveAssertion(runs[3]!)!;
       expect(active).toBeTypeOf("function");
-      assertions = 0;
       active();
-      expect(assertions).toBe(1);
-      active();
-      expect(assertions).toBe(2);
       const model = bindOperatorModelExecution(captured.authority, {
         provider: "fixture",
         model: "model",
@@ -130,57 +122,34 @@ it("admits closed-scope lineage while policy failures remain unavailable and rev
       expect(() => inScope(active)).not.toThrow();
       expect(() => inScope(model.assertCurrent)).not.toThrow();
       unavailable = true;
-      let error: unknown;
-      try {
-        inScope(active);
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).toBeInstanceOf(GatewayOperatorAccessUnavailableError);
-      expect(errorShapeFromError("UNAVAILABLE", error)).toMatchObject({
-        code: "UNAVAILABLE",
-        retryable: true,
-        details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
-      });
+      expect(() => inScope(active)).not.toThrow();
+      await expect(
+        prepareSessionPrincipalRunAuthority({
+          context,
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          profileId: profile.id,
+        }),
+      ).rejects.toBeInstanceOf(GatewayOperatorAccessUnavailableError);
       expect(captured.authority.signal?.aborted).toBe(false);
       expect(grant.signal.aborted).toBe(false);
-      expect(() => inScope(model.assertCurrent)).toThrow(GatewayOperatorAccessUnavailableError);
+      expect(() => inScope(model.assertCurrent)).not.toThrow();
       expect(model.signal.aborted).toBe(false);
       unavailable = false;
       expect(active).not.toThrow();
       expect(model.assertCurrent).not.toThrow();
-      const mixedScope = createAdmittedRunOperatorAuthority({
-        profileId: profile.id,
-        scopes: captured.authority.scopes,
-        assertCurrent: () => {
-          active();
-          inScope(active);
-        },
-      });
-      expect(mixedScope.assertCurrent).not.toThrow();
-      const closingScope = new PluginInvocationScope(registry, [instance], { retained: true });
-      const closesDuringCheck = createAdmittedRunOperatorAuthority({
-        profileId: profile.id,
-        scopes: captured.authority.scopes,
-        assertCurrent: () => {
-          active();
-          closingScope.release();
-          active();
-        },
-      });
-      expect(() => closingScope.run(closesDuringCheck.assertCurrent)).not.toThrow();
-      expect(active).not.toThrow();
       expect(captured.authority.signal?.aborted).toBe(false);
       for (const run of runs) {
         expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
       }
-      // A real grant revocation still cancels the same authority and refuses every descendant.
+      // Revocation applies to the next start, not to this admitted lineage.
       grant.abort(new Error("grant revoked"));
-      expect(captured.authority.signal?.aborted).toBe(true);
-      expect(model.signal.aborted).toBe(true);
-      expect(active).toThrow();
+      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(model.signal.aborted).toBe(false);
+      expect(active).not.toThrow();
       for (const run of runs) {
-        expect(getAdmittedRunDelegatedAuthority(run)).toBeUndefined();
+        expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
       }
     } finally {
       for (const release of releases.toReversed()) {

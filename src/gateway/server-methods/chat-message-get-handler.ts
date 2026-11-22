@@ -124,7 +124,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
             ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
                 allowPluginNormalization: false,
-              }).provider
+              })?.provider
             : undefined,
           sessionAgentId,
           sessionId,

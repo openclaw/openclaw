@@ -558,26 +558,6 @@ struct OnboardingAISetupView: View {
 
     private func moreProviders(_ picker: OnboardingAIPicker) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if self.model.nativeSessionCatalogPreferenceRequired,
-               !self.model.nativeSessionCatalogs.isEmpty
-            {
-                Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Show your existing conversations")
-                            .font(.callout.weight(.semibold))
-                        Text(String(
-                            format: String(localized: """
-                            Lists your %@ conversations in the sidebar \
-                            without copying them.
-                            """),
-                            self.model.nativeSessionCatalogSummary))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.checkbox)
-                .padding(.bottom, 6)
-            }
             ForEach(picker.moreAuthOptions) { option in
                 self.providerAuthRow(option)
             }

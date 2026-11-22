@@ -134,6 +134,44 @@ const withPage = pageRunner(suite, {
 const capture = proof.capture;
 
 suite.define(() => {
+  it("keeps the Infrastructure page still when focusing its last tab on a phone", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    await withPage(
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configSnapshot(
+              { gateway: { mode: "local" }, acp: { enabled: true } },
+              "tabs",
+            ),
+            "config.schema": buildConfigSchemaCore(),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/infrastructure`);
+        const gateway = page.getByRole("tab", { name: "Gateway", exact: true });
+        const acp = page.getByRole("tab", { name: "ACP", exact: true });
+        const toolbar = page.locator(".config-toolbar");
+        await gateway.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const initial = await toolbar.evaluate((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          return { left, right };
+        });
+        await gateway.press("End");
+        expect(await acp.evaluate((tab) => tab === document.activeElement)).toBe(true);
+        expect(await toolbar.evaluate((element) => element.getBoundingClientRect().left)).toBe(
+          initial.left,
+        );
+        expect(await acp.evaluate((tab) => tab.getBoundingClientRect().right)).toBeLessThanOrEqual(
+          initial.right + 1,
+        );
+        await acp.press("Enter");
+        await page.locator("#config-section-acp").waitFor();
+      },
+      { viewport: { width: 390, height: 844 } },
+    );
+  });
+
   it.each(["light", "dark"] as const)(
     "keeps selected Usage accents at rest and on hover in %s mode",
     async (colorScheme) => {

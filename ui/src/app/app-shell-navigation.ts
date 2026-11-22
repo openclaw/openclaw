@@ -23,6 +23,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
+import { canonicalModelSetupLocation } from "../pages/model-setup/route.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -36,6 +37,7 @@ import {
   isNativeWebChromeHost,
 } from "./native-web-chrome.ts";
 import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
+import { resolveOnboardingMode } from "./onboarding-mode.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -43,6 +45,8 @@ export interface ShellNavigationHost {
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
+  /** This page showed first-use setup; its automatic panels and promotions stay quiet. */
+  firstUse: boolean;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
@@ -261,6 +265,16 @@ export class ShellNavigationOwner {
         this.host.custodianMinimizeRequestId += 1;
       }
       this.host.lastConcreteRouteId = routeState.routeId;
+    }
+    const location = routeState.location;
+    if (
+      location &&
+      (routeState.routeId === "custodian"
+        ? resolveOnboardingMode(location.search)
+        : routeState.routeId === "model-setup" &&
+          canonicalModelSetupLocation(location, this.host.context?.basePath ?? "") === location)
+    ) {
+      this.host.firstUse = true;
     }
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";

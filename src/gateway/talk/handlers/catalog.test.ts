@@ -52,6 +52,35 @@ describe("talk.catalog handler", () => {
       },
     );
   });
+  it("answers the caller's unstarted main conversation from its agent", async () => {
+    const config: OpenClawConfig = {};
+    const client = { connect: { scopes: ["operator.read", "operator.sessions.write"] } };
+    const catalog = (sessionKey: string, caller = client) =>
+      invokeTalkHandler("talk.catalog", {
+        params: { sessionKey },
+        config,
+        client: caller,
+        context: {
+          getRuntimeConfig: () => config,
+          ...bindSessionRowProjection({}, () => projection),
+        },
+      });
+    await mocks.resolveSessionKeyFromResolveParams.withImplementation(
+      () => ({ ok: true, missing: true }),
+      async () => {
+        expectRespondOk(await catalog("agent:main:main"));
+        expectRespondError(await catalog("agent:main:unknown"), {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found: agent:main:unknown",
+        });
+        // A caller who cannot start the conversation gets the same answer as for a hidden one.
+        expectRespondError(await catalog("agent:main:main", readClient()), {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found: agent:main:main",
+        });
+      },
+    );
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listSpeechProviders.mockReturnValue([]);

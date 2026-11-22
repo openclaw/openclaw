@@ -191,13 +191,15 @@ describe("Model Setup explicit discovery", () => {
     },
   );
 
-  it("does not change upgrade catalog choices or select a manual provider implicitly", async () => {
+  it("never offers native conversations or selects a manual provider implicitly", async () => {
     const { context, client, request } = createFirstRunContext();
     request.mockResolvedValue({ done: true, status: "cancelled" });
+    // Even when the Gateway would record a fresh catalog preference, connecting AI
+    // leaves that choice to Session sources and lets the Gateway keep it off.
     const { page } = await mountDetection(context, client, {
       configuredModel: "openai/existing",
       setupComplete: true,
-      nativeSessionCatalogPreferenceRequired: false,
+      nativeSessionCatalogPreferenceRequired: true,
       nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
       manualProviders: [{ id: "provider-key", label: "API provider" }],
     });

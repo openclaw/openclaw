@@ -66,7 +66,7 @@ describe("config schema regressions", () => {
     });
     expect(response.uiHints["gateway.controlUi.experimental.templates"]).toMatchObject({
       label: "Templates",
-      help: expect.stringContaining("default: false"),
+      help: expect.stringContaining("default: true"),
     });
   });
 });

@@ -242,12 +242,14 @@ function SkillPageFocus(props: {
   let region!: HTMLDivElement;
   onSettled(() => {
     const opener = props.opener();
+    const list = props.list();
     const document = region.ownerDocument;
-    region.focus();
+    if (document.activeElement === document.body || list.contains(document.activeElement)) {
+      region.focus();
+    }
     return () => {
       // Back first unhides the retained list; leaving Skills entirely must not move focus.
       queueMicrotask(() => {
-        const list = props.list();
         if (!list.isConnected || list.hidden || document.activeElement !== document.body) {
           return;
         }
@@ -262,6 +264,7 @@ function SkillPageFocus(props: {
   });
   return (
     <div
+      class="skills-detail-surface"
       role="region"
       aria-label={t("tabs.skills")}
       tabindex={-1}

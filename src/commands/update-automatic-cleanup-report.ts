@@ -71,7 +71,7 @@ export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArti
       (item) =>
         `Kept: not provably ours: ${item.path} (${sizeOf(item.bytes)}). Ask your agent with openclaw triage${
           item.reason === "unmanifested-recovery-original"
-            ? `, or remove it yourself with openclaw update cleanup --include-unmanifested ${(process.platform === "win32" ? quotePowerShellArg : quoteCliArg)(item.path)}`
+            ? `, or stop the Gateway (openclaw gateway stop) and remove it yourself with openclaw update cleanup --include-unmanifested ${(process.platform === "win32" ? quotePowerShellArg : quoteCliArg)(item.path)}`
             : ""
         }.`,
     ),
