@@ -733,7 +733,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     input.attempt.provider = input.attempt.model.provider;
     input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
     if (testCase.toolExecutionAllow !== undefined) {
-      input.attempt.sessionForkRequest = {};
+      input.attempt.sessionForkRequest = { ownOutputLimit: false };
     }
     input.attempt.config = {
       auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
@@ -895,7 +895,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         model: { ...anthropicModel, ...route, id: "synthetic-model" },
       });
       if (mode === "fork") {
-        input.attempt.sessionForkRequest = {};
+        input.attempt.sessionForkRequest = { ownOutputLimit: false };
       }
       const previousHost = getAiTransportHost();
       const sent: Array<Record<string, unknown>> = [];
