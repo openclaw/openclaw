@@ -66,7 +66,11 @@ describe("interactive ACP permissions", () => {
     const output = Object.assign(new PassThrough(), { isTTY: true });
     const fromClient = new PassThrough();
     const toClient = new PassThrough();
-    const agent = Object.assign(new ChildProcess(), { stdin: fromClient, stdout: toClient });
+    const agent = Object.defineProperties(new ChildProcess(), {
+      stdin: { value: fromClient },
+      stdout: { value: toClient },
+      stderr: { value: null },
+    });
     const closeServer = () => {
       if (agent.exitCode !== null) {
         return;

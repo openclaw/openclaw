@@ -1,14 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import {
-  notifyPublications,
-  recordPublication,
-} from "../../scripts/gateway-publication-notify.mjs";
+import { notifyPublications } from "../../scripts/gateway-publication-notify.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,23 +34,60 @@ afterEach(() => {
 });
 
 describe("gateway publication notification", () => {
-  it("records each tarball's own version and bytes with the release source", async () => {
+  it("records verified tarball identities through the parent notification step", async () => {
     const root = tempDirs.make("gateway-publication-");
     mkdirSync(join(root, "package"));
+    mkdirSync(join(root, "preflight-tarball"));
+    mkdirSync(join(root, "scripts/lib"), { recursive: true });
+    for (const file of ["gateway-publication-notify.mjs", "lib/record-shared.mjs"]) {
+      copyFileSync(join("scripts", file), join(root, "scripts", file));
+    }
     const output = join(root, "outputs");
-    for (const [name, version, key] of [
+    const packages = [
       ["openclaw", "2026.9.9", "openclaw_publication"],
       ["@openclaw/gateway-protocol", "2026.9.8-beta.1", "gateway_protocol_publication"],
-    ]) {
+    ] as const;
+    for (const [name, version, key] of packages) {
       writeFileSync(join(root, "package", "package.json"), JSON.stringify({ name, version }));
-      const archive = join(root, `${key}.tgz`);
-      await tar.c({ cwd: root, file: archive, gzip: true }, ["package"]);
-      await recordPublication(name, archive, sourceCommit, output);
-      const line = readFileSync(output, "utf8").trim().split("\n").at(-1)!;
+      await tar.c({ cwd: root, file: join(root, "preflight-tarball", key + ".tgz"), gzip: true }, [
+        "package",
+      ]);
+    }
+    writeFileSync(
+      join(root, "preflight-tarball/preflight-manifest.json"),
+      JSON.stringify({
+        tarballName: "openclaw_publication.tgz",
+        corePackageTarballs: [
+          {
+            packageName: "@openclaw/gateway-protocol",
+            tarballName: "gateway_protocol_publication.tgz",
+          },
+          { packageName: "@openclaw/unrelated", tarballName: "not-a-notification.tgz" },
+        ],
+      }),
+    );
+    const parent = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+    const step = parent.jobs.notify_gateway_publication.steps.find(
+      (entry: { id?: string }) => entry.id === "publications",
+    );
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_OUTPUT: output, RELEASE_SHA: sourceCommit },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const lines = readFileSync(output, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(2);
+    for (const [index, [name, version, key]] of packages.entries()) {
+      const line = lines[index]!;
       expect(line.slice(0, line.indexOf("="))).toBe(key);
       expect(JSON.parse(line.slice(line.indexOf("=") + 1))).toEqual({
         ...publication(name, version),
-        package_integrity: `sha512-${createHash("sha512").update(readFileSync(archive)).digest("base64")}`,
+        package_integrity:
+          "sha512-" +
+          createHash("sha512")
+            .update(readFileSync(join(root, "preflight-tarball", key + ".tgz")))
+            .digest("base64"),
       });
     }
   });
@@ -168,34 +202,41 @@ describe("gateway publication notification", () => {
   );
 });
 
+it("notifies Windows only after the parent finishes core readback", () => {
+  const parent = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+  const child = parse(readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8"));
+  const notification = parent.jobs.notify_gateway_publication;
+  expect(notification).toBeDefined();
+  expect(notification.needs).toEqual(["resolve_release_target", "publish"]);
+  expect(notification.if).toContain("needs.publish.result == 'success'");
+  expect(notification.if).toContain("inputs.publish_openclaw_npm");
+  expect(notification["continue-on-error"]).toBe(true);
+  expect(child.jobs.notify_gateway_publication).toBeUndefined();
+});
+
 const workflow = parse(readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8")) as {
   jobs: { publish_openclaw_npm: { steps: { id?: string; run?: string }[] } };
 };
 
-it.each(["record", "summary", "core", "protocol"])(
-  "preserves publication after %s failure",
-  (fault) => {
-    const root = tempDirs.make("gateway-publication-workflow-");
-    mkdirSync(join(root, "preflight-tarball"));
-    writeFileSync(join(root, "preflight-tarball/protocol.tgz"), "");
-    const script = workflow.jobs.publish_openclaw_npm.steps.find(
-      (step) => step.id === "publish",
-    )?.run;
-    expect(script).toBeTruthy();
-    const result = spawnSync(
-      "bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-c",
-        `
+it.each(["core", "protocol"])("stops publication after %s failure", (fault) => {
+  const root = tempDirs.make("gateway-publication-workflow-");
+  mkdirSync(join(root, "preflight-tarball"));
+  writeFileSync(join(root, "preflight-tarball/protocol.tgz"), "");
+  const script = workflow.jobs.publish_openclaw_npm.steps.find(
+    (step) => step.id === "publish",
+  )?.run;
+  expect(script).toBeTruthy();
+  const result = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `
     npm() { return 1; }
-    git() { printf '%040d\n' 0; }
     jq() { printf '@openclaw/gateway-protocol\tprotocol.tgz\n'; }
     node() {
       if [[ "$1" == "-p" ]]; then echo 2026.9.9; return 0; fi
-      echo "record:$3"
-      [[ "$FAULT" != record && "$FAULT" != summary ]]
     }
     bash() {
       case "$3" in *protocol.tgz) name=protocol ;; *) name=core ;; esac
@@ -204,33 +245,20 @@ it.each(["record", "summary", "core", "protocol"])(
     }
     ${script}
   `,
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          FAULT: fault,
-          PUBLISH_TARBALL_PATH: "preflight-tarball/core.tgz",
-          GITHUB_STEP_SUMMARY: fault === "summary" ? "preflight-tarball" : "summary",
-        },
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAULT: fault,
+        PUBLISH_TARBALL_PATH: "preflight-tarball/core.tgz",
+        GITHUB_STEP_SUMMARY: "summary",
       },
-    );
-    expect(result.status, result.stderr).toBe(fault === "core" || fault === "protocol" ? 1 : 0);
-    const expected =
-      fault === "protocol"
-        ? ["publish:protocol"]
-        : [
-            "publish:protocol",
-            "record:@openclaw/gateway-protocol",
-            "publish:core",
-            ...(fault === "core" ? [] : ["record:openclaw"]),
-          ];
-    expect(result.stdout.split("\n").filter((line) => /^(publish|record):/u.test(line))).toEqual(
-      expected,
-    );
-    if (fault === "record" || fault === "summary") {
-      expect(result.stdout).toContain("::warning::");
-    }
-  },
-);
+    },
+  );
+  expect(result.status, result.stderr).toBe(fault === "core" || fault === "protocol" ? 1 : 0);
+  const expected =
+    fault === "protocol" ? ["publish:protocol"] : ["publish:protocol", "publish:core"];
+  expect(result.stdout.split("\n").filter((line) => line.startsWith("publish:"))).toEqual(expected);
+});

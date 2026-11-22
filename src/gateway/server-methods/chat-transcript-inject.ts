@@ -154,7 +154,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         }
       : {}),
   };
-  if (displayMessage.openclawDelivery) {
+  if (messageBody.role === "assistant" && displayMessage.openclawDelivery) {
     messageBody.openclawDelivery = displayMessage.openclawDelivery;
   }
 

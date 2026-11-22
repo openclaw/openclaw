@@ -4,6 +4,17 @@ import type {
 } from "../../../src/shared/mcp-app-extensions.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
+export type McpAppDisplayModeDetail = {
+  sessionKey: string;
+  /** Host-created presentation command; the receiver selects its live conversation owner. */
+  present: (
+    owner: Pick<
+      import("../pages/chat/chat-pane-mcp-app.ts").ChatPaneMcpAppOwner,
+      "state" | "openAppPanel"
+    >,
+  ) => void;
+};
+
 /** The synchronous workspace owner retires presentation without cancelling admitted writes. */
 export type McpAppPanelRetirement = (retire: () => void) => () => void;
 
@@ -17,6 +28,8 @@ export type McpAppOpenDetail = McpAppExtensionTarget & {
   settings?: boolean;
   quickAction?: boolean;
 };
+
+export type McpAppOpenEventDetail = McpAppOpenDetail | McpAppDisplayModeDetail;
 
 /** The containing conversation accepts synchronously before any remote tool runs. */
 export function requestMcpAppOpen(element: HTMLElement, detail: McpAppOpenDetail): boolean {

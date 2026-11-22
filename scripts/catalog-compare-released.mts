@@ -1,5 +1,7 @@
 // Show how a candidate model-catalog bundle changes behavior for released OpenClaw installs.
-// A developer report, not a gate: it always exits 0 once every release was compared.
+// The report always exits 0 once every release was compared. `--check` is the publish
+// gate instead: each release that reads the candidate's wire version must accept it
+// and keep every published row, or the command exits 1.
 // See the "Model Listing" rules in src/plugins/AGENTS.md.
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -12,9 +14,16 @@ import {
   type Change,
   type ReleaseRun,
 } from "./lib/catalog-compare-released-diff.mts";
+import {
+  catalogRowCount,
+  catalogSchemaVersion,
+  releasedReaderVerdict,
+  RELEASED_READER_ENTRIES,
+  releasedSchemaVersions,
+  type ReleaseVerdict,
+} from "./lib/catalog-compare-released-gate.mts";
 
 const run = promisify(execFile);
-const SERVED_CATALOG_URL = "https://catalog.openclaw.ai/models/v2/catalog.json";
 const DIST_TAGS = ["latest", "extended-stable", "beta"];
 const CACHE_ROOT = path.join(os.tmpdir(), "openclaw-catalog-compare-released");
 const WORKER = path.join(import.meta.dirname, "lib/catalog-compare-released-worker.mts");
@@ -27,14 +36,29 @@ const { values } = parseArgs({
     filter: { type: "string" },
     json: { type: "boolean", default: false },
     dump: { type: "string" },
+    check: { type: "boolean", default: false },
+    "allow-row-loss": { type: "string" },
   },
 });
-if (!values.candidate) {
+const allowRowLoss = Number(values["allow-row-loss"] ?? 0);
+if (
+  !values.candidate ||
+  !Number.isInteger(allowRowLoss) ||
+  allowRowLoss < 0 ||
+  (!values.check && values["allow-row-loss"] !== undefined)
+) {
   console.error(
-    "usage: pnpm catalog:compare-released --candidate <bundle.json> [--baseline <bundle.json>] [--releases <v,v>] [--filter <provider[/model]>] [--json] [--dump <dir>]",
+    [
+      "usage: pnpm catalog:compare-released --candidate <bundle.json> [--baseline <bundle.json>] [--releases <v,v>] [--filter <provider[/model]>] [--json] [--dump <dir>]",
+      "       pnpm catalog:compare-released --check --candidate <bundle.json> [--baseline <last published bundle.json>] [--releases <v,v>] [--allow-row-loss <n>] [--dump <dir>]",
+    ].join("\n"),
   );
   process.exit(2);
 }
+const candidateBundle: unknown = JSON.parse(fs.readFileSync(values.candidate, "utf8"));
+const schemaVersion = catalogSchemaVersion(candidateBundle);
+const feed = `v${schemaVersion}`;
+const SERVED_CATALOG_URL = `https://catalog.openclaw.ai/models/${feed}/catalog.json`;
 
 async function npm(args: string[], cwd?: string): Promise<string> {
   return (await run("npm", args, { cwd, maxBuffer: 64 * 1024 * 1024 })).stdout;
@@ -88,21 +112,21 @@ function officialProviders(dir: string, version: string): string[] {
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
-// A cached install is trusted only when its marker accounts for every provider the
-// release lists and every installed plugin is at the release version.
+function installedVersion(dir: string, name: string): string | undefined {
+  const manifest = path.join(dir, "node_modules", name, "package.json");
+  return (JSON.parse(fs.readFileSync(manifest, "utf8")) as { version?: string }).version;
+}
+
+// A cached install is trusted only when openclaw and every installed plugin are at the
+// release version and its marker accounts for every provider the release lists.
 function cachedInstall(dir: string, version: string): Install | undefined {
   try {
     const marker = JSON.parse(fs.readFileSync(path.join(dir, ".installed"), "utf8")) as Marker;
     const accounted = [...marker.plugins, ...marker.omitted].toSorted((a, b) => a.localeCompare(b));
     const complete =
+      installedVersion(dir, "openclaw") === version &&
       JSON.stringify(accounted) === JSON.stringify(officialProviders(dir, version)) &&
-      marker.plugins.every((name) => {
-        const manifest = path.join(dir, "node_modules", name, "package.json");
-        return (
-          (JSON.parse(fs.readFileSync(manifest, "utf8")) as { version?: string }).version ===
-          version
-        );
-      });
+      marker.plugins.every((name) => installedVersion(dir, name) === version);
     return complete ? { dir, omitted: marker.omitted } : undefined;
   } catch {
     return undefined;
@@ -133,13 +157,21 @@ async function installRelease(version: string): Promise<Install> {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "package.json"), '{ "private": true }\n');
-  const install = ["install", "--ignore-scripts", "--no-audit", "--no-fund"];
+  // Plugins name openclaw as a peer. npm would otherwise move the root openclaw to any
+  // version that satisfies both ranges, as it did when the 2026.10.33 plugins shipped
+  // `openclaw >=2026.11.4` and the 2026.10.33 install became 2026.11.5. OpenClaw's own
+  // plugin installs also pass --legacy-peer-deps (src/infra/safe-package-install.ts).
+  const install = ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--legacy-peer-deps"];
   await npm([...install, `openclaw@${version}`], dir);
   const names = officialProviders(dir, version);
   const published = await Promise.all(names.map((name) => isPublished(name, version)));
   const plugins = names.filter((_, index) => published[index]);
   const omitted = names.filter((_, index) => !published[index]);
   await npm([...install, ...plugins.map((name) => `${name}@${version}`)], dir);
+  const installed = installedVersion(dir, "openclaw");
+  if (installed !== version) {
+    throw new Error(`openclaw@${version}: npm installed openclaw@${installed} in ${dir}`);
+  }
   const marker: Marker = { plugins, omitted };
   fs.writeFileSync(path.join(dir, ".installed"), JSON.stringify(marker, null, 2));
   return { dir, omitted };
@@ -176,6 +208,7 @@ async function readRelease(
   comparedBundles: string[],
   runDir: string,
   cert: { cert: string; key: string },
+  refreshOnly = false,
 ): Promise<ReleaseRun> {
   const sandbox = fs.mkdtempSync(path.join(runDir, "sandbox-"));
   for (const sub of ["home", "state", "tmp", "workspace"]) {
@@ -190,10 +223,7 @@ async function readRelease(
     OPENCLAW_CONFIG_PATH: path.join(sandbox, "state/openclaw.json"),
     TMPDIR: path.join(sandbox, "tmp"),
   };
-  // Released code finds bundled plugins relative to its entry script; a worker
-  // inside this checkout would make it load the checkout's extensions/.
   const worker = path.join(runDir, path.basename(WORKER));
-  fs.copyFileSync(WORKER, worker);
   const workerArgs = JSON.stringify({
     releaseDir,
     bundle,
@@ -201,6 +231,8 @@ async function readRelease(
     sandbox,
     out,
     filter: values.filter,
+    refreshOnly,
+    readerEntries: RELEASED_READER_ENTRIES,
     ...cert,
   });
   const log: Buffer[] = [];
@@ -227,12 +259,69 @@ async function readRelease(
   return observed;
 }
 
-const started = performance.now();
-const runDir = fs.realpathSync(
-  fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-compare-run-")),
-);
-try {
-  const candidate = path.resolve(values.candidate);
+// Every release that ships a reader for the candidate's wire version reads the candidate
+// and, when given, the last published file of the same feed. Releases without that reader
+// are skipped by name, so a feed nobody reads yet passes and is gated from its first reader.
+async function checkReleases(candidate: string, runDir: string): Promise<number> {
+  const baselinePath = values.baseline ? path.resolve(values.baseline) : undefined;
+  // A missing or identical baseline (first publish of a feed) explains no loss.
+  const baseline =
+    baselinePath &&
+    fs.existsSync(baselinePath) &&
+    fs.realpathSync(baselinePath) !== fs.realpathSync(candidate)
+      ? baselinePath
+      : undefined;
+  const baselineEmitted = baseline
+    ? catalogRowCount(JSON.parse(fs.readFileSync(baseline, "utf8")))
+    : 0;
+  const emitted = catalogRowCount(candidateBundle);
+  const releases = await releaseVersions();
+  const cert = await selfSignedCert(runDir);
+  const verdicts = await Promise.all(
+    releases.map(async ({ version }): Promise<ReleaseVerdict> => {
+      const { dir } = await installRelease(version);
+      const dist = path.join(dir, "node_modules/openclaw/dist");
+      const chunks = (function* () {
+        for (const file of fs.readdirSync(dist).filter((name) => name.endsWith(".mjs"))) {
+          yield fs.readFileSync(path.join(dist, file), "utf8");
+        }
+      })();
+      if (!releasedSchemaVersions(chunks).has(schemaVersion)) {
+        return {
+          line: `${feed} on openclaw@${version}: no ${feed} reader, skipped`,
+          skipped: true,
+        };
+      }
+      const [after, before] = await Promise.all([
+        readRelease("candidate", dir, candidate, [candidate], runDir, cert, true),
+        baseline
+          ? readRelease("baseline", dir, baseline, [baseline], runDir, cert, true)
+          : undefined,
+      ]);
+      return releasedReaderVerdict({
+        feed,
+        release: after.version,
+        candidate: { emitted, refresh: after.refresh },
+        ...(before ? { baseline: { emitted: baselineEmitted, refresh: before.refresh } } : {}),
+        allowRowLoss,
+      });
+    }),
+  );
+  for (const { line } of verdicts) {
+    console.log(line);
+  }
+  const failures = verdicts.flatMap(({ failure }) => (failure ? [failure] : []));
+  for (const failure of failures) {
+    console.log(`::error::${failure}`);
+  }
+  if (verdicts.every(({ skipped }) => skipped)) {
+    console.log(`${feed}: no checked release reads ${feed} yet`);
+  }
+  return failures.length > 0 ? 1 : 0;
+}
+
+async function reportReleases(candidate: string, runDir: string): Promise<void> {
+  const started = performance.now();
   const baseline = values.baseline
     ? path.resolve(values.baseline)
     : path.join(runDir, "served.json");
@@ -287,6 +376,23 @@ try {
       `[catalog-compare-released] rows ${results.map((r) => `${r.release}=${r.rows}`).join(" ")}; ` +
         `install ${timing.installMs} ms, read ${timing.readMs} ms, total ${timing.totalMs} ms`,
     );
+  }
+}
+
+const runDir = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-compare-run-")),
+);
+try {
+  // Released code finds bundled plugins relative to its entry script; a worker
+  // inside this checkout would make it load the checkout's extensions/. Copy once:
+  // readers spawn together, and a copy per spawn truncates the file a sibling is
+  // loading, which then runs an empty module and exits 0 without a result.
+  fs.copyFileSync(WORKER, path.join(runDir, path.basename(WORKER)));
+  const candidate = path.resolve(values.candidate);
+  if (values.check) {
+    process.exitCode = await checkReleases(candidate, runDir);
+  } else {
+    await reportReleases(candidate, runDir);
   }
 } finally {
   fs.rmSync(runDir, { recursive: true, force: true });

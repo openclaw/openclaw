@@ -106,6 +106,7 @@ async function main() {
     ? ["--allow-escape-sequences"]
     : [];
   const runs: CiTimingRun[] = [];
+  const packedReleaseRunIds = new Set<number>();
   const seenRuns = new Map<number, string>();
   const seenJobs = new Map<number, string>();
   type TimingSource = "main" | "release" | "pull-request" | "tooling" | "packed-release";
@@ -178,12 +179,16 @@ async function main() {
           afterCutoff ||= Date.parse(job.completed_at) > Date.parse(upper);
           const compactJob = /^checks-node-(?:changed-(?:config-)?)?compact-/u.test(job.name);
           const extensionJob =
-            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)$/u.test(job.name);
+            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)(?: \(node\)| \(bun\))?$/u.test(
+              job.name,
+            );
           const kind =
             source === "packed-release"
-              ? job.name.startsWith("checks-node-release-packed-")
-                ? "release-packed"
-                : undefined
+              ? compactJob
+                ? "compact"
+                : job.name.startsWith("checks-node-release-packed-")
+                  ? "release-packed"
+                  : undefined
               : source === "release"
                 ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
                   ? "repoE2e"
@@ -275,7 +280,8 @@ async function main() {
         : source === "pull-request"
           ? "pull_request"
           : "workflow_dispatch";
-    const completedRuns = source === "main" || source === "packed-release";
+    const completedRuns =
+      source === "main" || source === "packed-release" || source === "pull-request";
     const pageSchema = z.object({
       total_count: z.number().int().nonnegative(),
       workflow_runs: z.array(
@@ -289,8 +295,8 @@ async function main() {
         }),
       ),
     });
-    // Coalesced cancelled main tips must not exhaust pagination before usable runs.
-    const pageSize = source === "main" ? 100 : Math.min(count, 100);
+    // Cancelled main and PR runs must not exhaust pagination before usable runs.
+    const pageSize = source === "main" || source === "pull-request" ? 100 : Math.min(count, 100);
     const query = new URLSearchParams({
       ...(source === "main" ? { branch: "main" } : {}),
       event,
@@ -326,7 +332,7 @@ async function main() {
           continue;
         }
         seenRuns.set(run.id, identity);
-        // Completed failed main runs still contain successful independent jobs.
+        // Completed failed workflows still contain successful independent jobs.
         // Cancellation and other conclusions do not supply a timing cohort.
         if (run.conclusion !== "success" && run.conclusion !== "failure") {
           continue;
@@ -354,6 +360,9 @@ async function main() {
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
           runs.push(timingRun);
+          if (source === "packed-release") {
+            packedReleaseRunIds.add(run.id);
+          }
         }
         if (source === "release" || contributes) {
           sampled += 1;
@@ -453,11 +462,6 @@ async function main() {
   const { blacksmith, github, boat, toolingBlacksmith, toolingGithub, toolingBoat } =
     contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
-  const packedReleaseRunIds = new Set(
-    runs
-      .filter((run) => run.logs.some((log) => log.kind === "release-packed"))
-      .map((run) => run.id),
-  );
   const mainBlacksmith = blacksmith.filter(
     (id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id),
   );

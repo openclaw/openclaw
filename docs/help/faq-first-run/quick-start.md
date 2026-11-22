@@ -22,15 +22,16 @@ where to run the Gateway see
 
     The installer starts guided onboarding for you, so there is no separate
     onboarding command to run. If you answered no to Quick start's background
-    question, press **Ctrl+C** to stop the foreground Gateway and install the
-    background service:
+    question, press **Ctrl+C** to stop the foreground Gateway, install the
+    background service, and wait for it to be ready:
 
     ```bash
     openclaw gateway install
+    openclaw gateway start
     ```
 
     Prefer the classic step-by-step wizard and a service install in one
-    command? Run `openclaw onboard --install-daemon` instead of the two
+    command? Run `openclaw onboard --install-daemon` instead of the
     commands above. That flag selects the classic flow, so you do not see the
     guided **Quick start** and **Custom setup** choice.
 

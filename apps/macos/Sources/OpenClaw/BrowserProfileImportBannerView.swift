@@ -174,7 +174,6 @@ struct BrowserProfileImportBannerView: View {
         .buttonStyle(.plain)
         .disabled(content.badge == .progress)
         .opacity(content.badge == .progress ? 0.4 : 1)
-        .help("Dismiss")
         .accessibilityLabel("Dismiss")
     }
 }

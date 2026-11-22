@@ -66,7 +66,7 @@ async function createStartedPlugin(
   const service = builder.registry.services.find(
     (entry) => entry.id === "memory-core-dreaming",
   )?.service;
-  if (!service || !("start" in service)) {
+  if (service?.apiVersion !== 2) {
     throw new Error("Expected the dreaming service");
   }
   const scheduler = createTestPluginServiceScheduler();

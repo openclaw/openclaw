@@ -1,6 +1,20 @@
+import type { OperatorAdmissionContext } from "../../../gateway/operator-admission.js";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
+import { restoreGatewayQueuedOperatorRecovery } from "../../../gateway/operator-run-recovery.js";
+import {
+  GatewayOperatorAccessUnavailableError,
+  isOperatorAuthorityUnavailable,
+} from "../../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../../infra/restart-recovery-errors.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
-import { submitSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import {
+  retireSessionControllerInput,
+  submitSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import type { FollowupQueueDisposition } from "../../get-reply-options.types.js";
+import { replyCallbackCustody } from "../reply-callback-custody.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import {
   startFollowupRunPreAdoptionHeartbeatWithCustody,
@@ -114,7 +128,10 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
     // Deferral publishes the source and can synchronously wake its RPC waiters.
     state.enqueued = true;
     try {
+      state.releaseCallbacks = run[replyCallbackCustody]?.retain();
       if (run.turnAdoptionLifecycle?.onDeferred?.() === false) {
+        state.releaseCallbacks?.();
+        state.releaseCallbacks = undefined;
         state.enqueued = false;
         return false;
       }
@@ -137,6 +154,61 @@ export function retireFollowupRunCancellation(run: FollowupRun): void {
   state.cancellationRetired = true;
   run.turnAdoptionLifecycle?.onCancellationRetired?.();
 }
+/** Restore a selected queued requester before execution preparation captures its caps. */
+export async function prepareFollowupRunOperatorAuthority(
+  run: FollowupRun,
+  context: OperatorAdmissionContext,
+): Promise<void> {
+  const state = run.controllerClaim?.custody ?? run.controllerInput?.custody;
+  if (!state?.enqueued || state.adopted || !run.operatorAuthority) {
+    return;
+  }
+  if (state.completed) {
+    throw new Error("Input completed before source adoption");
+  }
+  try {
+    const operatorSource = run.run.scheduledAutomation?.job.operatorSource;
+    const restored = await restoreGatewayQueuedOperatorRecovery({
+      context,
+      agentId: run.run.agentId,
+      source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      liveAuthority: run.operatorAuthority,
+      operatorSource: operatorSource && decodeGatewayOperatorRecoverySource(operatorSource.source),
+      assertCurrent: () => {
+        if (context.resolveGatewayContext && !context.resolveGatewayContext()) {
+          throw new GatewayOperatorAccessUnavailableError();
+        }
+        if (state.completed) {
+          throw new Error("Input completed before source adoption");
+        }
+      },
+    });
+    const release = state.releaseAuthority;
+    run.operatorAuthority = restored.authority;
+    state.releaseAuthority = restored.release;
+    release?.();
+    state.failure = undefined;
+  } catch (error) {
+    state.failure = error;
+    const input = run.controllerInput;
+    if (
+      input &&
+      !isOperatorAuthorityUnavailable(error) &&
+      !(error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ) {
+      const recorder = run.userTurnTranscriptRecorder;
+      try {
+        recorder?.markBlocked();
+        recorder?.finishPendingInput?.("cancelled", "policy-refused");
+        await recorder?.waitForPendingInputSettlement?.();
+      } finally {
+        retireSessionControllerInput(input);
+      }
+    }
+    throw error;
+  }
+}
+
 export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
 ): Promise<void> {
@@ -173,7 +245,7 @@ export async function admitFollowupRunLifecycle(
 /** Adapter registers source identity before the canonical custody owner settles it. */
 export function completeFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
-  disposition?: "consumed",
+  disposition?: "consumed" | { kind: "dropped"; reason: FollowupQueueDisposition },
 ): void {
   const state = custody(run);
   if (!state.completed && disposition === "consumed") {
@@ -194,7 +266,7 @@ export async function refuseCollaborativeSteering(
   const recorder = run.userTurnTranscriptRecorder;
   recorder?.markBlocked();
   try {
-    recorder?.finishPendingInput?.("cancelled");
+    recorder?.finishPendingInput?.("cancelled", "policy-refused");
     await recorder?.waitForPendingInputSettlement?.();
     await admitFollowupRunLifecycle(run);
   } finally {

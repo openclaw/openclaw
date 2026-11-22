@@ -20,6 +20,7 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
+import * as pressure from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
@@ -108,6 +109,43 @@ function toolCallMessage(id: string, timestamp: number) {
 }
 
 describe("harness context engine lifecycle", () => {
+  it.each(["assemble", "prompt", "fallback"] as const)(
+    "shares the history budget without rescanning the rendered prompt (%s)",
+    async (operation) => {
+      const estimate = vi.spyOn(pressure, "estimateRenderedLlmBoundaryTokenPressure");
+      onTestFinished(() => estimate.mockRestore());
+      const messages = [textMessage("user", "Current request", 1)];
+      const assemble = vi.fn(async (input: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input.tokenBudget).toBe(4952);
+        expect(input.runtimeSettings?.limits.promptTokenBudget).toBe(4952);
+        if (operation === "fallback") {
+          throw new Error("fixture assembly failure");
+        }
+        return { messages: input.messages, estimatedTokens: 0 };
+      });
+      const params = {
+        ...promptDefaults,
+        messages,
+        contextEngine: createContextEngine({ assemble }),
+        promptBudget: {
+          contextTokens: 6000,
+          reserveTokens: 1000,
+          inputTokens: 16,
+          systemPrompt: "aaaa",
+          prompt: "bbbb",
+        },
+        warn: vi.fn(),
+      };
+      const result = await (operation === "assemble"
+        ? assembleHarnessContextEngine(params)
+        : prepareHarnessContextEnginePrompt(params));
+      expect(result?.messages).toEqual(messages);
+      expect(assemble).toHaveBeenCalledOnce();
+      expect(estimate).toHaveBeenCalledOnce();
+      expect(params.warn).toHaveBeenCalledTimes(operation === "fallback" ? 1 : 0);
+    },
+  );
+
   it.each(["assemble", "prompt"] as const)(
     "does not enumerate the enclosing attempt during %s",
     async (operation) => {

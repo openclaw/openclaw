@@ -126,6 +126,9 @@ describe("prepareBundledPluginRuntime", () => {
       const owner = pathToFileURL(
         path.join(sourceRoot, "scripts/lib/source-update-artifact-preflight.mts"),
       ).href;
+      const lockOwner = pathToFileURL(
+        path.join(sourceRoot, "scripts/lib/dist-artifact-lock.mts"),
+      ).href;
       const result = await command.run(
         resolveTestNodeExecPath(),
         [
@@ -134,15 +137,15 @@ describe("prepareBundledPluginRuntime", () => {
           `import assert from "node:assert/strict";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { inspectSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+import { inspectOwnedSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+import { acquireDistArtifactOwnership } from ${JSON.stringify(lockOwner)};
 execFileSync("git", ["init", "--quiet"]);
-const admission = await inspectSourceUpdateArtifacts(process.cwd());
+const lock = await acquireDistArtifactOwnership(fs.realpathSync(process.cwd()));
 try {
-  assert(admission.lock);
   assert(fs.existsSync(".artifacts/dist-artifacts.lock/owner.json"));
-  assert.equal(admission.sourceRuntimePrepared, true);
+  assert.equal(await inspectOwnedSourceUpdateArtifacts(fs.realpathSync(process.cwd())), true);
 } finally {
-  await admission.lock?.release();
+  await lock.release();
 }`,
         ],
         { cwd: repoRoot, env: { ...process.env, NODE_OPTIONS: "" } },

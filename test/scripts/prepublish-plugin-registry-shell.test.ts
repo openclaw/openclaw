@@ -308,6 +308,78 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
     },
   );
 
+  it.for(["run_negative_control", "run_positive_hops"])(
+    "isolates published setup before candidate update through %s",
+    async (caller, { signal }) => {
+      const version = "2026.8.1";
+      const root = tempDirs.make("openclaw-first-hop-same-version-");
+      const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
+      const published = createTarball(root, root, "openclaw", "published.tgz", version, {
+        dependencies: { "@openclaw/ai": version },
+      });
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh",
+        "utf8",
+      );
+      const start = source.indexOf(`${caller}() {`);
+      const end = source.indexOf("\n}\n", start);
+      if (start < 0 || end < start) {
+        throw new Error(`Missing first-hop owner ${caller}`);
+      }
+      await withPublishedRegistry(
+        root,
+        signal,
+        async (upstream) => {
+          const result = runShell(
+            `
+set -euo pipefail
+source "$HELPER"
+${source.slice(start, end + 3)}
+registry_before="$NPM_CONFIG_REGISTRY"
+baseline_installed=0
+setup_lane() {
+  npm install --prefix "$BASELINE_INSTALL" "$PUBLISHED_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false
+  node -e 'const assert=require("node:assert/strict"); assert.equal(require(process.env.BASELINE_INSTALL+"/node_modules/@openclaw/ai/package.json").provenance,"published");'
+  printf '123\\n' >"$ARTIFACT_DIR/$1-before.pid"
+  baseline_installed=1
+}
+run_update() {
+  test "$baseline_installed" = 1 || exit 1
+  test "$NPM_CONFIG_REGISTRY" = "$registry_before" || exit 1
+  test "$npm_config_registry" = "$registry_before" || exit 1
+  test "$BUN_CONFIG_REGISTRY" = "$registry_before" || exit 1
+  npm install --prefix "$CANDIDATE_INSTALL" "$ROOT_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false || exit 1
+  node -e 'const assert=require("node:assert/strict"); for(const name of ["openclaw","@openclaw/ai"]) assert.equal(require(process.env.CANDIDATE_INSTALL+"/node_modules/"+name+"/package.json").provenance,"candidate");' || exit 1
+  exit 0
+}
+"$CALLER"
+`,
+            {
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              HELPER: resolve(SCRIPT),
+              CALLER: caller,
+              ARTIFACT_DIR: root,
+              ADMISSION_PROTOCOL: "0",
+              NEGATIVE_PACKAGE: "unused-before-update-boundary",
+              CANDIDATE_PACKAGE: "unused-before-update-boundary",
+              PUBLISHED_TARBALL: published,
+              BASELINE_INSTALL: join(root, "baseline"),
+              CANDIDATE_INSTALL: join(root, "candidate"),
+              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+              npm_config_cache: join(root, "cache"),
+              NPM_CONFIG_USERCONFIG: "/dev/null",
+              npm_config_userconfig: "/dev/null",
+            },
+            { timeout: 30_000, mounted: true },
+          );
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+        },
+        version,
+      );
+    },
+  );
+
   it.for([
     { name: "mismatched registry source", fault: "source" },
     { name: "mismatched registry digest", fault: "manifest" },
@@ -328,6 +400,7 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
       "scripts/prepublish-plugin-registry-artifact.mjs",
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
       "scripts/lib/bounded-response.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/docker/install-sh-common/version-parse.sh",
     ]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });

@@ -62,7 +62,16 @@ export async function startControlUiBenchGatewayServer(
   let preloadHeadersEnabled = true;
   let terminalEnabled = false;
   let closing: Promise<void> | undefined;
-  const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
+  const requests: Array<{
+    method: string;
+    url: string;
+    navigationPreload: boolean;
+    startedAtMs: number;
+    completedAtMs?: number;
+    status?: number;
+    bodyBytes?: number;
+    contentEncoding?: string;
+  }> = [];
   const serve = async (request: IncomingMessage, response: ServerResponse) => {
     // Keep this request on its admitted bundle while an asynchronous fixture waits.
     const root = currentRoot;
@@ -72,10 +81,38 @@ export async function startControlUiBenchGatewayServer(
       response.setHeader = (name, value) =>
         name.toLowerCase() === "link" ? response : setHeader(name, value);
     }
-    requests.push({
+    const observation: (typeof requests)[number] = {
       method: request.method ?? "GET",
       url: request.url ?? "/",
       navigationPreload: request.headers["service-worker-navigation-preload"] !== undefined,
+      startedAtMs: performance.now(),
+    };
+    requests.push(observation);
+    let bodyBytes = 0;
+    // Preserve Node's overloaded write/end calls while counting their encoded buffers.
+    function observeBody<T extends ServerResponse["write"] | ServerResponse["end"]>(method: T): T {
+      return new Proxy(method, {
+        apply(target, receiver, args) {
+          const chunk = args[0];
+          if (typeof chunk === "string") {
+            const encoding =
+              typeof args[1] === "string" && Buffer.isEncoding(args[1]) ? args[1] : undefined;
+            bodyBytes += Buffer.byteLength(chunk, encoding);
+          } else if (ArrayBuffer.isView(chunk)) {
+            bodyBytes += chunk.byteLength;
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      });
+    }
+    response.write = observeBody(response.write.bind(response));
+    response.end = observeBody(response.end.bind(response));
+    response.once("finish", () => {
+      observation.completedAtMs = performance.now();
+      observation.status = response.statusCode;
+      observation.bodyBytes =
+        request.method === "HEAD" || response.statusCode === 304 ? 0 : bodyBytes;
+      observation.contentEncoding = String(response.getHeader("Content-Encoding") ?? "identity");
     });
     const url = new URL(request.url ?? "/", "http://localhost");
     const fixture = await readFixture?.(url.pathname, url);

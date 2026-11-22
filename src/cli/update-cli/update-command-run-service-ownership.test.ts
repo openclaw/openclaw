@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
 import * as daemonExec from "../../daemon/exec-file.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as gatewayService from "../../daemon/service.js";
@@ -22,7 +20,6 @@ import {
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
 import * as databaseEngine from "../../infra/database-engine/config.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import * as ports from "../../infra/ports-probe.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import * as baselineCapture from "../../infra/update-recovery-baseline-capture.js";
@@ -128,7 +125,6 @@ it.each([
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
     const serviceEnv = { ...process.env, ...serviceOverrides };
-    let previousRunId: string | undefined;
     if (scenario === "owned-command") {
       await writePackageRoot(root, "1.0.0");
       for (const [state, channel] of [
@@ -141,15 +137,10 @@ it.each([
           JSON.stringify({ update: { channel }, database: { engine: "sqlite" } }),
         );
       }
-      previousRunId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
+      // An earlier run gives the service profile its state database, so it is not fresh.
+      const { runId: previousRunId } = createUpdateRun({ trigger: "cli" }, { env: serviceEnv });
       updateRunLedger.finishUpdateRun(previousRunId, { status: "succeeded" }, { env: serviceEnv });
       closeOpenClawStateDatabaseForTest();
-      using original = new DatabaseSync(resolveOpenClawStateSqlitePath(serviceEnv));
-      original
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run("fixture.original", '{"selected":"service"}', 1);
       vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
     }
     let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
@@ -256,8 +247,9 @@ it.each([
         expect.objectContaining({ update: { channel: "beta" }, database: { engine: "sqlite" } }),
         expect.objectContaining(serviceOverrides),
       );
-      expect(capture).toHaveBeenCalledOnce();
-      expect(capture.mock.calls[0]?.[0].env).toBe(selectedEnv);
+      // The refused update changed nothing in either profile, so it copied nothing.
+      expect(capture).not.toHaveBeenCalled();
+      expect(run.originalRecoveryCapture).toBeUndefined();
       expect(
         inspection.mock.calls.filter(
           ([, selectedRoot, allowInstallRootChange]) =>
@@ -275,25 +267,6 @@ it.each([
       expect(output).toHaveBeenCalledWith(
         expect.objectContaining({ runId: run.runId, reason: "unsupported-package-target" }),
       );
-      const ref = run.originalRecoveryCapture;
-      assert(ref);
-      const manifest = parseUpdateRecoveryBackupManifest(fs.readFileSync(ref.manifestPath, "utf8"));
-      const databasePath = fs.realpathSync(resolveOpenClawStateSqlitePath(serviceEnv));
-      expect(manifest.databases).toContainEqual({ role: "global", path: databasePath });
-      const captured = manifest.entries.find((entry) => entry.sourcePath === databasePath);
-      assert(captured?.kind === "file");
-      using original = new DatabaseSync(
-        path.join(path.dirname(ref.manifestPath), captured.archivePath),
-        { readOnly: true },
-      );
-      expect(
-        original
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("fixture.original"),
-      ).toEqual({ value_json: '{"selected":"service"}' });
-      expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
-        { run_id: previousRunId },
-      ]);
     } else if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
       const usesServiceState = scenario !== "absent";
       await expectAdmitted(usesServiceState);
@@ -505,68 +478,5 @@ it.each([
     }
     expect(native.stop).not.toHaveBeenCalled();
     expect(native.install).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["owned", "foreign", "absent", "failed"] as const)(
-  "selects a startup executable only from an admitted service (%s)",
-  async (ownership) => {
-    const { home } = admissionHome("update-startup-runtime-");
-    mockProcessPlatform("darwin");
-    mockSystemAccountHome();
-    const root = path.join(home, "package");
-    const serviceRoot = ownership === "foreign" ? path.join(home, "foreign") : root;
-    await writePackageRoot(serviceRoot, "1.0.0");
-    let executable = path.join(home, "runtime", "bun");
-    vi.spyOn(ports, "probePortUsage").mockResolvedValue("free");
-    const command = {
-      programArguments: ["node", path.join(serviceRoot, "dist", "index.js"), "gateway"],
-    };
-    const service = createMockGatewayService({
-      isLoaded: async () => ownership !== "absent",
-      readCommand: async (_env, options) => {
-        options?.onEffectiveExecutable?.(executable);
-        if (ownership === "failed") {
-          throw new Error("native inspection failed");
-        }
-        return ownership === "absent" ? null : command;
-      },
-      readRuntime: async () => ({ status: "stopped", missingUnit: ownership === "absent" }),
-    });
-    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-    const onOwnedStartupRuntime = vi.fn();
-
-    const state = await maybeStopManagedServiceBeforeMutableUpdate({
-      root,
-      updateInstallKind: "git",
-      shouldRestart: false,
-      jsonMode: true,
-      phase: "inspect",
-      onOwnedStartupRuntime,
-    });
-
-    expect(state.serviceUpdateVerdict?.kind).toBe(
-      ownership === "failed" ? "unavailable" : ownership,
-    );
-    if (ownership === "owned") {
-      expect(onOwnedStartupRuntime).toHaveBeenCalledExactlyOnceWith(executable);
-      executable = path.join(home, "other-runtime", "node");
-      const observed = await gatewayService.readGatewayServiceState(service, { env: process.env });
-      const reinspection = await servicePlan.inspectManagedGatewayServiceBeforeUpdate({
-        root,
-        state: observed,
-      });
-      expect(observed.effectiveExecutable).toBe(executable);
-      expect(reinspection).toEqual(state.serviceUpdateVerdict);
-    } else {
-      expect(onOwnedStartupRuntime).not.toHaveBeenCalled();
-    }
-    expect(state).not.toHaveProperty("effectiveExecutable");
-    expect(state).not.toHaveProperty("gatewayStartupRuntime");
-    expect(command).toEqual({
-      programArguments: ["node", path.join(serviceRoot, "dist", "index.js"), "gateway"],
-    });
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
   },
 );

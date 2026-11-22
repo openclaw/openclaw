@@ -349,6 +349,7 @@ function observeCodexThreadConfiguration(
     }
   });
   return {
+    model: thread.model,
     modelProvider: thread.modelProvider,
     dispose: () => {
       clearTimeout(timer);

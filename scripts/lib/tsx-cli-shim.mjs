@@ -1,5 +1,5 @@
 // Bootstraps documented JavaScript entrypoints before the TypeScript loader is active.
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
@@ -125,6 +125,9 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
       ? [
           path.join(SHIM_CHECKOUT_ROOT, "scripts/lib/vitest-worker-bootstrap.mts"),
           options.workerRun.descriptor.directory,
+          ...(options.workerRun.descriptor.preset && options.workerRun.descriptor.preset !== "full"
+            ? [`--worker-preset=${options.workerRun.descriptor.preset}`]
+            : []),
         ]
       : []),
     fileURLToPath(new URL(options.implementation, moduleUrl)),
@@ -208,7 +211,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
   process.on("exit", exitHandler);
 
   try {
-    child = spawn(nodeExecutable, commandArgs, {
+    child = childProcess.spawn(nodeExecutable, commandArgs, {
       cwd: process.cwd(),
       detached,
       env: process.env,

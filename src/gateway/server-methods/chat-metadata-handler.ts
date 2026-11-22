@@ -24,6 +24,7 @@ import { readWorkerPlacementIdentity } from "../worker-environments/placement-pr
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
+import { ChatMetadataStartingError } from "./chat-metadata-facts.js";
 import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -234,6 +235,14 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
     }
   },
   (error, { respond }) => {
+    if (error instanceof ChatMetadataStartingError) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
+      );
+      return;
+    }
     if (error instanceof SessionMutationAuthorizationChangedError) {
       respond(false, undefined, error.error);
       return;

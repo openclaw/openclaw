@@ -117,9 +117,12 @@ describe("failover classification", () => {
       ).toEqual(reason ? { kind: "reason", reason } : null),
   );
 
-  it.each([400, 422])("preserves provider-owned service failures on HTTP %i", (status) => {
+  it.each([400, 403, 422])("preserves provider-owned service failures on HTTP %i", (status) => {
     const signal = { status, message: "Upstream account unavailable", errorType: "server_error" };
-    expect(classifyFailoverSignal(signal, noPlugin)).toEqual({ kind: "reason", reason: "format" });
+    expect(classifyFailoverSignal(signal, noPlugin)).toEqual({
+      kind: "reason",
+      reason: status === 403 ? "auth" : "format",
+    });
     expect(
       classifyFailoverSignal(signal, {
         providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "server_error" },

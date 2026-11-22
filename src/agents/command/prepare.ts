@@ -7,6 +7,7 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { assertAgentInitializationCompleteInWorker } from "../../config/sessions/agent-initialization.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -33,7 +34,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
-import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -45,7 +46,7 @@ import {
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveAcpPromptBody, resolveInternalEventTranscriptBody } from "../internal-events.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
@@ -59,6 +60,7 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
+import { resolveSessionWorktree } from "../worktrees/session-lifecycle.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -175,7 +177,7 @@ export async function prepareAgentCommandExecution(
     }
     const admissionAgentId =
       agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
-    await waitForAgentInputAdmission(admissionAgentId, { cfg, signal: abortSignal });
+    await waitForAgentDatabaseWriteAdmission(admissionAgentId, { signal: abortSignal });
     assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
@@ -256,6 +258,7 @@ export async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  await assertAgentInitializationCompleteInWorker(cfg, sessionAgentId, assertPreparationCurrent);
   const harnessSessionError = sessionKey
     ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
     : undefined;
@@ -267,8 +270,7 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  await waitForAgentInputAdmission(sessionAgentId, { cfg, signal: abortSignal });
-  assertPreparationCurrent();
+
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -315,7 +317,6 @@ export async function prepareAgentCommandExecution(
     cfg,
     agentId: sessionAgentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: pluginsEnabled,
     ...modelManifestContext,
   });
@@ -324,14 +325,16 @@ export async function prepareAgentCommandExecution(
     workspaceDir,
     ...modelManifestContext,
   });
-  const configuredThinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg,
-    provider: configuredModel.provider,
-    modelId: configuredModel.model,
-    agentId: sessionAgentId,
-    sessionKey,
-    sessionEntry: sessionEntryRaw,
-  });
+  const configuredThinkingRuntime =
+    configuredModel &&
+    resolveEffectiveAgentRuntime({
+      cfg,
+      provider: configuredModel.provider,
+      modelId: configuredModel.model,
+      agentId: sessionAgentId,
+      sessionKey,
+      sessionEntry: sessionEntryRaw,
+    });
   const sessionStableReplyMode = await resolveSessionStableReplyMode({
     cfg,
     metadataSnapshot: manifestMetadataSnapshot,
@@ -359,14 +362,15 @@ export async function prepareAgentCommandExecution(
   // Built only for the error, since it loads the selected model's bundled row.
   const formatThinkingLevelsHint = () =>
     formatThinkingLevels(
-      configuredModel.provider,
-      configuredModel.model,
+      configuredModel?.provider,
+      configuredModel?.model,
       ", ",
-      buildThinkingCatalog({
-        cfg,
-        provider: configuredModel.provider,
-        model: configuredModel.model,
-      }),
+      configuredModel &&
+        buildThinkingCatalog({
+          cfg,
+          provider: configuredModel.provider,
+          model: configuredModel.model,
+        }),
       configuredThinkingRuntime,
     );
   const thinkOverride = normalizeThinkLevel(opts.thinking);
@@ -378,10 +382,20 @@ export async function prepareAgentCommandExecution(
     throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
-  const worktreeSource = await resolveWorktreeForPath({
-    sessionEntry: sessionEntryRaw,
-    candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
-  });
+  const worktreeSource =
+    sessionKey && sessionEntryRaw?.worktree
+      ? await resolveSessionWorktree({
+          binding: sessionEntryRaw.worktree,
+          sessionKey,
+          assertCurrent: assertPreparationCurrent,
+          turn: true,
+        }).then((prepared) =>
+          prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
+        )
+      : await resolveWorktreeForPath({
+          sessionEntry: sessionEntryRaw,
+          candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
+        });
   const runLease = worktreeSource
     ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
     : undefined;
@@ -398,7 +412,7 @@ export async function prepareAgentCommandExecution(
     });
     await ensureAgentWorkspace({
       dir: agentWorkspaceDir,
-      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
       guard: { assertHost: assertAcpPreparationCurrent },

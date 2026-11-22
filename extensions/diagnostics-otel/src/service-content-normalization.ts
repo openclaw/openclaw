@@ -102,7 +102,12 @@ export function safeJsonString(
     return undefined;
   }
   const json = serializeJsonForOtelAttribute(value);
-  const exact = redactJsonWithinAttributeBudget(json);
+  // JSON escaping hides line-start assignments from text redaction rules.
+  // Keep the whole-value bound, then redact strings before escaping them.
+  const exact =
+    json && json.length <= MAX_OTEL_REDACTED_JSON_CANDIDATE_CHARS
+      ? redactJsonWithinAttributeBudget(serializeJsonForOtelAttribute(value, redact))
+      : undefined;
   if (exact) {
     return exact;
   }
@@ -129,9 +134,15 @@ export function safeJsonString(
   );
 }
 
-function serializeJsonForOtelAttribute(value: unknown): string | undefined {
+function serializeJsonForOtelAttribute(
+  value: unknown,
+  redact?: OtelContentRedactor,
+): string | undefined {
   try {
-    return JSON.stringify(value) || undefined;
+    const replacer = redact
+      ? (_key: string, field: unknown) => (typeof field === "string" ? redact(field) : field)
+      : undefined;
+    return JSON.stringify(value, replacer) || undefined;
   } catch {
     return undefined;
   }

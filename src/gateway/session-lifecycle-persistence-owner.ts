@@ -14,21 +14,21 @@ import {
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
-type TerminalPersistenceAuthority = {
+type LifecyclePersistenceAuthority = {
   claimId: string;
   lifecycleGeneration: string;
   runId: string;
 };
-type ObservedTerminalPersistenceParams = Omit<
+type ObservedLifecyclePersistenceParams = Omit<
   LifecyclePersistenceParams,
   "assertCommitAllowed" | "event"
 > & {
-  authority?: TerminalPersistenceAuthority;
+  authority?: LifecyclePersistenceAuthority;
   writeContext?: CapturedAgentRunTerminalWriteContext;
   event: AgentEventRuntimePayload;
 };
 
-function assertTerminalAuthority(authority: TerminalPersistenceAuthority): void {
+function assertLifecycleAuthority(authority: LifecyclePersistenceAuthority): void {
   if (
     getAgentRunContextOwnerStatus(
       authority.runId,
@@ -40,9 +40,9 @@ function assertTerminalAuthority(authority: TerminalPersistenceAuthority): void 
   }
 }
 
-function terminalEventAuthority(
+function lifecycleEventAuthority(
   event: LifecyclePersistenceParams["event"],
-): TerminalPersistenceAuthority | undefined {
+): LifecyclePersistenceAuthority | undefined {
   return event.contextClaimId && event.lifecycleGeneration && event.runId
     ? {
         claimId: event.contextClaimId,
@@ -52,7 +52,7 @@ function terminalEventAuthority(
     : undefined;
 }
 
-/** Owns each definitive lifecycle write before optional chat presentation code runs. */
+/** Owns runtime lifecycle writes before optional chat presentation code runs. */
 export function createSessionLifecyclePersistenceOwner() {
   let prepared = new WeakMap<LifecyclePersistenceParams["event"], Promise<void>>();
   const work = new AsyncWorkScope();
@@ -86,7 +86,7 @@ export function createSessionLifecyclePersistenceOwner() {
     return promise;
   };
 
-  const observe = (params: ObservedTerminalPersistenceParams) => {
+  const observe = (params: ObservedLifecyclePersistenceParams) => {
     const existing = prepared.get(params.event);
     if (existing) {
       return existing;
@@ -104,7 +104,7 @@ export function createSessionLifecyclePersistenceOwner() {
         ...(authority || params.writeContext
           ? {
               assertCommitAllowed: composeSessionSourceAssertion([
-                authority ? () => assertTerminalAuthority(authority) : undefined,
+                authority ? () => assertLifecycleAuthority(authority) : undefined,
                 params.writeContext?.assertCurrent,
               ]),
             }
@@ -128,14 +128,14 @@ export function createSessionLifecyclePersistenceOwner() {
         // Only the original runtime event may reuse its eager definitive write.
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
-      const authority = terminalEventAuthority(params.event);
+      const authority = lifecycleEventAuthority(params.event);
       return track(() =>
         enqueue({
           ...params,
           ...(authority
             ? {
                 assertCommitAllowed: composeSessionSourceAssertion([
-                  () => assertTerminalAuthority(authority),
+                  () => assertLifecycleAuthority(authority),
                   params.assertCommitAllowed,
                 ]),
               }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { shouldRunPublishedDriverUpdate } from "../../scripts/lib/ci-published-driver-update-plan.mts";
@@ -191,6 +191,7 @@ it.each([
   };
   const cacheMode = String(evaluateWorkflowExpression(driver.env.DRIVER_CACHE_MODE, context));
   const f = fixture("cache-mode");
+  f.file("package.json", JSON.stringify({ version: "2026.9.7" }));
   f.file(
     "scripts/lib/release-version.mjs",
     readFileSync("scripts/lib/release-version.mjs", "utf8"),
@@ -202,7 +203,7 @@ it.each([
   });
   expect(resolved.status, `${resolved.stdout}${resolved.stderr}`).toBe(0);
   const driverOutputs = readWorkflowOutputs(f.file("outputs"));
-  expect(driverOutputs).toEqual({ version: "2026.9.7", "cache-mode": cacheMode });
+  expect(driverOutputs).toMatchObject({ version: "2026.9.7", "cache-mode": cacheMode });
   for (const step of [prepare, save]) {
     expect(
       evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
@@ -274,5 +275,57 @@ it.each([0, 42])(
     expect(Math.abs(directBudget - ciBudget)).toBeLessThanOrEqual(2);
     const releaseLane = mainLanes.find((lane) => lane.name === "published-driver-update");
     expect(releaseLane?.timeoutMs).toBeGreaterThan(ciBudget * 1000);
+  },
+);
+
+it.each([
+  ["extended-stable/2026.10.33", "2026.10.33", "2026.9.37", "false"],
+  ["release-prep/2026.10.33-final-notes", "2026.10.33", "2026.9.37", "false"],
+  ["", "2026.10.33", "2026.9.37", "false"],
+  ["main", "2026.11.4", "2026.11.5", "false"],
+  ["main", "2026.11.5", "2026.11.5", "true"],
+])(
+  "resolves published upgrade coverage for context %j and candidate %s",
+  (targetContextRef, candidateVersion, driverVersion, postgres) => {
+    const driver = readWorkflow(
+      ".github/workflows/ci-published-driver-update.yml",
+    ).jobs.update.steps.find((step: WorkflowStep) => step.id === "driver");
+    const root = tempDirs.make("openclaw-frozen-published-driver-");
+    const bin = path.join(root, "bin");
+    const lib = path.join(root, "scripts/lib");
+    const output = path.join(root, "outputs");
+    mkdirSync(bin);
+    mkdirSync(lib, { recursive: true });
+    for (const name of [
+      "release-version.mjs",
+      "release-upgrade-baseline.mjs",
+      "canonical-json.mjs",
+    ]) {
+      copyFileSync(`scripts/lib/${name}`, path.join(lib, name));
+    }
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: candidateVersion }));
+    writeExecutable(path.join(bin, "npm"), ["#!/bin/sh", `echo '"2026.11.5"'`]);
+    const result = runWorkflowShellScript(driver.run, {
+      cwd: root,
+      env: {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        SystemRoot: process.env.SystemRoot,
+        BASH_ENV: "",
+        ENV: "",
+        TARGET_CONTEXT_REF: targetContextRef,
+        QUALIFICATION_BASELINES_JSON: JSON.stringify({
+          upgradeBaseline: "openclaw@2026.9.37",
+          upgradeSurvivorBaselines: ["openclaw@2026.10.10", "openclaw@2026.9.37"],
+        }),
+        DRIVER_CACHE_MODE: "restore",
+        GITHUB_OUTPUT: output,
+      },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(readWorkflowOutputs(output)).toEqual({
+      version: driverVersion,
+      "cache-mode": "restore",
+      postgres,
+    });
   },
 );

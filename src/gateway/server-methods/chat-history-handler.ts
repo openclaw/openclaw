@@ -203,6 +203,8 @@ export async function handleChatHistoryRequest({
                 maxChars: effectiveMaxChars,
                 queuedRunIds,
                 cronStorePath: context.cronStorePath,
+                resolveGatewayContext: context.resolveGatewayContext,
+                physicalPaths: rowProjection.physicalPaths,
               },
             ),
           )
@@ -249,7 +251,7 @@ export async function handleChatHistoryRequest({
                     deflateResponse,
                     includePluginSteering,
                     entry: historyEntry,
-                    provider: resolvedSessionModel.provider,
+                    provider: resolvedSessionModel?.provider,
                     sessionId,
                     storePath,
                     sessionAgentId,
@@ -286,12 +288,13 @@ export async function handleChatHistoryRequest({
         historyPage.encodedMessagesDeflate,
       );
     }
-    const responsePage = historyPage.encodedResponse
+    const { encodedResponse, messageModelIndex } = historyPage;
+    const responsePage = encodedResponse
       ? {
-          ...historyPage.encodedResponse,
-          messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
-          activity: historyPage.encodedResponse.activity
-            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+          ...encodedResponse,
+          messages: new SerializedJsonArray(encodedResponse.messages, messageModelIndex),
+          activity: encodedResponse.activity
+            ? new SerializedJsonArray(encodedResponse.activity)
             : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {

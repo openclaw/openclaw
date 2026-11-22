@@ -70,7 +70,7 @@ export async function readMcpOAuthStoreStatuses(
   if (storeKeys.length === 0) {
     return [];
   }
-  const result = await readExisting(context, { type: "mcpOAuth.statuses", input: storeKeys });
+  const result = await readExisting(context, { type: "mcpOAuth.statuses", input: [...storeKeys] });
   return result?.value ?? storeKeys.map(() => projectMcpOAuthCredentialsStatus({}));
 }
 

@@ -6,18 +6,17 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
-/** Session dispatch retains its execution owner without consulting the participant roster. */
+/** Caller and participant assertions only; runtime authority is checked once at pre-dispatch. */
 export function resolveSessionRuntimeAuthority(params: {
   method: string;
   runtimeIdentity: AgentRuntimeIdentity | undefined;
-  context: GatewayRequestContext;
 }) {
   const caller = getGatewayToolCallerIdentity();
-  const { method, runtimeIdentity, context } = params;
+  const { method, runtimeIdentity } = params;
   if (caller?.personalToolIdentityScoped || !isSessionTargetMethod(method)) {
     return undefined;
   }
@@ -45,12 +44,6 @@ export function resolveSessionRuntimeAuthority(params: {
     checked(() => {
       assertCallerCurrent?.();
       activeTurn?.assertCurrent();
-      if (
-        runtimeIdentity &&
-        context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) !== true
-      ) {
-        throw new Error("agent runtime authority is no longer active");
-      }
     });
   assertCurrent();
   return { assertCurrent };
@@ -58,13 +51,12 @@ export function resolveSessionRuntimeAuthority(params: {
 
 /** Expected authority refusals are request policy outcomes, not handler failures. */
 export function resolveSessionRuntimeAuthorityRequest(
-  options: Pick<GatewayRequestOptions, "req" | "client" | "respond" | "context">,
+  options: Pick<GatewayRequestOptions, "req" | "client" | "respond">,
 ): ReturnType<typeof resolveSessionRuntimeAuthority> | null {
   try {
     return resolveSessionRuntimeAuthority({
       method: options.req.method,
       runtimeIdentity: options.client?.internal?.agentRuntimeIdentity,
-      context: options.context,
     });
   } catch (error) {
     options.respond(
