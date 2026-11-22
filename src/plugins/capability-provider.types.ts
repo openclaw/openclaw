@@ -454,6 +454,10 @@ export type WorkerProvider = {
         secretNames?: readonly string[];
         signal: AbortSignal;
         assertCurrent: () => void;
+        /** Verify and normalize only the disposable prepared project before claimed image capture. */
+        prepareSnapshot?: (transport: {
+          runScript: (script: string, signal: AbortSignal) => Promise<string>;
+        }) => Promise<void>;
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;

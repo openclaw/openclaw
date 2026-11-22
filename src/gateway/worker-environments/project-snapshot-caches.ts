@@ -1,0 +1,67 @@
+/** Runs only for a claimed disposable image builder, after current project content is verified. */
+export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, preparedRef, verifySeed, verifyManifest) => {
+  const fs = require("node:fs"), path = require("node:path");
+  const fail = (cacheCheck, cacheKind) => {
+    const error = new Error("Project snapshot cache verification failed");
+    error.snapshotDiagnostic = { schema: "openclaw.project-snapshot-diagnostic.v1", cacheCheck, cacheKind };
+    throw error;
+  };
+  const directory = (parent, name, kind) => {
+    const target = path.join(parent, name);
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch { fail("cache-path", kind); }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) fail("cache-path", kind);
+    return target;
+  };
+  const namespace = (kind) => {
+    const parent = directory(root, kind, kind);
+    const names = fs.readdirSync(parent);
+    if (names.length !== 1 || names[0] !== input.namespace) fail("cache-inventory", kind);
+    return directory(parent, input.namespace, kind);
+  };
+  const removals = [];
+  const seeds = namespace("git-seeds");
+  for (const name of fs.readdirSync(seeds)) {
+    if (!/^[a-f0-9]{64}$/.test(name)) fail("unapproved-entry", "git-seeds");
+    const seed = directory(seeds, name, "git-seeds");
+    if (name !== input.seedKey) removals.push(seed);
+  }
+  const selectedSeed = directory(seeds, input.seedKey, "git-seeds");
+  try { verifySeed(selectedSeed); } catch { fail("verification", "git-seeds"); }
+  const prepared = namespace("prepared");
+  const names = fs.readdirSync(prepared);
+  if (names.length !== 1 || names[0] !== input.cacheKey) fail("cache-inventory", "prepared");
+  const current = directory(prepared, input.cacheKey, "prepared");
+  if (fs.readdirSync(current).sort().join("\\0") !== "home\\0workspace") fail("unapproved-entry", "prepared");
+  const hostManifests = directory(root, "manifests", "manifests");
+  const home = directory(current, "home", "prepared");
+  const preparedManifests = directory(directory(home, ".openclaw-worker", "manifests"), "manifests", "manifests");
+  const artifact = (parent, name) => {
+    const file = path.join(parent, name);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(file) !== file) fail("cache-path", "manifests");
+    return file;
+  };
+  const sourceDigest = sourceRef.slice(7), preparedDigest = preparedRef.slice(7);
+  const completion = directory(preparedManifests, "prepared", "manifests");
+  const sources = fs.readdirSync(completion);
+  if (sources.length !== 1 || sources[0] !== sourceDigest) fail("cache-inventory", "manifests");
+  const witness = directory(completion, sourceDigest, "manifests");
+  const witnesses = fs.readdirSync(witness);
+  if (witnesses.length !== 1 || witnesses[0] !== preparedDigest + ".json") fail("cache-inventory", "manifests");
+  verifyManifest(artifact(witness, witnesses[0]), preparedRef);
+  const retained = new Set([sourceDigest, preparedDigest]);
+  for (const manifests of [hostManifests, preparedManifests]) {
+    for (const name of fs.readdirSync(manifests)) {
+      if (manifests === preparedManifests && name === "prepared") continue;
+      if (!/^[a-f0-9]{64}[.](json|memo)$/.test(name)) fail("unapproved-entry", "manifests");
+      const file = artifact(manifests, name);
+      const selected = retained.has(name.slice(0, -5));
+      if (selected && name.endsWith(".json")) verifyManifest(file, "sha256:" + name.slice(0, -5));
+      if (!selected) removals.push(file);
+    }
+  }
+  // Validate the entire plan before removing anything; obsolete owned content needs no rescan.
+  for (const target of removals) fs.rmSync(target, { recursive: true });
+}`;

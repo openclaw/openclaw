@@ -136,6 +136,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (existing.operation) {
           return;
         }
+        // Only provision retains project verification; teardown may settle existing captures.
+        if (context.teardown && owner.projectKey && !prepareSource) {
+          return;
+        }
         if (isCrabboxCaptureRefusalRetained(existing, dependencies.policy.refreshAfterMs)) {
           return;
         }
