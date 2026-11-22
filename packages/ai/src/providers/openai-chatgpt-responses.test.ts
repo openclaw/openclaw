@@ -128,6 +128,70 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(providerToken).toBe(`Bearer ${realToken}`);
   });
 
+  it("routes cache affinity by an explicit prompt cache key on SSE", async () => {
+    const seen: Array<{ session: string | null; request: string | null; key: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        const raw = init?.body;
+        const body = JSON.parse(
+          typeof raw === "string" ? raw : zstdDecompressSync(raw as Uint8Array).toString("utf8"),
+        ) as { prompt_cache_key?: unknown };
+        seen.push({
+          session: headers.get("session_id"),
+          request: headers.get("x-client-request-id"),
+          key: body.prompt_cache_key,
+        });
+        return completedSseResponse();
+      }),
+    );
+
+    await run({ transport: "sse", sessionId: "transcript-a", promptCacheKey: "shared-key" });
+    await run({ transport: "sse", sessionId: "transcript-b", promptCacheKey: "shared-key" });
+    await run({ transport: "sse", sessionId: "transcript-c" });
+    await run({
+      transport: "sse",
+      sessionId: "transcript-d",
+      promptCacheKey: "shared-key",
+      cacheRetention: "none",
+    });
+
+    expect(seen).toEqual([
+      { session: "shared-key", request: "transcript-a", key: "shared-key" },
+      { session: "shared-key", request: "transcript-b", key: "shared-key" },
+      { session: "transcript-c", request: "transcript-c", key: "transcript-c" },
+      { session: "transcript-d", request: "transcript-d", key: undefined },
+    ]);
+  });
+
+  it("routes cache affinity by an explicit prompt cache key on WebSocket", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    const handshakes: Array<{ session: unknown; request: unknown }> = [];
+    server.on("connection", (socket, request) => {
+      handshakes.push({
+        session: request.headers.session_id,
+        request: request.headers["x-client-request-id"],
+      });
+      socket.on("message", () => socket.send(JSON.stringify(completion("resp_ws"))));
+    });
+    await once(server, "listening");
+    vi.stubGlobal("WebSocket", WebSocket);
+    const loopbackModel = createLoopbackModel(server);
+    try {
+      const result = await run(
+        { transport: "websocket", sessionId: "transcript-ws", promptCacheKey: "shared-key" },
+        context,
+        loopbackModel,
+      );
+      expect(result.stopReason).toBe("stop");
+      expect(handshakes).toEqual([{ session: "shared-key", request: "transcript-ws" }]);
+    } finally {
+      closeOpenAICodexWebSocketSessions("transcript-ws");
+      await closeServer(server, server.clients);
+    }
+  });
+
   it("reconnects once when the websocket connection limit is reached", async () => {
     const { sockets } = installWebSocket((socket) =>
       message(
