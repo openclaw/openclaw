@@ -475,6 +475,31 @@ function collectCronAssignments(params: ConfigCollectorParams): void {
   });
 }
 
+function collectMcpOAuthClientSecretAssignments(params: ConfigCollectorParams): void {
+  const servers = params.config.mcp?.servers;
+  if (!isRecord(servers)) {
+    return;
+  }
+  const collect = createConfigSecretInputCollector(params);
+  for (const [name, server] of Object.entries(servers)) {
+    if (!isRecord(server) || !isRecord(server.oauth)) {
+      continue;
+    }
+    const serverPath = appendConfigPathSegment("mcp.servers", name);
+    collect(server.oauth, "clientSecret", `${serverPath}.oauth.clientSecret`, {
+      active: server.enabled !== false,
+      inactiveReason: "MCP server is disabled.",
+      owner: {
+        ownerKind: "capability",
+        ownerId: serverPath,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: server,
+      },
+    });
+  }
+}
+
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
@@ -529,5 +554,6 @@ export function collectCoreConfigAssignments(params: {
   collectMessagesTtsAssignments(params);
   collectAgentTtsAssignments(params);
   collectCronAssignments(params);
+  collectMcpOAuthClientSecretAssignments(params);
   collectMediaRequestAssignments(params);
 }

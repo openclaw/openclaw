@@ -187,6 +187,68 @@ describe("config schema", () => {
     }
   });
 
+  it("validates MCP OAuth pre-registered clients", () => {
+    const secretRef = { source: "env", provider: "default", id: "DOCS_MCP_CLIENT_SECRET" };
+    const server = (oauth: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+      mcpConfig({ url: mcpUrl, auth: "oauth", oauth, ...extra });
+    const issueAt = (config: unknown, path: string) =>
+      OpenClawSchema.safeParse(config).error?.issues.find(
+        (issue) => issue.path.join(".") === `mcp.servers.docs.${path}`,
+      )?.message;
+
+    expect(accepts(server({ clientId: "docs-client" }))).toBe(true);
+    expect(accepts(server({ clientId: "docs-client", clientSecret: secretRef }))).toBe(true);
+    expect(
+      accepts(
+        server({
+          clientId: "docs-client",
+          authorizationParams: { access_type: "offline", prompt: "consent", login_hint: "a@b.c" },
+        }),
+      ),
+    ).toBe(true);
+    // Extra authorization params do not need a pre-registered client.
+    expect(accepts(server({ authorizationParams: { prompt: "consent" } }))).toBe(true);
+
+    // Plaintext secrets, including env templates, are not accepted at rest.
+    for (const clientSecret of ["plaintext-secret", "${DOCS_MCP_CLIENT_SECRET}"]) {
+      expect(accepts(server({ clientId: "docs-client", clientSecret }))).toBe(false);
+    }
+    expect(accepts(server({ clientId: "  " }))).toBe(false);
+    expect(issueAt(server({ clientSecret: secretRef }), "oauth.clientSecret")).toBe(
+      "oauth.clientSecret requires oauth.clientId",
+    );
+    expect(
+      issueAt(mcpConfig({ url: mcpUrl, oauth: { clientId: "docs-client" } }), "oauth.clientId"),
+    ).toBe('oauth.clientId requires auth: "oauth"');
+    expect(
+      issueAt(
+        server({
+          clientId: "docs-client",
+          clientMetadataUrl: "https://client.example.com/openclaw-mcp.json",
+        }),
+        "oauth.clientId",
+      ),
+    ).toBe("oauth.clientId cannot be combined with oauth.clientMetadataUrl");
+    expect(
+      issueAt(server({ clientId: "docs-client", authProfileId: "docs:mcp" }), "oauth.clientId"),
+    ).toBe("oauth.clientId cannot be combined with oauth.authProfileId");
+    expect(
+      issueAt(server({ clientId: "docs-client", identity: "per-requester" }), "oauth.clientId"),
+    ).toBe(
+      'oauth.clientId is not supported with oauth.identity "per-requester" yet; use a shared identity',
+    );
+
+    for (const authorizationParams of [
+      { redirect_uri: "https://evil.example.com/cb" },
+      { code_challenge_method: "plain" },
+      { client_id: "other" },
+      { hd: "example.com" },
+      { prompt: "" },
+    ]) {
+      expect(accepts(server({ clientId: "docs-client", authorizationParams }))).toBe(false);
+    }
+  });
+
   it("requires a bare HTTPS Gateway public origin except on loopback", () => {
     for (const publicOrigin of [
       "https://gateway.example.com",

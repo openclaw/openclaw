@@ -260,6 +260,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'OAuth credential ownership for this server. Omit this field or use "shared" for operator-managed credentials; use "per-requester" to let each authenticated sender connect their own account.',
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
+  "mcp.servers.*.oauth.clientId":
+    'Client ID of an OAuth app you registered with the provider. When set, OpenClaw signs in with this client and never runs dynamic client registration. Requires auth: "oauth"; register the exact callback URL the sign-in uses.',
+  "mcp.servers.*.oauth.clientSecret":
+    "SecretRef (env, file, exec, or store) for the client secret of oauth.clientId. Plaintext is rejected. OpenClaw sends it only to the token endpoint and never stores it with the MCP sign-in.",
+  "mcp.servers.*.oauth.authorizationParams":
+    "Extra sign-in URL parameters. Allowed keys: access_type, prompt, login_hint (for example access_type: offline and prompt: consent for Google refresh tokens).",
   "mcp.servers.*.codex.agents":
     "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Lists with no valid agent IDs grant no access; when omitted, the server is projected for all Codex app-server agents.",
   "mcp.servers.*.codex.defaultToolsApprovalMode":
