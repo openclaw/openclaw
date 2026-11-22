@@ -419,6 +419,7 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
   const target = event.target;
   if (
     event.button !== 0 ||
+    event.detail < 2 ||
     !(thread instanceof HTMLElement) ||
     !(target instanceof Element) ||
     target.closest("a, button, input, select, textarea, summary, [contenteditable]")
@@ -426,14 +427,11 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
     return undefined;
   }
   // The row margin and the empty side of a message are layout, not prose.
-  // A native press there can select the next word or just an inter-turn newline.
+  // A multi-click can select an inter-turn newline. Leave single presses native for drags.
   if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group")) {
     event.preventDefault();
     thread.focus({ preventScroll: true });
     thread.ownerDocument.getSelection()?.removeAllRanges();
-    return undefined;
-  }
-  if (event.detail < 2) {
     return undefined;
   }
   const bubble = target.closest(".chat-bubble");
