@@ -26,6 +26,16 @@ struct OnboardingMascotMoodTests {
             remoteProbeState: .ok(input, RemoteGatewayProbeSuccess(authSource: nil)))) == .happy)
     }
 
+    @Test func `find page reacts to the remote connection check`() {
+        let input = RemoteGatewayProbeInput(transport: .direct, target: "wss://gateway.test", token: "")
+        #expect(self.mood(.init(page: .find)) == .curious)
+        #expect(self.mood(.init(page: .find, remoteProbeState: .checking(input))) == .thinking)
+        #expect(self.mood(.init(page: .find, remoteProbeState: .failed(input, "no route"))) == .sad)
+        #expect(self.mood(.init(
+            page: .find,
+            remoteProbeState: .ok(input, RemoteGatewayProbeSuccess(authSource: nil)))) == .happy)
+    }
+
     @Test func `cli page tracks install lifecycle`() {
         #expect(self.mood(.init(page: .cli, installingCLI: true)) == .working)
         #expect(self.mood(.init(page: .cli)) == .working, "status probe still deciding")
@@ -55,6 +65,7 @@ struct OnboardingMascotMoodTests {
         #expect(self.accessory(.ready) == .gradCap)
         #expect(self.accessory(.welcome) == .none)
         #expect(self.accessory(.connection) == .none)
+        #expect(self.accessory(.find) == .none)
         #expect(self.accessory(.cli) == .none)
         #expect(self.accessory(.ai) == .none)
     }

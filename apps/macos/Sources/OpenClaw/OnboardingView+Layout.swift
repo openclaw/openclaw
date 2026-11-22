@@ -3,77 +3,68 @@ import SwiftUI
 
 extension OnboardingView {
     var body: some View {
-        GeometryReader { windowGeometry in
-            let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
-            VStack(spacing: 0) {
-                GlowingOpenClawIcon(
-                    size: 130,
-                    mood: self.mascotMood,
-                    accessory: self.mascotAccessory)
-                    .offset(y: 10)
-                    .frame(height: 145)
-
-                GeometryReader { _ in
-                    HStack(spacing: 0) {
-                        ForEach(self.pageOrder, id: \.self) { pageIndex in
-                            self.pageView(for: pageIndex, contentHeight: contentHeight)
-                                .frame(width: self.pageWidth)
-                        }
-                    }
-                    .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
-                    .animation(
-                        .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-                        value: self.currentPage)
-                    .frame(height: contentHeight, alignment: .top)
-                    .clipped()
+        let snapshot = self.mascotSnapshot
+        return OnboardingWindowLayout(
+            mood: Self.mascotMood(for: snapshot),
+            accessory: self.mascotAccessory,
+            line: Self.guideLine(for: snapshot).text,
+            pages: { self.pageStrip(contentHeight: $0) },
+            navigation: { self.navigationBar })
+            .frame(
+                minWidth: pageWidth,
+                maxWidth: pageWidth,
+                minHeight: Self.minimumWindowHeight,
+                maxHeight: .infinity)
+            .background(Color(NSColor.windowBackgroundColor))
+            .sheet(isPresented: self.$showOpenClawID) {
+                OnboardingOpenClawIDView(model: self.openClawID)
+            }
+            .onAppear {
+                self.onboardingDidAppear()
+            }
+            .onChange(of: currentPage) { _, newValue in
+                self.updateMonitoring(for: self.activePageIndex(for: newValue))
+            }
+            .onChange(of: showRemoteChoices) { _, _ in
+                self.updateDiscoveryMonitoring(for: self.activePageIndex)
+            }
+            .onChange(of: state.connectionMode) { _, _ in
+                self.handleConnectionModeChange()
+            }
+            .onChange(of: cliInstalled) { previous, installed in
+                guard installed else { return }
+                self.preservePageAfterCLIReadiness(wasInstalled: previous)
+                self.updateMonitoring(for: self.activePageIndex)
+            }
+            .onChange(of: GatewayProcessManager.shared.status) { _, status in
+                self.reviseCLIActivationFailureIfGatewayReady(status)
+            }
+            .onDisappear {
+                self.onboardingDidDisappear()
+            }
+            .task {
+                await self.refreshCLIStatus()
+            }
+            .task {
+                await self.configuredGatewayProbe.consumeReconnects {
+                    self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
                 }
-                .frame(height: contentHeight)
+            }
+    }
 
-                Spacer(minLength: 0)
-                self.navigationBar
-            }
-            .frame(maxHeight: .infinity)
-        }
-        .frame(
-            minWidth: pageWidth,
-            maxWidth: pageWidth,
-            minHeight: Self.minimumWindowHeight,
-            maxHeight: .infinity)
-        .background(Color(NSColor.windowBackgroundColor))
-        .sheet(isPresented: self.$showOpenClawID) {
-            OnboardingOpenClawIDView(model: self.openClawID)
-        }
-        .onAppear {
-            self.onboardingDidAppear()
-        }
-        .onChange(of: currentPage) { _, newValue in
-            self.updateMonitoring(for: self.activePageIndex(for: newValue))
-        }
-        .onChange(of: showRemoteChoices) { _, _ in
-            self.updateDiscoveryMonitoring(for: self.activePageIndex)
-        }
-        .onChange(of: state.connectionMode) { _, _ in
-            self.handleConnectionModeChange()
-        }
-        .onChange(of: cliInstalled) { previous, installed in
-            guard installed else { return }
-            self.preservePageAfterCLIReadiness(wasInstalled: previous)
-            self.updateMonitoring(for: self.activePageIndex)
-        }
-        .onChange(of: GatewayProcessManager.shared.status) { _, status in
-            self.reviseCLIActivationFailureIfGatewayReady(status)
-        }
-        .onDisappear {
-            self.onboardingDidDisappear()
-        }
-        .task {
-            await self.refreshCLIStatus()
-        }
-        .task {
-            await self.configuredGatewayProbe.consumeReconnects {
-                self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
+    private func pageStrip(contentHeight: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            ForEach(self.pageOrder, id: \.self) { pageIndex in
+                self.pageView(for: pageIndex, contentHeight: contentHeight)
+                    .frame(width: self.pageWidth)
             }
         }
+        .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
+        .animation(
+            .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+            value: self.currentPage)
+        .frame(height: contentHeight, alignment: .top)
+        .clipped()
     }
 
     @discardableResult
@@ -397,7 +388,7 @@ extension OnboardingView {
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
-        .frame(minHeight: 60, alignment: .bottom)
+        .frame(minHeight: Self.navigationBarHeight, alignment: .bottom)
     }
 
     private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {

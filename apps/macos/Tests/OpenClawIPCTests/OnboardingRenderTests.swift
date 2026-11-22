@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawChatUI
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -33,6 +34,78 @@ struct OnboardingRenderTests {
             output: output)
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
+    func `onboarding guide lines render beside the mascot`() throws {
+        let output = try Self.outputDirectory()
+        for line in OnboardingGuideLine.allCases {
+            try Self.capture(
+                OnboardingGuideHero(mood: Self.mood(for: line), accessory: .none, line: line.text),
+                name: "guide-\(line)",
+                label: "Guide line · \(line) · hero row",
+                output: output)
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
+    func `long guide lines keep the navigation bar on screen at the minimum window height`() throws {
+        let output = try Self.outputDirectory()
+        let longest = try #require(OnboardingGuideLine.allCases.max { $0.text.count < $1.text.count })
+        let stretched = [longest.text, longest.text, longest.text].joined(separator: " ")
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = OnboardingView(state: state, gatewaySelectionPersister: { true }, dashboardHandoffOpener: { _ in })
+        let height = OnboardingView.minimumWindowHeight
+        for (name, text) in [("guide-window-longest", longest.text), ("guide-window-stretched", stretched)] {
+            for dark in [false, true] {
+                let frames = FrameBox()
+                let content = OnboardingWindowLayout(
+                    mood: .curious,
+                    accessory: .none,
+                    line: text,
+                    pages: { contentHeight in
+                        view.pageView(for: view.reachabilityPageIndex, contentHeight: contentHeight)
+                            .frame(width: OnboardingView.windowWidth, height: contentHeight, alignment: .top)
+                            .clipped()
+                            .recordFrame("pages", in: frames)
+                    },
+                    navigation: { view.navigationBar.recordFrame("navigation", in: frames) })
+                    .frame(width: OnboardingView.windowWidth, height: height)
+                    .coordinateSpace(name: FrameBox.space)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.locale, Locale(identifier: "en_US"))
+                    .environment(\.colorScheme, dark ? .dark : .light)
+                let hosting = NSHostingView(rootView: content)
+                hosting.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                hosting.setFrameSize(NSSize(width: OnboardingView.windowWidth, height: height))
+                let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = hosting
+                defer {
+                    window.contentView = nil
+                    window.close()
+                }
+                hosting.layoutSubtreeIfNeeded()
+                let navigation = try #require(frames.values["navigation"], "navigation bar was not laid out")
+                let pages = try #require(frames.values["pages"], "page area was not laid out")
+                #expect(navigation.maxY <= height + 0.5, "\(name): navigation bar fell off the window")
+                #expect(navigation.height >= OnboardingView.navigationBarHeight - 0.5)
+                #expect(pages.maxY <= navigation.minY + 0.5, "\(name): pages overlap the navigation bar")
+                #expect(pages.minY >= OnboardingGuideHero.minimumHeight - 0.5, "\(name): pages overlap the hero")
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: output.appendingPathComponent("\(name)-\(dark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    private static func mood(for line: OnboardingGuideLine) -> OpenClawMascotMood {
+        OnboardingGuideLineTests.allSnapshots()
+            .first { OnboardingView.guideLine(for: $0) == line }
+            .map { OnboardingView.mascotMood(for: $0) } ?? .idle
+    }
+
     static func outputDirectory() throws -> URL {
         let environment = ProcessInfo.processInfo.environment
         let output = try URL(fileURLWithPath: #require(environment["OPENCLAW_ONBOARDING_RENDER_DIR"]))
@@ -46,7 +119,7 @@ struct OnboardingRenderTests {
     static func capturePage(_ content: some View, name: String, label: String, output: URL) throws {
         // Match OnboardingView's default content rectangle and mascot metrics.
         // Leave navigation's space empty rather than fabricate an active route or verified AI state.
-        try Self.capture(
+        try self.capture(
             VStack(spacing: 0) {
                 GlowingOpenClawIcon(size: 130).offset(y: 10).frame(height: 145)
                 content.frame(
@@ -92,5 +165,35 @@ struct OnboardingRenderTests {
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: output.appendingPathComponent("\(name)-\(dark ? "dark" : "light").png"))
         }
+    }
+}
+
+@MainActor
+final class FrameBox {
+    static let space = "onboarding-window"
+    var values: [String: CGRect] = [:]
+}
+
+private struct FramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+extension View {
+    @MainActor
+    fileprivate func recordFrame(_ name: String, in box: FrameBox) -> some View {
+        self
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: FramePreferenceKey.self,
+                        value: [name: proxy.frame(in: .named(FrameBox.space))])
+                }
+            }
+            .onPreferenceChange(FramePreferenceKey.self) { frames in
+                MainActor.assumeIsolated { box.values.merge(frames) { _, new in new } }
+            }
     }
 }
