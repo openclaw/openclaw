@@ -290,6 +290,7 @@ function packRegistryPackages(dependencyDirs: string[], destination: string) {
 
 function writePatchedRuntimeFixture(bundling = "default") {
   const optionalDirect = bundling === "optional-direct" || bundling === "skipped-optional";
+  const autoOptional = bundling === "optional-auto";
   const nested = bundling.startsWith("nested-");
   const optOut = bundling.startsWith("opt-out-");
   const policy = ["range-policy", "locked-optional"].includes(bundling);
@@ -322,7 +323,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
         }
       : {},
   );
-  if (nested || optOut) {
+  if (nested || optOut || autoOptional) {
     sourceManifest.dependencies["unpatched-sibling"] = "1.0.0";
     artifacts.push(packRegistryDependency("unpatched-sibling"));
   }
@@ -340,6 +341,16 @@ function writePatchedRuntimeFixture(bundling = "default") {
   if (optionalDirect) {
     sourceManifest.dependencies["local-runtime-dep"] = "0.0.0";
     sourceManifest.optionalDependencies = { "local-runtime-dep": "1.0.0" };
+  }
+  if (autoOptional) {
+    // Both optional: the verified patch must stay bundled while the ordinary optional
+    // dependency stays install-time for npm's platform selection.
+    delete sourceManifest.dependencies["local-runtime-dep"];
+    delete sourceManifest.dependencies["unpatched-sibling"];
+    sourceManifest.optionalDependencies = {
+      "local-runtime-dep": "1.0.0",
+      "unpatched-sibling": "1.0.0",
+    };
   }
   if (optOut) {
     sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
@@ -385,15 +396,21 @@ function writePatchedRuntimeFixture(bundling = "default") {
   writeJsonFile(join(repoDir, "pnpm-workspace.yaml"), {
     patchedDependencies: { [patchKey]: "patches/runtime.patch" },
   });
+  const lockRuntimeDependency = {
+    "local-runtime-dep": { specifier: "1.0.0", version: patchedVersion },
+  };
+  const lockOptionalDependencies = {
+    ...(optionalDirect || autoOptional ? lockRuntimeDependency : {}),
+    ...(autoOptional ? { "unpatched-sibling": { specifier: "1.0.0", version: "1.0.0" } } : {}),
+  };
   const lock = {
     lockfileVersion: "9.0",
     patchedDependencies: { [patchKey]: patchHash },
     importers: {
-      "extensions/diffs": {
-        [optionalDirect ? "optionalDependencies" : "dependencies"]: {
-          "local-runtime-dep": { specifier: "1.0.0", version: patchedVersion },
-        },
-      },
+      "extensions/diffs":
+        optionalDirect || autoOptional
+          ? { optionalDependencies: lockOptionalDependencies }
+          : { dependencies: lockRuntimeDependency },
     },
     packages: Object.fromEntries(
       artifacts.map(({ manifest, integrity }) => [
@@ -404,7 +421,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
     snapshots: {
       [`local-runtime-dep@${patchedVersion}`]: {},
       ...(bundling === "nested-other" ? { "local-runtime-dep@2.0.0": {} } : {}),
-      ...(optOut ? { "unpatched-sibling@1.0.0": {} } : {}),
+      ...(optOut || autoOptional ? { "unpatched-sibling@1.0.0": {} } : {}),
       ...(nested
         ? {
             "unpatched-sibling@1.0.0": {
@@ -1126,6 +1143,7 @@ it.each([
   "opt-out-npm",
   "opt-out-clawhub",
   "optional-direct",
+  "optional-auto",
   "nested-other",
   "nested-same",
   "explicit-all",
@@ -1153,6 +1171,7 @@ it.each([
     fs.linkSync(join(installedDir, "index.d.ts"), join(installedDir, "index.d.mts"));
   }
   const optOut = bundling.startsWith("opt-out-");
+  const autoOptional = bundling === "optional-auto";
   const consumerDir = join(repoDir, "consumer");
   mkdirSync(consumerDir);
   const originalManifest = readText(packageDir, "package.json");
@@ -1222,7 +1241,9 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
             ...registryEnv,
             OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: repoDir,
             OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES:
-              bundling === "all" || bundling.startsWith("nested-") || optOut ? "1" : "0",
+              bundling === "all" || bundling.startsWith("nested-") || optOut || autoOptional
+                ? "1"
+                : "0",
           },
         },
       );
@@ -1274,16 +1295,18 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     if (optOut) {
       expect(published.openclaw.release.bundleRuntimeDependencies).toBe(false);
     }
-    // Optional dependencies stay install-time: npm selects the platform-matching variant,
-    // so the automatic bundle list must not pin the build host's copy (memory-lancedb).
-    const optionalOnly = bundling === "optional-direct" || bundling === "skipped-optional";
+    // Verified patches stay in the published bundle in every mode; optional dependencies
+    // stay install-time so npm selects the platform-matching variant (memory-lancedb).
     expect(published.bundledDependencies).toEqual(
       ["partial", "all", "explicit-all"].includes(bundling) || bundling.startsWith("nested-")
         ? ["local-runtime-dep", "unpatched-sibling"]
-        : optionalOnly
-          ? []
-          : ["local-runtime-dep"],
+        : ["local-runtime-dep"],
     );
+    if (bundling === "optional-auto") {
+      expect(
+        packResult.files.some(({ path }) => path.startsWith("node_modules/unpatched-sibling/")),
+      ).toBe(false);
+    }
     expect(packResult.files.some(({ path }) => path.endsWith(".tgz"))).toBe(false);
     expect(readText(installedDir, "index.js")).toBe(installedSource);
     if (bundling === "isolated") {

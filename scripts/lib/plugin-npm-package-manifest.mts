@@ -216,7 +216,11 @@ function listAutoBundledDependencyNames(packageJson: PluginPackageJson) {
   return listPackageRuntimeDependencyNames(packageJson).filter((name) => !optional.has(name));
 }
 
-/** The published bundled list: explicit bundles first, then the automatic closure. */
+/**
+ * The published bundled list: explicit bundles first, then the automatic closure, plus
+ * every verified patch. Patches are unioned in both modes: dropping a patched dependency
+ * from the bundle would make the destination install fetch the unpatched registry bytes.
+ */
 function listPackagedBundledDependencyNames(params: {
   packageJson: PluginPackageJson;
   includeRuntimeDependencies: boolean;
@@ -227,7 +231,8 @@ function listPackagedBundledDependencyNames(params: {
       ...listConfiguredBundledDependencyNames(params.packageJson),
       ...(params.includeRuntimeDependencies
         ? listAutoBundledDependencyNames(params.packageJson)
-        : (params.patchedDependencies ?? []).map(({ name }) => name)),
+        : []),
+      ...(params.patchedDependencies ?? []).map(({ name }) => name),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
 }
