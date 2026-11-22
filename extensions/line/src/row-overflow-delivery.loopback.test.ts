@@ -15,7 +15,8 @@ import { processLineMessage } from "./markdown-to-line.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { LINE_PRESENTATION_CAPABILITIES, prepareLineReplyPayload } from "./rich-messages.js";
 import { setLineRuntime } from "./runtime.js";
-import { createFlexMessage, pushMessagesLine, replyMessageLine } from "./send.js";
+import { pushMessagesLine, replyMessageLine } from "./send.js";
+import { createFlexMessage } from "./template-messages.js";
 import type { LineChannelData } from "./types.js";
 
 type WireMessage = {

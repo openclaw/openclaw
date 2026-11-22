@@ -14,7 +14,10 @@ import {
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import {
+  resolveOperatorRolePolicy,
+  resolveGatewayOperatorRoleActor,
+} from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
@@ -90,7 +93,10 @@ function companionTargetIsVisible(
   const cfg = context.getRuntimeConfig();
   const sharingTarget = prepared.target;
   if (!sharingTarget) {
-    return !isNamedOperatorRoleEnforcementEnabled(cfg);
+    return !(
+      isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      resolveOperatorRolePolicy(client, cfg) !== undefined
+    );
   }
   const sharing = prepareProjectedSessionSharing({
     client,
@@ -308,6 +314,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
+          askId: params.askId,
           ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
           ...(selection ? { selection } : {}),
@@ -352,7 +359,8 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
                   retryable:
                     error.reason === "rate-limited" ||
                     error.reason === "context-unavailable" ||
-                    error.reason === "timeout",
+                    error.reason === "timeout" ||
+                    error.reason === "stopped",
                   ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
                 },
           ),
@@ -418,11 +426,20 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       // Clearing affects only the caller's own thread.
-      target.companion.reset({
+      const reset = target.companion.reset({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
         ownerId: resolveSessionCompanionOwnerId(client),
+        ...(params.cancelAskId ? { cancelAskId: params.cancelAskId } : {}),
       });
+      if (params.cancelAskId && !reset) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "This side chat question is not running."),
+        );
+        return;
+      }
       respond(true, { ok: true });
     },
   ),

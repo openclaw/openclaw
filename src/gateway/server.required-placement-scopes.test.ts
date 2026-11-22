@@ -88,7 +88,8 @@ test.each([false, true])(
   "session writers read only requested placement policy over authenticated RPC (required=%s)",
   async (required) => {
     const email = "writer@example.invalid";
-    await configureWriters({ [email]: writerScopes }, required);
+    const admin = "admin@example.invalid";
+    await configureWriters({ [email]: writerScopes, [admin]: ["operator.admin"] }, required);
     await gateway.withGatewayServer(async ({ port }) => {
       await waitForGatewayStartup(port);
       using connection = await connectWriter(port, email);
@@ -119,6 +120,14 @@ test.each([false, true])(
               },
             }
           : {},
+      );
+      using administrator = await connectWriter(port, admin, ["operator.admin"]);
+      const adminRoster = await gateway.rpcReq<{
+        sessionPlacement: { hasDispatchableCloudProfile?: true };
+      }>(administrator.ws, "agents.list", { includeSessionPlacement: true });
+      expect(adminRoster.ok).toBe(true);
+      expect(adminRoster.payload?.sessionPlacement.hasDispatchableCloudProfile).toBe(
+        required || undefined,
       );
       const ordinary = await gateway.rpcReq(ws, "agents.list", {});
       expect(ordinary.ok).toBe(true);

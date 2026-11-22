@@ -324,8 +324,7 @@ describe("DailyChartCompact", () => {
       preset.click();
       flush();
       expect(onDatesChange.mock.calls.map(([patch]) => patch)).toEqual([
-        { startDate: "2026-05-08" },
-        { endDate: "2026-05-14" },
+        { startDate: "2026-05-08", endDate: "2026-05-14" },
       ]);
       expect([...container.querySelectorAll(".usage-presets button")]).toContain(preset);
       expect(document.activeElement).toBe(preset);

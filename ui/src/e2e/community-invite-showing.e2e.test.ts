@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -123,9 +127,15 @@ suite.define(() => {
             node.scrollTop = 0;
           });
           await page.locator('.sidebar-rail [data-navigation-view="online"]').click();
+          if (!mobile) {
+            await waitForControlUiRoute(page, { routeId: "activity" });
+          }
           await close.waitFor();
           const sessionsRail = page.locator('.sidebar-rail [data-navigation-view="sessions"]');
           await sessionsRail.click();
+          if (!mobile) {
+            await waitForControlUiRoute(page, { routeId: "chat" });
+          }
           await page.keyboard.press("Tab");
           await close.focus();
           expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);

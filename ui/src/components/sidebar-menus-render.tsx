@@ -60,7 +60,8 @@ import {
   runSessionAction,
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
-import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { moveSessionFromMenu, sessionMenuPlacementAction } from "./session-placement-action.ts";
+import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -247,7 +248,7 @@ function renderSidebarMenus(
                   if (view.sidebarAgentsMode === "roster") {
                     patchSettings({ sidebarAgentsMode: "chip" });
                   }
-                  view.switchChipAgent(agentId);
+                  view.switchChipAgent(agentId, resolveAgentMenuSessionKey);
                 },
                 onShareAgent: shareAgent(),
                 onCreateAgent: () => {
@@ -446,7 +447,10 @@ function renderSidebarMenus(
           <SessionMenu
             session={{
               label: session().label,
-              placementAction: sessionPlacementAction(currentPlacementSession()),
+              placementAction: sessionMenuPlacementAction(
+                currentPlacementSession(),
+                context()?.agents.state.agentsList,
+              ),
               target: { key: session().key, agentId: session().agentId },
               sessionId: session().sessionId ?? null,
               isChild: session().isChild,

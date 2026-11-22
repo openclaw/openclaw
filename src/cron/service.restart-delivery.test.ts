@@ -4,26 +4,47 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createFollowupRunner } from "../auto-reply/reply/followup-runner.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  readLatestSessionTranscriptReport,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { sendGatewayCronWebhook } from "../gateway/server-cron-notifications.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { advanceCronActiveJobGeneration } from "./active-jobs.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  advanceCronActiveJobGeneration,
+  clearCronJobActive,
+  markCronJobActive,
+} from "./active-jobs.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { TEST_SCHEDULED_TURN } from "./scheduled-occurrence.test-support.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
+import { createCronCompletionDeliveryFence } from "./service/delivery-attempt-fence.js";
 import * as runtimeMutations from "./service/runtime-mutation.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
+import { saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptForTest,
+  inspectActiveCronRunReceipt,
+} from "./store/run-receipt-store.test-support.js";
 
 const transports = vi.hoisted(() => ({
   deliverOutboundPayloads:
@@ -311,3 +332,73 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
     mutation.mockRestore();
   }
 });
+
+it.each([true, false])(
+  "records a retired cron follow-up without replay (automation=%s)",
+  (automation) =>
+    withOpenClawTestState({ label: "withheld-cron-followup" }, async (fixture) => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:withheld-cron",
+        sessionId: "withheld-cron",
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const job = makeCronJob({ agentId: target.agentId });
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
+      const { state: cron } = createCronServiceWithStateForTest(cronTestDeps({ storePath }));
+      const queued = createQueueTestRun({ prompt: "Continue the cron goal" }, target);
+      const marker = markCronJobActive(job.id);
+      const fence = createCronCompletionDeliveryFence({
+        state: cron,
+        job,
+        handle: receipt,
+        activeJobMarker: marker,
+        signal: new AbortController().signal,
+      });
+      // Goals retain automation data; background session events retain only its authority.
+      if (automation) {
+        queued.run.scheduledAutomation = {
+          ...TEST_SCHEDULED_TURN,
+          job,
+          deliveryAttemptFence: fence,
+        };
+      }
+      queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "guest",
+        scopes: ["operator.write"],
+        assertCurrent: fence.assertCurrent,
+      });
+      clearCronJobActive(job.id, marker);
+
+      await createFollowupRunner({
+        typing: createMockTypingController(),
+        typingMode: "never",
+        defaultModel: "gpt-test",
+      })(queued);
+
+      expect(queued.operatorAuthority.signal?.aborted).toBe(true);
+      expect(
+        readCronRunHistoryPageForTests({ storeKey: receipt.storeKey, jobId: job.id }).entries,
+      ).toContainEqual(
+        expect.objectContaining({
+          status: "error",
+          delivered: false,
+          deliveryStatus: "not-delivered",
+          error: "cron delivery owner retired",
+          sessionKey: target.sessionKey,
+        }),
+      );
+      expect(
+        await readLatestSessionTranscriptReport(target, ["run-failed-before-reply"]),
+      ).toMatchObject({
+        ok: true,
+        value: {
+          content: "withheld: cron delivery owner retired",
+        },
+      });
+      expect(fence.assertCurrent).toThrow("cron delivery owner retired");
+    }),
+);

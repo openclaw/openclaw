@@ -313,7 +313,8 @@ inter-session user turns that only have provenance metadata.
 - Historical calls to tools absent from the outgoing catalog, including tools whose
   schemas were rejected, replay as assistant text together with their results.
   The model still sees errors such as `Tool session_status not found`. Declared
-  calls retain native tool protocol, with their results kept together in mixed
+  calls, and calls to Tool Search directory tools that a direct call hydrates,
+  retain native tool protocol, with their results kept together in mixed
   batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive

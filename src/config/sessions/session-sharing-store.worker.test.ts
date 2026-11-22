@@ -498,7 +498,9 @@ it.each([
       const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
       const unavailable = "Session access facts are unavailable";
       const expectUnavailable = () =>
-        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(unavailable);
+        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+          mutation === "category" ? unavailable : "restart the Gateway",
+        );
       const publishedMemberships: boolean[] = [];
       const stopPublic = sessionChanges.subscribe((change) => {
         if (

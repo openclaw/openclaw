@@ -16,11 +16,8 @@ import { LruCache } from "../infra/lru-cache.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { readRemoteMediaBuffer } from "../media/fetch.js";
-import {
-  createImageProcessor,
-  MAX_IMAGE_INPUT_PIXELS,
-  readImageMetadataFromHeader,
-} from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
+import { createImageProcessor, MAX_IMAGE_INPUT_PIXELS } from "../media/image-ops.js";
 import { resolveClawHubCatalogIconUrl } from "../plugins/catalog-icon-registry.js";
 import {
   resolveManagedPluginIconSources,

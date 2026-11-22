@@ -66,6 +66,8 @@ export type SessionRowChange =
       agentId?: string;
       storePath?: string;
       scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
+      /** Runtime aliases can select stored rows by session ID independently of their key. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */

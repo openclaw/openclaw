@@ -472,7 +472,12 @@ export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: Refusa
     await control?.(killed);
     const before = reserved(killed.runId);
 
-    await expect(nextUpdate(killed.slot, { dryRun, restart })).rejects.toThrow(refusal);
+    const refused = nextUpdate(killed.slot, { dryRun, restart });
+    await expect(refused).rejects.toThrow(refusal);
+    // Every refusal names the agent route before the manual command.
+    await expect(refused).rejects.toThrow(
+      "Run openclaw triage for an agent that reads this update history and settles it. By hand: ",
+    );
     await expect(nextUpdate(killed.slot, { dryRun, restart })).rejects.toThrow(
       /has unfinished recovery/u,
     );

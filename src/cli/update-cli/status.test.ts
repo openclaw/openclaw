@@ -694,7 +694,7 @@ it.each([undefined, "work"])("abandoned history stays read-only (profile=%s)", a
   const cli = `openclaw${profile ? " --profile work" : ""}`;
   expectOutput(
     "Abandoned update detected;",
-    `Stop the Gateway first (${cli} gateway stop)`,
+    `Stop the Gateway first (${cli} gateway stop --force)`,
     `${cli} update repair`,
   );
   expect(outputText()).not.toContain("update in progress:");

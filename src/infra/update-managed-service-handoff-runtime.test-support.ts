@@ -44,6 +44,7 @@ export async function prepareManagedServiceRuntimeFixture({
     | "updaterStopped"
     | "operatorRestart"
     | "pluginCohort"
+    | "olderMark"
     | "finalizeFailure"
   >;
 }) {
@@ -75,6 +76,7 @@ export async function prepareManagedServiceRuntimeFixture({
           updaterStopped: options.updaterStopped,
           operatorRestart: options.operatorRestart,
           pluginCohort: options.pluginCohort,
+          olderMark: options.olderMark,
           finalizeFailure: options.finalizeFailure,
         })
       : undefined;

@@ -55,7 +55,7 @@ export class DiscordVoiceReceive {
       accountId: string;
       admissionAllowFrom?: string[];
       botUserId?: string;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
       sessions: ReadonlyMap<string, VoiceSessionEntry>;
@@ -175,6 +175,7 @@ export class DiscordVoiceReceive {
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
@@ -296,7 +297,7 @@ export class DiscordVoiceReceive {
       : undefined;
     const recording = new DiscordVoiceRecording({
       entry,
-      cfg: this.params.cfg,
+      readConfig: this.params.readConfig,
       userId,
       isInputComplete: () => !failed,
       minimumSeconds: () => (aborted ? 0.2 : MIN_SEGMENT_SECONDS),
@@ -457,6 +458,7 @@ export class DiscordVoiceReceive {
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
       ...this.params,
+      cfg: this.params.readConfig(),
       entry,
       userId,
     });

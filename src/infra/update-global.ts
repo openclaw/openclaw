@@ -19,7 +19,6 @@ import {
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { realpathOrResolve } from "./path-existence.js";
 import { parseSemver } from "./runtime-guard.js";
-import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   applyNonInteractivePackageManagerEnv,
@@ -258,30 +257,14 @@ export function resolveExpectedInstalledVersionFromSpec(
 }
 
 /**
- * Verifies packaged installs, or the exact checkout built by a Git update.
- * An explicit package spec alone never authorizes a source checkout.
+ * Verifies packaged installs; explicit package specs do not authorize source checkouts.
  */
 export async function collectInstalledGlobalPackageErrors(params: {
   packageRoot: string;
   expectedVersion?: string | null;
-  expectedGitCheckout?: GitRuntimeIdentity;
 }): Promise<string[]> {
   const errors: string[] = [];
-  if (params.expectedGitCheckout) {
-    const installedRoot = await fs.realpath(params.packageRoot).catch(() => null);
-    if (installedRoot !== params.expectedGitCheckout.root) {
-      errors.push(
-        `expected checkout ${params.expectedGitCheckout.root}, found ${installedRoot ?? "<missing>"}`,
-      );
-    } else {
-      errors.push(...(await collectGitRuntimeErrors(params.expectedGitCheckout)));
-      if (!(await pathExists(path.join(installedRoot, "openclaw.mjs")))) {
-        errors.push(`missing ${path.join(installedRoot, "openclaw.mjs")}`);
-      }
-    }
-  } else {
-    errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
-  }
+  errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
   const installedVersion = await readPackageVersion(params.packageRoot);
   const expectedComparable = normalizePackageVersionForComparison(params.expectedVersion);
   const installedComparable = normalizePackageVersionForComparison(installedVersion);
@@ -290,15 +273,13 @@ export async function collectInstalledGlobalPackageErrors(params: {
       `expected installed version ${expectedComparable}, found ${installedComparable ?? "<missing>"}`,
     );
   }
-  if (!params.expectedGitCheckout) {
-    errors.push(
-      ...(await collectInstalledPackageDistErrors({
-        packageRoot: params.packageRoot,
-        installedVersion,
-        expectedVersion: params.expectedVersion,
-      })),
-    );
-  }
+  errors.push(
+    ...(await collectInstalledPackageDistErrors({
+      packageRoot: params.packageRoot,
+      installedVersion,
+      expectedVersion: params.expectedVersion,
+    })),
+  );
   return errors;
 }
 

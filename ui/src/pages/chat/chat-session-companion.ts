@@ -5,7 +5,10 @@ import type {
   SessionsCompanionResetResult,
   SessionsCompanionStateResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import {
+  SESSION_COMPANION_MAX_MS,
+  SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS,
+} from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
@@ -15,6 +18,7 @@ import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.t
 import type { ChatAttachment, DurableComposerDraftScope } from "../../lib/chat/chat-types.ts";
 import { showToast } from "../../lib/toast.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   generateAttachmentId,
@@ -29,8 +33,10 @@ registerChatSessionEnglish();
 
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
-const COMPANION_ASK_TIMEOUT_MS = 70_000;
+const COMPANION_ASK_TIMEOUT_MS = SESSION_COMPANION_MAX_MS + 10_000;
 const COMPANION_FAILURE_HINTS = new Map([
+  ["timeout", "timeout"],
+  ["stopped", "stopped"],
   ["context-unavailable", "history-unavailable"],
   ["session-missing", "missing"],
   ["rate-limited", "rate-limited"],
@@ -42,7 +48,7 @@ export type ChatSessionCompanionTurn = {
   question: string;
   attachments?: ChatAttachment[];
 } & (
-  | { status: "pending"; startedAt: number }
+  | { status: "pending"; startedAt: number; askId?: string }
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
@@ -50,6 +56,8 @@ export type ChatSessionCompanionTurn = {
       startedAt: number;
       hint:
         | "busy"
+        | "timeout"
+        | "stopped"
         | "history-unavailable"
         | "missing"
         | "model-unavailable"
@@ -309,6 +317,7 @@ export class ChatSessionCompanionThreads {
       sessionKey: string,
       question: string,
       attachments?: ChatAttachment[],
+      askId?: string,
     ) => Promise<SessionsCompanionAskResult>,
     agentId?: string | null,
   ): Promise<void> {
@@ -352,6 +361,7 @@ export class ChatSessionCompanionThreads {
     const turn: ChatSessionCompanionTurn = {
       question: normalized,
       status: "pending",
+      askId: generateUUID(),
       startedAt: Date.now(),
       ...(attachments?.length ? { attachments } : {}),
     };
@@ -374,7 +384,7 @@ export class ChatSessionCompanionThreads {
     this.submissionTokens.set(key, token);
     this.notify();
     try {
-      const result = await ask(targetSessionKey, normalized, turn.attachments);
+      const result = await ask(targetSessionKey, normalized, turn.attachments, turn.askId);
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
@@ -389,7 +399,10 @@ export class ChatSessionCompanionThreads {
       }
       const details = asRecord(asRecord(error).details);
       const reason = readStringField(details, "reason") ?? null;
-      const imageUnsupported = reason === "image-input-unsupported";
+      const canRetryManually =
+        reason === "image-input-unsupported" ||
+        reason === "utility-model-unavailable" ||
+        reason === "unavailable";
       const hint =
         details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
@@ -398,7 +411,7 @@ export class ChatSessionCompanionThreads {
         status: "failed",
         hint,
         // Changing the model is a user action, not an automatic retry condition.
-        retryable: imageUnsupported || Boolean(asRecord(error).retryable) || reason === null,
+        retryable: canRetryManually || Boolean(asRecord(error).retryable) || reason === null,
       });
     } finally {
       token.resolve();
@@ -599,32 +612,32 @@ function companionSelectionContext(attachments: readonly ChatAttachment[]): stri
   return selections.length ? selections.join("\n\n") : undefined;
 }
 
-export function requestSessionCompanionAnswer(
+export function createSessionCompanionAsk(
   client: Pick<GatewayBrowserClient, "request">,
-  sessionKey: string,
-  question: string,
   agentId?: string | null,
-  attachments?: ChatAttachment[],
   uploadConfig?: ApplicationConfigCapability,
   selection?: ChatSessionCompanionModelSelection,
-): Promise<SessionsCompanionAskResult> {
-  const selectionContext = companionSelectionContext(attachments ?? []);
-  const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
-  if (media?.length) {
-    assertUploadsEnabled(uploadConfig);
-  }
-  return client.request<SessionsCompanionAskResult>(
-    "sessions.companion.ask",
-    {
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      question,
-      ...(selectionContext ? { selectionContext } : {}),
-      ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
-      ...(selection?.model ? { model: selection.model } : {}),
-      ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
-      ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
-    },
-    { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
-  );
+): Parameters<ChatSessionCompanionThreads["submit"]>[2] {
+  return (sessionKey, question, attachments, askId) => {
+    const selectionContext = companionSelectionContext(attachments ?? []);
+    const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
+    if (media?.length) {
+      assertUploadsEnabled(uploadConfig);
+    }
+    return client.request<SessionsCompanionAskResult>(
+      "sessions.companion.ask",
+      {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        ...(askId ? { askId } : {}),
+        question,
+        ...(selectionContext ? { selectionContext } : {}),
+        ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
+        ...(selection?.model ? { model: selection.model } : {}),
+        ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+        ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+      },
+      { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
+    );
+  };
 }

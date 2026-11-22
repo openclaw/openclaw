@@ -122,6 +122,8 @@ export type SessionSourceAssertion = (() => void) & {
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
   /** Prepare one external effect; legacy callbacks retain their synchronous final check. */
   prepareSessionSourceEffect?: () => Promise<PreparedSessionSourceEffect>;
+  /** Preserve database custody at file effects without rechecking admitted tool policy. */
+  prepareSessionSourceStorageEffect?: () => Promise<PreparedSessionSourceEffect>;
 };
 
 /** Sources supplied to worker mutation APIs must own asynchronous predicate preparation. */
@@ -260,7 +262,11 @@ export async function prepareSessionSourceEffect(
 /** Classify request/SDK callbacks before adapters compose them with prepared internal authority. */
 export function captureExternalSessionCommitGuard(guard: SessionSourceAssertion | undefined) {
   return guard && !guard.prepareSessionSource
-    ? Object.assign(() => guard(), { nativeSource: true, opaqueCommitGuard: true })
+    ? Object.assign(() => guard(), {
+        nativeSource: true,
+        opaqueCommitGuard: true,
+        prepareSessionSourceStorageEffect: guard.prepareSessionSourceStorageEffect?.bind(guard),
+      })
     : guard;
 }
 
@@ -377,6 +383,21 @@ export function createDynamicSessionSourceAssertion(
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
       prepareSessionSourceEffect: () =>
         prepareSelected((source) => source.prepareSessionSourceEffect()),
+      prepareSessionSourceStorageEffect: async () => {
+        const selected = select();
+        const prepared = await composeSessionSourceAssertion([
+          selected,
+        ]).prepareSessionSourceStorageEffect();
+        return {
+          assertCurrent: () => {
+            if (select() !== selected) {
+              refuse();
+            }
+            prepared.assertCurrent();
+          },
+          release: prepared.release,
+        };
+      },
     },
   );
   return Object.defineProperty(assertion, "nativeSource", {
@@ -399,6 +420,7 @@ export function composeSessionSourceAssertion(
   },
 ): PreparedSessionSourceAssertion & {
   prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
+  prepareSessionSourceStorageEffect: () => Promise<PreparedSessionSourceEffect>;
 } {
   function prepare(scoped: true): Promise<PreparedSessionSourceAuthority | undefined>;
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
@@ -549,6 +571,7 @@ export function composeSessionSourceAssertion(
   };
   const assertion: PreparedSessionSourceAssertion & {
     prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
+    prepareSessionSourceStorageEffect: () => Promise<PreparedSessionSourceEffect>;
   } = Object.assign(
     () => (forward && validatedSources ? run() : assertSessionSource(assertion, run)),
     {
@@ -563,6 +586,27 @@ export function composeSessionSourceAssertion(
       prepareSessionSource: () => prepare(),
       prepareSessionSourceScope: () => prepare(true),
       prepareSessionSourceEffect: prepareEffect,
+      prepareSessionSourceStorageEffect: async () => {
+        const prepared: PreparedSessionSourceEffect[] = [];
+        try {
+          for (const source of sources) {
+            if (source?.prepareSessionSourceStorageEffect) {
+              prepared.push(await source.prepareSessionSourceStorageEffect());
+            }
+          }
+          return {
+            assertCurrent: () => {
+              for (const source of prepared) {
+                source.assertCurrent();
+              }
+            },
+            release: () => releaseSessionSourceAuthorities(prepared),
+          };
+        } catch (error) {
+          await releaseSessionSourceAuthorities(prepared, [error]);
+          throw error;
+        }
+      },
     },
   );
   composedSources.add(assertion);
