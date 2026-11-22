@@ -73,6 +73,7 @@ export async function prepareUpdate(params: {
   timeoutMs?: number;
 }): Promise<UpdateRunOutcome> {
   const timeoutMs = params.timeoutMs ?? PREPARE_DEADLINE_MS;
+  const deadline = Date.now() + timeoutMs;
   const env = params.env ?? process.env;
   const prefix = resolvePrefix(env);
   const node = params.node ?? process.execPath;
@@ -191,7 +192,7 @@ export async function prepareUpdate(params: {
             sha: target.sha,
             staging: staging.path,
             node,
-            timeoutMs,
+            timeoutMs: Math.max(1, deadline - Date.now()),
             onStep,
           })
         : await preparePackage({
@@ -199,7 +200,7 @@ export async function prepareUpdate(params: {
             staging: staging.path,
             npm: npmBesideNode(node),
             node,
-            timeoutMs,
+            timeoutMs: Math.max(1, deadline - Date.now()),
             onStep,
           });
     if (!prepared.ok) {

@@ -29,6 +29,7 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-pl
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { admitGatewayUpdateRequest } from "./update-admission.js";
+import { appUpdateNoticePublisher } from "./update-app-notice.js";
 import { updateHandlers as legacyUpdateHandlers } from "./update.js";
 
 export const updateRunHandler: GatewayRequestHandler = async (request) => {
@@ -85,9 +86,14 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     : isBrowserOperatorUiClient(client?.connect.client) || params.sessionKey
       ? "control-ui"
       : "api";
+  // Desktop and browser requests see the run outside the conversation, as package installs do.
+  const publishAppUpdate = fromChat
+    ? undefined
+    : appUpdateNoticePublisher(request, requester?.channel);
   const run = await createUpdateRunAsync({
     trigger,
     origin: {
+      ...(publishAppUpdate ? { noticeSurface: "app" as const } : {}),
       ...(requester ? { requester } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(fromChat ? {} : { deliveryContext: { channel: INTERNAL_MESSAGE_CHANNEL } }),
@@ -95,10 +101,12 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     before: { version: VERSION },
     ...(params.target ? { target: { kind: "git", sha: params.target.upstreamSha } } : {}),
   });
+  publishAppUpdate?.(run);
   context.logGateway?.info(
     `update.run ${run.runId} ${formatControlPlaneActor(resolveControlPlaneActor(client))}`,
   );
   // The requester hears that the update started; the Gateway after the switch sends the outcome.
+  // The notifier writes nothing for an app-surface run.
   const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
   const notify = await createUpdateRunNotifier(run, () => context.getRuntimeConfig(), context.deps);
   const ack = await notify(run, "ack");
@@ -107,7 +115,9 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     ok: true,
     ackDelivered: ack.delivered,
     ackQueued: ack.owned,
-    acknowledgement: renderUpdateRunNotice(run, "ack") ?? undefined,
+    ...(publishAppUpdate
+      ? { noticeInApp: true }
+      : { acknowledgement: renderUpdateRunNotice(run, "ack") ?? undefined }),
     result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
   });
   wakeUpdateRunWatcher();
