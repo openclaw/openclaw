@@ -43,9 +43,12 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   }),
 }));
 const converted = vi.hoisted(() => [] as unknown[]);
+const conversion = vi.hoisted(() => ({ mode: null as "convert" | "resume" | null }));
 // mock-isolation: conversion builds a release and restarts the service; this checks the routing.
 vi.mock("./half-switched.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./half-switched.js")>()),
+  // The service and trial facts that decide this are covered in half-switched.test.ts.
+  checkoutConversion: async () => conversion.mode,
   convertHalfSwitchedCheckout: async (params: unknown) => {
     converted.push(params);
     return "run-converted";
@@ -80,6 +83,7 @@ afterEach(async () => {
   sent.length = 0;
   prepared.length = 0;
   converted.length = 0;
+  conversion.mode = null;
   runsGet.length = 0;
   process.exitCode = undefined;
 });
@@ -163,12 +167,7 @@ it("says the update is still running when the --timeout budget ends first", asyn
 });
 
 it("finishes a half-switched checkout itself instead of asking the Gateway that left it so", async () => {
-  // The #199706 updater's trial: no format field, a release under lib/node_modules.
-  await fs.mkdir(path.join(stateDir, "git-install", "releases"), { recursive: true });
-  await fs.writeFile(
-    path.join(stateDir, "git-install", "releases", ".trial"),
-    JSON.stringify({ target: "../../releases/x/lib/node_modules/openclaw", previous: "y" }),
-  );
+  conversion.mode = "convert";
   runsGet.push(() => ({
     run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
   }));

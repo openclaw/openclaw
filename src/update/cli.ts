@@ -15,7 +15,11 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { convertHalfSwitchedCheckout, needsCheckoutConversion } from "./half-switched.js";
+import {
+  checkoutConversion,
+  convertHalfSwitchedCheckout,
+  resumeHalfSwitchedCheckout,
+} from "./half-switched.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 
 const POLL_MS = 2_000;
@@ -64,19 +68,29 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : undefined;
   // A half-switched checkout's Gateway runs the updater that left it so; this process finishes.
   // Only the configured local Gateway serves this checkout; an override targets another install.
-  if (
-    opts.restart &&
-    (await isImplicitLocalGatewayTarget({})) &&
-    (await needsCheckoutConversion())
-  ) {
-    const runId = await convertHalfSwitchedCheckout({
-      runningRoot: opts.runningRoot,
-      channel: opts.channel ?? opts.storedChannel ?? "dev",
-      sha: opts.sha,
-      timeoutMs: opts.timeoutMs,
-      acceptCapabilities: opts.acceptCapabilities,
-    });
-    const record = await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS);
+  const conversion =
+    opts.restart && (await isImplicitLocalGatewayTarget({})) ? await checkoutConversion() : null;
+  if (conversion) {
+    // One budget for the conversion and for following its run.
+    const started = Date.now();
+    const runId =
+      conversion === "resume"
+        ? await resumeHalfSwitchedCheckout({
+            runningRoot: opts.runningRoot,
+            timeoutMs: opts.timeoutMs,
+          })
+        : await convertHalfSwitchedCheckout({
+            runningRoot: opts.runningRoot,
+            channel: opts.channel ?? opts.storedChannel ?? "dev",
+            sha: opts.sha,
+            timeoutMs: opts.timeoutMs,
+            acceptCapabilities: opts.acceptCapabilities,
+          });
+    const record = await followRun(
+      runId,
+      opts.json,
+      Math.max(1, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - started)),
+    );
     report(record, opts.json);
     process.exitCode = record?.status === "succeeded" ? 0 : 1;
     return;
