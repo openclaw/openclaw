@@ -67,6 +67,48 @@ describe.runIf(browserMode)("Review layout", () => {
     },
   );
 
+  it("identifies a selected file in the compact tree and in the reading pane", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const name =
+      "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        desktop: true,
+        mobile: false,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          additions: 1,
+          deletions: 0,
+          files: [{ path: "src/" + name, status: "added", additions: 1, deletions: 0 }],
+        }),
+      }),
+    );
+    const host = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    host.style.cssText = "display:flex;position:fixed;top:0;left:0;width:480px;height:600px";
+    await waitForSolid(() => expect(host.querySelector(".session-diff__filename")).not.toBeNull());
+    await userEvent.click(
+      host.querySelector<HTMLButtonElement>('[aria-label="Changed files tree"]')!,
+    );
+    const leaf = host.querySelector<HTMLButtonElement>(
+      '.session-diff__tree-row[title="src/' + name + '"]',
+    )!;
+    await userEvent.click(leaf);
+    await waitForSolid(() =>
+      expect(host.querySelector(".session-diff__file-toggle")).toBe(document.activeElement),
+    );
+    expect(host.querySelector<HTMLElement>(".session-diff__filename")!.offsetWidth).toBeGreaterThan(
+      0,
+    );
+    expect(leaf.querySelector<HTMLElement>(".session-diff__basename")!.offsetWidth).toBeGreaterThan(
+      16,
+    );
+  });
+
   it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);

@@ -1492,7 +1492,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-width: min(100%, 10ch);
   flex: 1;
 }
 .session-diff__tree-name > svg {
@@ -1511,7 +1511,8 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   white-space: nowrap;
 }
 .session-diff__filename-label {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
   min-width: 0;
   max-width: 100%;
 }
@@ -1521,7 +1522,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   white-space: nowrap;
 }
 .session-diff__extension {
-  flex: none;
+  overflow: hidden;
 }
 .session-diff-menu__jump-path {
   display: flex;
@@ -1705,12 +1706,31 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   padding-inline-start: 0;
 }
 
-/* At the native compact breakpoint, the open tree already supplies identity;
-   reserve the reader header for complete counts and actions. */
+/* Keep the destination name: the narrow tree can only show a fragment. */
 @container review-reader (max-width: 400px) {
-  .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__path,
   .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__badge {
     display: none;
+  }
+  .session-diff__file-toggle:has(.session-diff__old-path) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 4px;
+  }
+  .session-diff__file-toggle:has(.session-diff__old-path) .session-diff__path {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 2px;
+  }
+  .session-diff__old-path {
+    grid-column: 1 / -1;
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .session-diff__file-toggle:has(.session-diff__old-path) .chat-diffstat {
+    grid-column: 2;
+    justify-self: start;
+    margin: 0;
   }
 }
 
