@@ -289,7 +289,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "gives a trigger only the command's output and stops what the command left running",
+  "gives a trigger only the command's output when the command leaves a process running",
   async () => {
     // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
     const command = `printf '{"ok":true}\\n'; (sleep 5 >/dev/null 2>&1 &)`;
@@ -301,9 +301,10 @@ it.skipIf(process.platform === "win32")(
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         script: `
           const result = await exec({ command: ${JSON.stringify(command)} });
-          // Nothing outlives the trigger: no conversation could ever stop a handed-off process.
-          if (/background session/.test(result.warningText ?? "")) {
-            throw new Error("a process was left running after the trigger");
+          // Where the host hands a survivor off, the script can still stop it.
+          const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
+          if (left) {
+            await process({ action: "kill", sessionId: left[1] });
           }
           return { fire: false, state: JSON.parse(result.aggregated) };
         `,

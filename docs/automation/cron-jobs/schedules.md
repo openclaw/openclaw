@@ -319,9 +319,9 @@ and keeps no command output, so the message must carry what you need to diagnose
 it. A trigger's `exec` always waits for its command to finish within the
 trigger's time limit and returns `status: "completed"` or `"failed"`, never a
 running process; `yieldMs` and `background` have no effect there. A successful
-command's `aggregated` is exactly what the command wrote. When the command ends,
-OpenClaw stops any process it left running (`gh`, for example, can start a
-helper that outlives it). Keep this example within the 16 KiB state limit by scoping large
+command's `aggregated` is exactly what the command wrote. When a command leaves a
+process running (`gh`, for example, can start a helper that outlives it),
+OpenClaw reports that in `response.warningText`, not in the output. Keep this example within the 16 KiB state limit by scoping large
 repositories to the checks the watcher owns. Do not use a change-only gate for an
 explicitly requested recurring report or digest: that job should deliver at its
 requested cadence even if the observations are unchanged.
