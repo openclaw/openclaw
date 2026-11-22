@@ -553,13 +553,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         />
         <button
           type="button"
-          class="settings-row model-providers__more"
+          class="settings-row settings-row--nav settings-details-toggle"
           aria-expanded={moreOpen() ? "true" : "false"}
           data-models-more-settings
           onClick={() => setMoreOpen(!moreOpen())}
         >
           <span class="settings-row__title">{t("modelProviders.defaults.moreSettings")}</span>
-          <Icon name="chevronDown" />
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
         </button>
         <Show when={moreOpen()}>
           <FallbackModel
