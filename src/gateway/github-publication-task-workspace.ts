@@ -144,6 +144,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
         getConfig(),
         requester.snapshot.scopes,
         actor.kind === "operator" ? actor.profileId : undefined,
+        requester.snapshot.openclawIdPrincipal,
       ),
       { fresh: true },
     );

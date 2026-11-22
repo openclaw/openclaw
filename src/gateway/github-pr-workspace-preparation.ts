@@ -103,6 +103,7 @@ export async function performSessionGitHubPreparation(
     context.getRuntimeConfig(),
     authority.operatorWrite ? ["operator.write"] : [],
     actor.kind === "operator" ? actor.profileId : undefined,
+    admitted.requester.snapshot.openclawIdPrincipal,
   );
   if (
     !authority.operatorWrite &&

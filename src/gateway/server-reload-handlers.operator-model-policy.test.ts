@@ -31,8 +31,10 @@ import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import { projectRequesterForClient } from "./project-access.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   createManagedReloadTestParams,
   createDirectConfigWriteFixture,
@@ -148,10 +150,16 @@ function admittedDispatcher(
   };
 }
 
-const LIVE_ROLE_EDITS = ["model policy", "project grant"] as const;
+const WRITE: OperatorScope[] = ["operator.write"];
+const SESSIONS: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+const LIVE_ROLE_EDITS = [
+  ["model policy", WRITE],
+  ["project grant", WRITE],
+  ["project grant", SESSIONS],
+] as const;
 it.each(LIVE_ROLE_EDITS)(
-  "commits %s edits without retiring permitted source work",
-  async (edit) => {
+  "commits %s edits without retiring permitted source work (scopes %j)",
+  async (edit, scopes) => {
     const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
     await withOpenClawTestState(profileState, async () => {
       const clock = createGatewaySchedulerClock(Date.now());
@@ -169,7 +177,7 @@ it.each(LIVE_ROLE_EDITS)(
             definitions: {
               [roleName]: {
                 agents: "*",
-                scopes: ["operator.write"],
+                scopes: [...scopes],
                 sessions: { others: "none" },
                 modelPolicy: {},
               },
@@ -189,7 +197,7 @@ it.each(LIVE_ROLE_EDITS)(
       const connection = new AbortController();
       const close = vi.fn(() => connection.abort());
       const client = {
-        ...createOperatorWsClient({ socket: { close }, scopes: ["operator.write"] }),
+        ...createOperatorWsClient({ socket: { close }, scopes: [...scopes] }),
         authenticatedUserProfile: dispatchProfile(profile.id),
         authPolicy: captureGatewayAuthPolicy(initialConfig, null),
         connectionSignal: connection.signal,
@@ -220,10 +228,15 @@ it.each(LIVE_ROLE_EDITS)(
         const getCommittedRuntimeConfig = reloader.getCommittedRuntimeConfig;
         assert(getCommittedRuntimeConfig);
         context.getCommittedRuntimeConfig = getCommittedRuntimeConfig;
-        const dispatch = admittedDispatcher(context, client, (source) => {
-          original = source;
-        });
-        await dispatch.wake("model-policy");
+        if (scopes === SESSIONS) {
+          // Session-scoped callers cannot reach the admin-scoped wake fixture; admit directly.
+          original = await prepareGatewayOperatorRunAuthority({ client, context });
+        } else {
+          const dispatch = admittedDispatcher(context, client, (source) => {
+            original = source;
+          });
+          await dispatch.wake("model-policy");
+        }
         assert(original);
         modelA = bindOperatorModelExecution(original.authority, {
           provider: "fixture",
@@ -267,6 +280,19 @@ it.each(LIVE_ROLE_EDITS)(
         expect(original.authority.assertCurrent).not.toThrow();
         expect(close).not.toHaveBeenCalled();
         expect(requestRecoveryRestart).not.toHaveBeenCalled();
+        if (edit === "project grant") {
+          // Retained run clients read the grant live; restricted ones pick up the new project.
+          const runClient = createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "operator", profileId: profile.id },
+            operatorRunAuthority: original.authority,
+            scopes: [...original.authority.scopes],
+          });
+          expect(projectRequesterForClient(runClient, getCommittedRuntimeConfig())).toEqual({
+            kind: "operator",
+            scopes,
+            ...(scopes === SESSIONS ? { projects: ["handbook"] } : {}),
+          });
+        }
       } finally {
         releasePreparation.resolve();
         try {

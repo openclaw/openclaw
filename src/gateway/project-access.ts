@@ -12,8 +12,9 @@ import type {
 } from "../projects/project-registry.types.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import {
-  resolveOperatorRolePolicy,
+  resolveCurrentProjectGrant,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -63,9 +64,8 @@ export function projectRequesterForClient(
   cfg: OpenClawConfig,
 ): ProjectRequester {
   return client
-    ? operatorProjectRequester(
-        client.connect?.scopes,
-        () => resolveOperatorRolePolicy(client, cfg)?.projects,
+    ? operatorProjectRequester(client.connect?.scopes, () =>
+        resolveCurrentProjectGrant(cfg, { client }),
       )
     : INTERNAL_PROJECT_REQUESTER;
 }
@@ -75,9 +75,10 @@ export function projectRequesterForProfile(
   cfg: OpenClawConfig,
   scopes: readonly string[],
   profileId: string | undefined,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
 ): ProjectRequester {
   return operatorProjectRequester(scopes, () =>
-    profileId ? resolveOperatorRolePolicyForProfile(profileId, cfg)?.projects : undefined,
+    profileId ? resolveCurrentProjectGrant(cfg, { profileId, openclawIdPrincipal }) : undefined,
   );
 }
 
@@ -90,12 +91,21 @@ export function resolveRunProjectRequester(
   cfg: OpenClawConfig,
   spawnedBy: {
     profileId?: string;
-    operatorAuthority?: { readonly profileId: string; readonly scopes: readonly string[] };
+    operatorAuthority?: {
+      readonly profileId: string;
+      readonly scopes: readonly string[];
+      readonly openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    };
   },
 ): ProjectRequester {
   const authority = spawnedBy.operatorAuthority;
   if (authority) {
-    return projectRequesterForProfile(cfg, authority.scopes, authority.profileId);
+    return projectRequesterForProfile(
+      cfg,
+      authority.scopes,
+      authority.profileId,
+      authority.openclawIdPrincipal,
+    );
   }
   const policy = spawnedBy.profileId
     ? resolveOperatorRolePolicyForProfile(spawnedBy.profileId, cfg)

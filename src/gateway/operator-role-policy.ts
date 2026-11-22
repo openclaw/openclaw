@@ -345,6 +345,45 @@ export function resolveOperatorRolePolicy(
   );
 }
 
+type ProjectGrantSubject =
+  | { client: GatewayClient | null | undefined }
+  | {
+      profileId: string | undefined;
+      openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+    };
+
+/**
+ * Project grants are never admission facts. Retained clients and run authorities pass the
+ * ordinary role boundary, then read their canonical profile's current role from live config.
+ */
+export function resolveCurrentProjectGrant(
+  cfg: OpenClawConfig,
+  subject: ProjectGrantSubject,
+): GatewayOperatorRoleDefinition["projects"] {
+  if ("profileId" in subject) {
+    return openclawIdSubjectRolePolicy(subject.openclawIdPrincipal, () =>
+      resolveOperatorRolePolicyForProfile(subject.profileId, cfg),
+    )?.projects;
+  }
+  const { client } = subject;
+  if (!resolveOperatorRolePolicy(client ?? null, cfg)) {
+    return undefined;
+  }
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const actorProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
+  const authority = client?.internal?.operatorRunAuthority;
+  const prepared = client?.preparedSessionProfile;
+  const profileId =
+    (actorProfileId && authority?.profileId) ||
+    (actorProfileId && prepared?.aliases.has(actorProfileId) ? prepared.profileId : undefined) ||
+    actorProfileId ||
+    client?.authenticatedUserProfile?.profileId;
+  return resolveCurrentProjectGrant(cfg, {
+    profileId,
+    openclawIdPrincipal: client?.internal?.openclawIdPrincipal ?? authority?.openclawIdPrincipal,
+  });
+}
+
 /** Admit the request against its prepared role or the connection's current named role. */
 export function authorizeCurrentOperatorRoleScopes(
   client: GatewayClient | null,

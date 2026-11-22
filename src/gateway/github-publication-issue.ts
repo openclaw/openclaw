@@ -107,6 +107,7 @@ export async function createSessionGitHubIssue(
             admitted.requester.snapshot.actor.kind === "operator"
               ? admitted.requester.snapshot.actor.profileId
               : undefined,
+            admitted.requester.snapshot.openclawIdPrincipal,
           ),
           { fresh: true },
         ))
