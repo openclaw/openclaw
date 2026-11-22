@@ -1,4 +1,6 @@
 import { expect, it, vi } from "vitest";
+import { isTrustedSubagentCompletionHandoffForRun } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import { createRequesterSettleReceiptAdmission } from "../agents/subagents/announce/subagent-announce.requester-settle-receipt.js";
 import {
   cancelSubagentCompletionToolHandoff,
   consumeSubagentCompletionToolHandoff,
@@ -92,4 +94,45 @@ it("expires capabilities and removes cancelled capabilities", () => {
   const cancelledId = registerSubagentCompletionToolHandoff(registration);
   expect(cancelSubagentCompletionToolHandoff(cancelledId)).toBe(true);
   expect(consume(cancelledId)).toBeUndefined();
+});
+
+it("retains a consumed requester's model binding after its child cohort changes", () => {
+  let current = true;
+  const receiptAdmission = createRequesterSettleReceiptAdmission({
+    requester: { canonicalKey: identity.targetSessionKey },
+    identity: { sessionId: identity.targetSessionId },
+    storeSessionKey: identity.targetSessionKey,
+    storePaths: () => [],
+    isSourceCurrent: () => true,
+    readCurrent: () => ({ sessionId: identity.targetSessionId }),
+    isStoreCurrent: () => true,
+  });
+  const handoffId = registerSubagentCompletionToolHandoff({
+    ...registration,
+    settleBatch: {
+      sourceSessionKeys: [identity.sourceSessionKey],
+      isCurrent: () => current,
+      receiptAdmission,
+    },
+  });
+  const handoff = consume(handoffId, { sourceTool: "subagent_settle" });
+  current = false;
+  expect(
+    isTrustedSubagentCompletionHandoffForRun({
+      handoff,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "subagent_settle",
+        sourceSessionKey: identity.sourceSessionKey,
+      },
+      sessionKey: identity.targetSessionKey,
+      sessionId: identity.targetSessionId,
+      provider: "openai",
+      model: "glm-4.5",
+    }),
+  ).toBe(true);
+  expect(consume(handoffId, { sourceTool: "subagent_settle" })).toBeUndefined();
+  expect(
+    registerSubagentCompletionToolHandoff({ ...registration, settleBatch: handoff?.settleBatch }),
+  ).toBeUndefined();
 });
