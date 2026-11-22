@@ -144,7 +144,7 @@ export function updateModelSetupWizardDraft(
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
-  if (kind === "provider-auth") {
+  if (kind === "provider-auth" || kind === "provider-login") {
     return 25 * 60 * 1000;
   }
   return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
