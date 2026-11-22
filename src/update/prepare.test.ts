@@ -146,8 +146,12 @@ if (args[0] !== 'enable' || args.at(-1) !== 'pnpm') process.exit(5);
 fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-directory') + 1], 'pnpm'));
 `,
     );
-    const git = (await exec(process.platform === "win32" ? "where" : "which", ["git"])).stdout;
-    await fs.symlink(git.split(/\r?\n/u)[0], path.join(bin, "git"));
+    const [git = ""] = (
+      await exec(process.platform === "win32" ? "where" : "which", ["git"])
+    ).stdout
+      .trim()
+      .split(/\r?\n/u);
+    await fs.symlink(git, path.join(bin, "git"));
     vi.stubEnv("PATH", bin);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
