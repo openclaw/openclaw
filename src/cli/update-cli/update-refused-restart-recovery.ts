@@ -1,0 +1,291 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  resolveServiceEntrypoint,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
+import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
+import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
+import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { inspectUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
+import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { listUpdateRunsAsync } from "../../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import {
+  GatewayServiceUpdateOwnershipError,
+  inspectManagedGatewayServiceBeforeUpdate,
+  readGatewayServiceStateForUpdate,
+} from "./update-command-service-plan.js";
+
+/*
+ * Shipped updaters 2026.11.4 through 2026.11.6 leave a pnpm-installed Gateway stopped after a
+ * same-schema hop: they revalidate the unchanged service definition against the global entry
+ * pnpm has just repointed into a new versioned store directory, refuse the restart and end
+ * `service-revalidation-failed`. They run this package's Doctor after the swap, with service
+ * repair and activation disallowed, and never hand it the restart. Nothing in this package can
+ * restart the Gateway then, so Doctor (during the update) and the status readers (after it) name
+ * the verified recovery instead.
+ *
+ * The same updaters also publish a launcher that still names their removed update stage, which
+ * this package's Doctor repairs. A fixed updater relocates the launcher itself, so a repaired
+ * staged launcher is the marker that tells a shipped driver from a fixed one; the driver's
+ * version cannot, because fixed and unfixed builds share version lines.
+ */
+
+// Verified in this state: `gateway restart` alone fails while the unit names the old package.
+export const REFUSED_RESTART_RECOVERY =
+  "Run `openclaw gateway install --force`, then `openclaw gateway restart`.";
+// Doctor prints this during the update, before the updater decides; it promises nothing more.
+export const REFUSED_RESTART_NOTICE =
+  "If this updater leaves the Gateway stopped, run `openclaw gateway install --force` and then `openclaw gateway restart`.";
+
+type ServiceFacts = { packageRoot?: string; owned: boolean; writable: boolean };
+type InspectService = (root: string) => Promise<ServiceFacts | undefined>;
+
+/**
+ * The pnpm home a package directory belongs to, whichever store holds it: the global
+ * virtual store (`<home>/store/v<N>/links/@/openclaw/<version>/<hash>/node_modules/openclaw`),
+ * a project's own store for tarball installs
+ * (`<home>/global/v<N>/<project>/node_modules/.pnpm/openclaw@<spec>/node_modules/openclaw`), or
+ * pnpm 11.28's group store (`<home>/global/v<N>/<group>/.pnpm/openclaw@<version>_…/…/openclaw`).
+ */
+function parsePnpmPackageHome(root: string) {
+  const match = /^(.+)[/\\](?:store|global)[/\\](v\d+)[/\\].+[/\\]node_modules[/\\]openclaw$/u.exec(
+    root,
+  );
+  return match ? { home: match[1]!, layout: match[2]! } : undefined;
+}
+
+/** The service still names another version's package in the running package's pnpm home. */
+async function inspectPnpmSwitch(
+  root: string,
+  inspectService: InspectService,
+): Promise<{ skip: string } | { service: ServiceFacts }> {
+  const realRoot = await fs.realpath(root).catch(() => undefined);
+  const running = realRoot ? parsePnpmPackageHome(realRoot) : undefined;
+  const version = realRoot ? await readPackageVersion(realRoot) : null;
+  if (!realRoot || !running || !version) {
+    return { skip: `the running package ${realRoot ?? root} is not in a pnpm home` };
+  }
+  const service = await inspectService(realRoot);
+  const previous = service?.packageRoot ? parsePnpmPackageHome(service.packageRoot) : undefined;
+  // A pruned entry no longer has a manifest; its path still places it in this home.
+  const present = service?.packageRoot ? await pathEntryExists(service.packageRoot) : false;
+  if (
+    !service?.packageRoot ||
+    !previous ||
+    previous.home !== running.home ||
+    previous.layout !== running.layout ||
+    service.packageRoot === realRoot ||
+    (present &&
+      ((await readPackageName(service.packageRoot)) !== "openclaw" ||
+        (await readPackageVersion(service.packageRoot)) === version))
+  ) {
+    return {
+      skip: `the service runs ${service?.packageRoot ?? "no readable package"}, not another version in ${running.home}`,
+    };
+  }
+  return { service };
+}
+
+/**
+ * The one decision every reader shares: on macOS or Linux, the service this pnpm installation
+ * owns and may rewrite still names another version's package in the same pnpm home (possibly
+ * pruned). Only then is reinstalling the definition from this package the verified recovery.
+ */
+async function inspectRefusedRestartService(
+  root: string,
+  inspectService: InspectService,
+): Promise<{ skip: string } | { service: ServiceFacts }> {
+  if (process.platform !== "linux" && process.platform !== "darwin") {
+    return { skip: `the recovery is not verified on ${process.platform}` };
+  }
+  const pnpm = await inspectPnpmSwitch(root, inspectService);
+  if ("skip" in pnpm) {
+    return pnpm;
+  }
+  return !pnpm.service.owned
+    ? { skip: `the service at ${pnpm.service.packageRoot} is not owned by this installation` }
+    : !pnpm.service.writable
+      ? { skip: "the service definition is not writable" }
+      : pnpm;
+}
+
+/**
+ * Holds only for this package's Doctor run by a shipped updater that disallows service repair:
+ * one running update run whose live driver is this process's ancestor, a pnpm install, and a
+ * service this installation owns and may rewrite that still names its previous store entry.
+ */
+export async function inspectShippedRestartGate(params: {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  isDriverAncestor: (driver: UpdateRunDriver) => boolean;
+  inspectService: InspectService;
+}): Promise<{ runId: string } | { skip: string } | undefined> {
+  const { env } = params;
+  if (
+    !isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
+    env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR !== "0" ||
+    env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== "0"
+  ) {
+    return undefined;
+  }
+  // Shipped drivers pass the run id to the post-plugin Doctor only. The package-step Doctor
+  // is identified by descending from the recorded live driver; the CLI entry can respawn
+  // itself, so the driver is an ancestor and not necessarily the parent.
+  const runId = env[UPDATE_RUN_ID_ENV]?.trim();
+  const options = { env };
+  const candidates = runId
+    ? [getUpdateRun(runId, options)]
+    : listUpdateRuns({ active: true, limit: 10 }, options);
+  const runs = candidates.filter((run) => {
+    const driver = run?.origin.driver;
+    return (
+      run?.status === "running" &&
+      driver &&
+      inspectUpdateRunDriver(driver) === "alive" &&
+      (runId || params.isDriverAncestor(driver))
+    );
+  });
+  const run = runs.length === 1 ? runs[0] : undefined;
+  if (!run) {
+    return {
+      skip: `${runs.length} running update runs with a live driver ${runId ? `match ${runId}` : "above this Doctor"} (${candidates.length} candidates)`,
+    };
+  }
+  const service = await inspectRefusedRestartService(params.root, params.inspectService);
+  return "skip" in service ? service : { runId: run.runId };
+}
+
+/** The recorded driver is this process's live ancestor, by PID and start identity. */
+function isLiveDriverAncestor(driver: UpdateRunDriver): boolean {
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, {
+    requireVerifiedParent: true,
+    throughPid: driver.pid,
+  });
+  return ancestry.pids.has(driver.pid) && inspectUpdateRunDriver(driver) === "alive";
+}
+
+// The service is read as the user's own CLI would, without the updater's continuation markers.
+function withoutUpdaterAuthority(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key]) => !isUpdateAdmissionAuthorityEnvKey(key) && key !== "OPENCLAW_SERVICE_REPAIR_POLICY",
+    ),
+  );
+}
+
+async function inspectGatewayServiceFacts(
+  root: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ServiceFacts | undefined> {
+  const state = await readGatewayServiceStateForUpdate(
+    resolveGatewayService(),
+    withoutUpdaterAuthority(env),
+  );
+  if (!state.command) {
+    return undefined;
+  }
+  const layout = await summarizeGatewayServiceLayout(state.command);
+  // pnpm can prune the previous entry; its path still names it in the unit's command.
+  const entrypoint = resolveServiceEntrypoint(state.command);
+  const marker = `${path.sep}node_modules${path.sep}openclaw${path.sep}`;
+  const lexicalRoot = entrypoint?.includes(marker)
+    ? entrypoint.slice(0, entrypoint.lastIndexOf(marker) + marker.length - 1)
+    : undefined;
+  const packageRoot = layout?.packageRootReal ?? lexicalRoot;
+  const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+    root,
+    state,
+    allowInstallRootChange: true,
+  }).catch((error: unknown) => {
+    // Install-owner, start-refusal and dueling-manager services are someone else's to repair.
+    if (error instanceof GatewayServiceUpdateOwnershipError) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!verdict) {
+    return { packageRoot, owned: false, writable: false };
+  }
+  return {
+    packageRoot,
+    owned:
+      (verdict.kind === "owned" &&
+        verdict.requiresInstallRootRefresh === true &&
+        verdict.root === packageRoot) ||
+      // pnpm pruned the previous entry; the same-home check above already placed it here, and
+      // the fixed updater proves it against this global root before rewriting the service.
+      (packageRoot !== undefined && !(await pathEntryExists(packageRoot))),
+    // An absent capability is writable to the existing owners as well (service-layout.ts).
+    writable: (state.definitionMutationCapability?.kind ?? "writable") === "writable",
+  };
+}
+
+/**
+ * Doctor step after its launcher repair: print the verified recovery once when a shipped
+ * updater (the launcher it published still named its stage) is about to refuse this pnpm
+ * Gateway's restart. Skips are silent: the updater's own outcome and guidance stand.
+ */
+export async function noteShippedRestartRecovery(params: {
+  root: string;
+  log: (message: string) => void;
+  /** Inspection errors only; the updater captures this Doctor's stderr. */
+  diagnose: (message: string) => void;
+  env?: NodeJS.ProcessEnv;
+  inspectService?: InspectService;
+  isDriverAncestor?: (driver: UpdateRunDriver) => boolean;
+}): Promise<void> {
+  const env = params.env ?? process.env;
+  try {
+    const gate = await inspectShippedRestartGate({
+      root: params.root,
+      env,
+      isDriverAncestor: params.isDriverAncestor ?? isLiveDriverAncestor,
+      inspectService: params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, env)),
+    });
+    if (gate && !("skip" in gate)) {
+      params.log(REFUSED_RESTART_NOTICE);
+    }
+  } catch (error) {
+    params.diagnose(`Gateway restart recovery note skipped: ${formatErrorMessage(error)}.`);
+  }
+}
+
+/**
+ * After the update: a `service-revalidation-failed` run whose service is still in the refused
+ * state above has the verified recovery. The stored run alone cannot tell this from a genuinely
+ * foreign service; the live service read decides.
+ */
+export async function resolveRefusedRestartRecovery(params: {
+  run: Pick<UpdateRunRecord, "status" | "reason">;
+  activeRoot: string | null | undefined;
+  env?: NodeJS.ProcessEnv;
+  inspectService?: InspectService;
+}): Promise<string | undefined> {
+  const { run, activeRoot } = params;
+  if (run.status !== "failed" || run.reason !== "service-revalidation-failed" || !activeRoot) {
+    return undefined;
+  }
+  const env = params.env ?? process.env;
+  const service = await inspectRefusedRestartService(
+    activeRoot,
+    params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, env)),
+  );
+  return "skip" in service ? undefined : REFUSED_RESTART_RECOVERY;
+}
+
+/** The same decision for the latest recorded update run, for readers without a run at hand. */
+export async function readRefusedRestartRecovery(params: {
+  activeRoot: string | null | undefined;
+  env?: NodeJS.ProcessEnv;
+  inspectService?: InspectService;
+}): Promise<string | undefined> {
+  const [run] = await listUpdateRunsAsync({ limit: 1 }, params.env ? { env: params.env } : {});
+  return run ? resolveRefusedRestartRecovery({ run, ...params }) : undefined;
+}

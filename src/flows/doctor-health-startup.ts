@@ -10,6 +10,7 @@ import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -395,6 +396,16 @@ export async function prepareDoctorRuntimeChecks(
         runtime.log(
           `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g --allow-build=openclaw openclaw@<installed-version>\` as the account that owns the pnpm install.`,
         );
+      }
+      // A shipped updater published that staged launcher; name the Gateway recovery it needs.
+      if (repaired.length > 0 && isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
+        const { noteShippedRestartRecovery } =
+          await import("../cli/update-cli/update-refused-restart-recovery.js");
+        await noteShippedRestartRecovery({
+          root,
+          log: (message) => runtime.log(message),
+          diagnose: (message) => runtime.error(message),
+        });
       }
     }
   });
