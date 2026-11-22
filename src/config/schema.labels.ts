@@ -204,6 +204,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.reviewer.fastMode": "Exec Reviewer Fast Mode",
   "tools.exec.reviewer.timeoutMs": "Exec Reviewer Timeout (ms)",
   "tools.exec.node": "Exec Node Binding",
+  "tools.exec.claudeCliHost": "Claude CLI Host",
   "tools.updatePlan": "Enable Structured Plan Tool",
   "tools.toolSearch": "Tool Search",
   "tools.toolSearch.enabled": "Enable Tool Search",

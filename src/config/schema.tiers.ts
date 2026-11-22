@@ -176,6 +176,7 @@ const ADVANCED_TUNING_PATHS = new Set([
   "agents.entries.*.tools.github.allowInSandbox",
   "agents.entries.*.tools.github.app",
   "session.maintenance.preserveRecent",
+  "tools.exec.claudeCliHost",
   "tools.github.app",
   "tools.sessions.allowThreadTargets",
 ]);

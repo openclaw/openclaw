@@ -4,6 +4,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
+import { applyConfiguredClaudeCliRunPlacement } from "../agents/cli-runner/prepare-claude.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
@@ -194,6 +195,8 @@ export async function prepareNodeClaudeSkillRuntime(
       assertSources();
       combinedSignal.throwIfAborted();
       const current = memory ? memory.readCurrent() : session;
+      // tools.exec.claudeCliHost places the run without storing a binding; compare that placement.
+      const placed = current && applyConfiguredClaudeCliRunPlacement(run, current);
       const currentPlacement = readPlacement();
       if (
         !sourceActive ||
@@ -218,8 +221,8 @@ export async function prepareNodeClaudeSkillRuntime(
             (run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision)) ||
         current?.sessionId !== session.sessionId ||
         current?.lifecycleRevision !== session.lifecycleRevision ||
-        current.execHost !== "node" ||
-        current.execNode?.trim() !== node.nodeId ||
+        placed?.execHost !== "node" ||
+        placed.execNode?.trim() !== node.nodeId ||
         (current.execCwd?.trim() || undefined) !==
           (target.kind === "node" ? target.placement.cwd : undefined) ||
         currentPlacement?.generation !== placement?.generation ||

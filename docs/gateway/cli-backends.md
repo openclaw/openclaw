@@ -868,6 +868,26 @@ native permission handling. The separate bridge `exec` capability still targets
 the selected node. Changing the configured MCP surface starts one fresh Claude
 session for an affected existing conversation; OpenClaw history is preserved.
 
+To run the Claude CLI itself on a paired node, set `tools.exec.claudeCliHost: "node"`
+(globally or per agent) and set `tools.exec.node` to that node's id. Every
+`claude-cli` turn of the agent is then placed on the node, as for a session bound
+with `execNode` (see [Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)).
+The node must enable `nodeHost.agentRuns.claude`. OpenClaw refuses the turn instead
+of starting it on the Gateway when `tools.exec.node` is unset, when the session is
+bound to another node, or when the run has no session. `tools.exec.host: "node"`
+alone keeps the CLI on the Gateway, as described above.
+
+The key does not store a binding on the session: Gateway session views such as
+the session list and its files still show the session as Gateway-local, and
+turning the key off returns its next turn to the Gateway.
+
+Placing the CLI on a node does not keep a saved credential on the Gateway. When
+a turn selects a saved Claude credential (a subscription token or an API key
+auth profile), the Gateway forwards that credential to the node for the run, as
+`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. Without one, the CLI uses the
+node's native Claude login. Scheduled runs without a recorded account use only
+the node's native Claude login, as they do on the Gateway.
+
 When another backend passes configured MCP servers to its harness natively,
 `tools.allow` and `tools.deny` also constrain those servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same

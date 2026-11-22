@@ -129,7 +129,7 @@ import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliModelCapabilities } from "./model-capabilities.js";
-import { detectNodeClaudePlacement } from "./prepare-claude.js";
+import { detectNodeClaudePlacement, placeConfiguredClaudeCliRun } from "./prepare-claude.js";
 import { prepareCliTurnHookContext, runCliAuthorizedPromptBuild } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
@@ -189,7 +189,7 @@ export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   return runWithCliPreparationSource(inputParams, () =>
-    prepareCliRunContextWithinReadFence(inputParams),
+    prepareCliRunContextWithinReadFence(placeConfiguredClaudeCliRun(inputParams)),
   );
 }
 
