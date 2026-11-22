@@ -34,11 +34,11 @@ export async function preserveImplicitOpenAIPrimary(
   const unchanged = { config: cfg, changes: [] };
   const defaultsModel = cfg.agents?.defaults?.model;
   const touched = cfg.meta?.lastTouchedVersion;
-  const agentId = listAgentIds(cfg).find(
+  const affected = listAgentIds(cfg).filter(
     (candidate) => !resolveAgentEffectiveModelPrimary(cfg, candidate),
   );
   if (
-    !agentId ||
+    affected.length === 0 ||
     resolveAgentModelPrimaryValue(defaultsModel) ||
     (touched !== undefined &&
       (compareOpenClawVersions(touched, LAST_IMPLICIT_PRIMARY_RELEASE) ?? 1) > 0)
@@ -49,47 +49,80 @@ export async function preserveImplicitOpenAIPrimary(
     cfg.models?.providers,
     "openai",
   )?.models?.some((model) => model?.id === LEGACY_MODEL_ID);
-  const fallback = listsLegacyDefault
-    ? null
-    : resolveConfiguredPrimaryProviderFallback({ cfg, agentId, defaultProvider: DEFAULT_PROVIDER });
-  const legacy = fallback
-    ? `${fallback.provider}/${fallback.model}`
-    : LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
-  const current = resolveDefaultModelForAgent({ cfg, agentId });
-  if (current && `${current.provider}/${current.model}` === legacy) {
-    return unchanged;
-  }
-  if (legacy === LEGACY_IMPLICIT_PRIMARY_MODEL_REF) {
-    const agentDir = resolveAgentDir(cfg, agentId, options.env);
-    const authStore = await loadAuthProfileStoreForSecretsRuntimeAsync(agentDir, {
-      config: cfg,
-      externalCli: { mode: "scoped", providerIds: ["openai"], allowKeychainPrompt: false },
-    });
-    const evaluation = createModelAuthAvailabilityResolver({
-      cfg,
-      agentId,
-      agentDir,
-      authStore,
-      env: options.env,
-      externalCliProviderIds: ["openai"],
-    }).evaluateModelAuth("openai", { modelId: LEGACY_MODEL_ID });
-    if (evaluation.availability === false) {
-      return unchanged;
+  // Each agent ran its own implicit pick; the utility exclusion can differ per agent.
+  const legacyFor = (agentId: string) => {
+    const fallback = listsLegacyDefault
+      ? null
+      : resolveConfiguredPrimaryProviderFallback({
+          cfg,
+          agentId,
+          defaultProvider: DEFAULT_PROVIDER,
+        });
+    return fallback ? `${fallback.provider}/${fallback.model}` : LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
+  };
+  const legacies = new Map(affected.map((agentId) => [agentId, legacyFor(agentId)]));
+  const preserved: string[] = [];
+  for (const [agentId, legacy] of legacies) {
+    const current = resolveDefaultModelForAgent({ cfg, agentId });
+    if (current && `${current.provider}/${current.model}` === legacy) {
+      continue;
+    }
+    if (
+      legacy !== LEGACY_IMPLICIT_PRIMARY_MODEL_REF ||
+      (await hasOpenAIAuth(cfg, agentId, options.env))
+    ) {
+      preserved.push(agentId);
     }
   }
-  return {
-    config: {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          model: { ...(isRecord(defaultsModel) ? defaultsModel : {}), primary: legacy },
+  if (preserved.length === 0) {
+    return unchanged;
+  }
+  const refs = new Set(legacies.values());
+  if (refs.size === 1) {
+    // Every affected agent ran the same model, so one default restores all of them.
+    const [legacy] = refs;
+    return {
+      config: {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: { ...(isRecord(defaultsModel) ? defaultsModel : {}), primary: legacy },
+          },
         },
       },
-    },
-    changes: [
-      `Set agents.defaults.model.primary to ${legacy}: the model earlier releases ran when no model was configured.`,
-    ],
-  };
+      changes: [
+        `Set agents.defaults.model.primary to ${legacy}: the model earlier releases ran when no model was configured.`,
+      ],
+    };
+  }
+  const entries = { ...cfg.agents?.entries };
+  const changes = preserved.map((agentId) => {
+    const legacy = legacies.get(agentId);
+    const entry = entries[agentId];
+    entries[agentId] = {
+      ...entry,
+      model: { ...(isRecord(entry?.model) ? entry.model : {}), primary: legacy },
+    };
+    return `Set agents.entries.${agentId}.model.primary to ${legacy}: the model earlier releases ran for this agent when no model was configured.`;
+  });
+  return { config: { ...cfg, agents: { ...cfg.agents, entries } }, changes };
+}
+
+async function hasOpenAIAuth(cfg: OpenClawConfig, agentId: string, env: NodeJS.ProcessEnv) {
+  const agentDir = resolveAgentDir(cfg, agentId, env);
+  const authStore = await loadAuthProfileStoreForSecretsRuntimeAsync(agentDir, {
+    config: cfg,
+    externalCli: { mode: "scoped", providerIds: ["openai"], allowKeychainPrompt: false },
+  });
+  const evaluation = createModelAuthAvailabilityResolver({
+    cfg,
+    agentId,
+    agentDir,
+    authStore,
+    env,
+    externalCliProviderIds: ["openai"],
+  }).evaluateModelAuth("openai", { modelId: LEGACY_MODEL_ID });
+  return evaluation.availability !== false;
 }

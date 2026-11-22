@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { resolveAgentDir } from "../../../agents/agent-scope.js";
+import { upsertAuthProfileAsync } from "../../../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { preserveImplicitOpenAIPrimary } from "./implicit-openai-primary.js";
 
@@ -58,6 +60,20 @@ describe("preserveImplicitOpenAIPrimary", () => {
     const result = await run(cfg, OPENAI_KEY);
     expect(result.config.agents?.defaults?.model).toMatchObject({ primary });
     expect(result.changes).toHaveLength(1);
+  });
+
+  it("preserves the default when a later agent has its own OpenAI credentials", async () => {
+    const stateDir = tempDirs.make("openclaw-implicit-primary-agents-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cfg: OpenClawConfig = { meta: LEGACY_META, agents: { entries: { a: {}, b: {} } } };
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    await upsertAuthProfileAsync({
+      profileId: "openai:b",
+      credential: { type: "api_key", provider: "openai", key: "sk-test" },
+      agentDir: resolveAgentDir(cfg, "b", env),
+    });
+    const result = await preserveImplicitOpenAIPrimary(cfg, { env });
+    expect(result.config.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-6-astra" });
   });
 
   it.each<[string, OpenClawConfig, Record<string, string>]>([
