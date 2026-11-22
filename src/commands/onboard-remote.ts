@@ -13,6 +13,7 @@ import {
   buildGatewayDiscoveryLabel,
   buildGatewayDiscoveryTarget,
 } from "../infra/gateway-discovery-targets.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -103,22 +104,23 @@ export async function promptRemoteGatewayConfig(
     const target = buildGatewayDiscoveryTarget(selectedBeacon);
     if (target.endpoint) {
       const { host, port } = target.endpoint;
+      const hostLabel = formatHostForUrl(host);
       const mode = await prompter.select({
         message: t("wizard.remote.connectionMethod"),
         options: [
           {
             value: "direct",
-            label: terminalText`Direct gateway WS (${host}:${port})`,
+            label: terminalText`Direct gateway WS (${hostLabel}:${port})`,
           },
           { value: "ssh", label: t("wizard.remote.sshTunnel") },
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `wss://${host}:${port}`;
+        suggestedUrl = `wss://${hostLabel}:${port}`;
         const fingerprint = target.endpoint.gatewayTlsFingerprintSha256;
         const trusted = await prompter.confirm({
           message: t("wizard.remote.trustGateway", {
-            host: terminalText`${host}:${port}`,
+            host: terminalText`${hostLabel}:${port}`,
             fingerprint: fingerprint
               ? terminalText`${fingerprint}`
               : t("wizard.remote.fingerprintMissing"),

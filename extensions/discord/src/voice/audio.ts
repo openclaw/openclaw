@@ -310,7 +310,7 @@ export class DiscordOpusEncodeStream extends Duplex {
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
-    onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
+    onChunk: (pcm48kStereo: Buffer<ArrayBuffer>, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
   let decoder: LibopusDecoder;
@@ -333,6 +333,9 @@ export async function decodeOpusStreamChunks(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
+        if (!(decoded.buffer instanceof ArrayBuffer)) {
+          throw new Error("Discord voice decoder must return transferable PCM storage");
+        }
         await params.onChunk(
           Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
           chunk,

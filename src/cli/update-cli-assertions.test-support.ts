@@ -17,7 +17,7 @@ export function requireValue<T>(value: T | undefined, label: string): T {
 }
 
 export const expectUpdateCallChannel = (channel: string) => {
-  const call = vi.mocked(update.updateGitCheckout).mock.calls[0]?.[0];
+  const call = vi.mocked(update.updateGitRelease).mock.calls[0]?.[0];
   expect(call?.opts.channel).toBe(channel);
   return call;
 };
@@ -115,9 +115,6 @@ export const mockMutableConfigSnapshot = (initial: ConfigFileSnapshot) => {
   });
 };
 
-// Failure assertions must not render the triage target's inherited environment.
-export const getTriageFailures = () =>
-  vi.mocked(update.runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
 export const expectNoSideEffects = (...effects: unknown[]) => {
   for (const effect of effects) {
     expect(effect).not.toHaveBeenCalled();
@@ -132,7 +129,7 @@ export const pluginOutcome = (result?: UpdateRunResult) =>
   result?.postUpdate?.plugins?.npm.outcomes[0];
 
 export const expectPackageInstallSpec = (spec: string, staged = true) => {
-  expect(update.updateGitCheckout).not.toHaveBeenCalled();
+  expect(update.updateGitRelease).not.toHaveBeenCalled();
   let installSpec = spec;
   const isGit = isNpmGitPackageSpec(spec);
   if (isGit) {

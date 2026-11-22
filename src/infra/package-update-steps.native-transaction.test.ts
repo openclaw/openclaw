@@ -11,6 +11,7 @@ import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.j
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { packageUpdateStepResult, writePackageRoot } from "./package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
 const readText = (file: string) => fs.readFile(file, "utf8");
@@ -169,6 +170,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         let cleanupRejected = false;
         const originalRename = fs.rename.bind(fs);
         const originalUnlink = fs.unlink.bind(fs);
+        // A project root that no rename can move has no exchange either.
+        const exchangeSpy =
+          rollbackFailure === "backup-cleanup" ? publishWithoutPathExchange() : undefined;
         const backupRenameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           if (rollbackFailure === "backup-cleanup" && String(args[0]) === project) {
             throw Object.assign(new Error("cross-device move"), { code: "EXDEV" });
@@ -299,6 +303,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           }
         }
         const result = await update.finally(() => {
+          exchangeSpy?.mockRestore();
           backupRenameSpy.mockRestore();
           backupUnlinkSpy.mockRestore();
         });
@@ -309,14 +314,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           expect(result.recovery?.serviceRestartSafe).toBe(false);
           assert(retained, "transaction missing");
           expect(await retained.rollback(() => {})).toMatchObject({
-            exitCode: 1,
-            activePackageRoot: null,
+            exitCode: 0,
+            activePackageRoot: packageRoot,
           });
-          await expect(
-            fs.readFile(path.join(packageRoot, "dist", "index.js")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-          const backupPackage = path.join(retained.backupRoot, path.relative(project, packageRoot));
-          await expectText(path.join(backupPackage, "dist", "index.js"), "export {};\n");
+          await expectVersion(packageRoot, "1.0.0");
+          await expectText(path.join(packageRoot, "dist", "index.js"), "export {};\n");
           return;
         }
         if (shimFailure) {

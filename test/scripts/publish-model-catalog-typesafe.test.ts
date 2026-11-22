@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   parseRemoteModelCatalogBundle,
   parseRemoteModelCatalogBundleV2,
-  parseRemoteModelCatalogBundleV3,
 } from "@openclaw/model-catalog-core";
 import {
   LITELLM_PRICING_URL,
@@ -13,13 +12,12 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
 import { loadPluginManifest } from "../../src/plugins/manifest.js";
-import { finalizePluginModelUsage } from "../../src/plugins/runtime/runtime-model-usage.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("publishes pinned TypeSafe billing without borrowing prices for aliases or local models", async () => {
+it("keeps TypeSafe native models and borrowed prices out of released catalogs", async () => {
   const rootDir = roots.make("typesafe-catalog-");
   const pluginDir = path.join(rootDir, "extensions", "typesafe");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -55,11 +53,7 @@ it("publishes pinned TypeSafe billing without borrowing prices for aliases or lo
   );
   fs.mkdirSync(path.join(rootDir, "scripts", "lib"), { recursive: true });
   fs.writeFileSync(path.join(rootDir, "scripts", "lib", "recommended-models.json"), "[]");
-  const files = [
-    path.join(rootDir, "v1.json"),
-    path.join(rootDir, "v2.json"),
-    path.join(rootDir, "v3.json"),
-  ] as const;
+  const files = [path.join(rootDir, "v1.json"), path.join(rootDir, "v2.json")] as const;
   const ids = ["jev-1.13.0", "jev-latest", "jev-preview", "kev-latest"];
   vi.spyOn(process.stdout, "write").mockReturnValue(true);
   await expect(
@@ -67,7 +61,7 @@ it("publishes pinned TypeSafe billing without borrowing prices for aliases or lo
       rootDir,
       sourceCommit: "typesafe-documentation-snapshot",
       now: () => 1234,
-      args: ["--pricing", "--out", files[0], "--out-v2", files[1], "--out-v3", files[2]],
+      args: ["--pricing", "--out", files[0], "--out-v2", files[1]],
       fetchImpl: async (input) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -101,70 +95,11 @@ it("publishes pinned TypeSafe billing without borrowing prices for aliases or lo
   const payloads = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
   const legacy = parseRemoteModelCatalogBundle(payloads[0]);
   const second = parseRemoteModelCatalogBundleV2(payloads[1]);
-  const third = parseRemoteModelCatalogBundleV3(payloads[2]);
   expect(legacy.providers).not.toHaveProperty("typesafe");
   expect(second.providers).not.toHaveProperty("typesafe");
   expect(second.models).toHaveLength(200);
-  const models = third.models.filter((model) => model.provider === "typesafe");
-  expect(models.map((model) => model.id).toSorted()).toEqual(ids.toSorted());
-  const pinned = models.find((model) => model.id === "jev-1.13.0");
-  expect(pinned).toMatchObject({
-    inference: {
-      chat: false,
-      decision: {
-        limits: { maxRequestTokens: 64000, maxStateAndQuestionTokens: 32000 },
-        billing: {
-          unit: "tokens",
-          source: "provider-docs",
-          usdPerMillion: { input: 0.042, output: 0 },
-        },
-      },
-    },
-  });
-  expect(models.find((model) => model.id === "jev-preview")?.status).toBe("preview");
-  for (const model of models) {
-    expect(model).not.toHaveProperty("baseUrl");
-    expect(model).not.toHaveProperty("headers");
-    expect(model.inference?.chat).toBe(false);
-    // Native billing stays in inference; generic chat prices remain undeclared.
-    expect(model.pricing).toEqual({ status: "unknown" });
-    expect(legacy.pricing?.[`typesafe/${model.id}`]).toBeUndefined();
-    expect(second.providerPricing?.[`typesafe/${model.id}`]).toBeUndefined();
-    if (model.id !== "jev-1.13.0") {
-      expect(model.inference?.decision).not.toHaveProperty("billing");
-      // Aliases do not inherit token ceilings, but hosted image bounds are explicit.
-      expect(model.inference?.decision).not.toHaveProperty("limits.maxRequestTokens");
-      expect(model.inference?.decision).not.toHaveProperty("limits.maxStateAndQuestionTokens");
-    }
-    if (model.id === "kev-latest") {
-      expect(model.inference?.decision?.input).toEqual(["text"]);
-      expect(model.inference?.decision).not.toHaveProperty("limits");
-    } else {
-      expect(model.inference?.decision?.input).toEqual(["text", "image"]);
-      expect(model.inference?.decision?.limits?.image).toEqual({
-        maxBytes: 4194304,
-        mimeTypes: ["image/png", "image/jpeg"],
-        remoteUrls: false,
-      });
-    }
-    const usage = finalizePluginModelUsage({
-      cfg: {},
-      estimate: "none",
-      suppressUsage: true,
-      target: { provider: "typesafe", model: model.id },
-      preparedBilling: {
-        provider: "typesafe",
-        model: model.id,
-        billing: model.inference?.decision?.billing,
-      },
-      rawUsage: { inputTokens: 100, outputTokens: 12 },
-    });
-    expect(usage.inputTokens).toBe(100);
-    expect(usage.outputTokens).toBe(12);
-    if (model.id === "jev-1.13.0") {
-      expect(usage.costUsd).toBeCloseTo(0.0000042, 12);
-    } else {
-      expect(usage.costUsd).toBeUndefined();
-    }
+  for (const id of ids) {
+    expect(legacy.pricing?.[`typesafe/${id}`]).toBeUndefined();
+    expect(second.providerPricing?.[`typesafe/${id}`]).toBeUndefined();
   }
 });

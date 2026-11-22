@@ -38,6 +38,7 @@ export type {
   AgentsFilesSetResult,
   SessionsFilesGetResult as SessionWorkspaceGetResult,
   SessionsFilesSetResult as SessionWorkspaceSetResult,
+  SessionsFilesStatResult as SessionWorkspaceStatResult,
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
@@ -105,6 +106,9 @@ export type ConfigSnapshot = {
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: { path: string; message: string }[] | null;
+  warnings?: { path: string; message: string }[] | null;
+  /** Files reached through $include, when the config uses any. */
+  includedPaths?: string[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";

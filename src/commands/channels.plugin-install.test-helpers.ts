@@ -28,28 +28,6 @@ export function createExternalChatCatalogEntry(): ChannelPluginCatalogEntry {
   });
 }
 
-export function createExternalChatSetupPlugin(): ChannelPlugin {
-  return {
-    ...createChannelTestPluginBase({
-      id: "external-chat",
-      label: "External Chat",
-      docsPath: "/channels/external-chat",
-    }),
-    setup: {
-      applyAccountConfig: vi.fn(({ cfg, input }) => ({
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          "external-chat": {
-            enabled: true,
-            token: input.token,
-          },
-        },
-      })),
-    },
-  } as ChannelPlugin;
-}
-
 export function createExternalChatDeletePlugin(): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({

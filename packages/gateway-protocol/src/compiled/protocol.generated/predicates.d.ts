@@ -39,6 +39,11 @@ export function isMigrationsMemoryApplyParams(
 ): value is import("typebox").Static<
   typeof import("../../schema/migrations.js").MigrationsMemoryApplyParamsSchema
 >;
+export function isDiagnosticsCpuProfileParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/diagnostics-schemas.js").DiagnosticsCpuProfileParamsSchema
+>;
 export function isDiagnosticsHeapProfileParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -402,6 +407,11 @@ export function isSkillsUpdateParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
 >;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
+>;
 export function isSkillsSearchParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -461,6 +471,21 @@ export function isModelsProbeParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ModelsProbeParamsSchema
+>;
+export function isToolUsageStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageStatusParamsSchema
+>;
+export function isToolUsageImportParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageImportParamsSchema
+>;
+export function isToolUsageResetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageResetParamsSchema
 >;
 export function isConversationListParams(
   value: unknown,
@@ -751,6 +776,11 @@ export function isChatPendingInputsDismissParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatPendingInputsDismissParamsSchema
+>;
+export function isChatSteerNowParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatSteerNowParamsSchema
 >;
 export function isChatPredictParams(
   value: unknown,
@@ -1464,6 +1494,11 @@ export function isMcpAuthLoginParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").McpAuthLoginParamsSchema
 >;
+export function isMcpAuthLogoutParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").McpAuthLogoutParamsSchema
+>;
 export function isWizardNextParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1973,6 +2008,16 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
+export function isSessionsSteerTargetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerTargetParamsSchema
+>;
+export function isSessionsSteerActiveParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerActiveParamsSchema
+>;
 export function isSessionsSendParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2083,6 +2128,11 @@ export function isSessionsGroupsDefaultsResult(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsGroupsDefaultsResultSchema
 >;
+export function isSessionsGroupsCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsGroupsCreateParamsSchema
+>;
 export function isSessionsGroupsPutParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2173,6 +2223,16 @@ export function isSessionGitHubActionParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionGitHubActionParamsSchema
 >;
+export function isSessionGitHubReadinessParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitHubReadinessParamsSchema
+>;
+export function isSessionGitHubReadinessResult(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitHubReadinessResultSchema
+>;
 export function isSessionGitHubOptionsParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2187,6 +2247,26 @@ export function isSessionGitHubConfirmParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionGitHubConfirmParamsSchema
+>;
+export function isSessionsFilesPreviewParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
+>;
+export function isSessionsFilesStatParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesStatParamsSchema
+>;
+export function isSessionsFilesPreviewReleaseParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
+>;
+export function isUsersChannelIdentityParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/users.js").UsersChannelIdentityParamsSchema
 >;
 export function isConnectParams(
   value: unknown,
@@ -2401,6 +2481,11 @@ export function isDevicePairRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").DevicePairRemoveParamsSchema
+>;
+export function isDevicePairCodeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").DevicePairCodeParamsSchema
 >;
 export function isDevicePairSetupCodeParams(
   value: unknown,

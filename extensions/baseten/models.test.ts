@@ -75,6 +75,7 @@ it("keeps System One models out of every conversational discovery path", () => {
   const ids = [
     "decision-models/baseten-elephant-9b-latest",
     "decision-models/baseten-mammoth-27b-latest",
+    "decision-models/baseten-joey-2b-latest",
   ];
   expect(catalog.buildStaticBasetenModels().some((model) => ids.includes(model.id))).toBe(false);
   expect(catalog.projectBasetenLiveModels(ids.map((id) => liveRow(id)))).toEqual([]);

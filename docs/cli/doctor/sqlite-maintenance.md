@@ -133,6 +133,13 @@ migration sources. Hot transcript JSONL files are imported and archived after
 successful import; archive-tier JSONL files remain support artifacts, not
 runtime fallbacks.
 
+Session-import archive filenames stay within 255 UTF-8 bytes. Long names retain
+a readable prefix and a stable hash; migration receipts retain the original paths
+and session keys. If an older receipt names an overlong destination, Doctor treats
+that destination as absent and verifies the surviving source before archiving it
+under a bounded name. Keep the original files and receipts. After upgrading from
+an update blocked by `ENAMETOOLONG`, rerun `openclaw update repair`.
+
 Older V2 migration receipts can record completed index moves without file identity.
 Doctor compares a surviving archive with the current `sessions.json`: different
 content imports as a new legacy index. If the archive is identical or missing,
@@ -299,7 +306,8 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
-If you deleted a retained historical archive, Doctor keeps a warning and completes
+If a retained historical archive is missing, Doctor redirects its receipts to a
+verified identical surviving archive when available. Otherwise it keeps a warning and completes
 verified plugin session repair. History available only in that missing file cannot
 be recovered; Doctor does not recreate it or resurrect deleted sessions. Remaining
 originals and their recovery references stay protected.

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  validateDiagnosticsCpuProfileParams,
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
@@ -12,6 +13,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { readGatewayResourceDiagnostics } from "../server/resource-diagnostics.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
@@ -70,13 +72,12 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
-    (params): params is Record<string, unknown> =>
-      isRecord(params) && Object.keys(params).length === 0,
-    "diagnostics.cpuProfile accepts only empty params",
-    async (_params, authority) => {
+    validateDiagnosticsCpuProfileParams,
+    "diagnostics.cpuProfile accepts only integer windows (1–30) and windowMs (100–5000)",
+    async (params, authority) => {
       const { captureDiagnosticCpuProfile } =
         await import("../../logging/diagnostic-cpu-profile.js");
-      return captureDiagnosticCpuProfile(authority);
+      return captureDiagnosticCpuProfile({ ...params, ...authority });
     },
   ),
   "diagnostics.heapProfile": profileHandler(
@@ -102,7 +103,12 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.lanes": ({ respond }) => {
     respond(
       true,
-      { ts: Date.now(), ...getCommandLaneDiagnostics(), ...getTrackedWorkerPoolSnapshot() },
+      {
+        ts: Date.now(),
+        ...getCommandLaneDiagnostics(),
+        ...getTrackedWorkerPoolSnapshot(),
+        resources: readGatewayResourceDiagnostics(),
+      },
       undefined,
     );
   },

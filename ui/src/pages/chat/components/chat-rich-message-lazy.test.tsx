@@ -2,11 +2,11 @@
 
 import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createToolResultMessage } from "./chat-message.test-support.ts";
 
 it("keeps ordinary transcript text synchronous", () => {
@@ -21,7 +21,30 @@ it("keeps ordinary transcript text synchronous", () => {
   expect(view.container.querySelector(".chat-text")?.textContent?.trim()).toBe("Ready immediately");
 });
 
-it("renders rich history immediately and retires a superseded message", () => {
+it("renders submitted App references synchronously when a user message acquires saved context", () => {
+  const [appContext, setAppContext] = createSignal<Array<{ title: string }>>([]);
+  const view = mountSolid(() => (
+    <GroupedMessage
+      preparation={prepareChatMessageRender({
+        role: "user",
+        content: "Describe this shell.",
+        __openclaw: { appContext: appContext() },
+      })}
+      messageKey="selected-shell"
+      options={{ isStreaming: false, showReasoning: false }}
+    />
+  ));
+  onTestFinished(view.unmount);
+  expect(view.container.textContent).toContain("Describe this shell.");
+  expect(view.container.querySelector(".mcp-app-context")).toBeNull();
+  setAppContext([{ title: "Helmet shell" }, { title: "Tiger cowrie" }]);
+  flush();
+  expect(
+    [...view.container.querySelectorAll(".mcp-app-context__label")].map((item) => item.textContent),
+  ).toEqual(["Helmet shell", "Tiger cowrie"]);
+});
+
+it("renders rich history and retires a superseded message", async () => {
   const question = {
     role: "assistant",
     content: "Choose an audience.",
@@ -76,7 +99,9 @@ it("renders rich history immediately and retires a superseded message", () => {
   });
   setMessages((entries) => [...entries.slice(0, 2), { key: "current", message: currentTool }]);
   flush();
-  expect(view.container.querySelector(".chat-permission-card")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-permission-card")).not.toBeNull(),
+  );
   expect(view.container.querySelector(".chat-question-summary")?.textContent).toContain(
     "Which audience?",
   );

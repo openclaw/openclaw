@@ -11,6 +11,7 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -35,6 +36,7 @@ import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
 import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
+import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -78,7 +80,11 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
     readNonEmptyStringPreservingWhitespace(
       (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
     ) ??
-    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature) ??
+    // LiteLLM proxies return Gemini signatures here.
+    readNonEmptyStringPreservingWhitespace(
+      asOptionalRecord(tc.provider_specific_fields)?.thought_signature,
+    )
   );
 }
 
@@ -708,10 +714,19 @@ function warnMissingStreamingUsage(model: OpenAIModeModel) {
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
+  mode: "direct" | "managed" = "managed",
 ) {
+  // Effort controls generation, not the reasoning needed to replay a tool turn.
+  if (
+    model.compat?.requiresReasoningContentOnAssistantMessages ||
+    requiresReasoningContentReplay(model.id)
+  ) {
+    return true;
+  }
   if (!model.reasoning) {
     return false;
   }
-  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  return Boolean(effort) && isOpenAICompletionsThinkingEnabled(effort);
+  const effort =
+    options?.reasoningEffort ?? (mode === "managed" ? (options?.reasoning ?? "high") : undefined);
+  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
 }

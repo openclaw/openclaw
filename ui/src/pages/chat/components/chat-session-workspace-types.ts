@@ -27,6 +27,7 @@ export type SessionWorkspaceArtifacts = {
 };
 
 export type SessionWorkspaceState = {
+  fileLinksRevision?: number;
   readResult?: Promise<void>;
   catalogNavigation?: SessionWorkspaceNavigation;
   pendingPreview?: { id: string; disposition: "pinned" | "preview" };
@@ -60,6 +61,7 @@ export type SessionWorkspaceState = {
 // treats its loader as new and requests sessions.diff again.
 export type SessionWorkspaceHost = {
   sessionKey: string;
+  readonly sessionWorkspaceReadDisabledReason?: string | null;
   sessions: SessionCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;

@@ -34,10 +34,7 @@ import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   parseGatewayPayload,
 } from "./nodes.helpers.js";
-import {
-  isForwardedNodeInvokeApprovalAuthorityActive,
-  resolveNodeInvokeRuntimeAuthorityError,
-} from "./nodes.invoke-authority.js";
+import { captureNodeSystemRunEventSource } from "./nodes.invoke-authority.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
@@ -54,7 +51,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
+  "node.invoke": async ({
+    params,
+    respond,
+    context,
+    client,
+    req,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
@@ -374,18 +379,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
         }
-        const runtimeAuthorityError = () =>
-          resolveNodeInvokeRuntimeAuthorityError({
-            context,
-            client,
-            approvalAuthority: forwardedParams.approvalAuthority,
-          });
-        const isForwardedApprovalAuthorityActive = () =>
-          isUploadAllowed() &&
-          isForwardedNodeInvokeApprovalAuthorityActive({
-            manager: context.execApprovalManager,
-            authority: forwardedParams.approvalAuthority,
-          });
         if (rejectDisabledUpload()) {
           return;
         }
@@ -419,7 +412,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 generation,
                 lifecycle: wakeLifecycle,
               })) && isUploadAllowed(),
-            isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+            // Carry the upload gate through to the policy's final send.
+            isApprovalAuthorityActive: isUploadAllowed,
             ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
           }),
         );
@@ -475,15 +469,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           respondIfInvokeExpired();
           return;
         }
-        // Policy, pairing, and approval checks above may await. Revalidate the
-        // exact runtime capability at the final raw transport handoff.
-        const authorityError = runtimeAuthorityError();
-        if (authorityError) {
-          respondError(respond, ErrorCodes.INVALID_REQUEST, authorityError, {
-            details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-          });
-          return;
-        }
         if (rejectDisabledUpload()) {
           return;
         }
@@ -494,6 +479,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           turnSource,
+          prepareSystemRunEventSource: (key) =>
+            captureNodeSystemRunEventSource({ client, context, hasCurrentClientAuthority }, key),
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
@@ -504,9 +491,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
           }),
           isDispatchAuthorized: () =>
-            isUploadAllowed() &&
-            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            runtimeAuthorityError() === undefined,
+            isUploadAllowed() && (nodeInvokeStream?.isRuntimeCurrent() ?? true),
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);
@@ -525,6 +510,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
+            !client?.internal?.operatorRunAuthority &&
             !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
@@ -536,6 +522,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               command,
               paramsJSON,
               idempotencyKey: p.idempotencyKey,
+              openclawIdPrincipal: client?.internal?.openclawIdPrincipal,
               ttlMs: nodeInvokePolicy.pendingActionTtlMs,
               maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
             });

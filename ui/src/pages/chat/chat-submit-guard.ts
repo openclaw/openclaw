@@ -80,7 +80,7 @@ export async function withChatSubmitHandoff(
       : undefined;
   try {
     let current = queued;
-    if (options.yieldToInput) {
+    if (options.yieldToInput && !options.pendingSettings) {
       // The shared outbox retains foreground custody while the browser accepts
       // input, including when terminal history settles before this task resumes.
       await yieldChatSubmitToInput();

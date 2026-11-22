@@ -16,6 +16,11 @@ import {
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import {
+  decodeShellText,
+  hasEscapedLineContinuation,
+  hasUnescapedDynamicPattern,
+} from "./shell-text.js";
+import {
   resolveCommandOperators,
   type CommandOperatorSource,
   type RecordedCommandStep,
@@ -166,120 +171,6 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "string",
   "word",
 ]);
-
-function hasEscapedLineContinuation(text: string): boolean {
-  return /\\(?:\r\n|[\r\n])/.test(text);
-}
-
-function hasUnescapedDynamicPattern(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    const ch = text[index];
-    if (ch === "\\") {
-      index += 1;
-      continue;
-    }
-    if (ch === "*" || ch === "?") {
-      return true;
-    }
-    if (ch === "[" && text.indexOf("]", index + 1) > index + 1) {
-      return true;
-    }
-    if (ch === "{" && text.indexOf("}", index + 1) > index + 1) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
-  "'": "'",
-  '"': '"',
-  "?": "?",
-  "\\": "\\",
-  a: "\u0007",
-  b: "\b",
-  e: "\u001B",
-  E: "\u001B",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-  v: "\v",
-};
-
-function decodeShellText(
-  text: string,
-  quoting: "unquoted" | "double" | "ansi-c" = "unquoted",
-  sourceOffsets?: number[],
-): string {
-  const prefix = quoting === "double" ? '"' : quoting === "ansi-c" ? "$'" : "";
-  const hasQuotes = prefix && text.startsWith(prefix) && text.endsWith(prefix.slice(-1));
-  const bodyStart = hasQuotes ? prefix.length : 0;
-  const body = hasQuotes ? text.slice(bodyStart, -1) : text;
-  let decoded = "";
-  if (sourceOffsets) {
-    sourceOffsets.push(bodyStart);
-  }
-  const append = (value: string, sourceEndOffset: number) => {
-    decoded += value;
-    if (sourceOffsets) {
-      // Source offsets count UTF-16 units, including both halves of an ANSI-C code point.
-      for (let remaining = value.length; remaining > 0; remaining -= 1) {
-        sourceOffsets.push(sourceEndOffset);
-      }
-    }
-  };
-  for (let index = 0; index < body.length; index += 1) {
-    const ch = body.charAt(index);
-    const next = body[index + 1];
-    const sourceOffset = bodyStart + index;
-    if (
-      ch !== "\\" ||
-      next === undefined ||
-      (quoting === "double" && !["\\", '"', "$", "`", "\n", "\r"].includes(next))
-    ) {
-      append(ch, sourceOffset + 1);
-      continue;
-    }
-    if (quoting !== "ansi-c" && (next === "\n" || next === "\r")) {
-      const width = next === "\r" && body[index + 2] === "\n" ? 3 : 2;
-      if (sourceOffsets) {
-        sourceOffsets[decoded.length] = sourceOffset + width;
-      }
-      index += width - 1;
-      continue;
-    }
-
-    let digits: string | undefined;
-    let radix = 16;
-    let prefixLength = 2;
-    if (quoting === "ansi-c") {
-      if (next === "x" || next === "u" || next === "U") {
-        const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
-        digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
-      } else if (/^[0-7]$/.test(next)) {
-        digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
-        radix = 8;
-        prefixLength = 1;
-      }
-    }
-    if (digits) {
-      const endOffset = sourceOffset + prefixLength + digits.length;
-      try {
-        append(String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
-      } catch {
-        append(`\\${next}${digits}`, endOffset);
-      }
-      index += prefixLength + digits.length - 1;
-      continue;
-    }
-
-    const value = quoting === "ansi-c" ? (ANSI_C_SIMPLE_ESCAPES[next] ?? next) : next;
-    append(value, sourceOffset + 2);
-    index += 1;
-  }
-  return decoded;
-}
 
 function hasDynamicWordPart(root: TreeSitterNode): boolean {
   const pending = [root];
@@ -438,6 +329,28 @@ function appendTestCommandArguments(
 function isCommandLikeNode(node: TreeSitterNode): boolean {
   return (
     node.type === "command" || node.type === "declaration_command" || node.type === "test_command"
+  );
+}
+
+// A standalone assignment adds no command step, but bash evaluates `$((name))`, `${name:expr}`,
+// `${arr[expr]}`, `${!name}`, `${name@P}` and `name[expr]=` recursively, and an array subscript
+// reached that way runs command substitutions. Command preludes and declaration arguments are
+// already covered by the prelude and dynamic-argument checks.
+function isDynamicStandaloneAssignment(node: TreeSitterNode): boolean {
+  if (node.type !== "variable_assignment") {
+    return false;
+  }
+  const parentType = node.parent?.type;
+  if (parentType === "command" || parentType === "declaration_command") {
+    return false;
+  }
+  // The parser flattens keyed compound entries, whose semantics depend on prior array state.
+  const value = node.childForFieldName("value");
+  return (
+    node.childForFieldName("name")?.type === "subscript" ||
+    (value?.type === "array" &&
+      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]\+?=/u.test(entry.text))) ||
+    node.descendantsOfType(["arithmetic_expansion", "expansion"]).length > 0
   );
 }
 
@@ -697,6 +610,8 @@ function visitNode(
     output.risks.push({ kind: "redirect", span });
   } else if (node.type === "ERROR") {
     output.risks.push({ kind: "syntax-error", span });
+  } else if (isDynamicStandaloneAssignment(node)) {
+    output.risks.push({ kind: "dynamic-assignment", span });
   }
 
   if (isCommandLikeNode(node)) {
@@ -824,4 +739,3 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     tree.delete();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

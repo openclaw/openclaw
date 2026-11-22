@@ -9,7 +9,7 @@ import { deliverAgentCommandResult } from "./delivery.js";
 
 type MarkerParams = Parameters<typeof persistPendingFinalDeliveryMarker>[0];
 type SessionTarget = Pick<MarkerParams, "agentId" | "storePath"> & { sessionKey: string };
-export const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
+const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
 export const runtime = { log: () => {}, error: () => {}, exit: () => {} };
 
 export function persistMarker(

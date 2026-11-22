@@ -3,6 +3,7 @@ import {
   buildModelCatalogMergeKey,
   normalizeModelCatalogProviderId,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import type {
   ModelCatalog,
   ModelCatalogDiscovery,
@@ -18,6 +19,7 @@ type ManifestModelCatalogPlugin = {
   providerEndpoints?: readonly import("../plugins/manifest-types.js").PluginManifestProviderEndpoint[];
   id: string;
   providers?: readonly string[];
+  contracts?: { readonly decisionProviders?: readonly string[] };
   modelCatalog?: Pick<
     ModelCatalog,
     "providers" | "aliases" | "suppressions" | "discovery" | "runtimeAugment"
@@ -79,11 +81,21 @@ function mergeRemoteModelWithTrustedTransport(
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
   // Object.prototype's setter while trusted transport fields win explicitly.
   // The hosted schema carries no family; the bundled row keeps the exact id's family.
+  // A hosted row published before a manifest gained a fact does not erase it: bundled
+  // `thinkingLevelMap` and compat keys fill only what the hosted row omits. A bundled row that
+  // owns its thinking profile keeps its map over a hosted row published before that ownership,
+  // so the profile and its levels stay one unit.
+  const bundledOwnsThinking =
+    ownsThinkingProfile(trustedModel?.compat) && !ownsThinkingProfile(remoteModel.compat);
   const merged = {
     ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
     ...(trustedModel?.family ? { family: trustedModel.family } : {}),
+    ...(trustedModel?.thinkingLevelMap && (bundledOwnsThinking || !remoteModel.thinkingLevelMap)
+      ? { thinkingLevelMap: trustedModel.thinkingLevelMap }
+      : {}),
+    ...(trustedModel?.compat ? { compat: { ...trustedModel.compat, ...remoteModel.compat } } : {}),
   };
   const target = {
     api: merged.api ?? effectiveProvider.api,
@@ -94,7 +106,11 @@ function mergeRemoteModelWithTrustedTransport(
         {
           inference: remoteModel.inference,
           api: remoteModel.api ?? remoteProvider.api ?? trustedProvider.api,
-          baseUrl: remoteModel.baseUrl ?? remoteProvider.baseUrl ?? trustedProvider.baseUrl,
+          baseUrl:
+            remoteModel.baseUrl ??
+            remoteProvider.baseUrl ??
+            trustedModel?.baseUrl ??
+            trustedProvider.baseUrl,
         },
         target,
       )
@@ -296,8 +312,13 @@ export function planManifestModelCatalogRows(params: {
   };
 }
 
+// Matches manifest catalog normalization: Decision-only providers own their rows too.
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
+  return new Set(
+    [...(plugin.providers ?? []), ...(plugin.contracts?.decisionProviders ?? [])]
+      .map(normalizeModelCatalogProviderId)
+      .filter(Boolean),
+  );
 }
 
 export function buildModelCatalogProviderAliasTargets(

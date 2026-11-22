@@ -42,8 +42,8 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_SECRETS_EGRESS: LegacyConfigMigrati
         (entry) => typeof entry !== "string" || !isValidExactHostname(entry),
       );
 
-      // Invalid entries already prevented proxy startup, so dropping them loses no working policy.
-      if (validHosts.length > 0) {
+      // Empty allowedHosts restricts traffic; omitting it would allow every host.
+      if (validHosts.length > 0 || key === "allowedHosts") {
         egressProxy[key] = validHosts;
       } else {
         delete egressProxy[key];

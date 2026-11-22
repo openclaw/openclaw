@@ -15,7 +15,6 @@ const activeModel = {
 const resolve = (cfg: OpenClawConfig, active?: typeof activeModel) =>
   resolvePdfModelConfigForTool({
     cfg,
-    agentDir: "/tmp/openclaw-pdf-model-config",
     activeModel: active,
   });
 

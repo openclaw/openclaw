@@ -40,6 +40,7 @@ import { createResourceLoader } from "../sessions/agent-session-loop-resource-lo
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import {
+  expectCall,
   expectRecordFields,
   findMockCall,
   mockCallArg,
@@ -93,7 +94,7 @@ import {
   registerQueuedProviderRefreshTest,
 } from "./compact.hooks.memory-refresh.test-support.js";
 import {
-  createCompactHooksPreparedModelRuntime,
+  createCompactHooksPreparedModelRuntimeLease,
   createCompactHooksResolvedModel,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
@@ -206,10 +207,6 @@ async function nativeCompactionArgs(
     agentHarnessId: overrides.agentHarnessId,
   });
   return params;
-}
-
-function expectCall(mock: Mock, fields: Record<string, unknown>, ...rest: unknown[]) {
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), ...rest);
 }
 
 const abortedCompaction = { ok: false, compacted: false, reason: "compaction aborted" };
@@ -447,7 +444,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => compactionTool(name, {})),
     );
-    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation(async (params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
@@ -650,7 +647,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         compacted: false,
         reason: expect.stringContaining("timed out"),
       });
-      expect(policies).toEqual([undefined]);
+      expect(policies).toEqual(["retry-invalid-once"]);
     } finally {
       vi.useRealTimers();
     }
@@ -893,17 +890,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
     };
-    const preparedModelRuntime = createCompactHooksPreparedModelRuntime({
+    const preparedModelRuntimeLease = createCompactHooksPreparedModelRuntimeLease({
       agentId: "main",
       agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
       config: { tools: { profile: "coding" } },
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       metadataSnapshot,
-    }) as never;
-    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
-      snapshot: preparedModelRuntime,
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
     });
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce(preparedModelRuntimeLease);
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       compactionTool(toolName, {
         parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -963,8 +957,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       entry: "middle",
       middle: "final",
     });
-    const { normalizeStaticProviderModelId } =
-      await vi.importActual<typeof import("../model-ref-shared.js")>("../model-ref-shared.js");
+    const { normalizeStaticProviderModelId } = await vi.importActual<
+      typeof import("../model-selection-normalize.js")
+    >("../model-selection-normalize.js");
     const { shouldPreferProviderRuntimeResolvedModel } =
       await import("../../plugins/provider-runtime.js");
     const acquire = expectDefined(

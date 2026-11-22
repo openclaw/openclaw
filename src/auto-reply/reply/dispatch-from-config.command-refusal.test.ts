@@ -214,6 +214,26 @@ it.each<
   }
 });
 
+it("runs commands without a model and refuses only the agent turn", async () => {
+  const { model: _model, ...defaults } = createReplyAgentDefaults(state.workspaceDir);
+  cfg = { ...cfg, agents: { defaults } };
+  await persistConfig();
+  const setup = expect.stringContaining("No model is configured");
+  for (const [body, expected] of [
+    ["/help", /\/model/u],
+    ["/status", /Model: not configured/u],
+    ["/new", /New session started/u],
+    ["/queue", /queue/iu],
+    ["/verbose off", /verbose/iu],
+    ["/think high", /No model is configured/u],
+  ] as const) {
+    const { texts } = await send("owner", body);
+    expect(texts, body).toEqual([expect.stringMatching(expected)]);
+  }
+  expect((await send("owner", "hello there", false)).texts).toEqual([setup]);
+  expect(runEmbeddedAgent).not.toHaveBeenCalled();
+});
+
 it.each([false, true])(
   "restores an authorized archived native source before /new (send denied=%s)",
   async (sendDenied) => {
@@ -262,11 +282,16 @@ it.for(["queue", "reject"] as const)(
       followed.resolve({ params, operation: getSessionControllerOperation(targetKey) });
       return modelReply;
     });
-    const run = holdAgentRun("owner", (_params, operation) => {
+    const run = holdAgentRun("owner", async (params, operation) => {
+      const { provider, model } = params;
+      if (!provider || !model) {
+        throw new Error("Expected the incumbent's concrete provider and model");
+      }
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({ provider, model });
       operation.attachBackend({
         kind: "embedded",
         cancel() {},
-        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+        toolAuthorityFingerprint: fingerprint,
         messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
       });
       operation.setPhase("running");

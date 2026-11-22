@@ -1,15 +1,15 @@
 // Vitest runtime config config wires the runtime config test shard.
 import type { ViteUserConfig } from "vitest/config";
-import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { runtimeConfigTestOwner } from "./vitest.test-shards.mjs";
 
 export function createRuntimeConfigVitestConfig(
   env?: Record<string, string | undefined>,
 ): ViteUserConfig {
-  const config = createScopedVitestConfig(["src/config/**/*.test.ts"], {
+  const config = createScopedVitestConfig(runtimeConfigTestOwner.include, {
     dir: "src",
     env,
-    exclude: databaseWorkerCoreTestFiles,
+    exclude: runtimeConfigTestOwner.exclude,
     includeOpenClawRuntimeSetup: false,
     name: "runtime-config",
     passWithNoTests: true,

@@ -146,49 +146,119 @@ extension ChatMathPlatformView {
 @MainActor
 struct ChatMarkdownTableView: View {
     let table: ChatMarkdownTable
+    let typography: ChatMarkdownRenderer.Typography
+
+    /// Padding the card adds on both sides of the grid.
+    static let cardPadding: CGFloat = 10
+    /// Space the grid leaves between two columns.
+    static let columnSpacing: CGFloat = 14
+    /// Narrowest column that still reads as a column. A table that cannot keep every column this
+    /// wide at the reply's own width keeps them and scrolls instead of squeezing the cells.
+    static let minimumColumnWidth: CGFloat = 120
+
+    /// Width the reply proposes to this card, so 0 until the first layout pass reports it.
+    @State private var cardWidth: CGFloat = 0
+    /// The enclosing message's file labels; nil where file links are off.
+    @Environment(\.openClawChatMarkdownFileLabels) private var fileLabels
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 7) {
-                GridRow {
-                    ForEach(self.table.header.indices, id: \.self) { column in
-                        // One cell per column carries the GFM alignment.
-                        self.cell(self.table.header[column], isHeader: true)
-                            .gridColumnAlignment(self.columnAlignment(column))
-                    }
+        // A horizontal scroll view proposes an unbounded width, so a grid inside it sizes every
+        // column to its longest cell and the last column runs off the screen with nothing wrapping.
+        // Each cell is therefore bounded to a column width derived from the reply's own width, which
+        // is what makes the text wrap; only a table whose columns cannot stay readable at that width
+        // scrolls, and then with its indicator visible as the cue that columns continue off-screen.
+        self.tableLayout
+            .padding(Self.cardPadding)
+            // Accept the parent proposal even while cells still carry the previous wider layout.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(OpenClawChatTheme.subtleCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.cardWidth = $0 }
+    }
+
+    /// Width one of `columns` columns gets when they share the reply's content width equally.
+    static func sharedColumnWidth(cardWidth: CGFloat, columns: Int) -> CGFloat {
+        let count = CGFloat(max(columns, 1))
+        let spacing = Self.columnSpacing * (count - 1)
+        let content = cardWidth - (Self.cardPadding * 2) - spacing
+        return max(content, 0) / count
+    }
+
+    /// True when that equal share drops below the readable minimum, so the table keeps its columns
+    /// and scrolls instead. The reply width is measured and the columns are bounded before this
+    /// decision is taken: comparing ideal widths (what a `ViewThatFits` candidate does) would only
+    /// ever see the unwrapped grid, which would send every table to the unbounded scroller.
+    static func overflowsReplyWidth(cardWidth: CGFloat, columns: Int) -> Bool {
+        guard cardWidth > 0 else { return false }
+        let width = Self.sharedColumnWidth(cardWidth: cardWidth, columns: columns)
+        let readableMinimum = Self.minimumColumnWidth
+        return width < readableMinimum
+    }
+
+    private var scrollsHorizontally: Bool {
+        Self.overflowsReplyWidth(cardWidth: self.cardWidth, columns: self.table.header.count)
+    }
+
+    /// Width every cell is laid out at, or nil before the reply's width is known, where cells keep
+    /// their ideal width for that first layout pass.
+    private var columnWidth: CGFloat? {
+        guard self.cardWidth > 0 else { return nil }
+        if self.scrollsHorizontally { return Self.minimumColumnWidth }
+        return Self.sharedColumnWidth(cardWidth: self.cardWidth, columns: self.table.header.count)
+    }
+
+    @ViewBuilder
+    private var tableLayout: some View {
+        if self.scrollsHorizontally {
+            ScrollView(.horizontal) {
+                self.tableGrid
+            }
+            .scrollIndicators(.visible)
+        } else {
+            self.tableGrid
+        }
+    }
+
+    private var tableGrid: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: Self.columnSpacing, verticalSpacing: 7) {
+            GridRow {
+                ForEach(self.table.header.indices, id: \.self) { column in
+                    // One cell per column carries the GFM alignment.
+                    self.cell(self.table.header[column], isHeader: true, column: column)
+                        .gridColumnAlignment(self.columnAlignment(column))
                 }
-                Divider()
-                ForEach(self.table.rows.indices, id: \.self) { rowIndex in
-                    GridRow {
-                        ForEach(self.table.rows[rowIndex].indices, id: \.self) { column in
-                            self.cell(self.table.rows[rowIndex][column], isHeader: false)
-                        }
+            }
+            Divider()
+            ForEach(self.table.rows.indices, id: \.self) { rowIndex in
+                GridRow {
+                    ForEach(self.table.rows[rowIndex].indices, id: \.self) { column in
+                        self.cell(self.table.rows[rowIndex][column], isHeader: false, column: column)
                     }
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
     }
 
-    private func cell(_ text: String, isHeader: Bool) -> some View {
-        Text(self.inlineMarkdown(text))
-            .font(isHeader ? OpenClawChatTypography.footnoteSemiBold : OpenClawChatTypography.footnote)
+    private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
+        // Cells read at the size of the reply's body text; a fixed footnote size stayed
+        // smaller than the surrounding prose at every Dynamic Type setting.
+        ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
+            .font(isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
+            // Grid cells otherwise accept compressed row proposals and ellipsize wrapped text.
+            .fixedSize(horizontal: false, vertical: true)
+            // The bounded width is what wraps a cell; the alignment keeps the GFM column alignment
+            // now that every cell fills its column instead of reporting its own ideal width.
+            .frame(width: self.columnWidth, alignment: self.cellAlignment(column))
     }
 
-    private func inlineMarkdown(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    private func cellAlignment(_ column: Int) -> Alignment {
+        Alignment(horizontal: self.columnAlignment(column), vertical: .top)
     }
 
     private func columnAlignment(_ column: Int) -> HorizontalAlignment {
@@ -208,6 +278,7 @@ struct ChatMarkdownListView: View {
     let variant: ChatMarkdownVariant
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
+    var isStreaming = false
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
@@ -271,7 +342,16 @@ struct ChatMarkdownListView: View {
     private func content(_ content: ChatMarkdownListItemContent) -> some View {
         switch content {
         case let .markdown(markdown):
-            self.markdownRenderer(markdown)
+            if self.isStreaming {
+                ChatStreamingAssistantTextBody(
+                    text: ChatStreamingAssistantText(
+                        markdown: markdown,
+                        kind: self.typography == .thinking ? .thinking : .response),
+                    markdownVariant: self.variant,
+                    textColor: self.textColor)
+            } else {
+                self.markdownRenderer(markdown)
+            }
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .list(list):
@@ -294,7 +374,8 @@ struct ChatMarkdownListView: View {
             context: self.context,
             variant: self.variant,
             typography: self.typography,
-            textColor: self.textColor)
+            textColor: self.textColor,
+            isStreaming: self.isStreaming)
     }
 
     private func markerAccessibilityLabel(at index: Int) -> Text {

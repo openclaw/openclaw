@@ -1,5 +1,6 @@
 import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 

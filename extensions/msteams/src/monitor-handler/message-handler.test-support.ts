@@ -83,7 +83,7 @@ export function buildChannelActivity(overrides: Record<string, unknown> = {}) {
     recipient: { id: "bot-id", name: "Bot" },
     conversation: { id: channelConversationId, conversationType: "channel" },
     channelData: { team: { id: "team-1" } },
-    entities: [{ type: "mention", mentioned: { id: "bot-id" } }],
+    entities: [{ type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id" } }],
     ...overrides,
   };
 }

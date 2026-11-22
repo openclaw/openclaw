@@ -50,9 +50,10 @@ openclaw_install_node() (
 `;
 
 /** Linux bootstrap only. Other platforms retain their image-provided Node contract. */
-export const DEFAULT_NODE_TOOLCHAIN_SETUP_SH = `${NODE_TOOLCHAIN_INSTALL_SH}
+function createNodeToolchainSetup(requirePackageManagers: boolean) {
+  return `${NODE_TOOLCHAIN_INSTALL_SH}
 if [ "$(uname -s)" = Linux ]; then
-  if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(${PROCESS_NODE_VERSION_CHECK} ? 0 : 1)' || ! command -v npm >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1 || ! command -v corepack >/dev/null 2>&1; then
+  if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(${PROCESS_NODE_VERSION_CHECK} ? 0 : 1)'${requirePackageManagers ? " || ! command -v npm >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1 || ! command -v corepack >/dev/null 2>&1" : ""}; then
     case "$(uname -m)" in
       x86_64) node_digest=${DEFAULT_NODE_SHA256.x64};;
       aarch64|arm64) node_digest=${DEFAULT_NODE_SHA256.arm64};;
@@ -64,3 +65,8 @@ if [ "$(uname -s)" = Linux ]; then
   fi
 fi
 `;
+}
+
+// Repository preparation resolves Node versions through npm and creates Corepack shims.
+export const DEFAULT_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(true);
+export const BUNDLE_NODE_TOOLCHAIN_SETUP_SH = createNodeToolchainSetup(false);

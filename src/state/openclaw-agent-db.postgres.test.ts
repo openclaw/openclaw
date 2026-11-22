@@ -14,7 +14,11 @@ import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
-import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "../config/sessions/transcript-payload.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { withEngineStoreAdmission as admit } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -30,6 +34,7 @@ import { retireSqliteDatabaseAdmissionForPath as retireAdmission } from "../infr
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
 import { readUpdateDatabaseGenerationsIsolated } from "../infra/update-candidate-state.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { readOpenVoiceSessions } from "../talk/client-voice-session-lookup.worker.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as schemaVersion } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -160,6 +165,56 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 
+  it("uses the partial indexes for PostgreSQL voice-session lookups", () => {
+    const options = { agentId: "voice-plans" };
+    const sessionKey = "agent:voice-plans:target";
+    const scope = "talk-client-voice-sessions";
+    using database = openDatabase(options);
+    const db = database.db;
+    assert(isPostgresSqlConnection(db));
+    database.write(
+      `INSERT INTO cache_entries (scope, key, value_json, updated_at)
+       SELECT ?, n::text, json_build_object(
+         'version', 1, 'agentId', 'voice-plans', 'voiceSessionId', n::text,
+         'sessionKey', CASE WHEN n = 1 THEN ? ELSE 'agent:voice-plans:other-' || n END,
+         'origin', 'client', 'status', CASE WHEN n <= 300 THEN 'open' ELSE 'closed' END,
+         'createdAt', n, 'updatedAt', n
+       )::text, n
+       FROM generate_series(1, 3000) AS n`,
+      scope,
+      sessionKey,
+    );
+    database.write(
+      "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+      scope,
+      "malformed",
+      "{broken",
+      1,
+    );
+    admit(() => db.exec("ANALYZE cache_entries"));
+
+    const plans = [];
+    using query = vi.spyOn(db, "query");
+    for (const input of [
+      { kind: "legacy", ...options, sessionKey },
+      { kind: "stale", ...options, updatedBefore: 2, excludeVoiceSessionId: "2" },
+    ] as const) {
+      query.mockClear();
+      expect(admit(() => readOpenVoiceSessions(options, input)).matches).toEqual([
+        { voiceSessionId: "1", sessionKey },
+      ]);
+      const lookup = query.mock.calls.find(([sql]) => sql.includes('from "cache_entries"'));
+      assert(lookup, `expected ${input.kind} lookup on the admitted store`);
+      const [statement, parameters] = lookup;
+      const explained = admit(() => db.query(`EXPLAIN ${statement}`, parameters));
+      plans.push(explained.rows.map((row) => row["QUERY PLAN"]).join("\n"));
+    }
+    expect(plans).toEqual([
+      expect.stringContaining("idx_agent_voice_session_open_scope"),
+      expect.stringContaining("idx_agent_voice_session_open_updated"),
+    ]);
+  });
+
   it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
     const target = await createSession("doctor-transcript", "doctor-transcripts", "main");
     await owners.appendTranscriptMessage(target, {
@@ -202,24 +257,22 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expectAnchorOnly(database.path);
   });
 
-  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", () => {
-    return admit(() => {
-      for (const options of [
-        { agentId: "main" },
-        { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
-      ]) {
-        const database = openDatabase(options);
-        assert(isPostgresSqlConnection(database.db));
-        const anchor = database.db.anchor;
-        closeReceipts.mockClear();
-        expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
-        expect(closeReceipts).toHaveBeenCalledWith(
-          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
-          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
-        );
-      }
-    });
+  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", async () => {
+    for (const options of [
+      { agentId: "main" },
+      { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
+    ]) {
+      const database = openDatabase(options);
+      assert(isPostgresSqlConnection(database.db));
+      const anchor = database.db.anchor;
+      closeReceipts.mockClear();
+      expect(await owners.closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
+      expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+      expect(closeReceipts).toHaveBeenCalledWith(
+        `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
+        expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
+      );
+    }
   });
 
   it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {
@@ -235,6 +288,123 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         }
       });
     expect(backend()).toBe(backend());
+  });
+
+  it("returns idle PostgreSQL backends without revoking logical readers or active borrowers", async () => {
+    await createSession("readonly-scope-release");
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        for (const cached of [false, true]) {
+          const scope = new OpenClawAgentDatabaseReadOnlyScope(cached);
+          const options = { agentId: "actor" };
+          try {
+            const first = scope.retain(options);
+            const second = scope.retain(options);
+            assert(first.found && second.found);
+            const db = first.database.db;
+            const pid = db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            second.claim.release();
+            vi.advanceTimersByTime(30 * 60_000);
+            expect(first.claim.isCurrent()).toBe(true);
+            first.claim.release();
+            expect(scope.hasRetainedConnection).toBe(true);
+            const reused = scope.read(({ db: reusedDb }) => reusedDb, options);
+            expect(reused).toEqual({ found: true, value: db });
+            const other = owners.openOpenClawAgentDatabaseReadOnly(options);
+            assert(other.found);
+            try {
+              vi.advanceTimersByTime(30 * 60_000);
+              expect(scope.hasRetainedConnection).toBe(false);
+              expect(other.database.db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid).toBe(
+                pid,
+              );
+            } finally {
+              other.database.close();
+            }
+          } finally {
+            scope.close();
+          }
+        }
+      });
+    } finally {
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds physical backends across retained logical stores without repeating admission", async () => {
+    const agents = Array.from({ length: 4 }, (_, index) => `retained-scope-${index}`);
+    for (const agentId of agents) {
+      await createSession("bounded-readers", agentId);
+    }
+    const { OpenClawAgentDatabaseReadOnlyScope } =
+      await import("./openclaw-agent-db-readonly-scope.js");
+    const scopes = agents.map((agentId) => ({
+      agentId,
+      scope: new OpenClawAgentDatabaseReadOnlyScope(),
+    }));
+    const databases: EngineConnection[] = [];
+    const pids: unknown[] = [];
+    const lockBase = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 10), 16);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      admit(() => {
+        scopes.forEach(({ scope, agentId }, index) => {
+          const result = scope.read(
+            ({ db }) => {
+              databases.push(db);
+              db.prepare("SELECT pg_advisory_lock(?)").get(lockBase + index);
+              return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+            },
+            { agentId },
+          );
+          assert(result.found);
+          pids.push(result.value);
+        });
+      });
+      await client.query("BEGIN; SET LOCAL lock_timeout = '1s'");
+      // Acquiring evicted backends' session locks waits for their asynchronous socket closes.
+      for (const backend of [...new Set(pids)].slice(0, -2)) {
+        await client.query("SELECT pg_advisory_xact_lock($1)", [lockBase + pids.indexOf(backend)]);
+      }
+      expect(
+        (await queryRows("SELECT pid FROM pg_stat_activity WHERE pid = ANY($1)", [pids])).length,
+      ).toBeLessThanOrEqual(2);
+      await client.query("ROLLBACK");
+      vi.advanceTimersByTime(3 * 60_000);
+      expect(scopes.every(({ scope }) => scope.hasRetainedConnection)).toBe(true);
+      const statements: unknown[] = [];
+      const observer = (event: unknown) => statements.push(event);
+      const observations = channel("openclaw.database.statement");
+      observations.subscribe(observer);
+      try {
+        admit(() => {
+          scopes.forEach(({ scope, agentId }, index) => {
+            const result = scope.read(
+              ({ db }) => {
+                expect(db).toBe(databases[index]);
+                return db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+              },
+              { agentId },
+            );
+            assert(result.found);
+            expect(result.value).not.toBe(pids[index]);
+          });
+        });
+        // Only the requested reads run; retained logical readers do no schema/admission SQL.
+        expect(statements).toHaveLength(agents.length);
+      } finally {
+        observations.unsubscribe(observer);
+      }
+    } finally {
+      await client.query("ROLLBACK");
+      scopes.forEach(({ scope }) => scope.close());
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+    }
   });
 
   it("updates captured PostgreSQL families through Doctor before agent startup, retaining rows and search", async () => {
@@ -339,7 +509,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       assert(maintenance);
       try {
         await maintenance.run(async () => {
-          admit(() => repairOpenClawStateDatabaseIndexesForDoctor());
+          await repairOpenClawStateDatabaseIndexesForDoctor();
           await prepareDoctorDatabaseMigrations({
             env: process.env,
             databasePaths: [databasePath],
@@ -353,10 +523,26 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
       expect(paths.map((file) => fs.readFileSync(file))).toEqual(anchors);
       const upgraded = openDatabase(options);
-      assert(isPostgresSqlConnection(upgraded.db));
+      const upgradedDb = upgraded.db;
+      assert(isPostgresSqlConnection(upgradedDb));
       expect(postgresFacts(upgraded.db)?.version).toBe(schemaVersion);
       admit(() => {
         assertMemorySearch(upgraded.db);
+        expect(
+          upgraded.db.prepare("SELECT * FROM session_transcript_active_event_facts").all(),
+        ).toEqual([]);
+        expect(() =>
+          upgradedDb.runTransaction(() => {
+            upgraded.db.exec("DROP TABLE session_transcript_active_event_facts");
+            createTranscriptPayloadUpdater(
+              upgraded.db,
+              target.sessionId,
+            )({
+              seq: 0,
+              ...prepareTranscriptPayload(upgraded.db, '{"type":"custom","id":"repair"}'),
+            });
+          }),
+        ).toThrow(/session_transcript_active_event_facts/);
         expect(
           upgraded.get("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'"),
         ).toEqual({ schema_version: schemaVersion });
@@ -454,6 +640,48 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       payloads.every((row) => row.event_zstd === null && typeof row.event_json === "string"),
     ).toBe(true);
     expect(payloads.map((row) => JSON.parse(row.event_json))).toEqual(hydrated.snapshot.events);
+    const activeFacts = await queryRows<{
+      serialized_bytes: string;
+      dependency_navigation_json: string;
+      event_json: string;
+    }>(
+      `SELECT facts.serialized_bytes, facts.dependency_navigation_json, event.event_json
+       FROM "${facts.namespace}".session_transcript_active_event_facts facts
+       JOIN "${facts.namespace}".transcript_events event USING (session_id, seq)
+       WHERE facts.session_id = $1 ORDER BY facts.seq`,
+      [target.sessionId],
+    );
+    expect(activeFacts).toHaveLength(7);
+    for (const row of activeFacts) {
+      expect(Number(row.serialized_bytes)).toBe(Buffer.byteLength(row.event_json, "utf8") + 1);
+      expect(row.dependency_navigation_json).toBe("{}");
+    }
+    const pendingTarget = await createSession("postgres-pending-facts");
+    await appendTranscriptMessage(pendingTarget, {
+      message: {
+        role: "assistant",
+        content: "Pending automation output",
+        provider: "openclaw",
+        model: "automation-result",
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    });
+    const pendingFacts = await queryRows<(typeof activeFacts)[number]>(
+      `SELECT facts.serialized_bytes, facts.dependency_navigation_json, event.event_json
+       FROM "${facts.namespace}".session_transcript_active_event_facts facts
+       JOIN "${facts.namespace}".transcript_events event USING (session_id, seq)
+       WHERE facts.session_id = $1`,
+      [pendingTarget.sessionId],
+    );
+    expect(pendingFacts).toHaveLength(1);
+    expect(Number(pendingFacts[0]!.serialized_bytes)).toBe(
+      Buffer.byteLength(pendingFacts[0]!.event_json, "utf8") + 1,
+    );
+    expect(JSON.parse(pendingFacts[0]!.dependency_navigation_json)).toMatchObject({
+      type: "message",
+      message: { excludeFromContext: true, openclawModelPlacement: "pending", content: [] },
+    });
     let store = openContextEngineTurnOutboxWorkerStore({ agentId: "actor", path: database.path });
     const filter = { engineId: "postgres-fixture" };
     const enqueue = (boundary: TranscriptTurnBoundary) =>

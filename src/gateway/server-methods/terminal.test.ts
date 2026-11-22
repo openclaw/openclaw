@@ -64,10 +64,12 @@ function makeOpts(
   params: Record<string, unknown> = { cols: 80, rows: 24 },
   {
     enabled = true,
+    agents,
     preparedConfig,
     nodeRegistry = { get: () => undefined },
   }: {
     enabled?: boolean;
+    agents?: OpenClawConfig["agents"];
     preparedConfig?: OpenClawConfig;
     nodeRegistry?: {
       get: (nodeId: string) => unknown;
@@ -76,7 +78,7 @@ function makeOpts(
   } = {},
 ) {
   const sessions = makeTerminalSessionMocks();
-  const runtimeConfig: OpenClawConfig = { gateway: { terminal: { enabled } } };
+  const runtimeConfig: OpenClawConfig = { agents, gateway: { terminal: { enabled } } };
   const policy = createTerminalLaunchPolicy(runtimeConfig);
   if (preparedConfig) {
     policy.prepareConfig(preparedConfig, { restartPending: true });
@@ -107,6 +109,7 @@ function makeOpts(
     isConnectionActive,
     isTerminalEnabled,
     resolveTerminalLaunchPolicy,
+    runtimeConfig,
   };
 }
 
@@ -221,24 +224,36 @@ describe("terminal gateway policy", () => {
     }
   });
 
-  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
+  it("opens a conversation terminal as its session agent in an explicit fleet", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const agentSessionKey = "agent:main:ui-session";
+    const agentSessionKey = "agent:research:ui-session";
     const agentOwner = {
       kind: "agent",
       agentSessionKey,
       agentSessionId: "ui-session-id",
-      agentId: "main",
+      agentId: "research",
     } as const;
-    const { opts, respond } = makeOpts({});
+    const { opts, respond } = makeOpts(
+      { sessionKey: agentSessionKey, cols: 80, rows: 24 },
+      {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, research: { workspace: process.cwd() } },
+        },
+      },
+    );
     opts.context.terminalSessions = manager;
 
-    await openOwnedTerminal(opts, agentSessionKey);
+    await runTerminal("terminal.open", opts);
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
+      expect.objectContaining({
+        agentId: "research",
+        cwd: process.cwd(),
+        sessionId: expect.any(String),
+      }),
     );
     const owned = manager.listAgent(agentOwner);
     expect(owned).toHaveLength(1);
@@ -249,13 +264,13 @@ describe("terminal gateway policy", () => {
     backend.emitData("ui session output");
     expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
     expect(
-      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
+      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:research:other-session" }),
     ).toEqual([]);
     expect(
-      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
+      manager.snapshotAgent({ ...agentOwner, agentId: "main" }, session.sessionId),
     ).toBeUndefined();
     expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
-      agentId: "main",
+      agentId: "research",
     });
   });
 
@@ -346,18 +361,26 @@ describe("terminal gateway policy", () => {
     await expectOpenFailure(makeOpts(catalogParams("missing")));
   });
 
-  it("reports a missing explicit owner as invalid request", async () => {
-    const fixture = makeOpts();
-    fixture.resolveTerminalLaunchPolicy.mockReturnValue({
-      ok: false,
-      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
-    });
+  it.each([undefined, "ui-session"])(
+    "refuses an ambiguous terminal owner even with a system agent (session=%s)",
+    async (sessionKey) => {
+      const fixture = makeOpts(
+        { sessionKey, cols: 80, rows: 24 },
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "research" } },
+            entries: { main: {}, research: {} },
+          },
+        },
+      );
 
-    await expectOpenFailure(fixture, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "terminal requires an explicit owner",
-    });
-  });
+      await expectOpenFailure(fixture, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("no explicit owner"),
+      });
+    },
+  );
 
   it("opens a provider-built local resume plan for a selected source and returns its title", async () => {
     const sourceHomeId = "selected-codex-home";
@@ -413,13 +436,17 @@ describe("terminal gateway policy", () => {
 
   it.each([
     ["isConnectionActive", "terminal connection closed"],
-    ["isTerminalEnabled", "terminal is disabled"],
+    ["terminal policy", "terminal is disabled"],
   ] as const)(
     "does not create a terminal after %s changes during catalog lookup",
     async (flag, message) => {
       const fixture = await startCatalogLookup();
       const { plan, opening, sessions, respond } = fixture;
-      fixture[flag].mockReturnValue(false);
+      if (flag === "isConnectionActive") {
+        fixture.isConnectionActive.mockReturnValue(false);
+      } else {
+        fixture.runtimeConfig.gateway!.terminal!.enabled = false;
+      }
       plan.resolve(localPlan());
       await opening;
       expect(sessions.open).not.toHaveBeenCalled();

@@ -40,17 +40,19 @@ type BytePlusTaskResponse = {
   resolution?: unknown;
 };
 
-type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
-
-function readBytePlusTaskStatus(payload: BytePlusTaskResponse): BytePlusTaskStatus {
+function isBytePlusTaskComplete(payload: BytePlusTaskResponse): boolean {
   const status = normalizeOptionalString(payload.status);
   switch (status) {
     case "running":
-    case "failed":
     case "queued":
+      return false;
     case "succeeded":
+      return true;
+    case "failed":
     case "cancelled":
-      return status;
+      throw new Error(
+        readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
+      );
     case undefined:
       throw new Error("BytePlus video status response missing task status");
     default:
@@ -63,6 +65,15 @@ function readBytePlusErrorMessage(error: unknown): string | undefined {
 }
 
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
+  const generateCapabilities = {
+    maxVideos: 1,
+    maxDurationSeconds: 12,
+    supportsAspectRatio: true,
+    supportsResolution: true,
+    supportsAudio: true,
+    supportsWatermark: true,
+  };
+  const { maxVideos, ...imageToVideoCapabilities } = generateCapabilities;
   return {
     id: "byteplus",
     label: "BytePlus",
@@ -75,23 +86,12 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         draft: "boolean",
         camera_fixed: "boolean",
       },
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: 12,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
-      },
+      generate: generateCapabilities,
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
+        maxVideos,
         maxInputImages: 1,
-        maxDurationSeconds: 12,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        supportsWatermark: true,
+        ...imageToVideoCapabilities,
       },
       videoToVideo: {
         enabled: false,
@@ -215,13 +215,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "BytePlus video status request failed",
         timeoutMessage: `BytePlus video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readBytePlusTaskStatus(payload) === "succeeded",
-        getFailureMessage: (payload) => {
-          const status = readBytePlusTaskStatus(payload);
-          return status === "failed" || status === "cancelled"
-            ? readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed"
-            : undefined;
-        },
+        isComplete: isBytePlusTaskComplete,
       });
       const completedContent = completed.content;
       if (completedContent !== undefined && !isRecord(completedContent)) {

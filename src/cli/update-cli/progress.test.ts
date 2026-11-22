@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createCliTtyMock } from "../test-runtime-capture.js";
-import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
+import {
+  createUpdateDoctorProgress,
+  createUpdateProgress,
+  prepareResult,
+  printResult,
+} from "./progress.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   reportUpdateCommandPendingRecovery,
@@ -43,6 +52,60 @@ const recoveryStep = (overrides: Partial<UpdateRunResult["steps"][number]> = {})
     exitCode: 0,
     ...overrides,
   });
+
+describe("activation Doctor diagnostic display", () => {
+  afterEach(() => {
+    resetLogger();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["pretty", "compact", "json"] as const)("uses %s stderr without JSON stdout", (style) => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: style });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const display = createUpdateDoctorProgress();
+    expect(display).toBeTypeOf("function");
+    display?.("Doctor: state schema");
+    expect(stderr).toHaveBeenCalledOnce();
+    const line = String(stderr.mock.calls[0]?.[0]);
+    if (style === "json") {
+      expect(JSON.parse(line)).toEqual({
+        time: expect.any(String),
+        level: "info",
+        message: "Doctor: state schema",
+      });
+    } else {
+      expect(line).toBe("Doctor: state schema\n");
+    }
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it.each(["warn", "error", "fatal", "silent"] as const)(
+    "respects %s filtering",
+    (consoleLevel) => {
+      setLoggerOverride({ consoleLevel });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      expect(createUpdateDoctorProgress()).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a synchronous stderr failure outside child cancellation", async () => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("synchronous display failure");
+    });
+    const observer = vi.fn();
+    const timing = createUpdateDoctorSectionTiming({}, createUpdateDoctorProgress());
+    await expect(
+      timing.wrap(async (_argv: string[], options: CommandOptions) => {
+        options.onOutputChunk?.(Buffer.from("Doctor: state schema\n"), "stderr");
+        return { stderr: "captured diagnostic", exitCode: 0 };
+      })([], { onOutputChunk: observer }),
+    ).resolves.toEqual({ stderr: "captured diagnostic", exitCode: 0 });
+    expect(observer).toHaveBeenCalledOnce();
+  });
+});
 function observed(version: string, overrides: UpdateRunRecord["verification"] = {}) {
   return {
     serviceRunning: true,
@@ -135,6 +198,84 @@ describe("update progress", () => {
       expect.objectContaining({ status: "ok", reportPath }),
     );
   });
+
+  it.each([
+    {
+      platform: "linux" as const,
+      path: "/report files/operator's $HOME `echo nope`;[1].md",
+      command:
+        "Read report (shell): cat -- '/report files/operator'\\''s $HOME `echo nope`;[1].md'",
+    },
+    {
+      platform: "win32" as const,
+      path: "C:\\report files\\operator's ‘notes’ $HOME `echo nope`;[1].md",
+      command:
+        "Read report (PowerShell): Get-Content -LiteralPath 'C:\\report files\\operator''s ‘‘notes’’ $HOME `echo nope`;[1].md'",
+    },
+  ])("prints a copyable $platform read command beside the saved path", async (fixture) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(fixture.platform);
+    vi.mocked(writeUpdateRunReportArtifact).mockResolvedValue(fixture.path);
+    await printResult(result, { run: context });
+    expect(log).toHaveBeenCalledWith(`Report: ${fixture.path}`);
+    expect(log).toHaveBeenCalledWith(fixture.command);
+  });
+
+  it("omits path and read guidance when the report could not be saved", async () => {
+    silenceErrors();
+    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("report unavailable"));
+    await printResult(result, { run: context });
+    expect(printed()).not.toContain("Report:");
+    expect(printed()).not.toContain("Read report");
+  });
+
+  it.each([true, false])(
+    "replaces late warning snapshots without reopening history (JSON: %s)",
+    async (json) => {
+      const writeJson = jsonOutput();
+      const captured: UpdateRunRecord = {
+        ...run,
+        status: "succeeded",
+        phase: "finished",
+        steps: [
+          { step: "warning:cleanup", status: "completed", detail: "old warning" },
+          { step: "warning:cleanup:2", status: "completed", detail: "old extra warning" },
+          { step: "warning:cleanup:neighbor", status: "completed", detail: "other warning" },
+        ],
+      };
+      const saved = structuredClone(captured);
+      const read = refuseHistory("Captured reporting must not reopen history.").mockClear();
+      const emit = await prepareResult(
+        result,
+        { json, run: context },
+        { record: captured, writeArtifacts: false },
+      );
+      for (const warnings of [undefined, ["current warning"], []]) {
+        log.mockClear();
+        writeJson.mockClear();
+        emit([stepFixture("cleanup", { exitCode: 0, warnings })]);
+        const expected = [...(warnings ?? ["old warning", "old extra warning"]), "other warning"];
+        if (json) {
+          const output = writeJson.mock.calls.at(-1)?.[0] as { run: UpdateRunRecord };
+          expect(output.run.status).toBe("succeeded");
+          expect(updateRunWarningMessages(output.run.steps).toSorted()).toEqual(
+            expected.toSorted(),
+          );
+        } else {
+          expect(printed()).toContain(`${expected.length} warning`);
+          for (const message of expected) {
+            expect(printed()).toContain(message);
+          }
+          if (warnings) {
+            expect(printed()).not.toContain("old warning");
+            expect(printed()).not.toContain("old extra warning");
+          }
+        }
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(writeUpdateRunReportArtifact).not.toHaveBeenCalled();
+      expect(captured).toEqual(saved);
+    },
+  );
 
   it.each([true, false])(
     "renders step progress with only bound ledger phases (bound: %s)",
@@ -495,7 +636,7 @@ describe("update progress", () => {
         expect(output).toContain(
           serviceRunning
             ? "verified serving 2026.9.5; restart remains unsafe (state-migration-started)"
-            : "not serving (service-not-running)",
+            : "readiness unverified (service-not-running)",
         );
       }
       expect(run).toEqual(saved);

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as sandboxRuntime from "../../agents/sandbox/runtime-status.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
@@ -242,7 +242,7 @@ describe("queued turn steering", () => {
       resetTriggered: false,
     });
     const turn = createTurn({ operation });
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.read", "operator.write"],
       gatewayAccessGrant: null,
@@ -264,7 +264,7 @@ describe("queued turn steering", () => {
       const target = captureCurrentReplyMessageInjectionTarget("main");
       expect(target).toBeDefined();
       const overlay = {
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+        operatorAuthority: createTestOperatorAuthority({
           ...operatorAuthority,
           scopes: ["operator.write", "operator.read"],
           source: {},
@@ -293,7 +293,7 @@ describe("queued turn steering", () => {
       await expect(
         inject("Same permissions from another profile", {
           ...overlay,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             ...overlay.operatorAuthority,
             profileId: "maintainer",
           }),
@@ -304,7 +304,7 @@ describe("queued turn steering", () => {
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       for (const incomingOperator of [
         undefined,
-        createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
+        createTestOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
         await expect(
           inject("Different original operator authority", {
@@ -370,9 +370,8 @@ describe("queued ingress acceptance", () => {
           if (multipleInputs) {
             const claim = run.controllerClaim ?? run.controllerInput?.claim;
             selectedGroups.push(claim?.sources.map((source) => source.prompt) ?? []);
-            rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
           }
-          throw new Error("ENOSPC: queued preparation failed");
+          rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
         });
         const drain = createChannelIngressDrain({
           queue,
@@ -430,6 +429,7 @@ describe("queued ingress acceptance", () => {
             expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
             await vi.advanceTimersByTimeAsync(60);
             expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+            await vi.advanceTimersByTimeAsync(250);
             expect(selectedGroups).toContainEqual(["Second request"]);
             // The waiting input keeps its heartbeat until its own preparation fails.
             await vi.advanceTimersByTimeAsync(90);
@@ -455,6 +455,7 @@ describe("queued ingress acceptance", () => {
         } finally {
           drain.dispose();
           clearFollowupQueue(key);
+          await vi.advanceTimersByTimeAsync(250);
           preparation?.mockRestore();
         }
       });

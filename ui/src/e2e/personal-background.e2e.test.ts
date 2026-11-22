@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UserBackgroundAsset } from "../../../packages/gateway-protocol/src/schema/users-background.ts";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
@@ -172,6 +174,92 @@ async function changePreference(
 }
 
 suite.define(() => {
+  it("keeps the loaded photo painted when switching to a new or retained session", () =>
+    suite.withPage({ viewport: desktop, colorScheme: "dark" }, async ({ page }) => {
+      const keys = ["agent:main:design", "agent:main:notes"] as const;
+      const sessions = keys.map((key, i) => ({
+        key,
+        kind: "direct",
+        label: ["Design review", "Field notes"][i],
+        updatedAt: Date.now() - i,
+      }));
+      await installBackground(
+        page,
+        {
+          ...DEFAULT_BACKGROUND_PREFERENCE,
+          source: { kind: "custom", assetId },
+          showInSessions: true,
+          visibility: 1,
+          presentation: "full-bleed",
+        },
+        {
+          sessionKey: keys[0],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "users.prefs.get",
+            ...backgroundMethods,
+          ],
+          historyMessages: [
+            chatMessage("user", "What should we check next?"),
+            chatMessage("assistant", "Let’s compare the two views side by side."),
+          ],
+          methodResponses: {
+            "sessions.list": { ts: 1, path: "", count: sessions.length, sessions, defaults: {} },
+          },
+        },
+      );
+      const jpeg = await readFile(
+        new URL("../../../test/fixtures/media/roof-camera-sky.jpg", import.meta.url),
+      );
+      let reads = 0;
+      await page.route("**/__openclaw__/users/background/*", (route) => {
+        reads++;
+        // A warm session switch must not depend on another network response.
+        return route.fulfill(
+          reads === 1 ? { contentType: "image/jpeg", body: jpeg } : { status: 503 },
+        );
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, keys[0]));
+      const photo = page.locator(`${chatImage}:visible`);
+      await photo.evaluate((node) => (node as HTMLImageElement).decode());
+      const src = await photo.getAttribute("src");
+      const sample = await page.evaluateHandle((selector) => {
+        let blank = 0;
+        let frame = 0;
+        const sampleFrame = () => {
+          if (
+            ![...document.querySelectorAll<HTMLImageElement>(selector)].some(
+              (img) => img.checkVisibility({ opacityProperty: true }) && img.naturalWidth > 0,
+            )
+          ) {
+            blank++;
+          }
+          frame = requestAnimationFrame(sampleFrame);
+        };
+        sampleFrame();
+        return () => {
+          cancelAnimationFrame(frame);
+          return blank;
+        };
+      }, chatImage);
+      for (const key of [keys[1], keys[0]]) {
+        await page.locator(`.sidebar-recent-session[data-session-key="${key}"] a`).click();
+        await expect
+          .poll(() =>
+            page
+              .locator('openclaw-chat-pane[aria-hidden="false"]')
+              .evaluate((el) => (el as HTMLElement & { sessionKey: string }).sessionKey),
+          )
+          .toBe(key);
+        if (key === keys[1]) {
+          await page.screenshot({ path: `${suite.artifactDir}/session-switch.png` });
+        }
+        expect(reads).toBe(1);
+        expect(await photo.getAttribute("src")).toBe(src);
+      }
+      expect(await sample.evaluate((stop) => stop())).toBe(0);
+    }));
+
   it("uses private upload controls and independent placements without covering the transcript", () =>
     suite.withPage(
       { colorScheme: "light", locale: "en-US", viewport: largeDesktop },
@@ -229,11 +317,11 @@ suite.define(() => {
           "users.background.upload",
           backgroundReply(asset, preference),
         );
-        await section.getByRole("status").filter({ hasText: "Background image saved." }).waitFor();
+        await expect.poll(() => section.locator("[data-background-upload]").isEnabled()).toBe(true);
         await expectSelected(section, "custom");
         expect((await gateway.getRequests("users.prefs.set")).length).toBe(priorWrites);
         await expectPlacement(page, "New session page", true);
-        await expectPlacement(page, "Conversations", false);
+        await expectPlacement(page, "Sessions", false);
         await expect
           .poll(() =>
             section
@@ -263,13 +351,13 @@ suite.define(() => {
           preference = { ...preference, ...patch };
           await changePreference(page, gateway, action, preference, previous, asset);
         };
-        await change(() => placement(page, "Conversations").click(), { showInSessions: true });
+        await change(() => placement(page, "Sessions").click(), { showInSessions: true });
         await expectPlacement(page, "New session page", true);
         await change(() => placement(page, "New session page").click(), {
           showOnNewSession: false,
           visibility: 0.5,
         });
-        await expectPlacement(page, "Conversations", true);
+        await expectPlacement(page, "Sessions", true);
         await openRoute(page, "new", "new-session");
         await expectCount(page, ".new-session-page openclaw-session-background img", 0);
         await visitAppearance(page);
@@ -367,7 +455,7 @@ suite.define(() => {
       const gateway = await installBackground(page, preference, {
         methodResponses: { "users.background.upload": { status: "conflict" } },
       });
-      const section = await visitAppearance(page);
+      const section = await visitAppearance(page, true);
       const image = await imageFixture(page);
       await uploadImage(page, section, "replacement.png", image.png);
       await gateway.waitForRequest("users.background.upload");

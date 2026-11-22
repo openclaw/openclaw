@@ -222,6 +222,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
       return false;
     }
+    let refreshCompletionAuthority: true | undefined;
+    try {
+      // A surviving requester owns the whole cohort, including this successor.
+      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
+    } catch {
+      refreshCompletionAuthority = true;
+    }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
       retainAdmission: params.retainAdmission,
@@ -233,7 +240,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
-      refreshCompletionAuthority: true,
+      refreshCompletionAuthority,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
@@ -491,6 +498,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             accumulatedRuntimeMs,
             endedReason: undefined,
             pauseReason: undefined,
+            waitForMessage: undefined,
             endedHookEmittedAt: undefined,
             browserCleanupDispatchedAt: undefined,
             deleteCleanupDispatchedAt: undefined,
@@ -559,7 +567,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
-          return { value: { source, next }, postimages };
+          return { value: { source, next }, postimages, removalReason: "superseded" };
         },
         {
           runs: this.options.runs,
@@ -586,7 +594,25 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             if (refreshCompletionAuthority && authority) {
               // The newly admitted caller replaces predecessor custody, including
               // a retired legacy source; persisted rows alone never grant it.
-              subagentRuns.bindCompletionAuthority(next, authority);
+              const sameRequesterTask =
+                !preserveCompletedRun &&
+                (next.taskRunId ?? next.runId) === (value.source.taskRunId ?? value.source.runId) &&
+                next.requesterSessionKey === value.source.requesterSessionKey &&
+                next.requesterAgentId === value.source.requesterAgentId &&
+                next.requesterStorePath === value.source.requesterStorePath &&
+                next.requesterTurnRunId === value.source.requesterTurnRunId;
+              // Transfer keeps accounting metadata for this task, never its predecessor's permission.
+              const requesterRunInstance = sameRequesterTask
+                ? subagentRuns.getRequesterRunInstance(next)
+                : undefined;
+              subagentRuns.bindCompletionAuthority(
+                next,
+                authority,
+                requesterRunInstance?.runId === next.requesterTurnRunId
+                  ? requesterRunInstance
+                  : undefined,
+                sameRequesterTask ? subagentRuns.getRequesterCompletion(next) : undefined,
+              );
               custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);

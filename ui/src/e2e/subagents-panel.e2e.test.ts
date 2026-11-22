@@ -190,7 +190,7 @@ suite.define(() => {
         const stopManaged = managed.getByRole("button", { name: `Stop ${child.label}` });
         await openManaged.waitFor();
         await stopManaged.waitFor();
-        const native = panel.getByRole("region", { name: "Live native agents", exact: true });
+        const native = panel.getByRole("region", { name: "Live subagents", exact: true });
         const nativeRow = native.getByRole("listitem").filter({ hasText: nativeLabel });
         // The suite allocates one retained artifact directory per test attempt.
         const directory = suite.artifactDir;
@@ -256,6 +256,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-completed");
 
+        await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -265,6 +266,7 @@ suite.define(() => {
         expect(await stopManaged.isVisible()).toBe(true);
         await capture("native-mobile-completed");
 
+        await pauseVirtualClock(page);
         await gateway.setMethodResponse(
           "sessions.describe",
           describeResponse({
@@ -283,6 +285,7 @@ suite.define(() => {
           .getByText("Updates retry automatically while this panel is visible.")
           .waitFor();
         await capture("native-parent-denied");
+        await page.clock.resume();
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
         await openChatSidePanelType(page, "Subagents");
@@ -373,18 +376,22 @@ suite.define(() => {
         await expect
           .poll(async () => (await panel.boundingBox())!.width)
           .toBeLessThan(initialWidth);
-        const geometry = await thread.evaluate((element) => {
-          const outer = element.closest("openclaw-chat-subagents-panel")!.getBoundingClientRect();
-          const inner = element.getBoundingClientRect();
-          return {
-            left: inner.left - outer.left,
-            right: inner.right - outer.right,
-            overflow: element.scrollWidth - element.clientWidth,
-          };
-        });
-        expect(geometry.left).toBeGreaterThanOrEqual(-1);
-        expect(geometry.right).toBeLessThanOrEqual(1);
-        expect(geometry.overflow).toBeLessThanOrEqual(1);
+        // The transcript receives its narrowed width through ResizeObserver.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const outer = element
+                .closest("openclaw-chat-subagents-panel")!
+                .getBoundingClientRect();
+              const inner = element.getBoundingClientRect();
+              return Math.max(
+                outer.left - inner.left,
+                inner.right - outer.right,
+                element.scrollWidth - element.clientWidth,
+              );
+            }),
+          )
+          .toBeLessThanOrEqual(1);
         const bounds = (await panel.boundingBox())!;
         await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
         await page.mouse.wheel(0, -2000);
@@ -582,6 +589,14 @@ suite.define(() => {
           .filter({ has: page.getByText(child.label, { exact: true }) })
           .waitFor();
         await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
+        const adjacentRoots = panel
+          .locator(
+            '.subagents-desktop__row[data-depth="0"]:has(+ .subagents-desktop__row[data-depth="0"])',
+          )
+          .first();
+        expect(
+          await adjacentRoots.evaluate((root) => getComputedStyle(root, "::after").content),
+        ).toBe('""');
         await panel
           .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })
@@ -591,9 +606,8 @@ suite.define(() => {
           .getByText(swarm.label, { exact: true })
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("2 calls");
+        const openRow = row.locator(".subagents-desktop__open");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("2 calls");
 
         const activity = {
           sessionKey: child.key,
@@ -614,13 +628,11 @@ suite.define(() => {
           },
         };
         await gateway.emitGatewayEvent("agent", activity);
-        await expect
-          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("Reading notice component");
+        await expect.poll(() => openRow.ariaSnapshot()).toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
-          "2 calls",
-        );
+        expect(await openRow.ariaSnapshot()).toContain("2 calls");
+        await openRow.hover({ position: { x: 12, y: 34 } });
+        expect(await openRow.getAttribute("title")).toBeNull();
         await gateway.emitGatewayEvent("agent", {
           sessionKey: other.key,
           agentId: "main",
@@ -631,13 +643,11 @@ suite.define(() => {
           data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
-        await otherRow.locator(".subagents-desktop__open").waitFor();
+        const openOtherRow = otherRow.locator(".subagents-desktop__open");
         await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .poll(() => openOtherRow.ariaSnapshot())
           .toContain("Retry failed benchmark targets");
-        await expect
-          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
-          .toContain("1+ calls");
+        await expect.poll(() => openOtherRow.ariaSnapshot()).toContain("1+ calls");
         expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
         await panel

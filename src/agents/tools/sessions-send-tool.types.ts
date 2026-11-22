@@ -8,6 +8,18 @@ export type AgentStepSession = {
 };
 
 export type SessionsSendToolOptions = {
+  swarmCollector?: boolean;
+  modelProvider?: string;
+  modelId?: string;
+  sessionId?: string;
+  runId?: string;
+  onYield?: import("./sessions-yield-tool.js").SessionsYieldCallback;
+  senderIsOwner?: boolean;
+  scheduledToolTargets?: import("../../cron/execution-context-registry.js").ScheduledToolTargets;
+  /** A retained replay whose target had a task when it was held. */
+  expectTargetTask?: boolean;
+  /** A retained replay uses its host-owned source assertion and cannot ask for fresh approval. */
+  retainedReplay?: true;
   workerPlacement?: boolean;
   agentId?: string;
   agentSessionKey?: string;

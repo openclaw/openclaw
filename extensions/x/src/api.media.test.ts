@@ -136,7 +136,7 @@ describe("X native media request boundary", () => {
       ["0", 4194304],
       ["1", 7],
     ]);
-    expect(Buffer.concat(test.chunks.map(({ bytes }) => bytes))).toEqual(media.buffer);
+    assert(Buffer.concat(test.chunks.map(({ bytes }) => bytes)).equals(media.buffer), "media");
     expect(test.post()).toEqual({
       text: "Video",
       reply: { in_reply_to_tweet_id: "20" },

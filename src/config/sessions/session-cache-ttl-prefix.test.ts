@@ -4,6 +4,7 @@ import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -57,9 +58,14 @@ function prefixAt(
   );
 }
 
-it.each([false, true])(
-  "selects cache-TTL dependencies without scanning messages (analyzed=%s)",
-  async (analyzed) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "selects cache-TTL dependencies without repeated identity scans (analyzed=%s, legacy=%s)",
+  async (analyzed, legacy) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { database, scope } = createSessionCompoundWorkerFixture();
       const marker = checkpoint("checkpoint", null, {
@@ -81,15 +87,15 @@ it.each([false, true])(
             [{ type: "session", id: scope.sessionId, version: 3 }, marker, ...messages],
             { scheduleProjectionReconcile: false },
           );
+          if (legacy) {
+            // Imported prefixes can have a canonical header without an auxiliary identity.
+            database.db
+              .prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND seq = 0")
+              .run(scope.sessionId);
+          }
           if (analyzed) {
             // The same type-index seek must cover transcripts admitted without a backfill.
-            database.db
-              .prepare(`UPDATE transcript_events
-              SET navigation_type = NULL, navigation_custom_type = NULL,
-                  navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                  navigation_last_custom_type = NULL, navigation_valid = 1
-              WHERE session_id = ?`)
-              .run(scope.sessionId);
+            clearHistoryNavigation(database, scope.sessionId);
           }
         },
         { agentId: database.agentId, path: database.path },
@@ -136,7 +142,16 @@ it.each([false, true])(
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;
-        expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        if (legacy) {
+          expect(
+            plan.some(
+              ({ detail }) =>
+                typeof detail === "string" && detail.includes("(session_id=? AND seq=?) LEFT-JOIN"),
+            ),
+          ).toBe(true);
+        } else {
+          expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+        }
       } finally {
         spy.mockRestore();
       }

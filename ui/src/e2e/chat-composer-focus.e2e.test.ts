@@ -9,6 +9,14 @@ const expectFocus = (locator: Locator, focused = true) =>
   expect
     .poll(() => locator.evaluate((element) => document.activeElement === element))
     .toBe(focused);
+const expectActiveOption = (option: Locator) =>
+  expect
+    .poll(() =>
+      option.evaluate(
+        (element) => document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+      ),
+    )
+    .toBe(true);
 
 const measureComposer = (composer: Locator) =>
   composer.evaluate(async (element) => {
@@ -52,12 +60,77 @@ async function openAgentPicker(page: Page) {
     picker,
     trigger: picker.locator(".agent-select__trigger"),
     menu: picker.locator(".agent-select__menu"),
-    option: picker.getByRole("menuitemradio", { name: "research", exact: true }),
+    option: picker.getByRole("option", { name: "research", exact: true }),
     composer: page.locator(".new-session-page__message"),
   };
 }
 
 suite.define(() => {
+  it("keeps blocked composer clicks and typing from focusing the footer", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
+      await page.goto(suite.server.baseUrl + "chat");
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      const footer = page.locator(".chat-footer");
+      const input = page.locator(".agent-chat__input");
+      for (const [target, inset] of [
+        [textarea, 8],
+        [input, 3],
+        [footer, 3],
+      ] as const) {
+        const bounds = await target.boundingBox();
+        expect(bounds).not.toBeNull();
+        await page.mouse.click(bounds!.x + inset, bounds!.y + inset);
+        await page.keyboard.type("Do not change this draft");
+        await expectFocus(footer, false);
+        expect(await textarea.inputValue()).toBe("");
+      }
+      await page.keyboard.press("Tab");
+      await expectFocus(footer, false);
+      await page.keyboard.press("Shift+Tab");
+      await expectFocus(footer, false);
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.read"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      await textarea.click({ force: true });
+      await page.keyboard.type("Blocked edit");
+      await expectFocus(footer, false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
+  it("keeps the archived composer keyboard handoff before Unarchive", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "direct", archived: true, updatedAt: 1 }],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
+      await unarchive.waitFor();
+      const skip = page.locator(".chat-composer-skip-link");
+      await skip.focus();
+      await page.keyboard.press("Enter");
+      const footer = page.locator(".chat-footer");
+      await expectFocus(footer);
+      await page.keyboard.press("Tab");
+      await expectFocus(unarchive);
+      const bounds = await footer.boundingBox();
+      expect(bounds).not.toBeNull();
+      await page.mouse.click(bounds!.x + 3, bounds!.y + 3);
+      await expectFocus(footer, false);
+    });
+  });
+
   it.each(["chat", "new"])(
     "centers %s composer keyboard focus on its action glyphs",
     async (route) => {
@@ -103,11 +176,11 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
-      // Opening initializes the selected row after its animation completes.
-      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
-      await expectFocus(selected);
+      // The list retains focus while its active descendant follows navigation.
+      const selected = picker.getByRole("option", { name: "main", exact: true });
+      await expectActiveOption(selected);
       await page.keyboard.press("ArrowDown");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.press("Space");
 
@@ -120,17 +193,18 @@ suite.define(() => {
 
       await trigger.focus();
       await page.keyboard.press("Enter");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.type("r");
 
-      await expect.poll(() => composer.inputValue()).toBe("r");
+      await expectActiveOption(option);
+      await expect.poll(() => composer.inputValue()).toBe("");
     });
   });
 
   it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const { trigger, menu, option, composer } = await openAgentPicker(page);
+      const { trigger, menu, composer } = await openAgentPicker(page);
       await composer.waitFor({ state: "visible" });
 
       await trigger.click();
@@ -141,8 +215,8 @@ suite.define(() => {
 
       await expect
         .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
-        .toBe(true);
-      await expectFocus(option);
+        .toBe(false);
+      await expectFocus(trigger);
       await expect.poll(() => composer.inputValue()).toBe("");
     });
   });

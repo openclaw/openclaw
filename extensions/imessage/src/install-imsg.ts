@@ -1,13 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 
 const IMESSAGE_BREW_FORMULA = "steipete/tap/imsg";
+
+// Homebrew prints warnings before its final Error line, so keep the stderr tail.
+function brewErrorTail(stderr: string): string {
+  const text = redactToolPayloadText(stderr).trim();
+  return text.length > 200 ? `...${sliceUtf16Safe(text, -200)}` : text;
+}
 
 async function resolveBrewManagedIMessageCliPath(
   brewExe: string,
@@ -112,7 +119,7 @@ export async function installIMessageCli(
     if (result.code !== 0) {
       return {
         ok: false,
-        error: `brew ${command.join(" ")} failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
+        error: `brew ${command.join(" ")} failed (exit ${result.code}): ${brewErrorTail(result.stderr)}`,
       };
     }
   }

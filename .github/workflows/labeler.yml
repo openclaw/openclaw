@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /.github/labeler.yml
-            /scripts/github/labeler-label-cap.mjs
+            /scripts/github/labeler-labels.mjs
           sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
@@ -88,32 +88,11 @@ jobs:
             }
 
             const { pathToFileURL } = require("node:url");
-            const { addLabelsWithinCap } = await import(
-              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+            const { ensureSizeLabels, applySizeLabel } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
             );
 
-            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
-            const labelColor = "b76e79";
-
-            for (const label of sizeLabels) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label,
-                });
-              } catch (error) {
-                if (error?.status !== 404) {
-                  throw error;
-                }
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label,
-                  color: labelColor,
-                });
-              }
-            }
+            await ensureSizeLabels({ github, ...context.repo });
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
@@ -122,26 +101,6 @@ jobs:
               per_page: 100,
             });
 
-            const excludedLockfiles = new Set(["pnpm-lock.yaml", "yarn.lock", "bun.lockb"]);
-            const totalChangedLines = files.reduce((total, file) => {
-              const path = file.filename ?? "";
-              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
-                return total;
-              }
-              return total + (file.additions ?? 0) + (file.deletions ?? 0);
-            }, 0);
-
-            let targetSizeLabel = "size: XL";
-            if (totalChangedLines < 50) {
-              targetSizeLabel = "size: XS";
-            } else if (totalChangedLines < 200) {
-              targetSizeLabel = "size: S";
-            } else if (totalChangedLines < 500) {
-              targetSizeLabel = "size: M";
-            } else if (totalChangedLines < 1000) {
-              targetSizeLabel = "size: L";
-            }
-
             const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -149,31 +108,15 @@ jobs:
               per_page: 100,
             });
 
-            for (const label of currentLabels) {
-              const name = label.name ?? "";
-              if (!sizeLabels.includes(name)) {
-                continue;
-              }
-              if (name === targetSizeLabel) {
-                continue;
-              }
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullRequest.number,
-                name,
-              });
-            }
-
-            await addLabelsWithinCap({
+            await applySizeLabel({
               github,
               core,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              ...context.repo,
               issueNumber: pullRequest.number,
-              labels: [targetSizeLabel],
+              files,
+              labelNames: new Set(currentLabels.map((label) => label.name)),
             });
-      - name: Apply maintainer or trusted-contributor label
+      - name: Apply maintainer label
         if: ${{ github.event.action != 'edited' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -183,13 +126,6 @@ jobs:
             if (!login) {
               return;
             }
-
-            const repo = `${context.repo.owner}/${context.repo.repo}`;
-            // const trustedLabel = "trusted-contributor";
-            // const experiencedLabel = "experienced-contributor";
-            // const trustedThreshold = 4;
-            // const experiencedThreshold = 10;
-
             let isMaintainer = false;
             try {
               const membership = await github.rest.teams.getMembershipForUserInOrg({
@@ -207,7 +143,7 @@ jobs:
             if (isMaintainer) {
               const { pathToFileURL } = require("node:url");
               const { addLabelsWithinCap } = await import(
-                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
               );
               await addLabelsWithinCap({
                 github,
@@ -219,39 +155,6 @@ jobs:
               });
               return;
             }
-
-            // trusted-contributor and experienced-contributor labels disabled.
-            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            // let mergedCount = 0;
-            // try {
-            //   const merged = await github.rest.search.issuesAndPullRequests({
-            //     q: mergedQuery,
-            //     per_page: 1,
-            //   });
-            //   mergedCount = merged?.data?.total_count ?? 0;
-            // } catch (error) {
-            //   if (error?.status !== 422) {
-            //     throw error;
-            //   }
-            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
-            // }
-            //
-            // if (mergedCount >= experiencedThreshold) {
-            //   await github.rest.issues.addLabels({
-            //     ...context.repo,
-            //     issue_number: context.payload.pull_request.number,
-            //     labels: [experiencedLabel],
-            //   });
-            //   return;
-            // }
-            //
-            // if (mergedCount >= trustedThreshold) {
-            //   await github.rest.issues.addLabels({
-            //     ...context.repo,
-            //     issue_number: context.payload.pull_request.number,
-            //     labels: [trustedLabel],
-            //   });
-            // }
       - name: Apply beta-blocker title label
         if: ${{ github.event.action != 'edited' || github.event.changes.title }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -291,7 +194,7 @@ jobs:
             if (matchesBetaBlocker && !hasLabel) {
               const { pathToFileURL } = require("node:url");
               const { addLabelsWithinCap } = await import(
-                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
               );
               await addLabelsWithinCap({
                 github,
@@ -487,7 +390,7 @@ jobs:
               if (!labelNames.has(activePrLimitLabel)) {
                 const { pathToFileURL } = require("node:url");
                 const { addLabelsWithinCap } = await import(
-                  pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                  pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
                 );
                 await addLabelsWithinCap({
                   github,
@@ -530,7 +433,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          sparse-checkout: /scripts/github/labeler-label-cap.mjs
+          sparse-checkout: /scripts/github/labeler-labels.mjs
           sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
@@ -559,7 +462,6 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const repoFull = `${owner}/${repo}`;
             const inputs = context.payload.inputs ?? {};
             const maxPrsInput = inputs.max_prs ?? "200";
             const perPageInput = inputs.per_page ?? "50";
@@ -571,41 +473,12 @@ jobs:
             const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
 
             const { pathToFileURL } = require("node:url");
-            const { addLabelsWithinCap } = await import(
-              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+            const { addLabelsWithinCap, ensureSizeLabels, applySizeLabel } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
             );
 
-            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const betaBlockerLabel = "beta-blocker";
-            const labelColor = "b76e79";
-            // const trustedLabel = "trusted-contributor";
-            // const experiencedLabel = "experienced-contributor";
-            // const trustedThreshold = 4;
-            // const experiencedThreshold = 10;
-
-            const contributorCache = new Map();
-
-            async function ensureSizeLabels() {
-              for (const label of sizeLabels) {
-                try {
-                  await github.rest.issues.getLabel({
-                    owner,
-                    repo,
-                    name: label,
-                  });
-                } catch (error) {
-                  if (error?.status !== 404) {
-                    throw error;
-                  }
-                  await github.rest.issues.createLabel({
-                    owner,
-                    repo,
-                    name: label,
-                    color: labelColor,
-                  });
-                }
-              }
-            }
+            const maintainerCache = new Map();
 
             async function hasBetaBlockerLabel() {
               try {
@@ -623,9 +496,9 @@ jobs:
               }
             }
 
-            async function resolveContributorLabel(login) {
-              if (contributorCache.has(login)) {
-                return contributorCache.get(login);
+            async function resolveMaintainerLabel(login) {
+              if (maintainerCache.has(login)) {
+                return maintainerCache.get(login);
               }
 
               let isMaintainer = false;
@@ -642,105 +515,18 @@ jobs:
                 }
               }
 
-              if (isMaintainer) {
-                contributorCache.set(login, "maintainer");
-                return "maintainer";
-              }
-
-              // trusted-contributor and experienced-contributor labels disabled.
-              // const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
-              // let mergedCount = 0;
-              // try {
-              //   const merged = await github.rest.search.issuesAndPullRequests({
-              //     q: mergedQuery,
-              //     per_page: 1,
-              //   });
-              //   mergedCount = merged?.data?.total_count ?? 0;
-              // } catch (error) {
-              //   if (error?.status !== 422) {
-              //     throw error;
-              //   }
-              //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
-              // }
-
-              const label = null;
-              // if (mergedCount >= experiencedThreshold) {
-              //   label = experiencedLabel;
-              // } else if (mergedCount >= trustedThreshold) {
-              //   label = trustedLabel;
-              // }
-
-              contributorCache.set(login, label);
+              const label = isMaintainer ? "maintainer" : null;
+              maintainerCache.set(login, label);
               return label;
             }
 
-            async function applySizeLabel(pullRequest, currentLabels, labelNames) {
-              const files = await github.paginate(github.rest.pulls.listFiles, {
-                owner,
-                repo,
-                pull_number: pullRequest.number,
-                per_page: 100,
-              });
-
-              const excludedLockfiles = new Set(["pnpm-lock.yaml", "yarn.lock", "bun.lockb"]);
-              const totalChangedLines = files.reduce((total, file) => {
-                const path = file.filename ?? "";
-                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
-                  return total;
-                }
-                return total + (file.additions ?? 0) + (file.deletions ?? 0);
-              }, 0);
-
-              let targetSizeLabel = "size: XL";
-              if (totalChangedLines < 50) {
-                targetSizeLabel = "size: XS";
-              } else if (totalChangedLines < 200) {
-                targetSizeLabel = "size: S";
-              } else if (totalChangedLines < 500) {
-                targetSizeLabel = "size: M";
-              } else if (totalChangedLines < 1000) {
-                targetSizeLabel = "size: L";
-              }
-
-              for (const label of currentLabels) {
-                const name = label.name ?? "";
-                if (!sizeLabels.includes(name)) {
-                  continue;
-                }
-                if (name === targetSizeLabel) {
-                  continue;
-                }
-                await github.rest.issues.removeLabel({
-                  owner,
-                  repo,
-                  issue_number: pullRequest.number,
-                  name,
-                });
-                labelNames.delete(name);
-              }
-
-              if (!labelNames.has(targetSizeLabel)) {
-                const added = await addLabelsWithinCap({
-                  github,
-                  core,
-                  owner,
-                  repo,
-                  issueNumber: pullRequest.number,
-                  labels: [targetSizeLabel],
-                });
-                if (added) {
-                  labelNames.add(targetSizeLabel);
-                }
-              }
-            }
-
-            async function applyContributorLabel(pullRequest, labelNames) {
+            async function applyMaintainerLabel(pullRequest, labelNames) {
               const login = pullRequest.user?.login;
               if (!login) {
                 return;
               }
 
-              const label = await resolveContributorLabel(login);
+              const label = await resolveMaintainerLabel(login);
               if (!label) {
                 return;
               }
@@ -795,7 +581,7 @@ jobs:
               labelNames.delete(betaBlockerLabel);
             }
 
-            await ensureSizeLabels();
+            await ensureSizeLabels({ github, owner, repo });
             const betaBlockerLabelExists = await hasBetaBlockerLabel();
 
             let page = 1;
@@ -832,8 +618,22 @@ jobs:
                   currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
                 );
 
-                await applySizeLabel(pullRequest, currentLabels, labelNames);
-                await applyContributorLabel(pullRequest, labelNames);
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  owner,
+                  repo,
+                  pull_number: pullRequest.number,
+                  per_page: 100,
+                });
+                await applySizeLabel({
+                  github,
+                  core,
+                  owner,
+                  repo,
+                  issueNumber: pullRequest.number,
+                  files,
+                  labelNames,
+                });
+                await applyMaintainerLabel(pullRequest, labelNames);
                 if (betaBlockerLabelExists) {
                   await applyBetaBlockerTitleLabel(pullRequest, labelNames);
                 }
@@ -866,7 +666,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          sparse-checkout: /scripts/github/labeler-label-cap.mjs
+          sparse-checkout: /scripts/github/labeler-labels.mjs
           sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
@@ -884,7 +684,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-issues: write
           permission-members: read
-      - name: Apply maintainer or trusted-contributor label
+      - name: Apply maintainer label
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
@@ -893,13 +693,6 @@ jobs:
             if (!login) {
               return;
             }
-
-            const repo = `${context.repo.owner}/${context.repo.repo}`;
-            // const trustedLabel = "trusted-contributor";
-            // const experiencedLabel = "experienced-contributor";
-            // const trustedThreshold = 4;
-            // const experiencedThreshold = 10;
-
             let isMaintainer = false;
             try {
               const membership = await github.rest.teams.getMembershipForUserInOrg({
@@ -917,7 +710,7 @@ jobs:
             if (isMaintainer) {
               const { pathToFileURL } = require("node:url");
               const { addLabelsWithinCap } = await import(
-                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
               );
               await addLabelsWithinCap({
                 github,
@@ -929,39 +722,6 @@ jobs:
               });
               return;
             }
-
-            // trusted-contributor and experienced-contributor labels disabled.
-            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
-            // let mergedCount = 0;
-            // try {
-            //   const merged = await github.rest.search.issuesAndPullRequests({
-            //     q: mergedQuery,
-            //     per_page: 1,
-            //   });
-            //   mergedCount = merged?.data?.total_count ?? 0;
-            // } catch (error) {
-            //   if (error?.status !== 422) {
-            //     throw error;
-            //   }
-            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
-            // }
-            //
-            // if (mergedCount >= experiencedThreshold) {
-            //   await github.rest.issues.addLabels({
-            //     ...context.repo,
-            //     issue_number: context.payload.issue.number,
-            //     labels: [experiencedLabel],
-            //   });
-            //   return;
-            // }
-            //
-            // if (mergedCount >= trustedThreshold) {
-            //   await github.rest.issues.addLabels({
-            //     ...context.repo,
-            //     issue_number: context.payload.issue.number,
-            //     labels: [trustedLabel],
-            //   });
-            // }
       - name: Apply beta-blocker title label
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -1000,7 +760,7 @@ jobs:
             if (matchesBetaBlocker && !hasLabel) {
               const { pathToFileURL } = require("node:url");
               const { addLabelsWithinCap } = await import(
-                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-labels.mjs`).href
               );
               await addLabelsWithinCap({
                 github,

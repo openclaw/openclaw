@@ -17,10 +17,12 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -29,6 +31,7 @@ import * as sourceRuntime from "./update-command-runtime.js";
 import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type * as revalidation from "./update-command-service-revalidation.js";
 import type * as service from "./update-command-service.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
@@ -178,7 +181,48 @@ export async function finishSuccessfulPackageSwitch(
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementation(async (root, inspection) =>
     packageInstall && root === installRoot ? "package" : resolveInstallKind(root, inspection),
   );
-  await finishUpdate(input, options);
+  const suppliedRun = input.opts.run;
+  if (suppliedRun) {
+    input.result.runId ??= suppliedRun.runId;
+  }
+  // Explicit missing/stale authority controls retain their original admission failure.
+  if (
+    suppliedRun?.executorFence ||
+    (suppliedRun && loadUpdateRecovery(suppliedRun.runId, { env: suppliedRun.env }))
+  ) {
+    await finishUpdate(input, options);
+    return;
+  }
+  const env = input.ownedManagedUpdateEnv ?? suppliedRun?.env ?? { ...process.env };
+  const run: NonNullable<FinishUpdateParams["opts"]["run"]> = suppliedRun ?? {
+    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+    env,
+  };
+  input.result.runId ??= run.runId;
+  await withUpdateCommandTerminalResult((registerRun) => {
+    registerRun(run);
+    return withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(input.root);
+      await finishUpdate({ ...input, opts: { ...input.opts, run } }, options);
+    });
+  }, input.opts);
+}
+
+/** Inspect the inner failure under its live owner before checking outer settlement. */
+export async function runFinalizationFailureWithNativeExecutor(
+  root: string,
+  run: NonNullable<FinishUpdateParams["opts"]["run"]>,
+  inspectSubject: () => Promise<unknown>,
+): Promise<unknown> {
+  let verified = false;
+  const failure = await withUpdateCommandExecutor(run.runId, async (executor) => {
+    run.executorFence = await executor.enter(root);
+    const subjectFailure = await inspectSubject();
+    verified = true;
+    throw subjectFailure;
+  }).catch((error: unknown) => error);
+  expect(verified).toBe(true);
+  return failure;
 }
 
 export const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];

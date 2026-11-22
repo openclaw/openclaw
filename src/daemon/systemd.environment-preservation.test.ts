@@ -19,7 +19,7 @@ import {
   resolveSystemdEnvironmentFilePath,
   resolveSystemdUnitPath,
 } from "./systemd-service-files.js";
-import { buildSystemdUnit } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 // Native responses are fixtures; no host service manager or runtime probe is contacted.
@@ -129,8 +129,12 @@ function mockSystemdManagerSnapshot(
       stdout = path.join(path.dirname(snapshot.fragmentPath), "absent-system-units");
     } else if (command === "systemctl" && args[0] === "--user" && args[1] === "show") {
       stdout =
-        "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nLoadState=loaded\nTimeoutStopUSec=330s\n";
-    } else if (command === "systemctl" && args[0] === "--user" && args[1] === "status") {
+        "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nLoadState=loaded\nTimeoutStopUSec=330s\nDelegate=yes\nDelegateSubgroup=gateway\n";
+    } else if (
+      command === "systemctl" &&
+      args[0] === "--user" &&
+      (args[1] === "status" || args[1] === "daemon-reload")
+    ) {
       stdout = "";
     } else {
       throw new Error(`Unexpected native fixture request: ${command} ${args.join(" ")}`);
@@ -140,11 +144,24 @@ function mockSystemdManagerSnapshot(
 }
 
 it.skipIf(process.platform === "win32").each([
-  { source: "EnvironmentFile", servicePath: "/usr/local/bin:/usr/bin:/bin" },
-  { source: "Environment", servicePath: "/usr/local/bin:/opt/operator/bin:/usr/bin:/bin" },
+  {
+    source: "EnvironmentFile",
+    servicePath: "/usr/local/bin:/usr/bin:/bin",
+    operatorKey: "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS",
+  },
+  {
+    source: "Environment",
+    servicePath: "/usr/local/bin:/usr/bin:/bin",
+    operatorKey: "MALLOC_ARENA_MAX",
+  },
+  {
+    source: "Environment",
+    servicePath: "/usr/local/bin:/opt/operator/bin:/usr/bin:/bin",
+    operatorKey: "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS",
+  },
 ])(
-  "preserves operator $source settings across audited reinstall",
-  async ({ source, servicePath: systemPath }) => {
+  "preserves operator $source $operatorKey settings across audited reinstall",
+  async ({ source, servicePath: systemPath, operatorKey }) => {
     const home = await fs.realpath(tempDirs.make("systemd-environment-preservation-"));
     const servicePath = `/opt/openclaw-runtime/bin:${systemPath}:${home}/.local/bin:${home}/.npm-global/bin:${home}/bin:${home}/.nix-profile/bin`;
     const stateDir = path.join(home, "state");
@@ -159,8 +176,7 @@ it.skipIf(process.platform === "win32").each([
     const wrapperPath = path.join(stateDir, "openclaw-wrapper");
     const dropInPath = `${unitPath}.d/operator.conf`;
     const operatorFile = path.join(stateDir, "operator.env");
-    const operatorKey = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
-    const operatorValue = "120000";
+    const operatorValue = operatorKey === "MALLOC_ARENA_MAX" ? "4" : "120000";
     const base = {
       programArguments: [wrapperPath, "gateway", "--port", "18789"],
       environment: {
@@ -224,21 +240,111 @@ it.skipIf(process.platform === "win32").each([
     expect(audit.definitionDriftError).toBeUndefined();
     expect(audit.definitionDrift).toBeUndefined();
     expect(audit.issues).toEqual([]);
-    expect(plan.environment[operatorKey]).toBeUndefined();
+    expect(plan.environment[operatorKey]).toBe(
+      operatorKey === "MALLOC_ARENA_MAX" ? "2" : undefined,
+    );
 
     await stageSystemdService({ env, stdout: new PassThrough(), ...plan });
     const rewrittenUnit = await fs.readFile(unitPath, "utf8");
-    expect(rewrittenUnit).not.toContain(operatorKey);
+    if (operatorKey !== "MALLOC_ARENA_MAX") {
+      expect(rewrittenUnit).not.toContain(operatorKey);
+    }
     await expect(fs.readFile(dropInPath, "utf8")).resolves.toBe(dropIn);
     if (source === "EnvironmentFile") {
       await expect(fs.readFile(operatorFile, "utf8")).resolves.toBe(
         `${operatorKey}=${operatorValue}\n`,
       );
     }
-    mockSystemdManagerSnapshot(snapshot(plan));
+    const generatedFiles = [...rewrittenUnit.matchAll(/^EnvironmentFile=-?(.*)$/gm)].map(
+      (match): [string, boolean] => [
+        expectDefined(match[1], "generated environment file path"),
+        true,
+      ],
+    );
+    const rewrittenSnapshot = snapshot({
+      ...plan,
+      environment: parseSystemdInlineEnvironment(rewrittenUnit),
+    });
+    mockSystemdManagerSnapshot({
+      ...rewrittenSnapshot,
+      environmentFiles: [...generatedFiles, ...(rewrittenSnapshot.environmentFiles ?? [])],
+    });
     const rewritten = await readSystemdServiceExecStart(env, { requireEffective: true });
     expect(rewritten?.environment?.[operatorKey]).toBe(operatorValue);
-    expect(rewritten?.managedDefinition?.environment?.[operatorKey]).toBeUndefined();
+    expect(rewritten?.managedDefinition?.environment?.[operatorKey]).toBe(
+      operatorKey === "MALLOC_ARENA_MAX" ? "2" : undefined,
+    );
     expect(rewritten?.managedDefinition?.environment?.PATH).toBe(plan.environment.PATH);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "delivers allocator defaults and dotenv overrides before startup across audited reinstall",
+  async () => {
+    const home = await fs.realpath(tempDirs.make("systemd-allocator-"));
+    const stateDir = path.join(home, "state");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+    const unitPath = resolveSystemdUnitPath(env);
+    const wrapperPath = path.join(home, "openclaw-wrapper");
+    await fs.mkdir(stateDir, { mode: 0o700 });
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+    await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const programArguments = [wrapperPath, "gateway", "--port", "18789"];
+    await fs.writeFile(unitPath, buildSystemdUnit({ programArguments, environment: env }));
+    mockSystemdManagerSnapshot({ programArguments, fragmentPath: unitPath, environmentFiles: [] });
+    let installed: Awaited<ReturnType<typeof readSystemdServiceExecStart>> = null;
+    for (const expected of ["2", "6", "6", "", "0"]) {
+      if (expected === "") {
+        await fs.unlink(path.join(stateDir, ".env"));
+      }
+      if (expected === "6") {
+        await fs.writeFile(path.join(stateDir, ".env"), `MALLOC_ARENA_MAX=${expected}\n`);
+      }
+      const plan = await buildGatewayInstallPlan({
+        env: expected === "" || expected === "0" ? { ...env, MALLOC_ARENA_MAX: expected } : env,
+        port: 18789,
+        runtime: "node",
+        runtimePath: "/usr/bin/node",
+        platform: "linux",
+        wrapperPath,
+        authStore: { version: 1, profiles: {} },
+        existingEnvironment: installed?.environment,
+        existingEnvironmentValueSources: installed?.environmentValueSources,
+      });
+      if (installed) {
+        const audit = await auditGatewayServiceConfig({
+          env,
+          command: installed,
+          expectedCommand: plan,
+          expectedServicePath: plan.environment.PATH,
+          platform: "linux",
+        });
+        expect(audit.definitionDrift).toBeUndefined();
+      }
+      await stageSystemdService({ env, stdout: new PassThrough(), ...plan });
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(parseSystemdInlineEnvironment(unit).MALLOC_ARENA_MAX).toBe(expected);
+      mockSystemdManagerSnapshot({
+        programArguments: plan.programArguments,
+        fragmentPath: unitPath,
+        environment: Object.entries(parseSystemdInlineEnvironment(unit)).map(
+          ([key, value]) => `${key}=${value}`,
+        ),
+        environmentFiles: [...unit.matchAll(/^EnvironmentFile=-?(.*)$/gm)].map((match) => [
+          expectDefined(match[1], "generated environment file path"),
+          true,
+        ]),
+      });
+      installed = await readSystemdServiceExecStart(env);
+      expect(installed?.environment?.MALLOC_ARENA_MAX).toBe(expected);
+      const audit = await auditGatewayServiceConfig({
+        env,
+        command: installed,
+        expectedCommand: plan,
+        expectedServicePath: plan.environment.PATH,
+        platform: "linux",
+      });
+      expect(audit.issues).toEqual([]);
+    }
   },
 );

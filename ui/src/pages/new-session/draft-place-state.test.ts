@@ -77,22 +77,65 @@ function pendingRepository(preference: NewSessionPreference) {
   return { ...fixture, discovery };
 }
 
+it("shows and submits New worktree for a restored managed clone folder", async () => {
+  const { state, request, readPreference } = createRepositoryFixture();
+  const folder = "/workspace/managed-clone";
+  readPreference.mockReturnValue({ workspace: "/workspace", folder, worktree: false });
+  request.mockImplementation(async (method) =>
+    method === "fs.listDir" ? { path: folder, entries: [] } : { ...GIT, requiresWorktree: true },
+  );
+
+  state.adoptAgentDefaults();
+  await repositoryReady(state);
+
+  expect(state.currentCheckoutUnavailableReason).toBe(
+    "Use an isolated worktree for this project and agent",
+  );
+  expect(createParams(state, "Inspect the clone")).toMatchObject({ cwd: folder, worktree: true });
+});
+
 const cloudProfile: DraftCloudProfile = {
   id: "aws",
   providerId: "crabbox",
   machines: [{ id: "fast", label: "Fast" }],
 };
 
+describe("DraftPlaceState agent selection", () => {
+  it("resolves the normalized selected workspace from the current non-system roster", () => {
+    const { state, context } = createRepositoryFixture();
+    const system: GatewayAgentRow = { id: "research", kind: "system", workspace: "/system" };
+    const original: GatewayAgentRow = { id: "Research", workspace: "/research" };
+    const roster = context.agents.state.agentsList!;
+    roster.agents = [system, original];
+    state.applyPendingPlacement({ agentId: " RESEARCH ", profileId: "" });
+
+    expect(state.selectedAgent()).toBe(original);
+    expect(state.workspacePath()).toBe("/research");
+    expect(state.agents()).toEqual([original]);
+
+    const replacement: GatewayAgentRow = { id: "research", workspace: "/new-research" };
+    context.agents.state.agentsList = { ...roster, agents: [system, replacement] };
+    expect(state.selectedAgent()).toBe(replacement);
+    expect(state.workspacePath()).toBe("/new-research");
+
+    context.agents.state.agentsList = { ...roster, agents: [system] };
+    expect(state.selectedAgent()).toBeUndefined();
+    expect(state.workspacePath()).toBe("");
+  });
+});
+
 describe("DraftPlaceState repository selection", () => {
   it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },
     { source: "registered", redacted: true, current: false, savedWorktree: false },
+    { source: "registered", redacted: false, current: true, savedWorktree: true },
     { source: "workspace", redacted: true, current: true, savedWorktree: true },
   ] as const)(
     "restores permitted $source checkout (redacted=$redacted)",
     async ({ source, redacted, current, savedWorktree }) => {
       const f = createRepositoryFixture();
       const eligibility = createDeferred<{ current: boolean; worktree: boolean }>();
+      const branches = createDeferred<WorktreesBranchesResult>();
       const projectId = source === "workspace" ? "workspace:main" : "registered";
       const project = {
         id: projectId,
@@ -104,9 +147,7 @@ describe("DraftPlaceState repository selection", () => {
       vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
       f.readPreference.mockReturnValue({ projectId, worktree: savedWorktree });
       f.request.mockImplementation(async (method) =>
-        method === "projects.checkoutOptions"
-          ? eligibility.promise
-          : { repositoryStatus: "git", branches: [] },
+        method === "projects.checkoutOptions" ? eligibility.promise : branches.promise,
       );
       const settled = nextChange(f.changed, () => f.state.worktree && f.state.worktreeAvailable());
       f.state.adoptAgentDefaults();
@@ -114,6 +155,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(f.state.folderSubmissionBlocked()).toBe(true);
       eligibility.resolve({ current, worktree: true });
       await settled;
+      expect(f.state.repositoryState.checkoutPending).toBe(false);
       expect(f.state).toMatchObject({
         worktree: true,
         currentCheckoutUnavailableReason: current
@@ -130,6 +172,7 @@ describe("DraftPlaceState repository selection", () => {
         worktree: true,
         message: "Keep my prompt",
       });
+      branches.resolve({ repositoryStatus: "git", branches: [] });
     },
   );
 
@@ -205,10 +248,11 @@ describe("DraftPlaceState repository selection", () => {
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
     // This test owns draft selection; settle lazy code loading before the interaction deadline.
     await import("../chat/components/chat-model-picker-panel.tsx");
-    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
-      data: routeData({ requestedModel: "example/first" }),
-      models: models("first", "second", "remembered"),
-    });
+    const { state, context, readPreference, persistModelPreference, request } =
+      createRepositoryFixture({
+        data: routeData({ requestedModel: "example/first" }),
+        models: models("first", "second", "remembered"),
+      });
     onTestFinished(() => state.modelControl.reset());
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
@@ -221,7 +265,7 @@ describe("DraftPlaceState repository selection", () => {
     );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
-    expect(persistPreference).not.toHaveBeenCalled();
+    expect(persistModelPreference).not.toHaveBeenCalled();
 
     const choice = await vi.waitFor(() => {
       const option = view.querySelector<HTMLButtonElement>(
@@ -244,9 +288,8 @@ describe("DraftPlaceState repository selection", () => {
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
+    expect(persistModelPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
-      "/workspace",
       expect.objectContaining({ model: "example/second" }),
     );
     context.agents.state.agentsList!.agents.push({ id: "scout", workspace: "/workspace" });
@@ -818,24 +861,24 @@ describe("device folder selection", () => {
     const f = folderFixture(true, { ...workerRuntime, cloudPlacementExecutionMode: undefined });
     expect(f.state.devicePlacement().ready).toBe(true);
     expect(f.state.deviceFolderAvailable).toBe(false);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.deviceFolder).toBeUndefined();
   });
 
   it("requires an explicit capable device and keeps its path out of Gateway discovery", () => {
     const f = folderFixture();
     expect(f.state.deviceFolderAvailable).toBe(false);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.deviceFolder).toBeUndefined();
     f.gateway.environments![0]!.workerHost = { deviceFolders: true };
     expect(f.state.deviceFolderAvailable).toBe(true);
-    f.state.selectDeviceFolder();
+    f.state.selectDeviceFolder("");
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     f.request.mockClear();
     f.persistPreference.mockClear();
-    f.state.setDeviceFolderPath("relative");
+    f.state.selectDeviceFolder("relative");
     expect(f.state.folderSubmissionBlocked()).toBe(true);
-    f.state.setDeviceFolderPath("/srv/existing project");
+    f.state.selectDeviceFolder("/srv/existing project");
     expect(f.state.folderSubmissionBlocked()).toBe(false);
     expect(f.state).toMatchObject({ worktree: false, checkoutVisible: false });
     expect(f.request).not.toHaveBeenCalled();
@@ -849,8 +892,7 @@ describe("device folder selection", () => {
 
   it("blocks a selected device folder when current capability is withdrawn", () => {
     const f = folderFixture(true);
-    f.state.selectDeviceFolder();
-    f.state.setDeviceFolderPath("/srv/project");
+    f.state.selectDeviceFolder("/srv/project");
     f.gateway.environments![0]!.workerHost = {};
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });

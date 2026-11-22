@@ -9,6 +9,7 @@ import {
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND as STOP_ENVIRONMENT,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND as CANCEL_LAUNCH,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND as LAUNCH,
@@ -380,6 +381,20 @@ describe("node worker tunnel lifetime", () => {
       await Promise.allSettled([...launches, ...(stopping ? [stopping] : [])]);
       vi.useRealTimers();
     }
+  });
+
+  it("negotiates local MCP only for a paired host approved to invoke MCP", async () => {
+    const node = (await nodeTransport.listCurrentNodes())[0]!;
+    const manager = createManager();
+    const handle = await manager.start(startRequest());
+    nodeTransport.listCurrentNodes = async () => [
+      { ...node, commands: [NODE_MCP_TOOLS_CALL_COMMAND] },
+    ];
+    await expect(handle.supportsLocalMcp!()).resolves.toBe(false);
+    node.workerHost.localMcp = true;
+    await expect(handle.supportsLocalMcp!()).resolves.toBe(true);
+    nodeTransport.listCurrentNodes = async () => [{ ...node, commands: [] }];
+    await expect(handle.supportsLocalMcp!()).resolves.toBe(false);
   });
 
   it("reads the current destination's launch vocabulary with a legacy fallback while offline", async () => {

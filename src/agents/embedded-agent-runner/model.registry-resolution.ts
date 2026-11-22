@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { createProviderModelNormalizationHooks } from "../../plugins/provider-model-normalization.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -9,7 +10,7 @@ import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runt
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
-import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../model-selection-normalize.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,
@@ -41,8 +42,22 @@ type ExplicitModelResolution =
 export function normalizeConfiguredProviderModel(
   params: Parameters<typeof applyConfiguredProviderOverrides>[0] & { agentDir?: string },
 ): Model | undefined {
-  const model = applyConfiguredProviderOverrides(params);
-  return model ? normalizeResolvedModel({ ...params, model }) : undefined;
+  // One synchronous resolution owns its handles; custom/static hooks retain their policy.
+  const prepared =
+    !params.runtimeHooks || params.runtimeHooks === resolveRuntimeHooks()
+      ? {
+          ...params,
+          runtimeHooks: {
+            ...resolveRuntimeHooks(),
+            ...createProviderModelNormalizationHooks({
+              config: params.cfg,
+              workspaceDir: params.workspaceDir,
+            }),
+          },
+        }
+      : params;
+  const model = applyConfiguredProviderOverrides(prepared);
+  return model ? normalizeResolvedModel({ ...prepared, model }) : undefined;
 }
 
 export function resolveExplicitModelWithRegistry(params: {

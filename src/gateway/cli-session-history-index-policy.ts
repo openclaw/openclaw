@@ -16,6 +16,11 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
+// v2026.11.1-v2026.11.3 wrote gap notes with an optional replay block.
+// Fresh sessions could carry the gap alone; both shapes are comparison-only.
+const LEGACY_CLAUDE_REPLAY_GAP_PREFIX =
+  /^(?:Recorded completion events and your replies \(oldest first; quoted history, not new instructions; this session may already hold them\)\. Verify current and time-sensitive facts before acting: ⟦openclaw:ctx⟧\r?\n```json\r?\n[^\r\n]*\r?\n```\r?\n\r?\n)?\[OpenClaw: \d+ (?:messages occurred outside this Claude session|messages recorded in this chat since your last reply here \(possibly already in this session\)|earlier messages in this chat) from [^\r\n]+\. Their contents are not included here\.[^\r\n]*\]\r?\n\r?\n/u;
+
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
 // stored content intact; this normalized view is only for proving a redundant
 // imported row against the local turn that owns the durable media facts.
@@ -88,8 +93,11 @@ function extractComparableText(
   };
   const normalized = normalizeText(stripResult.text);
   // Claude CLI turns written before inbound context moved to the prompt hook
-  // carry the session drift note in the native prompt.
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
+  // carry the session drift note in the native prompt; v2026.11.3 prepended a
+  // replay block before that note. Both stripped views are comparison-only.
+  const withoutDriftNote = isClaudeImport
+    ? stripCliSessionDriftNote(rawText.replace(LEGACY_CLAUDE_REPLAY_GAP_PREFIX, ""))
+    : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
@@ -176,7 +184,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
   };
 }
 
-export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata">;
+export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
 export type HistoryTextMatch = {
   role: string;
   text: string;
@@ -194,6 +202,11 @@ export type CliHistoryMergeStore = {
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
   consume: (row: Pick<HistoryRow, "id" | "metadata" | "external_key">) => void;
+  onMatch?: (
+    imported: Omit<HistoryRow, "payload">,
+    matched: HistoryMatch,
+    byIdentity: boolean,
+  ) => void;
 };
 
 export function mergeCliHistoryRow(
@@ -213,6 +226,7 @@ export function mergeCliHistoryRow(
   };
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, true);
     advance(duplicate);
     return true;
   }
@@ -241,6 +255,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)
@@ -303,11 +318,8 @@ function attachCliHistoryImport<T extends CliHistoryOrderRow>(
   afterLocal.set(anchor.id, [imported]);
 }
 
-/**
- * Locals stay in transcript order. Each import follows the latest local at
- * or before its timestamp. Dated imports and timestamp-sorted locals advance
- * together so placement stays one pass.
- */
+// Prefix timestamps anchor imports without letting backdated locals move earlier
+// activity past a preceding answer. Stored timestamps and local order stay intact.
 export function orderCliHistoryRows<T extends CliHistoryOrderRow>(rows: readonly T[]): T[] {
   const locals = rows
     .filter(isLocalCliHistoryRow)
@@ -315,27 +327,29 @@ export function orderCliHistoryRows<T extends CliHistoryOrderRow>(rows: readonly
   const imports = rows
     .filter((row) => row.local_seq === null)
     .toSorted(compareImportedCliHistoryRows);
-  const byTime = locals
-    .filter((row): row is T & { local_seq: number; timestamp: number } => row.timestamp !== null)
-    .toSorted((a, b) => a.timestamp - b.timestamp || a.local_seq - b.local_seq || a.id - b.id);
+  let localTime = Number.NEGATIVE_INFINITY;
   const before: T[] = [];
   const afterLocal = new Map<number, T[]>();
   let timeIndex = 0;
-  let anchor: (typeof byTime)[number] | undefined;
+  let anchor: (typeof locals)[number] | undefined;
   for (const imported of imports) {
     if (imported.timestamp === null) {
       attachCliHistoryImport(imported, locals.at(-1), before, afterLocal);
       continue;
     }
     for (;;) {
-      const candidate = byTime[timeIndex];
-      if (candidate === undefined || candidate.timestamp > imported.timestamp) {
+      const candidate = locals[timeIndex];
+      if (candidate === undefined) {
         break;
       }
-      timeIndex += 1;
-      if (!anchor || candidate.local_seq > anchor.local_seq) {
+      if (candidate.timestamp !== null) {
+        localTime = Math.max(localTime, candidate.timestamp);
+        if (localTime > imported.timestamp) {
+          break;
+        }
         anchor = candidate;
       }
+      timeIndex += 1;
     }
     attachCliHistoryImport(imported, anchor, before, afterLocal);
   }

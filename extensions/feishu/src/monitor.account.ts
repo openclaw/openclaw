@@ -9,12 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import {
-  handleFeishuMessage,
-  parseFeishuMessageEvent,
-  type FeishuMessageEvent,
-  type FeishuBotAddedEvent,
-} from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
@@ -23,13 +18,17 @@ import {
   buildFeishuCardButton,
   buildFeishuCardInteractionContext,
 } from "./card-ux-shared.js";
-import { createEventDispatcher } from "./client.js";
+import { resolveFeishuChatType } from "./chat-type.js";
+import { getChatInfo } from "./chat.js";
+import { createEventDispatcher, createFeishuClient } from "./client.js";
 import {
   claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
   warmupDedupFromPluginState,
 } from "./dedup.js";
+import type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress } from "./feishu-ingress.js";
+import { parseFeishuMessageEvent } from "./message-content.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import type { FeishuStatusSink } from "./monitor.js";
@@ -86,15 +85,12 @@ export async function resolveReactionSyntheticEvent(
   const { resolveFeishuAccount } = await import("./accounts.js");
   const account = resolveFeishuAccount({ cfg, accountId });
   const reactionNotifications = account.config.reactionNotifications;
-  if (reactionNotifications === "off") {
-    return null;
-  }
-
-  if (event.operator_type === "app" || senderId === botOpenId) {
-    return null;
-  }
-
-  if (emoji === "Typing") {
+  if (
+    reactionNotifications === "off" ||
+    event.operator_type === "app" ||
+    senderId === botOpenId ||
+    emoji === "Typing"
+  ) {
     return null;
   }
 
@@ -107,9 +103,7 @@ export async function resolveReactionSyntheticEvent(
 
   const reactedMsg = await raceWithTimeoutAndAbort(
     getMessageFeishu({ cfg, messageId, accountId }),
-    {
-      timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS,
-    },
+    { timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS },
   )
     .then((result) => (result.status === "resolved" ? result.value : null))
     .catch(() => null);
@@ -122,7 +116,16 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  const syntheticChatIdRaw = event.chat_id?.trim() || reactedMsg.chatId?.trim();
+  let resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  if (!resolvedChatType && syntheticChatIdRaw) {
+    const chatInfo = await raceWithTimeoutAndAbort(
+      getChatInfo(createFeishuClient(account), syntheticChatIdRaw),
+      { timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS },
+    ).catch(() => null);
+    resolvedChatType =
+      chatInfo?.status === "resolved" ? resolveFeishuChatType(chatInfo.value) : undefined;
+  }
   if (!resolvedChatType) {
     logger?.(
       `feishu[${accountId}]: skipping reaction ${emoji} on ${messageId} without chat type context`,
@@ -130,8 +133,6 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
-  const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
   return {
     sender: {
       sender_id: {
@@ -147,7 +148,7 @@ export async function resolveReactionSyntheticEvent(
       typing_target_message_id: messageId,
       ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
       ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
-      chat_id: syntheticChatId,
+      chat_id: syntheticChatIdRaw || `p2p:${senderId}`,
       chat_type: resolvedChatType,
       message_type: "text",
       content: JSON.stringify({

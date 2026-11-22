@@ -1,15 +1,15 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { getChildLogger } from "../logging/logger.js";
 import { tryReadDiskSpace } from "./disk-space.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   isPrivateDirectoryCreationRefused,
   markPrivateDirectoryCreationRefused,
 } from "./private-directory-creation.js";
-import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
+import {
+  markSqliteInspectionOperation,
+  readSqliteInspectionOperation,
+} from "./sqlite-error-diagnostics.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -19,38 +19,19 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
-  SqliteSnapshotCleanupError,
   retireSqliteSnapshotPayload,
 } from "./sqlite-readonly-location-cleanup.js";
+import {
+  hasSqliteSnapshotCapacityCode,
+  SqliteSnapshotCapacityError,
+} from "./sqlite-snapshot-capacity-error.js";
 import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotToken as snapshotToken,
   beginSqliteSnapshotRetirement,
-  isSqliteSnapshotStagingName as isStagingName,
-  SQLITE_SNAPSHOT_LEGACY_AGE_MS as legacyAgeMs,
-  SQLITE_SNAPSHOT_LEGACY_MARKER as legacyMarker,
   SQLITE_SNAPSHOT_PREFIX as prefix,
 } from "./sqlite-snapshot-retirement.js";
 import type { SqliteStagingToken as SnapshotToken } from "./sqlite-staging-token.js";
-
-const currentAgeMs = 15 * 60 * 1000;
-const reclamationByteBudget = 512 * 1024 * 1024;
-
-export function sqliteSnapshotStagingParent(root: string): string | undefined {
-  const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
-  return isStagingName(path.basename(parent)) ? parent : undefined;
-}
-
-export function warnSqliteSnapshotReclamation(message: string, error?: unknown): void {
-  try {
-    getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
-      { errorCode: extractErrorCode(error) },
-      message,
-    );
-  } catch {
-    // Cleanup diagnostics must not prevent inspection or startup.
-  }
-}
 
 /** A private reader protects its bytes independently of the staging child. */
 export function acquireSqliteSnapshotReadToken(directory: string): () => void {
@@ -65,67 +46,11 @@ export function reconcileSqliteSnapshotRetirement(directory: string): void {
   // Explicit retirement has confirmed owner exit; nested legacy layouts keep their age clamp.
   const retirement = beginSqliteSnapshotRetirement(directory, { cutoff: Number.POSITIVE_INFINITY });
   try {
-    retireSqliteSnapshotPayload(retirement);
+    for (const _ of retireSqliteSnapshotPayload(retirement)) {
+      // Synchronous reconciliation keeps the token until all bounded steps settle.
+    }
   } finally {
     retirement.release();
-  }
-}
-
-export function* reclaimAbandonedSqliteSnapshots(
-  root: string,
-  report = warnSqliteSnapshotReclamation,
-): Generator<void> {
-  if (sqliteSnapshotStagingParent(root)) {
-    return;
-  }
-  try {
-    let admittedBytes = 0;
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (admittedBytes >= reclamationByteBudget) {
-        report("Stopped SQLite snapshot reclamation: byte budget exhausted for this pass.");
-        break;
-      }
-      const legacy = legacyMarker.test(entry.name);
-      if (!entry.isDirectory() || !isStagingName(entry.name)) {
-        continue;
-      }
-      const directory = path.join(root, entry.name);
-      let retirement: ReturnType<typeof beginSqliteSnapshotRetirement> | undefined;
-      try {
-        retirement = beginSqliteSnapshotRetirement(directory, {
-          cutoff: Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
-        });
-        const { bytes } = retirement;
-        // Admit one oversized directory before spending the pass budget; otherwise
-        // interrupted multi-gigabyte copies can never be reclaimed.
-        if (admittedBytes > 0 && bytes > reclamationByteBudget - admittedBytes) {
-          throw new Error("Snapshot reclamation byte budget exhausted for this pass");
-        }
-        admittedBytes += bytes;
-        retireSqliteSnapshotPayload(retirement);
-        const claimed = path.join(
-          root,
-          `${legacy ? `openclaw-sqlite-readonly-${process.pid}-` : prefix}${randomUUID()}`,
-        );
-        fs.renameSync(directory, claimed);
-        if (!removeTempDirectory(claimed)) {
-          throw new Error("Snapshot removal failed; check private cache permissions");
-        }
-        report(`Reclaimed ${bytes} bytes of interrupted SQLite snapshot data.`);
-      } catch (error) {
-        report(`Skipped SQLite snapshot reclamation: ${formatErrorMessage(error)}`, error);
-      } finally {
-        try {
-          retirement?.release();
-        } catch (error) {
-          report("SQLite snapshot token close failed; retaining native cleanup custody.", error);
-        }
-      }
-      // Yield only after retirement, removal, and token release settle together.
-      yield;
-    }
-  } catch (error) {
-    report("SQLite snapshot reclamation failed; check private cache permissions.", error);
   }
 }
 
@@ -138,11 +63,14 @@ export function sqliteSnapshotStagingError(
   markSqliteInspectionOperation(cause, "snapshot");
   let destination = allocation;
   let capacity = false;
+  let cleanupFailure = false;
   let sqliteErrcode: number | undefined;
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
-    const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
+    cleanupFailure ||=
+      error instanceof AggregateError || error instanceof SqliteSnapshotCleanupError;
+    const { errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
-    capacity ||= ["ENOSPC", "EDQUOT"].includes(code ?? "") || errcode === 13;
+    capacity ||= hasSqliteSnapshotCapacityCode(error);
     if (
       capacity ||
       (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
@@ -177,7 +105,12 @@ export function sqliteSnapshotStagingError(
   }
   const selector = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? "TMPDIR" : "XDG_CACHE_HOME";
   const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}${capacityDetail}: ${guidance} or set ${selector} to a writable filesystem`;
-  const error = new Error(message, { cause });
+  // Capacity diagnostics alone do not establish a harmless destination failure.
+  // Source opens and unresolved cleanup retain their original blocking semantics.
+  const error =
+    capacity && !cleanupFailure && readSqliteInspectionOperation(cause) !== "source"
+      ? new SqliteSnapshotCapacityError(message, { cause })
+      : new Error(message, { cause });
   return isPrivateDirectoryCreationRefused(cause)
     ? markPrivateDirectoryCreationRefused(error)
     : error;

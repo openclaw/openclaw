@@ -2,10 +2,10 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
+import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
-import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 
 // Unit tests run in worker threads, where shared auth state requires the Gateway host broker.
 // An empty store keeps the real credential precedence and falls through to configured keys.
@@ -24,12 +24,12 @@ const configuredProvider = {
 };
 
 type ProviderConfig = NonNullable<
-  NonNullable<EmbeddingProviderOptions["config"]["models"]>["providers"]
+  NonNullable<EmbeddingProviderCreateOptions["config"]["models"]>["providers"]
 >[string];
 
 function resolveClient(
   providerConfig: ProviderConfig,
-  remote?: EmbeddingProviderOptions["remote"],
+  remote?: EmbeddingProviderCreateOptions["remote"],
   defaultBaseUrl = "https://api.openai.com/v1",
   model = "text-embedding-3-small",
   provider = "openai",

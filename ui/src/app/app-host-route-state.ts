@@ -39,7 +39,7 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
       : match && sessionFromRouteData(match.routeId, match.data)?.sessionKey.trim();
   return {
     routeId: match?.routeId,
-    location: match?.location,
+    location: match?.location ?? routerState.location ?? undefined,
     routeFailed: match
       ? match.status === "error" || match.status === "notFound"
       : routerState.status === "notFound" || undefined,
@@ -52,7 +52,7 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
     sessionUrlPending:
       routerState.pendingMatches.length > 0 ||
       Boolean(committedSession?.canonicalLocationReady) ||
-      committedSession?.sessionResolutionFromCache === "snapshot",
+      Boolean(committedSession?.sessionResolutionFromCache),
   };
 }
 

@@ -17,6 +17,8 @@ const currentNativeSection = (nativeSectionStore[nativeSectionKey] ??= new Async
 >());
 
 export type WorkerTaskControl = {
+  /** Aborts asynchronous owned work before native custody may be released. */
+  signal: AbortSignal;
   /** Await one bounded native operation before allowing the worker to be terminated. */
   runNativeSection: <T>(operation: () => T | Promise<T>) => Promise<T>;
   throwIfCancelled: () => void;
@@ -132,9 +134,11 @@ export function releaseWorkerNativeSectionsOnExit(state: WorkerNativeSectionStat
 export function createWorkerTaskControl(
   state: WorkerNativeSectionState,
   isActive: () => boolean,
+  signal: AbortSignal = new AbortController().signal,
 ): WorkerTaskControl {
   const throwIfCancelled = () => assertWorkerTaskActive(Atomics.load(state, 0), isActive);
   return {
+    signal,
     throwIfCancelled,
     runNativeSection: async <T>(operation: () => T | Promise<T>): Promise<T> => {
       const release = acquireWorkerNativeSection(state, isActive);

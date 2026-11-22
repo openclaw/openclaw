@@ -48,6 +48,64 @@ function textPreview(path: string, content: string, fields: object = {}) {
 }
 
 suite.define(() => {
+  it("opens a later managed-file reference through its original artifact", async () => {
+    await withPage(async (page) => {
+      const id = "artifact_managed_media_12345678-1234-4234-8234-123456789abc";
+      const href =
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/12345678-1234-4234-8234-123456789abc/full";
+      const original = '{"title":"Canal survey","temperatureCelsius":12}\n';
+      const artifact = {
+        id,
+        type: "file",
+        title: "canal-survey.json",
+        mimeType: "application/json",
+        sizeBytes: Buffer.byteLength(original),
+        sessionKey,
+        download: { mode: "url" },
+      };
+      const gateway = await installMockGateway(page, {
+        // The original row need not be in the rendered history window.
+        historyMessages: [chatMessage("assistant", `[Original survey](${href})`)],
+        methodResponses: {
+          "artifacts.list": {
+            artifacts: [
+              { ...artifact, id: "artifact_managed_media_87654321-4321-4321-8321-cba987654321" },
+              artifact,
+            ],
+          },
+          "artifacts.download": {
+            artifact,
+            url: `${href}?mediaTicket=fixture-grant`,
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      });
+      await page.route("**/api/chat/media/outgoing/**", (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: original }),
+      );
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.fill("Keep this unsent note.");
+      const chatUrl = page.url();
+      const link = page.getByRole("link", { name: "Original survey", exact: true });
+      await link.click();
+      const fileView = page.locator(".sidebar-file-view:visible");
+      await polledText(fileView).toContain("Canal survey");
+      expect(page.url()).toBe(chatUrl);
+      expect(await composer.inputValue()).toBe("Keep this unsent note.");
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+      expect((await gateway.getRequests("artifacts.download"))[0]?.params).toMatchObject({
+        sessionKey,
+        artifactId: id,
+      });
+      await exactButton(page, "Close tab: canal-survey.json").click();
+      await link.focus();
+      await link.press("Enter");
+      await polledText(fileView).toContain("Canal survey");
+      expect(page.context().pages()).toHaveLength(1);
+    });
+  });
+
   it.each([
     { kind: "managed", name: "log.md", root: "/workspace" },
     { kind: "extensionless", name: "README", root: "/workspace" },
@@ -247,6 +305,47 @@ suite.define(() => {
     },
   );
 
+  it("renders references the Gateway cannot open as plain text", async () => {
+    await withPage(async (page) => {
+      const remote = "~/crabbox-work/ocid-hidden/reset-profile.sh";
+      const local = "src/file.ts";
+      const gateway = await installMockGateway(page, {
+        workspace: "/workspace",
+        historyMessages: [
+          chatMessage("assistant", `Run \`${remote}\`, then edit \`${local}\`.`, { timestamp: 1 }),
+        ],
+        methodResponses: {
+          "sessions.files.stat": {
+            sessionKey,
+            files: [
+              { path: remote, status: "missing" },
+              { path: local, status: "file" },
+            ],
+          },
+          "sessions.files.get": textPreview(local, "export const local = true;\n"),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const remoteText = page.locator(`.chat-thread span[data-file-path="${remote}"]`);
+      const localLink = page.locator(`.chat-thread a[data-file-path="${local}"]`);
+      await remoteText.waitFor({ state: "visible" });
+      await polledCount(page.locator(`.chat-thread a[data-file-path="${remote}"]`)).toBe(0);
+      const [stat] = await gateway.getRequests("sessions.files.stat");
+      expect(stat?.params).toMatchObject({
+        sessionKey,
+        files: [{ path: remote }, { path: local }],
+      });
+
+      await remoteText.click();
+      await localLink.click();
+      await gateway.waitForRequest("sessions.files.get");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      expect((await gateway.getRequests("sessions.files.get")).map((r) => r.params)).toEqual([
+        fileRequest(local),
+      ]);
+    });
+  });
+
   it("preserves domain text and root-distinct file targets through click and keyboard", async () => {
     const files = [
       {
@@ -437,7 +536,7 @@ suite.define(() => {
       });
 
       const beforeReveal = (await gateway.getRequests("sessions.files.list")).length;
-      await selectFileAction(fileView, "Show in Files");
+      await selectFileAction(fileView, "Show in files");
       await gateway.waitForRequest("sessions.files.list", { after: beforeReveal });
       expect(
         (await gateway.getRequests("sessions.files.list"))[beforeReveal]?.params,
@@ -472,7 +571,7 @@ suite.define(() => {
       expect(await fileView.locator(".file-view__line--target").getAttribute("data-line")).toBe(
         "3",
       );
-      await selectFileAction(fileView, "Show in Files");
+      await selectFileAction(fileView, "Show in files");
       await workspace.getByRole("button", { name: "Search files", exact: true }).click();
       const search = workspace.getByRole("searchbox", { name: "Search files", exact: true });
       await search.fill("README");

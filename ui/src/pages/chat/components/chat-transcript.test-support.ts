@@ -86,8 +86,6 @@ export function threadProps(
     sessions: null,
     assistantName: "Molty",
     assistantAvatar: null,
-    onDraftChange: () => {},
-    onSend: () => {},
     ...overrides,
   };
 }

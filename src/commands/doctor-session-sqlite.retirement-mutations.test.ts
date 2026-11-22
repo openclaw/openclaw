@@ -65,7 +65,7 @@ describe("runDoctorSessionSqlite", () => {
     const replacement = Buffer.alloc(original.length, "x");
     fs.writeFileSync(archivePath, replacement);
 
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
       outcome: "blocked",
       reason: "artifact-metadata-changed",

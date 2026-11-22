@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as dataAtRisk from "../../infra/update-data-at-risk.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
@@ -26,6 +27,7 @@ import {
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
@@ -172,6 +174,117 @@ it("keeps restored-generation completion with its helper across CLI unwind", () 
   expect(getUpdateRun(run.runId, { env })?.status).toBe("rolled-back");
 });
 
+function markedFailedUpdate(prefix: string) {
+  const root = dirs.make(prefix);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
+  // The row shape published updaters leave after a failed post-activation schema read.
+  const marked = createUpdateRun({ trigger: "cli" });
+  recordUpdateRunVerification(marked.runId, {
+    recovery: {
+      serviceRestartSafe: false,
+      reason: "state-migration-started",
+      dataAtRisk: "rollback-state-unverified",
+    },
+  });
+  finishUpdateRun(marked.runId, { status: "failed", reason: "rollback-state-unverified" });
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  return { root, marked, error };
+}
+
+it("verifies a recorded data-at-risk mark before the next update and records the receipt", async () => {
+  const { root, marked, error } = markedFailedUpdate("update-admission-marked-");
+
+  const next = await admitUpdateCommandRun({ env: process.env, opts: {}, root });
+
+  expect(error).toHaveBeenCalledWith(
+    expect.stringMatching(
+      new RegExp(
+        `^Update ${marked.runId} recorded data at risk \\(rollback-state-unverified\\); verification found the state schemas match .* so that mark is resolved\\.$`,
+      ),
+    ),
+  );
+  expect(getUpdateRun(next.runId)?.steps).toContainEqual(
+    expect.objectContaining({
+      step: `finalize:data-at-risk-verified:${marked.runId}`,
+      status: "completed",
+    }),
+  );
+  // History is not rewritten, and the receipt keeps a later update from checking again.
+  expect(getUpdateRun(marked.runId)?.verification.recovery).toMatchObject({
+    dataAtRisk: "rollback-state-unverified",
+  });
+  finishUpdateRun(next.runId, { status: "skipped", reason: "already-current" });
+  error.mockClear();
+  await admitUpdateCommandRun({ env: process.env, opts: {}, root });
+  expect(error).not.toHaveBeenCalledWith(expect.stringContaining("recorded data at risk"));
+});
+
+it.each([
+  { finding: "unfinished migration", refuses: true },
+  { finding: "unchecked agent leftovers", refuses: true },
+  { finding: "newer state", refuses: false },
+] as const)(
+  "handles a recorded mark whose verification finds $finding",
+  async ({ finding, refuses }) => {
+    const { root, marked, error } = markedFailedUpdate("update-admission-marked-refused-");
+    vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(
+      finding === "unfinished migration"
+        ? {
+            status: "inconsistent",
+            detail: "the state database is at schema 7",
+            nextAction: "run `openclaw doctor --fix` to finish the migration.",
+          }
+        : finding === "unchecked agent leftovers"
+          ? {
+              // Unverifiable, but never continued past: the update restarts the Gateway.
+              status: "unverifiable",
+              leftoversUnchecked: true,
+              detail: "the state database is at schema 7",
+              nextAction: "run `openclaw doctor --fix` to finish the migration.",
+            }
+          : {
+              status: "inconsistent",
+              newerState: true,
+              detail: "the state database is at schema 99",
+              nextAction: "run `openclaw update` to a version that supports it.",
+            },
+    );
+    const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
+
+    if (refuses) {
+      await expect(admission).rejects.toThrow(
+        `Update ${marked.runId} recorded data at risk (rollback-state-unverified). The Gateway`,
+      );
+      await expect(admission).rejects.toThrow(
+        `The update changed nothing. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw doctor --fix\` to finish the migration. ${finding === "unfinished migration" ? "Found" : "Could not verify"}: the state database is at schema 7.`,
+      );
+      // The refusing run keeps the finding for the agent that triage opens.
+      const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });
+      expect(refusing?.runId).not.toBe(marked.runId);
+      expect(refusing?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "data-at-risk verification",
+          status: "failed",
+          detail: expect.stringContaining("the state database is at schema 7"),
+        }),
+      );
+      return;
+    }
+    const next = await admission;
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("The update continues; its own checks still guard activation."),
+    );
+    // Unverified, so no receipt: the next repair or update checks again.
+    expect(
+      getUpdateRun(next.runId)?.steps.some((step) =>
+        step.step.startsWith("finalize:data-at-risk-verified:"),
+      ),
+    ).toBe(false);
+  },
+);
+
 it.each([false, true])(
   "new update settles a dead driver only outside preview (dryRun=%s)",
   async (dryRun) => {
@@ -189,7 +302,7 @@ it.each([false, true])(
     });
     const recorded = recordUpdateRunPhase(previous.runId, "activating");
 
-    const next = await admitUpdateCommandRun({ opts: { dryRun }, root });
+    const next = await admitUpdateCommandRun({ env: process.env, opts: { dryRun }, root });
 
     expect(getUpdateRun(previous.runId)).toEqual(
       dryRun
@@ -227,9 +340,9 @@ it("refuses interrupted update admission without touching SQLite when reusing it
   const { root, run, record, snapshot } = pendingRecovery();
   vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
   const before = snapshot();
-  await expect(admitUpdateCommandRun({ opts: { dryRun: false }, root })).rejects.toBeInstanceOf(
-    UpdateRecoveryRequiredError,
-  );
+  await expect(
+    admitUpdateCommandRun({ env: process.env, opts: { dryRun: false }, root }),
+  ).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
   expect(snapshot()).toEqual(before);
   expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
 });
@@ -251,8 +364,10 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
       fs.writeFileSync(path.join(family, "displaced"), "incomplete database");
     }
     const before = snapshot();
-    await expect(admitUpdateCommandRun({ opts: {}, root })).rejects.toThrow(
-      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    const refusal = admitUpdateCommandRun({ env: process.env, opts: {}, root });
+    await expect(refusal).rejects.toThrow(`Interrupted shared-database publication left ${family}`);
+    await expect(refusal).rejects.toThrow(
+      "https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore",
     );
     expect(fs.existsSync(file)).toBe(false);
     expect(snapshot()).toEqual(before);
@@ -364,7 +479,7 @@ it.skipIf(process.platform === "win32").each([
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = mode === 'no-run' ? undefined : await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
+      const run = mode === 'no-run' ? undefined : await admitUpdateCommandRun({ env: process.env, opts, root: ${JSON.stringify(root)}, installKind: "package" });
       const preview = () => withUpdatePreviewSignals({ ...opts, run }, async () => {
         const commandSignal = resolveCommandProcessSignal();
         const sibling = run ? createUpdateRun({ trigger: 'cli' }) : undefined;
@@ -538,7 +653,7 @@ it("removes preview signal ownership on exceptional unwind", async () => {
   const root = dirs.make("update-preview-cleanup-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
-  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root });
+  const run = await admitUpdateCommandRun({ env: process.env, opts: { dryRun: true }, root });
   const before = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
   const operation = withUpdatePreviewSignals({ dryRun: true, run }, async () => {
     throw new Error("preview error");

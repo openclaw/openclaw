@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { testApi } from "openclaw/plugin-sdk/tts-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTtsTool } from "../agents/tools/tts-tool.js";
 import { handleTtsCommands } from "../auto-reply/reply/commands-tts.js";
@@ -32,8 +33,8 @@ const SYNTHETIC_OGG_OPUS_SHA256 =
 
 const converter = vi.hoisted(() => ({ count: 0 }));
 
-vi.mock("../media/media-services.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+vi.mock("../media/audio-transcode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/audio-transcode.js")>();
   return {
     ...actual,
     transcodeAudioBuffer: async (params: Parameters<typeof actual.transcodeAudioBuffer>[0]) => {
@@ -183,6 +184,10 @@ describe("TTS real synthesis owner to public output entries", () => {
         voice ? { synthesisTarget: "voice-note", transcodesAudio: true } : fileDelivery,
         !voice,
       );
+      expect(testApi.supportsNativeVoiceNoteTts(CHANNEL)).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(CHANNEL.toUpperCase())).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+      expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
       await observeEntries(voice);
       expect(requests).toEqual(Array(4).fill(voice ? "voice-note" : "audio-file"));
       expect(converter.count).toBe(voice ? 0 : 4);

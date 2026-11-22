@@ -7,11 +7,9 @@ import {
   defaultProgramArguments,
 } from "./launchd-install.test-support.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
-import {
-  installLaunchAgent as installLaunchAgentImpl,
-  resolveLaunchAgentPlistPath,
-} from "./launchd.js";
+import { installLaunchAgent as installLaunchAgentImpl } from "./launchd.js";
 
 type ScheduleHandoff = (
   _params: unknown,
@@ -164,9 +162,20 @@ function executeLaunchctlMock(file: string, args: string[]) {
         serviceState === "running" ? "state = running\npid = 4242" : "state = waiting\npid = 0",
       );
     }
+    const plist = state.files.get(resolveLaunchAgentPlistPath(ENV));
+    const programArguments = plist?.includes("<plist")
+      ? (JSON.parse(decodeLaunchAgentPlistFixture(plist, "json").stdout)
+          .ProgramArguments as string[])
+      : defaultProgramArguments;
     return printed(
       state.printOutput ||
-        (state.serviceRunning ? "state = running\npid = 4242" : "state = waiting\npid = 0"),
+        [
+          state.serviceRunning ? "state = running\npid = 4242" : "state = waiting\npid = 0",
+          `program = ${programArguments[0] ?? "node"}`,
+          "arguments = {",
+          ...programArguments.map((arg) => `\t${arg}`),
+          "}",
+        ].join("\n"),
     );
   }
   if (call[0] === "disable" && state.disableError) {
@@ -178,6 +187,7 @@ function executeLaunchctlMock(file: string, args: string[]) {
     }
     if (!state.bootoutLeavesLoaded) {
       Object.assign(state, { serviceLoaded: false, serviceRunning: false });
+      state.serviceStates.delete(call[1] ?? "");
     }
     return commandResult();
   }
@@ -262,7 +272,11 @@ vi.mock("./launchd-system.js", () => ({
 // mock-isolation: Process ancestry and cleanup use the suite's synthetic service processes.
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync,
-  cleanStaleGatewayProcessesSync,
+  cleanStaleGatewayProcessesSync: () => {
+    throw new Error("LaunchAgent lifecycle must await stale-process cleanup");
+  },
+  cleanStaleGatewayProcesses: async (...args: Parameters<typeof cleanStaleGatewayProcessesSync>) =>
+    cleanStaleGatewayProcessesSync(...args),
 }));
 
 // mock-isolation: Port diagnostics must match the synthetic listener state.
@@ -301,6 +315,12 @@ beforeEach(() => {
     }
   }
   launchctlSpawnSync.mockReset().mockImplementation((file: string, args: string[]) => {
+    if (file === "/usr/bin/plutil") {
+      const plist = state.files.get(args.at(-1) ?? "");
+      return plist
+        ? { ...decodeLaunchAgentPlistFixture(plist, "json"), status: 0 }
+        : { stdout: "", stderr: "missing plist", status: 1 };
+    }
     const result = executeLaunchctlMock(file, args);
     return { ...result, status: result.code, error: undefined };
   });

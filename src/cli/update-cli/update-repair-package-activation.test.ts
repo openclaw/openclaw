@@ -5,6 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import { createConfigIO } from "../../config/io.factory.js";
+import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import * as directoryDurability from "../../infra/directory-durability.js";
 import {
   openPackageActivationJournal,
@@ -25,13 +27,26 @@ import {
 } from "../../infra/package-update-publication.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
+import * as recoveryAdmission from "../../infra/update-run-recovery-admission.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
+import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   createInterruptedPackagePublication,
@@ -58,6 +73,7 @@ beforeEach(async () => {
   });
   await state.writeConfig({ plugins: { enabled: false } });
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   mocks.finalize.mockImplementation(async () => {
     assertNoPendingPackageActivation(await mocks.root());
   });
@@ -159,6 +175,158 @@ async function repair() {
   await updateRepairCommand({ json: true, yes: true });
 }
 
+async function preparePluginCohort() {
+  const installKey = path.join(fixtureRoot, "package");
+  const sourceRoot = path.join(fixtureRoot, "source");
+  await writePackageRoot(installKey, "2026.10.9");
+  mocks.root.mockResolvedValue(installKey);
+  const driver = readUpdateRunDriver();
+  expect(driver).toBeDefined();
+  const run = createUpdateRun({
+    trigger: "cli",
+    // A schema-valid different start identity represents an exited instance of this PID.
+    origin: { driver: { ...driver!, startIdentity: String(BigInt(driver!.startIdentity) + 1n) } },
+  });
+  recordUpdateRunPhase(run.runId, "verifying");
+  const runtime = {
+    root: installKey,
+    nodePath: process.execPath,
+    version: "2026.10.9",
+    buildId: null,
+  };
+  // Retained state is synthetic; configuration publication and native custody are real.
+  const reservation = createRetainedUpdateRecovery({
+    runId: run.runId,
+    from: runtime,
+    to: runtime,
+  });
+  writeConfigMachineState("update.pluginCohort." + run.runId, {
+    runId: run.runId,
+    transactionId: reservation.transactionId,
+    revision: 0,
+    disposition: "pending",
+    installKey,
+    priorArtifacts: [],
+    artifacts: [],
+    publications: [],
+    settledPublications: 0,
+  });
+  await withUpdateCommandExecutor(run.runId, async (executor) => {
+    const fence = await executor.enter(installKey);
+    await withPluginCohortConfigCapture(
+      { runId: run.runId, installKey, env: process.env, assertCurrent: fence.assertCurrent },
+      () =>
+        createConfigIO({ pluginValidation: "skip" }).writeConfigFile({
+          plugins: { enabled: false },
+          gateway: { mode: "local" },
+        }),
+    );
+  });
+  expect(loadPluginCohortRecovery(run.runId)?.cohort.publications).toEqual([
+    expect.objectContaining({ kind: "config" }),
+  ]);
+  return {
+    runId: run.runId,
+    installKey,
+    sourceRoot,
+    publishSource() {
+      fs.renameSync(installKey, sourceRoot);
+      fs.mkdirSync(path.join(sourceRoot, ".git"));
+      fs.symlinkSync(sourceRoot, installKey, "junction");
+      mocks.root.mockResolvedValue(sourceRoot);
+    },
+    invoke: () =>
+      runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "repair", "--json", "--yes"],
+      }),
+  };
+}
+
+it.each(["package", "source", "package link"] as const)(
+  "settles the named plugin pair before repair finalization from %s",
+  async (entry) => {
+    const f = await preparePluginCohort();
+    if (entry !== "package") {
+      f.publishSource();
+      if (entry === "package link") {
+        mocks.root.mockResolvedValue(f.installKey);
+      }
+    }
+    mocks.finalize.mockImplementation(async () => {
+      expect(loadPluginCohortRecovery(f.runId)).toBeUndefined();
+      expect(loadUpdateRecovery(f.runId)).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).not.toHaveProperty(
+        "gateway.mode",
+      );
+      assertNoPendingPackageActivation(f.installKey);
+    });
+    await f.invoke();
+    expect(
+      mocks.finalize,
+      JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls),
+    ).toHaveBeenCalledOnce();
+    expect(loadPluginCohortRecovery(f.runId)).toBeUndefined();
+    expect(loadUpdateRecovery(f.runId)).toBeUndefined();
+  },
+);
+
+it.each([
+  ["live package slot", /owns the occupied slot/u],
+  ["retargeted package link", /installation changed during repair/u],
+  ["unrelated runtime", /different installation/u],
+  ["different configuration", /unfinished recovery/u],
+  ["wrong committed version", /candidate version and build/u],
+] as const)("preserves source recovery and its publication with %s", async (failure, message) => {
+  const f = await preparePluginCohort();
+  const configBefore = fs.readFileSync(state.configPath, "utf8");
+  if (failure === "wrong committed version") {
+    const pair = loadPluginCohortRecovery(f.runId)!;
+    writeConfigMachineState("update.pluginCohort." + f.runId, {
+      ...pair.cohort,
+      disposition: "commit",
+    });
+    await writePackageRoot(f.installKey, "2026.10.10");
+  }
+  const pairBefore = loadPluginCohortRecovery(f.runId);
+  if (failure === "live package slot") {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      await executor.enter(f.installKey);
+      f.publishSource();
+      // The historical slot alone is busy; the destination can be claimed.
+      await withUpdateCommandExecutor(randomUUID(), async (destination) => {
+        (await destination.enter(f.sourceRoot)).assertCurrent();
+      });
+      await f.invoke();
+    });
+  } else {
+    f.publishSource();
+    if (failure === "unrelated runtime") {
+      mocks.root.mockResolvedValue(fixtureRoot);
+    } else if (failure === "different configuration") {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", state.path("other.json"));
+    } else if (failure === "retargeted package link") {
+      const inspect = recoveryAdmission.inspectPluginCohortRecoveryAdmission;
+      vi.spyOn(recoveryAdmission, "inspectPluginCohortRecoveryAdmission").mockImplementation(
+        async (...args) => {
+          const pair = await inspect(...args);
+          if (args[1] === f.runId) {
+            fs.unlinkSync(f.installKey);
+            fs.symlinkSync(fixtureRoot, f.installKey, "junction");
+          }
+          return pair;
+        },
+      );
+    }
+    await f.invoke();
+  }
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(message));
+  expect(mocks.finalize).not.toHaveBeenCalled();
+  expect(loadPluginCohortRecovery(f.runId, { env: state.env })).toEqual(pairBefore);
+  expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+});
+
 async function prepareNextPackage(
   f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
   version = "3.0.0",
@@ -180,6 +348,78 @@ async function interruptedPublication(
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
+  it.each(["abandoned", "live ownership", "live sibling"] as const)(
+    "repairs historical hostnames independently before remounted journal recovery: %s",
+    async (scenario) => {
+      const f = await prepareRemountedPublication(fixtures, fixtureRoot);
+      mocks.root.mockResolvedValue(f.packageRoot);
+      const driver = readUpdateRunDriver();
+      expect(driver).toBeDefined();
+      const runs = ["previous-mac.invalid", "renamed-mac.invalid"].map((host) => {
+        const run = createUpdateRun({ trigger: "cli", origin: { driver: { ...driver!, host } } });
+        recordUpdateRunPhase(run.runId, "verifying");
+        return run.runId;
+      });
+      const ageMs = 14 * 24 * 60 * 60_000;
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?")
+        .run(Date.now() - ageMs, Date.now() - ageMs);
+      const repairCli = () =>
+        runRegisteredCli({
+          register: registerUpdateCli,
+          argv: ["update", "repair", "--json", "--yes"],
+        });
+      if (scenario === "live ownership") {
+        const journal = fs.readFileSync(f.journalPath);
+        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+          await executor.enter(f.packageRoot);
+          await repairCli();
+        });
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/wait.*owning host.*repair/iu),
+        );
+        expect(runs.map((id) => getUpdateRun(id)?.status)).toEqual(["running", "running"]);
+        expect(fs.readFileSync(f.journalPath)).toEqual(journal);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      const sibling =
+        scenario === "live sibling"
+          ? createUpdateRun({ trigger: "cli", origin: { driver } })
+          : undefined;
+      await repairCli();
+      expect(runs.map((id) => getUpdateRun(id))).toEqual(
+        runs.map((runId) =>
+          expect.objectContaining({
+            runId,
+            status: "failed",
+            phase: "finished",
+            reason: "abandoned",
+            finishedAtMs: expect.any(Number),
+          }),
+        ),
+      );
+      for (const [index, id] of runs.entries()) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(id));
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining(index ? "renamed-mac.invalid" : "previous-mac.invalid"),
+        );
+      }
+      if (sibling) {
+        expect(getUpdateRun(sibling.runId)?.status).toBe("running");
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     "lost acknowledgement",
     "manual replacement",

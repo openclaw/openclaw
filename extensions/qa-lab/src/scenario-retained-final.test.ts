@@ -3,23 +3,29 @@ import { buffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { injectQaBusInboundMessage, type QaBusOutboundMessageInput } from "../../qa-channel/api.js";
+import {
+  injectQaBusInboundMessage,
+  pollQaBus,
+  type QaBusOutboundMessageInput,
+} from "../../qa-channel/api.js";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { closeQaHttpServer, dispatchQaHttpRequest, startQaBusServer } from "./bus-server.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { createScenarioChannel, dispatchScenarioFinal } from "./scenario-channel.test-support.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import { waitForCompletedQaReply } from "./suite-runtime-transport.js";
 
 type FinalFault =
   | "preview-only"
   | "failed-send"
+  | "failed-delete"
   | "duplicate"
   | "typed-error"
   | Partial<QaBusOutboundMessageInput>;
 
 async function startRetainedFinalScenario(fault: FinalFault = {}) {
-  const previewOnly = fault === "preview-only";
+  const previewOnly = fault === "preview-only" || fault === "failed-delete";
   const scenario = readQaScenarioById("qa-channel-failed-tool-terminal-finalization");
   if (!scenario.execution.flow) {
     throw new Error("expected retained-final scenario flow");
@@ -52,6 +58,13 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
   const proxy = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       let body = (await buffer(req)).toString();
+      if (req.url === "/v1/actions/delete" && fault === "failed-delete") {
+        deleteStarted.resolve();
+        await releaseDelete.promise;
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "injected preview deletion failure" }));
+        return;
+      }
       const finalSend = req.url === "/v1/outbound/message" && ++outboundRequests > 1;
       if (finalSend) {
         finalStarted.resolve();
@@ -150,7 +163,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
     state,
     vars,
     result,
-    acknowledgedCursor: () => state.getAcknowledgedPollCursor("default"),
+    completed: () => state.hasCompletedInboundEvent("default", Number(vars.inboundCursor)),
     previewSent: Promise.race([
       previewSent.promise,
       result.then((outcome) => {
@@ -164,12 +177,16 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
     finalStarted: finalStarted.promise,
     releaseFinal: () => releaseFinal.resolve(),
     async expectPending() {
-      expect(state.getAcknowledgedPollCursor("default")).toBe(0);
+      expect(state.hasCompletedInboundEvent("default", Number(vars.inboundCursor))).toBe(false);
       nextCheck = createDeferred<void>();
       expect(await Promise.race([nextCheck.promise, result])).toBeUndefined();
     },
     expireDeadline: () => {
       deadlineExpired = true;
+    },
+    async stopGateway() {
+      abort();
+      return await gatewaySettled;
     },
     async sendControl() {
       await injectQaBusInboundMessage({
@@ -193,7 +210,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
       const gatewayError = await gatewaySettled;
       await closeQaHttpServer(proxy);
       await bus.stop();
-      if (gatewayError) {
+      if (gatewayError && fault !== "failed-send" && fault !== "failed-delete") {
         throw gatewayError;
       }
     },
@@ -201,6 +218,61 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
 }
 
 describe("failed-tool scenario retained final", () => {
+  it("keeps an adopted interrupted preview incomplete across restart and a later reply", async () => {
+    const channel = createScenarioChannel();
+    const { state, runtime } = channel;
+    const oldInput = state.addInboundMessage({
+      conversation: { id: "interrupted", kind: "direct" },
+      senderId: "qa-driver",
+      text: "interrupted input",
+    });
+    state.addOutboundMessage({
+      to: "dm:interrupted",
+      replyToId: oldInput.id,
+      text: "interrupted preview",
+    });
+    const bus = await startQaBusServer({ state });
+    let running: ReturnType<typeof channel.start> | undefined;
+    try {
+      await pollQaBus({
+        baseUrl: bus.baseUrl,
+        accountId: "default",
+        cursor: state.getSnapshot().cursor,
+        adoptedEventCursors: [1],
+        timeoutMs: 0,
+      });
+      const polls = vi.spyOn(state, "poll");
+      const dispatch = vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher);
+      dispatch.mockImplementation(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
+        return dispatchScenarioFinal(dispatcherOptions, { text: "fresh final reply" });
+      });
+      running = channel.start(bus.baseUrl);
+      await running.ready;
+      await vi.waitFor(() => expect(polls.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(dispatch).not.toHaveBeenCalled();
+      await expect(waitForCompletedQaReply(state, oldInput, 50)).rejects.toThrow("timed out");
+      const { message: freshInput } = await injectQaBusInboundMessage({
+        baseUrl: bus.baseUrl,
+        input: {
+          conversation: { id: "fresh", kind: "direct" },
+          senderId: "qa-driver",
+          text: "fresh input",
+        },
+      });
+      expect(await waitForCompletedQaReply(state, freshInput)).toMatchObject({
+        text: "fresh final reply",
+        replyToId: freshInput.id,
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      await expect(waitForCompletedQaReply(state, oldInput, 50)).rejects.toThrow("timed out");
+    } finally {
+      running?.abort();
+      await running?.gateway;
+      await bus.stop();
+    }
+  });
+
   it("waits through preview deletion and final send until the exact inbound is acknowledged", async () => {
     await using harness = await startRetainedFinalScenario();
     await harness.previewSent;
@@ -216,7 +288,7 @@ describe("failed-tool scenario retained final", () => {
     await harness.expectPending();
     harness.releaseFinal();
     expect(await harness.result).toMatchObject({ status: "pass" });
-    expect(harness.acknowledgedCursor()).toBeGreaterThanOrEqual(Number(harness.vars.inboundCursor));
+    expect(harness.completed()).toBe(true);
     expect(harness.vars.reply).toMatchObject({
       text: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
     });
@@ -224,9 +296,46 @@ describe("failed-tool scenario retained final", () => {
 
   const missingReply = "expected exactly one failure-honest reply, got []";
   const wrongRoute = "retained reply has the wrong route";
+
+  it("keeps a failed final send incomplete after clearing its preview", async () => {
+    await using harness = await startRetainedFinalScenario("failed-send");
+    await harness.previewSent;
+    await harness.waitObserved;
+    harness.releaseDelete();
+    harness.releaseFinal();
+    harness.startFinal();
+    await harness.finalStarted;
+    const gatewayError = await harness.stopGateway();
+    expect(harness.completed()).toBe(false);
+    expect(gatewayError).toEqual(new Error("QA reply did not complete delivery"));
+    expect(
+      harness.state.getSnapshot().messages.filter((m) => m.direction === "outbound" && !m.deleted),
+    ).toEqual([]);
+    harness.expireDeadline();
+    expect(await harness.result).toMatchObject({ status: "fail" });
+  });
+
+  it("keeps a failed preview deletion incomplete after a no-output turn", async () => {
+    await using harness = await startRetainedFinalScenario("failed-delete");
+    await harness.previewSent;
+    await harness.waitObserved;
+    harness.startFinal();
+    await harness.deleteStarted;
+    harness.releaseDelete();
+    const gatewayError = await harness.stopGateway();
+    expect(
+      harness.state.getSnapshot().messages.filter((m) => m.direction === "outbound" && !m.deleted),
+    ).toMatchObject([
+      { text: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK" },
+    ]);
+    expect(harness.completed()).toBe(false);
+    expect(gatewayError).toEqual(new Error("injected preview deletion failure"));
+    harness.expireDeadline();
+    expect(await harness.result).toMatchObject({ status: "fail" });
+  });
+
   it.each<[string, FinalFault, string]>([
     ["preview-only with processing ack", "preview-only", missingReply],
-    ["deleted preview without final", "failed-send", missingReply],
     ["duplicate retained final", "duplicate", "expected exactly one failure-honest reply"],
     [
       "typed error with matching text",
@@ -250,9 +359,7 @@ describe("failed-tool scenario retained final", () => {
       details: expect.stringContaining(error),
     });
     if (fault !== "typed-error") {
-      expect(harness.acknowledgedCursor()).toBeGreaterThanOrEqual(
-        Number(harness.vars.inboundCursor),
-      );
+      expect(harness.completed()).toBe(true);
     }
     if (fault === "preview-only") {
       expect(

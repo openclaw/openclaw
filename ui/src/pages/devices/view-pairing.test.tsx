@@ -31,6 +31,12 @@ function Pairing(props: Partial<DevicePairSetupProps> & Pick<DevicePairSetupProp
   );
 }
 
+function loopbackRefusal() {
+  return Object.assign(new Error("Gateway is only bound to loopback."), {
+    details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+  });
+}
+
 type PairingView = ReturnType<typeof mountSolid>;
 const expectEnabled = (view: PairingView) =>
   expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
@@ -103,11 +109,16 @@ describe("device pairing dialog", () => {
   it.each([
     { lifecycle: { phase: "selection", access: "full" }, choices: true, selectable: true },
     {
-      lifecycle: { phase: "error", source: "create", access: "full", message: "Try again" },
+      lifecycle: {
+        phase: "error",
+        source: "create",
+        access: "full",
+        error: new Error("Try again"),
+      },
       choices: true,
       selectable: true,
     },
-    { lifecycle: { phase: "expired", access: "full" }, choices: true, selectable: false },
+    { lifecycle: { phase: "expired", access: "full" }, choices: false, selectable: false },
     {
       lifecycle: {
         phase: "error",
@@ -150,12 +161,59 @@ describe("device pairing dialog", () => {
     const { container } = mountSolid(() => <Pairing lifecycle={{ phase: "selection", access }} />);
 
     expect(container.textContent).toContain(
-      "Device capabilities plus complete Gateway controls, including settings and upgrades.",
+      "Use device tools and manage all settings and updates.",
     );
-    expect(container.textContent).toContain("Connect a computer as a command and capability host.");
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
-      href,
+    expect(container.textContent).toContain(
+      "Let agents run commands and use tools on this device.",
     );
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__help")?.href).toBe(href);
+  });
+
+  it("offers the apps beside the scan step", () => {
+    const selection = mountSolid(() => (
+      <Pairing lifecycle={{ phase: "selection", access: "full" }} />
+    ));
+    expect(selection.queryByRole("button", { name: "Get the apps" })).toBeNull();
+
+    const onGetApps = vi.fn();
+    const lifecycle = {
+      ...createWaitingNodePairSetup(),
+      access: "full",
+    } as unknown as DevicePairSetupLifecycle;
+    const waiting = mountSolid(() => (
+      <Pairing lifecycle={lifecycle} nowMs={10_000} onGetApps={onGetApps} />
+    ));
+    const getApps = waiting.getByRole("button", { name: "Get the apps" });
+    expect(getApps.closest(".device-pair-setup__waiting")?.textContent).toBe(
+      "Official OpenClaw mobile apps connect automatically after scanning. Get the apps",
+    );
+    getApps.click();
+    expect(onGetApps).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves the accent to Review once a device request is waiting", () => {
+    let setPendingCount!: (count: number) => void;
+    const lifecycle = {
+      ...createWaitingNodePairSetup(),
+      access: "full",
+    } as unknown as DevicePairSetupLifecycle;
+    const view = mountSolid(() => {
+      const [pendingCount, setCount] = createSignal(0);
+      setPendingCount = setCount;
+      return <Pairing lifecycle={lifecycle} nowMs={10_000} pendingCount={pendingCount()} />;
+    });
+    const copy = () => view.getByRole("button", { name: "Copy setup code" });
+
+    expect(copy().classList.contains("primary")).toBe(true);
+    expect(view.queryByRole("button", { name: "Review" })).toBeNull();
+    view.getByRole("button", { name: "Manage devices" });
+
+    setPendingCount(1);
+    flush();
+
+    expect(copy().classList.contains("primary")).toBe(false);
+    expect(view.getByRole("button", { name: "Review" }).classList.contains("primary")).toBe(true);
+    expect(view.queryByRole("button", { name: "Manage devices" })).toBeNull();
   });
 
   it("renders node setup instructions and announces arriving device requests", () => {
@@ -173,14 +231,14 @@ describe("device pairing dialog", () => {
     });
 
     const { container } = view;
-    expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);
+    expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(0);
     expect(container.querySelector(".device-pair-setup__command code")?.textContent).toBe(
       'openclaw node run --pair "oc-pair://AbC_123"',
     );
     expect(container.querySelector('[role="timer"]')?.textContent?.trim()).toBe(
       "This setup link expires in 1:00.",
     );
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__help")?.href).toBe(
       "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     );
     const waiting = "Run the command on the device, then review its pairing request here.";
@@ -202,4 +260,58 @@ describe("device pairing dialog", () => {
     expect(status.textContent).toBe("");
     view.getByText(waiting);
   });
+
+  it("announces only the secure access title after phone setup fails on a loopback-only Gateway", async () => {
+    const view = mountSolid(() => {
+      const [lifecycle, setLifecycle] = createSignal<DevicePairSetupLifecycle>({
+        phase: "selection",
+        access: "full",
+      });
+      return (
+        <Pairing
+          lifecycle={lifecycle()}
+          onRefresh={() => {
+            setLifecycle({
+              phase: "error",
+              source: "create",
+              access: "full",
+              error: loopbackRefusal(),
+            });
+            return Promise.resolve();
+          }}
+        />
+      );
+    });
+    const announcement = view.container.querySelector('[aria-live="polite"]');
+    expect(announcement?.textContent).toBe("");
+
+    view.getByRole("button", { name: "Create setup code" }).click();
+    await waitForSolid(() => {
+      const title = view.getByText("Set up secure access");
+      expect(title.closest('[aria-live="polite"]')).toBe(announcement);
+      expect(announcement?.textContent).toBe("Set up secure access");
+      expect(
+        view.getByText(
+          "After the Dashboard reconnects, reopen Connect a device and choose Create setup code.",
+        ),
+      ).toBeTruthy();
+      expect(view.queryByRole("alert")).toBeNull();
+      expect(view.getByRole("button", { name: /Retry/ })).toBeTruthy();
+    });
+  });
+
+  it.each([
+    { access: "node", error: loopbackRefusal() },
+    { access: "full", error: new Error("No auth") },
+  ] as const)(
+    "keeps the existing error for $access setup with $error.message",
+    ({ access, error }) => {
+      const view = mountSolid(() => (
+        <Pairing lifecycle={{ phase: "error", source: "create", access, error }} />
+      ));
+      expect(view.getByRole("alert").textContent).toContain(error.message);
+      expect(view.queryByText("Set up secure access")).toBeNull();
+      expect(view.getByRole("button", { name: "Reload" })).toBeTruthy();
+    },
+  );
 });

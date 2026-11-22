@@ -10,8 +10,11 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "../../../state/openclaw-state-db-cache.js";
 import { waitForQueuedSubagentClaim } from "../registry/subagent-registry-queued-registration-wait.js";
-import { closeSwarmScheduler, enqueueSwarmRun } from "./swarm-scheduler.js";
-import { observeSwarmSchedulerWork } from "./swarm-scheduler.lifecycle.test-support.js";
+import { closeSwarmScheduler } from "./swarm-scheduler.js";
+import {
+  enqueueSwarmRun,
+  observeSwarmSchedulerWork,
+} from "./swarm-scheduler.lifecycle.test-support.js";
 
 const wakes = vi.hoisted(() => new Set<() => void>());
 vi.mock("../registry/subagent-registry-publication.js", async (importOriginal) => {

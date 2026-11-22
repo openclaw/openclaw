@@ -63,3 +63,25 @@ it("retains runtime catalog aliases when no manifest owner is available", () => 
   expect(result.config.channels?.["runtime-channel"]).toEqual({ enabled: true });
   expect(result.config.plugins).toBeUndefined();
 });
+
+it("reads mixed-case plugin policy under the canonical lowercase key", () => {
+  const ids = ["MyProv", "OtherProv", "OnProv"];
+  const config = {
+    plugins: {
+      deny: ["otherprov"],
+      entries: { myprov: { enabled: false }, onprov: { enabled: true } },
+    },
+  };
+  const result = materializePluginAutoEnableCandidates({
+    config,
+    candidates: ids.map((pluginId) => ({
+      pluginId,
+      kind: "provider-auth-configured" as const,
+      providerId: pluginId.toLowerCase(),
+    })),
+    env: {},
+    manifestRegistry: makeRegistry(ids.map((id) => ({ id, channels: [], origin: "global" }))),
+  });
+  expect(result.config).toEqual(config);
+  expect(result.changes).toEqual([]);
+});

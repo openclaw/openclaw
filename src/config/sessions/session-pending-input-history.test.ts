@@ -20,7 +20,6 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
   captureSessionQueuedInputsForRestart,
-  readSessionPendingInputContext,
   readSessionQueuedInputPage,
 } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
@@ -92,7 +91,7 @@ it("skips covered empty history and reads a newly staged input after its owner c
       });
     } finally {
       history.mockRestore();
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
       await actor.release();
     }
@@ -158,17 +157,13 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
       expect(page.items[0]?.message.content === content).toBe(true);
       expect(page.total).toBe(2);
       expect(page.nextBefore).toBeDefined();
-      expect(await readSessionPendingInputContext(scope)).toEqual({
-        items: page.items,
-        nextBefore: page.nextBefore,
-      });
       const older = await listSessionPendingInputs(scope, { before: page.nextBefore });
       expect(older.items.map((input) => input.id)).toEqual([receipts[0]?.inputId]);
       expect(older.items[0]?.message.content === content).toBe(true);
       expect(older.nextBefore).toBeUndefined();
     } finally {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
       await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
     }
@@ -212,12 +207,13 @@ it.each(["context", "id"] as const)(
       );
       try {
         inputId = receipt.inputId;
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
         expect(read().rows).toEqual([]);
-        expect(await readSessionPendingInputContext(scope)).toEqual({ items: [] });
+        expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+        expect(await readSessionPendingInput(scope, inputId)).toBeUndefined();
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     });
@@ -257,20 +253,27 @@ it("reads pending history and exact messages without caller-thread data SQL", as
     if (!stale) {
       throw new Error("Expected stale fixture");
     }
-    stale.finish("interrupted");
+    stale.finish("interrupted", "failed");
     await stale.settled?.();
     // A persisted pre-restart row has no process-local custody.
     database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+      .prepare(
+        "UPDATE session_pending_inputs SET state = 'queued', end_cause = NULL WHERE input_id = ?",
+      )
       .run(stale.inputId);
     aborted = true;
     const hostSql = observeHostDataSql();
     try {
       expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ id: receipt.inputId, state: "queued" }],
+        total: 2,
+        items: [
+          { id: receipt.inputId, state: "queued" },
+          { id: stale.inputId, state: "queued" },
+        ],
       });
-      expect(await readSessionPendingInput(scope, stale.inputId)).toBeUndefined();
+      expect(await readSessionPendingInput(scope, stale.inputId)).toMatchObject({
+        state: "queued",
+      });
       expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
         id: receipt.inputId,
         state: "queued",
@@ -278,7 +281,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
     expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
@@ -287,7 +290,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
   });
 });
 
-it("resumes only the live FIFO inputs captured at graceful shutdown, leaving crash rows inert", async () => {
+it("reads all unowned durable FIFO inputs after a crash or graceful shutdown", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { scope, database } = createPendingHistoryFixture("graceful-input-queue");
     const crashed = expectDefined(
@@ -297,42 +300,43 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
       ),
       "Expected accepted input",
     );
-    crashed.finish("interrupted");
+    crashed.finish("interrupted", "failed");
     await crashed.settled?.();
-    // A crash leaves durable text without process-local custody.
+    // A crash retains the accepted row; unavailable source capture leaves no origin.
     database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+      .prepare(
+        "UPDATE session_pending_inputs SET state = 'queued', end_cause = NULL, lifecycle_generation = 'previous-process', origin_source_json = NULL WHERE input_id = ?",
+      )
       .run(crashed.inputId);
     const receipts = [];
     for (const runId of ["first", "second"]) {
       receipts.push(
         expectDefined(
-          await stageSessionPendingInput(
-            scope,
-            createUserPendingInput(runId, runId, `${runId}:user`),
-          ),
+          await stageSessionPendingInput(scope, {
+            ...createUserPendingInput(runId, runId, `${runId}:user`),
+            recoverySource: { kind: "unavailable" },
+          }),
           "Expected accepted input",
         ),
       );
     }
     const captured = await captureSessionQueuedInputsForRestart(scope);
     expect(captured.queuedInputIds).toEqual(receipts.map((receipt) => receipt.inputId));
+    expect((await readSessionQueuedInputPage(scope)).rows.map((row) => row.input_id)).toEqual([
+      crashed.inputId,
+    ]);
     captured.preserve();
     for (const receipt of receipts) {
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
-    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-    const page = await readSessionQueuedInputPage(scope, {
-      queuedInputIds: captured.queuedInputIds,
-    });
+    expect(await listSessionPendingInputs(scope)).toMatchObject({ total: 3 });
+    const page = await readSessionQueuedInputPage(scope);
     expect(page.rows.toReversed().map((row) => ({ runId: row.run_id, state: row.state }))).toEqual([
+      { runId: "old-crash", state: "queued" },
       { runId: "first", state: "queued" },
       { runId: "second", state: "queued" },
     ]);
-    expect(await readSessionQueuedInputPage(scope, { queuedInputIds: [] })).toEqual({
-      rows: [],
-      total: 0,
-    });
+    expect(page.rows.every((row) => row.origin_source_json == null)).toBe(true);
   });
 });

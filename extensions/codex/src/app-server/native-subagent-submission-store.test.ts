@@ -438,6 +438,9 @@ describe("native subagent submission receipts in the binding store", () => {
       });
       const requestCustody = Object.freeze({});
       const modelSource = createNativeModelSourceFixture(["test-model"]);
+      const cleanup = vi.fn(async (_threadId: string, _turnId: string, guard: () => void) =>
+        guard(),
+      );
       const parent = await monitor.registerParent({
         parentThreadId: binding.threadId,
         requesterSessionKey: identity.sessionKey,
@@ -452,6 +455,7 @@ describe("native subagent submission receipts in the binding store", () => {
           hasProvider: (provider) => provider === "test-provider",
         },
         claimDirectChild: () => () => {},
+        cancelChildProcesses: cleanup,
         assignmentStore,
         submissionStore,
       });
@@ -544,6 +548,10 @@ describe("native subagent submission receipts in the binding store", () => {
         const retried = await stop();
         expect([retried.killed, retried.errors]).toEqual([1, undefined]);
         expect(interrupt).toHaveBeenCalledOnce();
+        expect(cleanup.mock.calls.map(([threadId, turnId]) => [threadId, turnId])).toEqual([
+          [childThreadId, submissionId],
+          [childThreadId, submissionId],
+        ]);
         await reopen();
         await expectSaved([], []);
         expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();

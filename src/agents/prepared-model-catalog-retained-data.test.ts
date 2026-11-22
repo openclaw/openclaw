@@ -1,8 +1,43 @@
 import { expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { measurePreparedCatalogRetainedData } from "./prepared-model-catalog-retained-data.js";
+
+it("counts every owned config root once and shares traversal across overlay descendants", () => {
+  const config = {
+    models: { providers: { fixture: { baseUrl: "https://fixture.invalid", models: [] } } },
+    agents: {
+      defaults: {
+        modelPolicy: { allow: Array.from({ length: 128 }, (_, index) => `fixture/model-${index}`) },
+      },
+    },
+  };
+  const overlay = { ...config, plugins: { allow: ["fixture"] } };
+  const distinct = structuredClone(config);
+  const measure = (roots: (typeof config)[]) =>
+    measurePreparedCatalogRetainedData([], undefined, roots).find(
+      (row) => row.structure === "catalog-config",
+    )!;
+  setRuntimeConfigSnapshot(config, config);
+  try {
+    const initial = measure([]);
+    expect(initial).toMatchObject({ entries: 1, truncated: false });
+    expect(measure([config, config])).toEqual(initial);
+    const overlaid = measure([config, overlay]);
+    const copied = measure([config, distinct]);
+    expect(overlaid).toMatchObject({ entries: 2, truncated: false });
+    expect(copied).toMatchObject({ entries: 2, truncated: false });
+    expect(copied.approximateBytes).toBeGreaterThan(overlaid.approximateBytes);
+    expect(measure([config])).toEqual(initial);
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});
 
 it.each(["accessor", "proxy"])("samples a static %s catalog without executing it", async (kind) => {
   let reads = 0;
@@ -37,8 +72,6 @@ it.each(["accessor", "proxy"])("samples a static %s catalog without executing it
       {
         pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
         remoteCatalog: null,
-        inlineProviderModels: [],
-        configuredCatalogEntries: [],
         preparedStaticProviderCatalog,
       },
     ],
@@ -68,8 +101,6 @@ it("does not rewalk unchanged immutable remote catalogs and refreshes changed ro
   const generation = (remoteCatalog: typeof first) => ({
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
     remoteCatalog,
-    inlineProviderModels: [],
-    configuredCatalogEntries: [],
   });
   const firstGeneration = generation(first);
   const secondGeneration = generation(second);
@@ -109,8 +140,6 @@ it("does not rewalk published metadata on idle samples and refreshes replacement
   const generation = (pluginMetadataSnapshot: typeof first) => ({
     pluginMetadataSnapshot,
     remoteCatalog: null,
-    inlineProviderModels: [],
-    configuredCatalogEntries: [],
   });
   const firstGeneration = generation(first);
   const secondGeneration = generation(second);

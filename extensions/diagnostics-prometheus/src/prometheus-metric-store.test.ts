@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
-import {
-  PROMETHEUS_FAMILY_RESERVES,
-  type PrometheusMetricName,
-} from "./prometheus-family-budget.js";
+import { familyBudgetPopulation, populateFamilyBudget } from "./family-budget.test-support.js";
+import { PROMETHEUS_FAMILY_LIMITS, type PrometheusMetricName } from "./prometheus-family-budget.js";
 import * as prometheusFormat from "./prometheus-format.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
 
@@ -23,6 +21,24 @@ function expectLines(text: string, ...lines: string[]) {
   }
 }
 afterEach(() => vi.restoreAllMocks());
+
+it.each([121, 257])("retains the full family mix with %s bounded reader operations", (readers) => {
+  const store = createPrometheusMetricStore();
+  const population = familyBudgetPopulation(readers);
+  populateFamilyBudget(store, population);
+  populateFamilyBudget(store, population);
+  const body = store.render().toString();
+  expect(body).not.toContain("openclaw_prometheus_series_dropped_total");
+  for (const row of population) {
+    const name = row.type === "histogram" ? `${row.name}_count` : row.name;
+    const lines = samples(body, `${name}{`);
+    expect(lines, row.name).toHaveLength(row.labelSets);
+    expect(
+      lines.every((line) => line.endsWith(row.type === "gauge" ? " 1" : " 2")),
+      row.name,
+    ).toBe(true);
+  }
+});
 
 it("preserves the observed registry's golden exposition across cold and warm scrapes", () => {
   const store = createPrometheusMetricStore();
@@ -119,7 +135,10 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   const escaped = 'z="雪\\"\\\\\\n"';
   const bucket = (le: number) => `${duration}_bucket{a="first",le="${le}",${escaped}}`;
   const suffix = `{a="first",le="replaced",${escaped}}`;
-  store.histogram(duration, "Duration.", labels, 0.5, [1, 10]);
+  const buckets = [1, 10];
+  const upperBucket = vi.fn(() => 10);
+  store.histogram(duration, "Duration.", labels, 0.5, buckets);
+  Object.defineProperty(buckets, 1, { get: upperBucket });
   store.counterValue(runs, "Runs.", {}, 2);
   store.gauge(depth, "Depth.", {}, 3);
   const first = store.render();
@@ -143,10 +162,17 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
     expectLines(rendered.toString(), `${depth} ${value}`);
     rendered.buffer.transfer(0);
   }
+  upperBucket.mockClear();
   for (let index = 0; index < 8; index++) {
     store.histogram(duration, "Duration.", labels, 1, [1, 10]);
   }
-  expectLines(store.render().toString(), `${duration}_count${suffix} 10`);
+  expect(upperBucket).not.toHaveBeenCalled();
+  expectLines(
+    store.render().toString(),
+    `${bucket(1)} 9`,
+    `${bucket(10)} 10`,
+    `${duration}_count${suffix} 10`,
+  );
   const largeLabel = "雪😀".repeat(1024);
   store.gauge(depth, "Depth.", { label: largeLabel }, 7);
   expectLines(store.render().toString(), `${depth}{label="${largeLabel}"} 7`);
@@ -178,11 +204,11 @@ it("preserves label identity across property order, label shapes, and separator 
   );
 });
 
-it("bounds retained entries while reserving every family and releasing cleared gauges", () => {
+it("enforces family and total ceilings, releasing cleared gauges and retired plugin entries", () => {
   const store = createPrometheusMetricStore();
-  const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
+  const families = Object.keys(PROMETHEUS_FAMILY_LIMITS) as PrometheusMetricName[];
   for (const name of families) {
-    for (let index = 0; index <= Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]); index++) {
+    for (let index = 0; index <= PROMETHEUS_FAMILY_LIMITS[name]; index++) {
       store.gauge(name, "Synthetic admission pressure.", { index: String(index) }, index);
     }
   }
@@ -194,33 +220,43 @@ it("bounds retained entries while reserving every family and releasing cleared g
   );
   const admitted = rendered.split("\n").filter((line) => line.includes('{index="'));
   const count = (name: string) => admitted.filter((line) => line.startsWith(`${name}{`)).length;
-  expect(admitted).toHaveLength(16384);
+  expect(admitted).toHaveLength(16576);
   for (const name of families) {
     const size = count(name);
-    expect(size).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
-    expect(size).toBeLessThanOrEqual(Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]));
+    expect(size).toBeLessThanOrEqual(PROMETHEUS_FAMILY_LIMITS[name]);
   }
-  expect(count("openclaw_worker_request_phase_seconds")).toBe(1024);
-  expect(count("openclaw_gateway_ws_event_frame_bytes")).toBe(2048);
-  // This late family only used its reserve. Clearing it must not make that
-  // capacity available to another family whose shared admission is exhausted.
-  const late = "openclaw_worktree_preparation_seconds";
-  const competing = "openclaw_webhook_received_total";
-  store.clearGauges(late);
-  store.counter(competing, "Competing admission.", { index: "late" });
-  for (let index = 0; index < 32; index++) {
-    store.gauge(late, "Rebuilt gauges.", { index: String(index) }, 2);
+  const first = "openclaw_chat_history_requests_total";
+  expect(count(first)).toBe(128);
+  store.gauge(first, "Existing entries still update.", { index: "0" }, 3);
+  store.histogram(duration, "Blocked by total cap.", { index: "late" }, 1);
+  expect(store.render().toString()).toContain(`${first}{index="0"} 3\n`);
+  expect(store.render().toString()).not.toContain(`${duration}_count{index="late"}`);
+  store.clearGauges(first);
+  const plugin = {
+    name: "openclaw_plugin_synthetic_total",
+    type: "counter",
+    help: "Synthetic",
+    labels: ["index"],
+  } as const;
+  for (let index = 0; index < 129; index++) {
+    store.plugin(plugin, { index: String(index) }, 1);
+  }
+  expect(samples(store.render().toString(), `${plugin.name}{`)).toHaveLength(128);
+  store.retire([plugin.name]);
+  store.retire([plugin.name]);
+  for (let index = 0; index < 129; index++) {
+    store.gauge(first, "Rebuilt gauges.", { index: String(index) }, 2);
   }
   const rebuilt = store.render().toString();
-  expect(rebuilt).not.toContain(`${competing}{index="late"}`);
-  expect(samples(rebuilt, `${late}{`)).toHaveLength(32);
-  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
+  expect(rebuilt).not.toContain(`${plugin.name}{`);
+  expect(samples(rebuilt, `${first}{`)).toHaveLength(128);
+  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16576);
   store.reset();
   expect(store.render().toString()).toBe("");
   for (let index = 0; index < 128; index++) {
-    store.counter(late, "After reset.", { index: String(index) });
+    store.counter(first, "After reset.", { index: String(index) });
   }
-  expect(samples(store.render().toString(), `${late}{`)).toHaveLength(128);
+  expect(samples(store.render().toString(), `${first}{`)).toHaveLength(128);
 });
 
 it("renders exact UTF-8 exposition bytes, including help, all sample kinds, and empty values", () => {
@@ -266,7 +302,7 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
   }
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
   expectLines(store.render().toString(), `${depth}{index="31"} 31`);

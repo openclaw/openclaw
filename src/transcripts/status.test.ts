@@ -35,7 +35,6 @@ import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
 import type {
   TranscriptOccupancyWatchRequest,
-  TranscriptSessionDescriptor,
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "./provider-types.js";
@@ -45,6 +44,7 @@ import {
   useTranscriptStatusFixture,
 } from "./status.producer.test-harness.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -330,7 +330,7 @@ describe("configured transcript cleanup custody", () => {
   ])(
     "retains and drains $fault cleanup after $phase (occupied=$whenOccupied)",
     async ({ phase, fault, whenOccupied }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const adoption = phase === "adoption";
       const check = adoption ? expect.soft : expect;
       const text = adoption ? "Admitted note" : "Before shutdown";

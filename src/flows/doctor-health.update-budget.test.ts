@@ -75,6 +75,9 @@ vi.mock("./doctor-health-contribution-runners.state.js", async (importOriginal) 
 vi.mock("./doctor-health-contribution-runners.config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-health-contribution-runners.config.js")>()),
   runWriteConfigHealth: async () => observed.events.push("config-write"),
+}));
+vi.mock("./doctor-config-validation-findings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-config-validation-findings.js")>()),
   runFinalConfigValidationHealth: async () => observed.events.push("final-readiness"),
 }));
 
@@ -226,7 +229,10 @@ it.each([
       ...updateEnv,
       OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     };
-    const startedAt = Date.now();
+    // The simulated Doctor clock must not expire real worker settlement deadlines.
+    const startedAt = Date.UTC(2020, 0, 1);
+    Object.assign(observed, { now: startedAt, events: [] });
+    vi.spyOn(Date, "now").mockImplementation(() => observed.now);
     const run = createUpdateRun(
       { trigger: "cli", target: { kind: "package" }, before: { version: "2026.9.4" } },
       { env },
@@ -236,8 +242,6 @@ it.each([
     // Activation has a fresh inspection window even when validation was long ago.
     const doctorStartedAt = startedAt + (phase === "validation" ? 20_000 : 600_000);
     observed.now = doctorStartedAt;
-    observed.events = [];
-    vi.spyOn(Date, "now").mockImplementation(() => observed.now);
     const selected = selectContributions(
       doctorIds("auth-profiles session-transcripts write-config final-config-validation"),
     );

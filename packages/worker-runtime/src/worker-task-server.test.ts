@@ -1,6 +1,11 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  areWorkerNativeSectionsSettled,
+  cancelWorkerNativeSections,
+  createWorkerNativeSectionState,
+} from "./worker-task-native-sections.js";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
 const boundary = vi.hoisted((): { port: unknown } => ({ port: undefined }));
@@ -79,3 +84,197 @@ it.each([false, true])("joins retirement (cleanup rejects: %s)", async (rejectCl
 
 const callCounts = (...mocks: Array<{ mock: { calls: unknown[] } }>) =>
   mocks.map(({ mock }) => mock.calls.length);
+
+it("cancels noninteractive owned work and joins cleanup before releasing native custody", async () => {
+  const started = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  const idle = Promise.withResolvers<void>();
+  const parent = Object.assign(new EventEmitter(), { postMessage: vi.fn() });
+  boundary.port = parent;
+  const sections = createWorkerNativeSectionState();
+  serveOwnedWorkerTasks(
+    (_input, _channel, control) =>
+      control.runNativeSection(async () => {
+        control.signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+        started.resolve();
+        await cancelled.promise;
+        await cleanup.promise;
+        control.signal.throwIfAborted();
+      }),
+    { closeResource: vi.fn() },
+    {
+      initialize: vi.fn(),
+      onMessage: vi.fn(),
+      installTaskContext: vi.fn(),
+      onIdle: () => idle.resolve(),
+    },
+  );
+  parent.emit("message", { taskId: 1, nativeSections: sections.buffer });
+  try {
+    await started.promise;
+    cancelWorkerNativeSections(sections);
+    await cancelled.promise;
+    expect(areWorkerNativeSectionsSettled(sections)).toBe(false);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  } finally {
+    cleanup.resolve();
+    await idle.promise;
+  }
+  expect(areWorkerNativeSectionsSettled(sections)).toBe(true);
+  expect(parent.postMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ status: "failed", taskId: 1, error: "worker task cancelled" }),
+    [],
+  );
+});
+
+it("preserves transferred results, failures, and resource ordering for synchronous stateless tasks", async () => {
+  const { port1: output, port2: replies } = new MessageChannel();
+  const { port1: beforeReceipt, port2: beforeReply } = new MessageChannel();
+  const { port1: afterReceipt, port2: afterReply } = new MessageChannel();
+  const parent = Object.assign(new EventEmitter(), {
+    postMessage: output.postMessage.bind(output),
+  });
+  boundary.port = parent;
+  const enteredClose = Promise.withResolvers<void>();
+  const finishClose = Promise.withResolvers<void>();
+  const order: string[] = [];
+  let produced: Uint8Array<ArrayBuffer> | undefined;
+  serveOwnedWorkerTasks<Uint8Array<ArrayBuffer>, undefined, string>(
+    {
+      synchronousStateless(input) {
+        order.push(`task:${input}`);
+        if (input === "fail") {
+          throw new Error("synthetic read failure");
+        }
+        produced = new Uint8Array([1, 2, 3]);
+        return produced;
+      },
+    },
+    {
+      transferList: (value) => [value.buffer],
+      closeResource: async (key) => {
+        order.push(`close:${key}`);
+        if (key === "before") {
+          enteredClose.resolve();
+          await finishClose.promise;
+        }
+        order.push(`closed:${key}`);
+      },
+    },
+    {
+      initialize: vi.fn(),
+      onMessage: vi.fn(),
+      installTaskContext: vi.fn(),
+      onIdle: () => order.push("idle"),
+    },
+  );
+  const task = (taskId: number, input: string) => {
+    const reply = once(replies, "message");
+    parent.emit("message", { taskId, input, nativeSections: new SharedArrayBuffer(4) });
+    return reply;
+  };
+  const success = (taskId: number) => [{ status: "ok", taskId, value: new Uint8Array([1, 2, 3]) }];
+  try {
+    expect(await task(1, "first")).toEqual(success(1));
+    expect(produced?.byteLength).toBe(0);
+    expect(await task(2, "fail")).toEqual([
+      { status: "failed", taskId: 2, error: "synthetic read failure" },
+    ]);
+    const beforeClosed = once(beforeReply, "message");
+    parent.emit("message", { closeResource: true, key: "before", resourcePort: beforeReceipt });
+    await enteredClose.promise;
+    const waiting = task(3, "waiting");
+    const afterClosed = once(afterReply, "message");
+    parent.emit("message", { closeResource: true, key: "after", resourcePort: afterReceipt });
+    expect(order).toEqual(["task:first", "idle", "task:fail", "idle", "close:before"]);
+    finishClose.resolve();
+    expect(await beforeClosed).toEqual([{ ok: true }]);
+    expect(await waiting).toEqual(success(3));
+    expect(await afterClosed).toEqual([{ ok: true }]);
+    expect(await task(4, "last")).toEqual(success(4));
+    expect(order).toEqual([
+      "task:first",
+      "idle",
+      "task:fail",
+      "idle",
+      "close:before",
+      "closed:before",
+      "task:waiting",
+      "close:after",
+      "closed:after",
+      "idle",
+      "task:last",
+      "idle",
+    ]);
+  } finally {
+    finishClose.resolve();
+    for (const port of [output, replies, beforeReceipt, beforeReply, afterReceipt, afterReply]) {
+      port.close();
+    }
+  }
+});
+
+it.each([false, true])(
+  "publishes idle only after queued resource closes settle (first rejects: %s)",
+  async (rejectFirst) => {
+    const parent = Object.assign(new EventEmitter(), { postMessage: vi.fn() });
+    boundary.port = parent;
+    const firstStarted = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const firstFinished = Promise.withResolvers<void>();
+    const secondFinished = Promise.withResolvers<void>();
+    const idle = Promise.withResolvers<void>();
+    const onIdle = vi.fn(() => idle.resolve());
+    const first = new MessageChannel();
+    const second = new MessageChannel();
+    serveOwnedWorkerTasks(
+      vi.fn(),
+      {
+        closeResource: async (key) => {
+          if (key === "first") {
+            firstStarted.resolve();
+            await firstFinished.promise;
+            if (rejectFirst) {
+              throw new Error("first close failed");
+            }
+          } else {
+            secondStarted.resolve();
+            await secondFinished.promise;
+          }
+        },
+      },
+      {
+        initialize: vi.fn(),
+        onMessage: vi.fn(),
+        installTaskContext: vi.fn(),
+        onIdle,
+      },
+    );
+    const firstReply = once(first.port2, "message");
+    const secondReply = once(second.port2, "message");
+    parent.emit("message", { closeResource: true, key: "first", resourcePort: first.port1 });
+    parent.emit("message", { closeResource: true, key: "second", resourcePort: second.port1 });
+    try {
+      await firstStarted.promise;
+      expect(onIdle).not.toHaveBeenCalled();
+      firstFinished.resolve();
+      await secondStarted.promise;
+      expect(onIdle, "Pending resource cleanup must not publish idle").not.toHaveBeenCalled();
+      expect(await firstReply).toEqual([
+        rejectFirst ? { ok: false, error: "first close failed", detail: undefined } : { ok: true },
+      ]);
+      secondFinished.resolve();
+      await idle.promise;
+      expect(await secondReply).toEqual([{ ok: true }]);
+      expect(onIdle).toHaveBeenCalledTimes(1);
+    } finally {
+      firstFinished.resolve();
+      secondFinished.resolve();
+      await Promise.all([firstReply, secondReply, idle.promise]);
+      for (const port of [first.port1, first.port2, second.port1, second.port2]) {
+        port.close();
+      }
+    }
+  },
+);

@@ -12,9 +12,9 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { decodeXml } from "../shared/xml.js";
-import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-xml-enabled.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -123,16 +123,6 @@ export function disableScheduledTaskXmlForFixture(xml: string): string {
       const disabled = "<AllowStartOnDemand>false</AllowStartOnDemand>";
       return `${open}${field.test(body) ? body.replace(field, disabled) : `${disabled}${body}`}${close}`;
     },
-  );
-}
-
-export function normalizeScheduledTaskXmlEnabledForFixture(xml: string): string {
-  // COM exports omit Enabled=true and place an explicit false in schema order.
-  // Remove its whole LF/CRLF/CRCRLF export line; every other definition byte remains checked.
-  return setScheduledTaskXmlEnabled(xml, false).replace(
-    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
-    (_match, open: string, body: string, close: string) =>
-      `${open}<Enabled>false</Enabled>${body.replace(/(?:\r{0,2}\n[\t ]*)?<Enabled>false<\/Enabled>/u, "")}${close}`,
   );
 }
 
@@ -300,10 +290,7 @@ export function sanitizeTaskXml(
     .join("");
 }
 
-export function sanitizeVerboseQuery(
-  value: string,
-  replacements: Array<[string, string]>,
-): string | null {
+function sanitizeVerboseQuery(value: string, replacements: Array<[string, string]>): string | null {
   return (
     sanitizeDiagnosticText(value, replacements)?.replace(
       /^(\s*(?:HostName|Run As User)\s*:\s*).*$/gimu,

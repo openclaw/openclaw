@@ -1,10 +1,4 @@
-import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 export function createSubagentManagerTestOptions(
   runs: SubagentManagerOptions["runs"],
@@ -34,22 +28,4 @@ export function createSubagentManagerTestOptions(
     completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
   };
-}
-
-export function createRegistrationFixture() {
-  const refusal = { terminal: false };
-  probe.command(stateWorker, async (command, executeOptions, scope) => {
-    if (isSubagentRegistryWriteCommand(command)) {
-      const rows = command.input.values.map(rowToSubagentRunRecord);
-      if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
-        throw new Error("terminal settlement refused");
-      }
-    }
-    return scope.execute(command, executeOptions);
-  });
-  const options = createSubagentManagerTestOptions(subagentRuns, async () => {
-    throw new Error("Unexpected registration Gateway call");
-  });
-  const manager = createSubagentRunManager(options);
-  return { refusal, manager };
 }

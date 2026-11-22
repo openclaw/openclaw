@@ -1,10 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -180,6 +179,7 @@ export function formatNodeInvokeFailureToolResult(params: {
       durationMs: Date.now() - params.startedAt,
       aggregated: text,
       cwd: params.cwd,
+      ...(params.warnings?.length ? { warningText: params.warnings.join("\n") } : {}),
     },
   };
 }
@@ -190,23 +190,13 @@ export async function invokeNodeSystemRun(params: {
   invoke: Record<string, unknown>;
   signal?: AbortSignal;
   scopes?: OperatorScope[];
-  source?: SessionSourceAssertion;
 }): Promise<{ ok: true; raw: unknown } | { ok: false; failure: NodeInvokeFailure }> {
   try {
     const callOptions: Parameters<typeof callGatewayTool>[3] =
-      params.scopes || params.signal || params.source
+      params.scopes || params.signal
         ? {
             ...(params.scopes ? { scopes: params.scopes } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
-            ...(params.source
-              ? {
-                  dispatchAuthority: {
-                    version: 2,
-                    kind: "source-bound",
-                    assertCurrent: params.source,
-                  },
-                }
-              : {}),
           }
         : undefined;
     const raw = await callGatewayTool(

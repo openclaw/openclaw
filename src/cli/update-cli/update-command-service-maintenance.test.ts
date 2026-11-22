@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import "./update-command-service-maintenance.test-support.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as doctorAdmission from "../../commands/doctor-maintenance-admission.js";
@@ -16,9 +17,12 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -340,6 +344,35 @@ it.each(maintenanceOperations)(
       }
     }),
 );
+
+it("names a Git release launcher service as unconfirmed, not as another installation", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const prefix = path.join(home, ".openclaw", "git-install");
+    const launcher = path.join(prefix, "openclaw-launcher.mjs");
+    // The release the launcher starts through its link: a package outside this checkout.
+    const release = path.join(prefix, "releases", "r1", "openclaw");
+    await fs.mkdir(path.join(release, "dist"), { recursive: true });
+    await fs.writeFile(path.join(release, "package.json"), '{"name":"openclaw"}');
+    await fs.writeFile(path.join(release, "dist", "index.js"), "gateway");
+    await fs.symlink(path.join("releases", "r1", "openclaw"), path.join(prefix, "openclaw"));
+    await fs.writeFile(launcher, "launcher");
+    const service = mockMaintenanceService(home, {
+      readCommand: async () => ({
+        programArguments: [process.execPath, launcher, "gateway"],
+        environment: { HOME: home },
+      }),
+    });
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      phase: "inspect",
+    });
+    expect(result.serviceUpdateVerdict?.kind).toBe("foreign");
+    expect(result.serviceMutationSkipMessage).toBe(
+      `Gateway service management skipped: the service starts the Git release launcher ${launcher}, and this checkout cannot yet confirm that the release it runs is its own, so the service was left untouched. Run \`openclaw triage\` for an agent to inspect it.`,
+    );
+    expect(service.stop).not.toHaveBeenCalled();
+  }));
 
 it("explains a blocked systemd inspection for a failed unit with residual tasks", () =>
   withServiceHome(async (home) => {
@@ -690,5 +723,63 @@ it.each(["before stop", "after stop"] as const)(
       } finally {
         await closeStateDatabaseForTest();
       }
+    }),
+);
+
+it("records the update's own Gateway stop so repair can restore it after the updater dies", () =>
+  withServiceHome(async (home) => {
+    const env = { ...process.env };
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    mockMaintenanceService(home, {
+      stop: vi.fn<GatewayService["stop"]>(async ({ onMutation }) => {
+        onMutation?.({ mode: "systemctl-stop" });
+      }),
+    });
+    const updateRun = { runId: run.runId, env };
+    const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());
+    await maybeStopManagedServiceBeforeMutableUpdate({
+      updateRun,
+      recordPhase,
+      ...maintenanceDefaults,
+      root: process.cwd(),
+      phase: "prepare",
+    });
+    expect(findUpdateGatewayStop([getUpdateRun(run.runId, { env })!])).toEqual({
+      runId: run.runId,
+      started: false,
+    });
+    await closeStateDatabaseForTest();
+  }));
+
+it.each(["respawning", "unloaded", "disabled"] as const)(
+  "candidate Doctor preserves native stop/recovery ownership with no Gateway lease: %s",
+  (state) =>
+    withServiceHome(async (home) => {
+      // Create private persistent fixtures using the real host filesystem policy.
+      const env = { ...process.env };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      // Clean shutdown removed the predecessor lease, not the KeepAlive job.
+      expect(readGatewayOwnerLease({ env, current: true })).toBeUndefined();
+      mockProcessPlatform("darwin");
+      let loaded = state !== "unloaded";
+      const service = mockMaintenanceService(home, {
+        isLoaded: async () => loaded,
+        isEnabled: async () => state !== "disabled",
+        readRuntime: async () => ({ status: "stopped" }),
+        stop: vi.fn(async () => {
+          loaded = false;
+        }),
+      });
+      const stopped = await stopSupervisedPredecessorGateway(
+        { runId: run.runId, repair: true },
+        { root: process.cwd(), assertCurrent: () => {}, warn: vi.fn() },
+      );
+      expect(stopped).toBe(state === "respawning");
+      expect(loaded).toBe(state === "disabled");
+      const receipts = getUpdateRun(run.runId, { env })?.steps.filter((step) =>
+        step.step.startsWith("finalize:predecessor-stop:"),
+      );
+      expect(receipts).toHaveLength(state === "respawning" ? 1 : 0);
+      expect(service.restart).not.toHaveBeenCalled();
     }),
 );

@@ -70,7 +70,6 @@ export function createPdfToolInfraStub(completeMock: Mock) {
   }
 
   async function stubPdfToolInfra(
-    _agentDir: string,
     params: {
       mockLoad?: boolean;
       provider?: string;
@@ -105,6 +104,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             workspaceDir,
             createStores: () => ({ authStorage, modelRegistry }),
           }),
+          run: <T>(run: () => T): T => run(),
           [Symbol.asyncDispose]: async () => {},
         }) as never,
     );

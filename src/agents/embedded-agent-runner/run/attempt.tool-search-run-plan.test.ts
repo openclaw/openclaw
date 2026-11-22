@@ -38,7 +38,8 @@ async function plan(
     toolSearch?: NonNullable<OpenClawConfig["tools"]>["toolSearch"];
   } = {},
 ) {
-  const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
+  const visibleTools =
+    options.visibleTools ?? (options.codeMode ? undefined : [tool("dispatch_action")]);
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
     ...options.config,
@@ -92,7 +93,9 @@ async function plan(
     } satisfies EmbeddedRunAttemptParams;
     const seed = surface.compactTools(uncompactedTools);
     const preparedToolBase = {
+      bindRunAbortDeadline() {},
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => undefined,
         awaitSessionDiffBaseline: undefined,
         watchdogAttempt: undefined,
         agentId: "main",
@@ -104,7 +107,6 @@ async function plan(
         approvalReviewerDeviceId: undefined,
         channelId: undefined,
         trace: { traceId: "1234567890abcdef1234567890abcdef" },
-        loopDetection: undefined,
         onToolOutcome: undefined,
         allocateToolOutcomeOrdinal: undefined,
       },
@@ -113,6 +115,7 @@ async function plan(
         throw new Error("The catalog fixture does not prepare permission changes");
       },
       webSearchUnconfigured: false,
+      hasNativeWebSearch: false,
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
@@ -133,24 +136,29 @@ async function plan(
       toolSurfaceRuntime: {
         ...surface,
         // Fix only upstream compaction facts. The catalog computes every asserted allowlist.
-        compactTools: () => ({
-          ...seed,
-          tools: visibleTools,
-          projectedTools: visibleTools,
-          diagnostics: [],
-          catalog: {
-            ...seed.catalog,
-            tools: visibleTools,
-            catalogRegistered: true,
-            catalogToolCount: options.catalogToolCount ?? 0,
-          },
-        }),
+        compactTools: () =>
+          visibleTools
+            ? {
+                ...seed,
+                tools: visibleTools,
+                projectedTools: visibleTools,
+                diagnostics: [],
+                catalog: {
+                  ...seed.catalog,
+                  tools: visibleTools,
+                  catalogRegistered: true,
+                  catalogToolCount: options.catalogToolCount ?? 0,
+                },
+              }
+            : seed,
       },
       toolSearchConfig: surface.plan.toolSearchConfig,
       toolSearchControlsEnabledForRun: surface.toolSearchControlsEnabled,
       toolSearchRuntimeConfig: surface.plan.toolSearchRuntimeConfig,
       nestedToolActivityState: createAttemptNestedToolActivityState(),
       toolsEnabled: options.toolsEnabled ?? true,
+      messageToolAvailable: true,
+      fixedListing: false,
       toolsRaw: uncompactedTools,
     } satisfies Parameters<typeof prepareEmbeddedAttemptToolCatalog>[0]["preparedToolBase"];
     const result = await prepareEmbeddedAttemptToolCatalog({
@@ -180,6 +188,31 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it.each([
+    { allow: ["exec"] },
+    { allow: ["bash"] },
+    { allow: ["read", "write", "exec", "process"] },
+  ])("rejects an empty Code Mode catalog with explicit tools $allow", async ({ allow }) => {
+    const result = await plan({ codeMode: true, allow, clientTools: [] });
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("No callable tools remain");
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("Fix the allowlist");
+    expect(result.hasCallableTools).toBe(false);
+  });
+
+  it("admits a shell tool through Code Mode or direct execution", async () => {
+    for (const codeMode of [true, false]) {
+      const result = await plan({
+        codeMode,
+        uncompactedTools: [tool("exec")],
+        ...(codeMode ? {} : { visibleTools: [tool("exec")] }),
+        allow: ["exec"],
+        clientTools: [],
+      });
+      expect(result.emptyExplicitToolAllowlistError).toBeNull();
+      expect(result.hasCallableTools).toBe(true);
+    }
+  });
+
   it("keeps unselected clients direct without promoting MCP or client capabilities", async () => {
     const remote = tool("sessions_spawn");
     setPluginToolMeta(remote, {
@@ -322,8 +355,7 @@ async function diagnostic(options: Parameters<typeof plan>[0] = {}) {
 
 describe("explicit tool allowlist diagnostics", () => {
   it.each([
-    ["skill_workshop", true, false, "sandboxed run without library-authoring authority"],
-    ["skill_*", true, false, "sandboxed run without library-authoring authority"],
+    ["skill_workshop", true, false, "no registered tools matched"],
     ["query_db", true, false, "no registered tools matched"],
     ["skill_workshop", false, false, "selected model does not support tools"],
     ["skill_workshop", true, true, "tools are disabled for this run"],

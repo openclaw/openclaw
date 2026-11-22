@@ -103,6 +103,7 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       runtime: {
         id: "ollama",
         inlineBatchTimeoutMs: 10 * 60_000,
+        inlineIndexConcurrency: 1,
         cacheKeyData: {
           ...legacyCacheKeyData,
           ...(modelDigest ? { modelDigest } : {}),

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
@@ -115,6 +116,22 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
+export function makeUpdateRefusal({ mode, root }: UpdateInstallSurface) {
+  return (
+    status: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status,
+    mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
+}
+
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
@@ -122,15 +139,18 @@ export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
+  publishAppUpdate?: (run: UpdateRunRecord) => void,
 ): Promise<void> {
   const reason = "immutable-native-updater-required";
   await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  await finishUpdateRun(runId, { status: "skipped", reason });
+  const run = await finishUpdateRun(runId, { status: "skipped", reason });
+  publishAppUpdate?.(run);
   respond(true, {
     runId,
     ok: false,
+    ...(publishAppUpdate ? { noticeInApp: true } : {}),
     message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",
@@ -170,9 +190,11 @@ export function retainUpdateRequesterAuthority(
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
   const lifecycle = currentUpdateCheckLifecycle();
-  const { root, status } = await lifecycle.run((signal) =>
+  const { root: runningRoot, status } = await lifecycle.run((signal) =>
     resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
+  // The Gateway runs its release by real path; the installation it updates is the link.
+  const root = runningRoot && (resolvePackageReleaseSlotForRootSync(runningRoot) ?? runningRoot);
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
   }
@@ -190,6 +212,9 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
+    ...(status.installKind === "package" && status.packageManager !== "unknown"
+      ? { packageManager: status.packageManager }
+      : {}),
     timeoutMs,
   });
   await recordUpdateRunPhase(runId, "requested", {

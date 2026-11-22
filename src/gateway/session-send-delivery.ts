@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type SessionSendDeliveryEndpoint = {
+type SessionSendDeliveryEndpoint = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
@@ -9,7 +9,7 @@ export type SessionSendDeliveryEndpoint = {
 };
 
 /** Live communication facts identify an accepted input without durable restart custody. */
-export type SessionSendDelivery = {
+type SessionSendDelivery = {
   version: 1;
   runId: string;
   source: SessionSendDeliveryEndpoint;

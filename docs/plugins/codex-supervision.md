@@ -109,7 +109,7 @@ tokens in its auth store. Supervision honors explicit `appServer` connection set
 instead of replacing them with its local user-home default.
 
 New ChatGPT sign-ins offered by automatic setup use an isolated OpenClaw agent
-home. To switch a reused native login to a separate login, open **Model Setup**
+home. To switch a reused native login to a separate login, open **Models**
 and sign in with ChatGPT or enter an OpenAI API key. Completing sign-in selects
 `plugins.entries.codex.config.appServer.homeScope: "agent"` automatically.
 The separate login does not share native Codex threads or configuration.
@@ -290,6 +290,9 @@ openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--h
 - `--cursor <cursor>` continues one host page and therefore requires `--host`.
 - `--json` prints the structured Gateway response.
 
+With `--json`, Ctrl-C or SIGTERM stops a pending `sessions` catalog read without
+printing a late result; the CLI exits with status 130 or 143.
+
 All three commands accept `--agent <id>` and inherit `--url`, `--token`, and `--timeout <ms>` from the
 Gateway client. Session listing defaults to 75,000 ms so cold paired-node
 catalogs can complete. Continue and archive default to 30,000 ms. They also expose the shared
@@ -444,11 +447,15 @@ source, or fork an original imported message while that source remains
 available, then create new OpenClaw turns. OpenClaw does not backfill old rows.
 
 OpenClaw message forks use the shipping Codex App Server's developer-message
-API. OpenClaw keeps the complete current generic instructions in native thread
-configuration and appends one developer message that replaces earlier
-OpenClaw-supplied generic policy, including removed sections or an explicit
-empty policy. Independent native managed, guardian, security, collaboration,
-and project instructions retain their authority. This is textual supersession.
+API. OpenClaw keeps its complete current policy in native thread configuration,
+delimited by `<thread_policy>`, and appends one developer message that
+replaces earlier OpenClaw policy blocks with the same delimiters and legacy
+unframed OpenClaw generic policy. Omitted rules are withdrawn, and an empty block
+withdraws that policy. Independent instructions outside the policy are preserved. Separately supplied parent-request
+instructions and independent native managed, guardian, security,
+collaboration and project instructions retain their authority. The notice does
+not supersede the whole enclosing developer message or cancel user requests.
+This is textual supersession.
 It does not delete earlier history or change native permission enforcement.
 
 The refresh is session configuration recorded before the next native user turn.

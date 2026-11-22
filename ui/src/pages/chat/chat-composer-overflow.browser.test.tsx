@@ -4,6 +4,7 @@ import { page, server, userEvent } from "vitest/browser";
 import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { handleComposerMenuKeydown } from "../../components/composer-menu.ts";
+import { composerInputElement } from "../../lib/composer-input.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
@@ -114,6 +115,9 @@ it.each([390, 2048])("fits skill rows at %ipx", async (width) => {
   await click(".agent-chat__attach-menu .agent-chat__input-btn--attach");
   await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
   await click('[data-value="open-skills"]');
+  await expect
+    .poll(() => container.querySelector('.agent-chat__capability-menu [data-value^="skill:"]'))
+    .not.toBeNull();
   await afterLayout();
   const dropdown = query(".agent-chat__capability-menu");
   const menu = query(".oc-menu", dropdown);
@@ -162,6 +166,7 @@ it.each([
     onDraftChange: () => dismissed.push("mentions"),
   });
   drawComposer({ ...props });
+  await waitForSolid(() => expect(query(".chat-reply-preview:not([role])")).not.toBeNull());
   await afterLayout();
   await waitForSolid(() => expect(query(".chat-attachment-thumb")).not.toBeNull());
   const attachmentBox = rect(".chat-attachment-thumb", rail());
@@ -173,7 +178,9 @@ it.each([
     expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);
   }
   expect(attachmentBox.height).toBeGreaterThan(0);
-  expect(attachmentBox.bottom).toBeLessThanOrEqual(rect("textarea").top);
+  await expect.poll(() => container.querySelector(".chat-composer-mention")).not.toBeNull();
+  const editor = composerInputElement(query("textarea"));
+  expect(attachmentBox.bottom).toBeLessThanOrEqual(editor.getBoundingClientRect().top);
   expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth + 1);
   const reply = query(".chat-reply-preview:not([role])");
   const text = query(".chat-reply-preview__text", reply);
@@ -184,7 +191,6 @@ it.each([
 
   const contexts = [
     [".agent-chat__goal-mode", "goal"],
-    ['.composer-context-strip[role="status"]', "mentions"],
     [".chat-reply-preview:not([role])", "reply"],
   ] as const;
   for (const [selector, context] of contexts) {
@@ -235,34 +241,22 @@ it("restores full mention names after narrowing and reconnecting the composer", 
     ],
   });
   drawComposer(props);
-  let strip = query('[role="status"]');
   const visibleNames = () =>
-    [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
-      .filter((person) => !person.hidden)
-      .map((person) => person.title);
+    [...container.querySelectorAll<HTMLElement>(".chat-composer-mention")].map(
+      (person) => person.textContent,
+    );
   await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
   await document.fonts.ready;
   await afterLayout();
-  const people = [...strip.querySelectorAll(".composer-context-strip__person")];
   drawComposer({ ...props, draft: props.draft + " please review" });
-  await afterLayout();
-  for (const [index, person] of people.entries()) {
-    expect(strip.querySelectorAll(".composer-context-strip__person")[index]).toBe(person);
-  }
-  expect(visibleNames()).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
+  await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
   container.style.width = "300px";
-  await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
-  let more = query(".composer-context-strip__more", strip);
-  expect(more).toMatchObject({ hidden: false, textContent: "+1", title: "@Morgan Williams" });
+  await afterLayout();
+  expect(visibleNames()).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
   container.remove();
   container.style.width = "760px";
-  await afterLayout();
-  expect(visibleNames()).toEqual(["@Jordan Rivera"]);
   document.body.append(container);
-  strip = query('[role="status"]');
-  more = query(".composer-context-strip__more", strip);
   await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
-  expect(more.hidden).toBe(true);
   const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();
   const draft = "@Jordan Rivera @" + longName;
   drawComposer({
@@ -270,8 +264,17 @@ it("restores full mention names after narrowing and reconnecting the composer", 
     draft,
     mentions: [props.mentions![0]!, { profileId: "morgan", start: 15, end: draft.length }],
   });
-  await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
-  expect(more).toMatchObject({ hidden: false, title: "@" + longName });
+  await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@" + longName]);
+  const editor = container.querySelector<HTMLElement>(".chat-composer-editor")!;
+  expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth + 1);
+  // The editor's theme mirrors the textarea's queued and scrollbar-gutter rules.
+  const textarea = container.querySelector("textarea")!;
+  textarea.toggleAttribute("data-composer-scrollable", true);
+  editor.toggleAttribute("data-composer-overflow", true);
+  container.querySelector(".agent-chat__input")!.classList.add("agent-chat__input--submit-queued");
+  const [native, rich] = [getComputedStyle(textarea), getComputedStyle(editor)];
+  expect([rich.paddingRight, rich.color]).toEqual([native.paddingRight, native.color]);
+  expect(rich.paddingRight).not.toBe(rich.paddingLeft);
 });
 
 async function expectEdges(
@@ -349,8 +352,10 @@ it.each([
   }
   const draft =
     "A typed line that wraps within the available composer width. ".repeat(12) +
-    "\nA second editable line.";
+    "\nA second editable line.".repeat(40);
   await control.fill(draft);
+  await afterLayout();
+  // The pane-derived cap settles after the draft first reaches it.
   await afterLayout();
   expect([textarea.value, props.draft]).toEqual([draft, draft]);
   expect(placeholder.checkVisibility()).toBe(false);
@@ -408,7 +413,7 @@ it.each(server.browser === "webkit" ? ["classic", "overlay"] : ["overlay"])(
     };
     const text =
       "handover for plugin hot reload. To test it, make the knowledge fix and hit reload ";
-    const draft = text.repeat(6);
+    const draft = text.repeat(24);
     // Typing past the cap must not swap the end inset for a gutter that later
     // disappears: each wrap change would undo the overflow that caused it.
     const overflows = async (length: number) => {

@@ -8,6 +8,7 @@ import {
   type SqliteIntegrityCheckOptions,
 } from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { readSqlitePageHeader } from "./sqlite-schema-catalog.js";
 import { findSqlClosingParenthesis, normalizeSchemaSql } from "./sqlite-schema-sql.js";
 import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
 
@@ -32,14 +33,7 @@ export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  because?: string;
-  integrityGateReason?:
-    | "revoked"
-    | "stale-lease-full"
-    | "process-death"
-    | "dirty-receipt"
-    | SqliteCleanCloseSealRefusal
-    | "lease-class";
+  integrityGateReason?: "revoked" | "dirty-receipt" | SqliteCleanCloseSealRefusal | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
@@ -67,10 +61,15 @@ export function* sqliteIntegrityCheckSteps(
     return;
   }
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
+  const check: SqliteIntegrityCheck = {
+    database,
+    databaseLabel,
+    ...options,
+    check: options.check ?? "full",
+  };
   if (diagnostics) {
     check.timing = {};
-    diagnostics.integrityGateMode = options.check ?? "full";
+    diagnostics.integrityGateMode = check.check;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -126,13 +125,14 @@ export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
   repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }
@@ -204,6 +204,24 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   return isSqliteCorruptionError(error.cause);
 }
 
+/** SQLite recovers committed WAL frames on open; these probes only check header sanity.
+ * They never walk data pages or publish a full-verification receipt or clean-close seal.
+ */
+export function assertSqliteDatabaseHeader(database: DatabaseSync, databaseLabel: string): void {
+  const { pages, free } = readSqlitePageHeader(database);
+  if (
+    typeof pages !== "number" ||
+    !Number.isSafeInteger(pages) ||
+    pages < 1 ||
+    typeof free !== "number" ||
+    !Number.isSafeInteger(free) ||
+    free < 0 ||
+    free >= pages
+  ) {
+    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${databaseLabel}`);
+  }
+}
+
 /** Check structure and foreign keys, plus all indexes or the migration's selected tables. */
 export function assertSqliteIntegrity(
   database: DatabaseSync,
@@ -213,6 +231,11 @@ export function assertSqliteIntegrity(
     allFindings?: boolean;
   } = {},
 ): SqliteIntegrityChecks {
+  if (options.check === "quick" && options.schemaOnly) {
+    // Schema-only migrations leave existing payloads and FKs unchanged.
+    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    return { integrityCheck: "ok" };
+  }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
   let staleFts = false;
   try {

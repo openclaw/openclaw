@@ -8,7 +8,7 @@ import { execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { createWriteStream, writeSync } from "node:fs";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { HeapProfiler } from "node:inspector";
@@ -31,7 +31,7 @@ import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
 import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "./lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "./lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "./lib/gateway-bench-profile.ts";
 
 const exec = promisify(execFile);
 const diagnostics = channel("openclaw.worker.task");
@@ -475,10 +475,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
   inspector?.connect();
   const markGc = (phase: string, profilePath?: string) => {
     if (inspector) {
-      writeSync(
-        1,
-        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-      );
+      writeGatewayGcTraceMarker(phase, profilePath);
     }
   };
   if (inspector) {
@@ -524,6 +521,11 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
         "src/gateway/worker-environments/workspace-reconcile.ts",
       )
     : undefined;
+  const comparison = reconciliation
+    ? await importOwner<
+        typeof import("../src/gateway/worker-environments/workspace-manifest-comparison.js")
+      >(fixture.source, "src/gateway/worker-environments/workspace-manifest-comparison.ts")
+    : undefined;
   const baseRaw =
     staging || reconciliation
       ? await fs.readFile(path.join(fixture.root, "base.json"), "utf8")
@@ -541,10 +543,15 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
   // Uploads already retain raw manifests and decoded facts. Keep their parsing
   // outside the measured comparison, with independent facts for each caller.
   const comparisons = parser
-    ? Array.from({ length: fixture.concurrency }, () => ({
-        base: parser.parseWorkerWorkspaceManifest(baseRaw, fixture.baseRef),
-        current: parser.parseWorkerWorkspaceManifest(currentRaw, fixture.currentRef),
-      }))
+    ? Array.from({ length: fixture.concurrency }, () => {
+        const base = parser.parseWorkerWorkspaceManifest(baseRaw, fixture.baseRef);
+        const current = parser.parseWorkerWorkspaceManifest(currentRaw, fixture.currentRef);
+        return {
+          base,
+          current,
+          reconciliation: comparison?.prepareWorkspaceReconciliation(base, current),
+        };
+      })
     : undefined;
   const checkpointOwner =
     fixture.scenario === "checkpoint" || startup || baselineBuild
@@ -933,7 +940,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
             };
           }
           if (reconcile) {
-            const { current, base } = comparisons![lane]!;
+            const { current } = comparisons![lane]!;
             let committedRef: string | undefined;
             let began = false;
             const result = await reconcile.applyStagedWorkerWorkspace({
@@ -941,8 +948,8 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
               stagingRoot: path.join(fixture.root, `payload-${lane}`),
               baseManifestRef: fixture.baseRef,
               currentManifestRef: fixture.currentRef,
-              base,
-              current,
+              ...comparisons![lane]!,
+              reconciliation: comparisons![lane]!.reconciliation!,
               acceptance: { kind: "reconcile" },
               journal: {
                 load: async () => undefined,

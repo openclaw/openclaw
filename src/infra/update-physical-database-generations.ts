@@ -1,29 +1,71 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
-import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
+  readBackupEngineImage,
+  readEngineAnchorIdentity,
+} from "./database-engine/physical-store-inspection.js";
+import type { BackupEngine } from "./database-engine/physical-store.js";
+import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
+import {
+  readUnchangedUpdateDatabaseGeneration,
+  readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
-  readUpdateDatabaseGenerations,
+  type SqliteDatabaseGenerationReceipt,
 } from "./update-database-generations.js";
 
-export function readUpdatePhysicalDatabaseObservation(pathname: string): {
+export function readUpdatePhysicalDatabaseObservation(
+  pathname: string,
+  stagingRoot?: string,
+): {
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
+  emptyReaderAlternate?: string;
+  preparedSource?: PreparedSqliteSnapshotSource;
+  sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
   let engine: BackupEngine | undefined;
   let classificationFailed = false;
   try {
-    const generations = readUpdateDatabaseGenerations([pathname], (imagePath, sourcePath) => {
-      try {
-        engine = readBackupEngineImage(imagePath, sourcePath);
-      } catch (error) {
-        classificationFailed = true;
-        throw error;
-      }
-    });
-    return { engine, generation: ok(generations[pathname]!) };
+    const observation = readUpdateDatabaseGeneration(
+      pathname,
+      (imagePath, sourcePath) => {
+        classificationFailed = false;
+        try {
+          engine = readBackupEngineImage(imagePath, sourcePath);
+        } catch (error) {
+          classificationFailed = true;
+          throw error;
+        }
+      },
+      stagingRoot ? { stagingRoot, accept: () => engine?.engine === "sqlite" } : undefined,
+    );
+    return {
+      engine,
+      generation: ok(observation.generation),
+      emptyReaderAlternate: observation.emptyReaderAlternate,
+      preparedSource: observation.preparedSource,
+      ...(engine?.engine === "sqlite" && observation.generation && observation.physical
+        ? {
+            sqliteReceipt: Object.freeze({
+              sourcePath: pathname,
+              generation: observation.generation,
+              physical: observation.physical,
+            }),
+          }
+        : {}),
+    };
   } catch (error) {
-    if (classificationFailed) {
+    if (
+      classificationFailed ||
+      collectNestedErrorCandidates(error).some(
+        (failure) => failure instanceof SqliteSnapshotCleanupError,
+      )
+    ) {
       throw error;
     }
     // The coherent private image already established the engine. A later generation
@@ -55,6 +97,7 @@ export async function readUpdatePostgresDatabaseGenerations(
 export async function readUpdatePhysicalDatabaseGenerations(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  emptyReaderAlternates?: Record<string, string>,
 ) {
   const result: Record<string, string | null> = {};
   const postgres: string[] = [];
@@ -66,41 +109,97 @@ export async function readUpdatePhysicalDatabaseGenerations(
     result[pathname] = observation.generation.value;
     if (observation.engine?.engine === "postgres") {
       postgres.push(pathname);
+    } else if (emptyReaderAlternates && observation.emptyReaderAlternate) {
+      emptyReaderAlternates[pathname] = observation.emptyReaderAlternate;
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
 }
 
+/** Re-reads after capture; a matching receipt avoids a private image. */
+export async function rereadUpdatePhysicalDatabaseGeneration(
+  pathname: string,
+  receipt?: SqliteDatabaseGenerationReceipt,
+  pluginOwners?: DatabasePortPluginOwners,
+): Promise<{ generation?: string; emptyReaderAlternate?: string }> {
+  // A failed reuse propagates: the caller keeps manual recovery instead of copying again.
+  const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
+  if (unchanged) {
+    return { generation: unchanged };
+  }
+  const alternates: Record<string, string> = {};
+  const generations = await readUpdatePhysicalDatabaseGenerations(
+    [pathname],
+    pluginOwners,
+    alternates,
+  );
+  return {
+    generation: generations[pathname] ?? undefined,
+    emptyReaderAlternate: alternates[pathname],
+  };
+}
+
 export async function readUpdatePhysicalDatabaseGenerationPair(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  inspectEngine = readBackupEngineImage,
 ) {
-  const postgres: string[] = [];
+  // A drained source's failed observation classifies again from its private copy.
+  const postgres = new Set<string>();
   // Classify the captured image without reacquiring the live source family.
   const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
-    if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
-      postgres.push(sourcePath);
+    if (inspectEngine(imagePath, sourcePath).engine === "postgres") {
+      postgres.add(sourcePath);
     }
   });
-  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  const fingerprints = await readUpdatePostgresDatabaseGenerations([...postgres], pluginOwners);
   Object.assign(result.committed, fingerprints);
   Object.assign(result.physical, fingerprints);
   return result;
 }
 
-/** Only the recorded 9.33-line parent sends an unmarked restore inspection. */
-export async function isLegacyUpdateGenerationRequest(env: NodeJS.ProcessEnv): Promise<boolean> {
-  const { findActiveUpdateRun } = await import("./update-run-reader.js");
+/**
+ * Released parents send the same unmarked request for physical generations in
+ * 2026.9.7–2026.9.9 and 2026.9.33–2026.9.37 and committed generations in
+ * 2026.10.x and 2026.11.1–2026.11.4.
+ */
+export async function readUnmarkedUpdatePhysicalDatabaseGenerations(input: {
+  paths: readonly string[];
+  stateDir: string;
+  pluginOwners?: DatabasePortPluginOwners;
+}) {
   const { readUpdateRunDriver, sameUpdateRunDriver } = await import("./update-run-driver.js");
-  const run = findActiveUpdateRun({ env });
-  if (run?.status !== "running" || !["2026.9.33", "2026.9.34"].includes(run.before.version ?? "")) {
-    return false;
-  }
+  const { readActiveUpdateRun } = await import("./update-run-read.kernel.js");
   const parent = readUpdateRunDriver(process.ppid);
-  return (
-    parent !== undefined &&
-    [run.origin.driver, ...(run.origin.previousDrivers ?? [])].some(
-      (driver) => driver && sameUpdateRunDriver(driver, parent),
-    )
+  const shared = resolvePathViaExistingAncestorSync(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: input.stateDir }),
   );
+  let physical: boolean | undefined;
+  const inspectEngine = (imagePath: string, sourcePath: string) => {
+    if (!parent || resolvePathViaExistingAncestorSync(sourcePath) !== shared) {
+      return readBackupEngineImage(imagePath, sourcePath);
+    }
+    // The rollback parent holds offline maintenance. Read its ledger from the inspected image.
+    using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
+    const engine = readEngineAnchorIdentity(db, sourcePath);
+    const run = engine.engine === "sqlite" && readActiveUpdateRun(db);
+    physical = Boolean(
+      run &&
+      /^2026\.9\.(?:[7-9]|3[3-7])$/u.test(run.before.version ?? "") &&
+      [run.origin.driver, ...(run.origin.previousDrivers ?? [])].some(
+        (owner) => owner && sameUpdateRunDriver(owner, parent),
+      ),
+    );
+    return engine;
+  };
+  const pair = await readUpdatePhysicalDatabaseGenerationPair(
+    input.paths,
+    input.pluginOwners,
+    inspectEngine,
+  );
+  if (parent && physical === undefined) {
+    // A scoped inventory can omit the ledger. Inspect it without adding it to the reply.
+    readUpdateDatabaseGeneration(shared, inspectEngine);
+  }
+  return physical ? pair.physical : pair.committed;
 }

@@ -9,6 +9,7 @@ import {
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
@@ -32,7 +33,6 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
@@ -47,12 +47,45 @@ const skillCommandsRuntimeLoader = createLazyImportLoader(
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
+function resolveNativeCommandChannelOverride(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  channel: string;
+  sessionEntry: SessionEntry;
+}) {
+  const { cfg, ctx, channel, sessionEntry } = params;
+  const deliveryChannel = normalizeMessageChannel(sessionDeliveryChannel(sessionEntry));
+  // A shared session's stale peer must not outrank the current native command's sender.
+  const deliveryOrigin =
+    deliveryChannel && deliveryChannel === normalizeMessageChannel(channel)
+      ? sessionDeliveryOrigin(sessionEntry)
+      : undefined;
+  return resolveChannelModelOverride({
+    cfg,
+    channel,
+    groupId: sessionEntry.groupId,
+    groupChatType: sessionEntry.chatType ?? ctx.ChatType,
+    groupChannel: sessionEntry.groupChannel ?? ctx.GroupChannel,
+    groupSubject: sessionEntry.subject ?? ctx.GroupSubject,
+    parentSessionKey:
+      ctx.ModelParentSessionKey ?? ctx.ParentSessionKey ?? sessionEntry.parentSessionKey,
+    directUserIds: [
+      deliveryOrigin?.nativeDirectUserId,
+      deliveryOrigin?.from,
+      deliveryOrigin?.to,
+      ctx.OriginatingTo,
+      ctx.From,
+      ctx.SenderId,
+    ],
+  });
+}
+
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   const commandTurn = ctx.CommandTurn;
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
-  const commandName = resolveSlashCommandName(stripStructuralPrefixes(ctx.commandText ?? ""));
+  const commandName = resolveSlashCommandName(ctx.commandText);
   if (
     !commandName ||
     commandName === "new" ||
@@ -84,10 +117,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   agentCfg: AgentDefaults;
   commandAuthorized: boolean;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   provider: string;
-  model: string;
+  model: string | undefined;
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
   preparedModelCatalog?: ModelCatalogSnapshot;
@@ -97,9 +130,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { handled: false; queueModeOverride?: QueueMode }
 > {
-  if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
+  // Without any model, the main reply pipeline owns the missing-model reply.
+  if (!shouldRunNativeSlashCommandFastPath(params.ctx) || !params.model) {
     return { handled: false };
   }
+  const model = params.model;
 
   const sessionState = await initFastReplySessionState(params);
   if (params.commandAuthorized) {
@@ -162,7 +197,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
     const canApplyStoredModel =
-      params.provider === params.defaultProvider && params.model === params.defaultModel;
+      params.provider === params.defaultProvider && model === params.defaultModel;
     const storedModelOverride = canApplyStoredModel
       ? await resolveStoredModelOverrideAsync({
           sessionEntry: targetSessionEntry,
@@ -182,33 +217,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
       !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
       canApplyStoredModel;
-    const deliveryChannel = normalizeMessageChannel(sessionDeliveryChannel(targetSessionEntry));
-    // Shared sessions can retain another channel's peer; never let that stale
-    // identity outrank the authorized current command's live sender.
-    const deliveryOrigin =
-      deliveryChannel && deliveryChannel === normalizeMessageChannel(command.channel)
-        ? sessionDeliveryOrigin(targetSessionEntry)
-        : undefined;
     const channelModelOverride = canApplyChannelModel
-      ? resolveChannelModelOverride({
+      ? resolveNativeCommandChannelOverride({
           cfg: params.cfg,
+          ctx: params.ctx,
           channel: command.channel,
-          groupId: targetSessionEntry?.groupId,
-          groupChatType: targetSessionEntry?.chatType ?? params.ctx.ChatType,
-          groupChannel: targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel,
-          groupSubject: targetSessionEntry?.subject ?? params.ctx.GroupSubject,
-          parentSessionKey:
-            params.ctx.ModelParentSessionKey ??
-            params.ctx.ParentSessionKey ??
-            targetSessionEntry?.parentSessionKey,
-          directUserIds: [
-            deliveryOrigin?.nativeDirectUserId,
-            deliveryOrigin?.from,
-            deliveryOrigin?.to,
-            params.ctx.OriginatingTo,
-            params.ctx.From,
-            params.ctx.SenderId,
-          ],
+          sessionEntry: targetSessionEntry,
         })
       : null;
     const resolvedChannelModel = channelModelOverride
@@ -233,8 +247,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     // with status's selected/active-model owner, which also supplies thinking defaults.
     const statusProvider =
       resolvedInheritedModel?.provider ?? resolvedChannelModel?.ref.provider ?? params.provider;
-    const statusModel =
-      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? params.model;
+    const statusModel = resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? model;
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
     const thinkingCatalog = await readPreparedModelCatalog({
@@ -291,12 +304,18 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  // These commands need the selected model's transcript or context budget.
-  const needsModelSelection =
+  // These commands need the selected model's transcript, context budget, or tool inventory.
+  const needsToolsModelSelection =
     command.isAuthorizedSender &&
-    (command.commandBodyNormalized === "/compact" ||
-      command.commandBodyNormalized.startsWith("/compact ") ||
-      command.commandBodyNormalized.startsWith("/context "));
+    (command.commandBodyNormalized === "/tools" ||
+      command.commandBodyNormalized === "/tools compact" ||
+      command.commandBodyNormalized === "/tools verbose");
+  const needsModelSelection =
+    needsToolsModelSelection ||
+    (command.isAuthorizedSender &&
+      (command.commandBodyNormalized === "/compact" ||
+        command.commandBodyNormalized.startsWith("/compact ") ||
+        command.commandBodyNormalized.startsWith("/context ")));
   const commandResult = needsModelSelection
     ? { shouldContinue: true, reply: undefined }
     : await (
@@ -329,11 +348,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolvedBlockStreamingBreak: "text_end",
         resolveDefaultThinkingLevel: async () => undefined,
         provider: params.provider,
-        model: params.model,
+        model,
         contextTokens: resolveContextTokens({
           cfg: params.cfg,
           provider: params.provider,
-          model: params.model,
+          model,
         }),
         ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
           workspaceDir: params.workspaceDir,
@@ -358,9 +377,38 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: true, reply: markCommandReplyForDelivery(commandResult.reply) };
   }
   const continuationTriggerBodyNormalized = command.rawBodyNormalized;
+  const targetSessionEntry =
+    sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
+  const sessionModelSelectionLocked = isModelSelectionLocked(targetSessionEntry);
+  const hasResolvedTurnModelOverride =
+    !sessionModelSelectionLocked && Boolean(normalizeOptionalString(params.opts?.modelOverride));
+  let selectedChannelModel: ReturnType<typeof resolveModelRefFromString> = null;
+  if (
+    needsToolsModelSelection &&
+    params.cfg.channels?.modelByChannel &&
+    !hasResolvedTurnModelOverride &&
+    !sessionModelSelectionLocked
+  ) {
+    const channelModelOverride = resolveNativeCommandChannelOverride({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      channel: command.channel,
+      sessionEntry: targetSessionEntry,
+    });
+    selectedChannelModel = channelModelOverride
+      ? resolveModelRefFromString({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          raw: channelModelOverride.model,
+          defaultProvider: params.defaultProvider,
+          aliasIndex: params.aliasIndex,
+        })
+      : null;
+  }
 
   const directiveResult = await resolveReplyDirectives({
     ...params,
+    model,
     ...sessionState,
     conversation: prepareReplyConversation({
       ctx: sessionState.sessionCtx,
@@ -369,6 +417,19 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }),
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
+    ...(needsToolsModelSelection
+      ? {
+          provider:
+            selectedChannelModel?.ref.provider ??
+            (sessionModelSelectionLocked ? params.defaultProvider : params.provider),
+          model:
+            selectedChannelModel?.ref.model ??
+            (sessionModelSelectionLocked ? (params.defaultModel ?? model) : model),
+          primaryProvider: selectedChannelModel?.ref.provider ?? params.defaultProvider,
+          primaryModel: selectedChannelModel?.ref.model ?? params.defaultModel,
+          hasResolvedTurnModelOverride,
+        }
+      : {}),
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.

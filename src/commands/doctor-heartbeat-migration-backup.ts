@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import type { ConfigSnapshotReadMeasure } from "../config/io.read.types.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
+import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import { stateEngineInput } from "../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
@@ -19,7 +19,7 @@ export async function prepareDoctorMigrationBackups(params: {
   verifiedSnapshots: readonly BackupSqliteSnapshotFact[];
   automaticRepair: boolean;
   runtime: Pick<RuntimeEnv, "log">;
-  measure: ConfigSnapshotReadMeasure;
+  measure: DoctorProgressMeasure;
 }) {
   const { schemas, env, check, verifiedSnapshots, automaticRepair, runtime, measure } = params;
   const { prepareDoctorDatabaseMigrations } = await import("./doctor-schema-migrations.js");
@@ -119,9 +119,9 @@ async function hasPendingHeartbeatMigration(
     return Boolean(
       projected &&
       (!isDeepStrictEqual(projected, sourceConfig) ||
-        hasPendingHeartbeatCadenceMigration(sourceConfig, env) ||
+        (await hasPendingHeartbeatCadenceMigration(sourceConfig, env)) ||
         (await collectHeartbeatScratchMigrationFindings(sourceConfig, env)).length > 0 ||
-        hasPendingHeartbeatOutcomes(targets, env)),
+        (await hasPendingHeartbeatOutcomes(targets, env))),
     );
   } catch (error) {
     // Selection may unlock legacy heartbeat work later; preserve its full rollback group.

@@ -40,15 +40,6 @@ export const makeCompletedCollectorRun = (
   collectorCompletion: { status: "done" },
   ...overrides,
 });
-export const makeQueuedRun = (overrides: SubagentRunRecordOverrides): SubagentRunRecord =>
-  createSubagentRunRecord({
-    childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${overrides.runId}`,
-    requesterSessionKey: overrides.requesterSessionKey ?? "agent:main:main",
-    collect: true,
-    execution: { status: "queued" },
-    completion: { required: false },
-    ...overrides,
-  });
 export const makeSuspendedDeliveryRun = ({
   delivery: deliveryOverrides,
   ...overrides

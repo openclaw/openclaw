@@ -4,7 +4,6 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
@@ -15,6 +14,7 @@ import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
   formatCompactionModelRef,
+  deliverCompactionNoticePayload as deliverNotice,
 } from "./compaction-notice.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
@@ -43,19 +43,15 @@ export function createAgentRunEventHandler(params: {
     params.messageToolDeliveryState.completed &&
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
-  let modelWaitActive = false;
+  let modelWaitPhase: "waiting_for_model" | "retrying" | undefined;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
-    const deliver = params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload;
-    if (!deliver) {
-      return;
-    }
-    try {
-      await deliver(noticePayload);
-    } catch (err) {
-      logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
-    }
+    await deliverNotice(
+      noticePayload,
+      params.turn.opts?.onBlockReply ?? params.turn.onCompactionNoticePayload,
+      label,
+    );
   };
 
   return async (evt) => {
@@ -71,18 +67,25 @@ export function createAgentRunEventHandler(params: {
       params.notifyAgentRunStart(evt.transcriptStart);
     }
     if (evt.stream === "run_status" && !shouldSuppressProgressAfterMessageToolDelivery()) {
-      const waiting = evt.data.phase === "waiting_for_model";
-      if (waiting || (modelWaitActive && evt.data.phase === "starting_model")) {
-        modelWaitActive = waiting;
+      const { phase, reason } = evt.data;
+      const waiting = phase === "waiting_for_model";
+      const retrying = phase === "retrying" && reason === "codex_retry";
+      if (
+        waiting ||
+        (retrying && modelWaitPhase !== phase) ||
+        (modelWaitPhase && phase === "starting_model")
+      ) {
+        modelWaitPhase = waiting || retrying ? phase : undefined;
         await params.turn.opts?.onItemEvent?.({
           itemId: "model-wait",
           kind: "model-wait",
           suppressDurableProgress: true,
-          phase: waiting ? "update" : "end",
-          ...(waiting
+          phase: modelWaitPhase ? "update" : "end",
+          ...(modelWaitPhase
             ? {
-                progressText:
-                  evt.data.reason === "slot"
+                progressText: retrying
+                  ? "Still working. Retrying…"
+                  : reason === "slot"
                     ? "Waiting for a free model slot"
                     : "Waiting for the local model to respond",
               }
@@ -262,6 +265,7 @@ export function createAgentRunEventHandler(params: {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
+            summaryRefused: evt.data.summaryRefused === true,
             currentMessageId,
             applyReplyToMode: params.turn.applyReplyToMode,
           }),

@@ -31,7 +31,10 @@ import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import { loadOverviewForOperation } from "./operations-execution-helpers.js";
 import { executeSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
 import { formatSystemAgentStartupMessage } from "./overview.js";
-import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.js";
+import {
+  resolveSystemAgentVerifiedInferenceState,
+  type SystemAgentVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 type RunTui = typeof import("../tui/tui.js").runTui;
 
@@ -43,10 +46,8 @@ async function loadHostedSetupForTui() {
   return { createClackPrompter, hostedSetup };
 }
 
-export type SystemAgentTuiOptions = Pick<
-  SystemAgentChatEngineOptions,
-  "yes" | "deps" | "verifiedInference"
-> & {
+export type SystemAgentTuiOptions = Pick<SystemAgentChatEngineOptions, "yes" | "deps"> & {
+  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   runTui?: RunTui;
   /** "onboarding" swaps the greeting for the first-run setup proposal. */
   welcomeVariant?: "onboarding";

@@ -28,6 +28,7 @@ export type UpdatePostCoreInput = {
 export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
   repair: boolean;
+  retirementOnly?: true;
   fullIntegrityCheck?: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
@@ -38,6 +39,26 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   serviceInspectionDeadlineAtMs?: number;
 };
 
+/** Rollback bookkeeping only; the delegated executor remains the authority. */
+export type UpdatePluginCohortSettlementInput = {
+  executor: UpdateCommandChildGrant;
+  runId: string;
+  transactionId: string;
+};
+
+/** Correlation only; the post-ready worker acquires its own native executor. */
+export type UpdatePluginCohortCommitInput = {
+  runId: string;
+  transactionId: string;
+  installKey: string;
+};
+
+export type UpdatePluginCohortSettlementResult = {
+  runId: string;
+  transactionId: string;
+  configPaths: string[];
+};
+
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
   params: Omit<
     FinishUpdateParams,
@@ -46,7 +67,7 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery" | "onResult"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence" | "sourceArtifactLock" | "deadline"
+        "requesterAuthority" | "executorFence" | "deadline"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

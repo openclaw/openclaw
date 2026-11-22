@@ -5,8 +5,8 @@ Only for an authorized repair of a page's evidence set, not routine enrichment.
 - Use returned resolved evidence as-is, including its `source` ID. Source
   descriptors are shared within the vault scope; don't re-upload originals or
   invent IDs to shrink a profile. Keep passage ranges, quotes and attribution.
-- To replace the evidence set, read the complete State, Timeline and annotation
-  support first. Call `knowledge_reconcile_evidence` with a reason, the exact
+- To replace the evidence set, read the complete State, any written Timeline and
+  annotation support first. Call `knowledge_reconcile_evidence` with a reason, the exact
   vault/ontology/revision/hash fences and the reviewed complete `evidence` set.
   Preview with `dryRun: true`; apply with `dryRun: false` only after inspecting
   the result.

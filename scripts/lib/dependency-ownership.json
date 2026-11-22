@@ -194,11 +194,6 @@
       "class": "plugin-runtime",
       "risk": ["telegram-bot-api", "network"]
     },
-    "highlight.js": {
-      "owner": "core:syntax-highlighting",
-      "class": "core-runtime",
-      "risk": ["syntax-highlighting"]
-    },
     "hosted-git-info": {
       "owner": "core:git-utils",
       "class": "core-runtime",

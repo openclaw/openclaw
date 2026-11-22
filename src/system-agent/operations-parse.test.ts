@@ -49,6 +49,12 @@ describe("operation grammar", () => {
     ["install npm plugin @openclaw/discord", "plugin-install", { spec: "npm:@openclaw/discord" }],
     ["plugin install clawhub:openclaw-demo", "plugin-install", { spec: "clawhub:openclaw-demo" }],
     ["plugin install @composio/composio", "plugin-install", { spec: "@composio/composio" }],
+    ["plugin install npm:@example/plugin", "plugin-install", { spec: "npm:@example/plugin" }],
+    [
+      "plugin install git:github.com/example/plugin@main",
+      "plugin-install",
+      { spec: "git:github.com/example/plugin@main" },
+    ],
     ["plugin uninstall openclaw-demo", "plugin-uninstall", { pluginId: "openclaw-demo" }],
     [
       'create agent Work name "QA" role writer purpose "Check sums." workspace "/tmp/my work" model openai/gpt-5.2',
@@ -105,7 +111,7 @@ describe("operation grammar", () => {
   });
   it.each([
     ["create agent editor role unknown", "Unknown agent role"],
-    ["plugin install npm:@example/plugin", "trusted shell"],
+    ["plugin install git:file:///tmp/plugin.git", "requires a remote package source"],
   ])("explains rejected command %s", (input, message) => {
     expect(parseOperation(input)).toMatchObject({
       kind: "none",

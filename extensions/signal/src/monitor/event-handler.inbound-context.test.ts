@@ -804,7 +804,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     try {
       await receiveMessage(handler, { message: "hi" });
 
-      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+      const rpcOpts = {
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -812,19 +812,18 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
         account: "+15550009999",
         accountId: "default",
-      });
-      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        baseUrl: "http://localhost",
-        account: "+15550009999",
-        accountId: "default",
-      });
-
+      };
+      expect(sendReadReceiptMock).toHaveBeenCalledWith(
+        "signal:+15550001111",
+        1700000000000,
+        rpcOpts,
+      );
+      // The finished reply turn must clear the indicator it started, without keepalive repeats.
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      expect(sendTypingMock.mock.calls).toEqual([
+        ["+15550001111", rpcOpts],
+        ["+15550001111", { ...rpcOpts, stop: true }],
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -956,48 +955,35 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist",
+  it.each(["allowlist", "allowlist_quote"] as const)(
+    "renders quote-only native mentions subject to %s visibility",
+    async (contextVisibility) => {
+      const handler = createTestHandler({
+        cfg: createGroupAllowlistConfig({
+          signal: { groupAllowFrom: ["+15550001111"], contextVisibility },
+        }),
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+      });
+      await receiveGroupMessage(handler, "", {
+        quote: {
+          text: " \uFFFC ",
+          author: "+15550002222",
+          mentions: [{ uuid: "c3456789-01bc-4def-9012-3456789abcde", start: 1, length: 1 }],
         },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "blocked quote", author: "+15550002222" },
-    });
-
-    expect(capture.ctx).toBeUndefined();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps quote-only group context in allowlist_quote mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist_quote",
-        },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "quoted context", author: "+15550002222" },
-    });
-
-    const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("");
-    expect(context.ReplyToBody).toBe("quoted context");
-    expect(context.ReplyToSender).toBe("+15550002222");
-    expect(context.ReplyToIsQuote).toBe(true);
-  });
+      });
+      if (contextVisibility === "allowlist") {
+        expect(capture.ctx).toBeUndefined();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } else {
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe("");
+        expect(context.ReplyToBody).toBe("@c3456789-01bc-4def-9012-3456789abcde");
+        expect(context.ReplyToSender).toBe("+15550002222");
+        expect(context.ReplyToIsQuote).toBe(true);
+      }
+    },
+  );
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({

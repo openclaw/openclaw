@@ -20,6 +20,7 @@ import {
 import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
+  githubPublicationRemoteHeadArgs,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
@@ -51,7 +52,7 @@ export function createGitHubPublicationRecoveryBackoff() {
     },
     async run(
       row: { request_id: string; created_at_ms: number },
-      operation: () => Promise<SessionGitHubPublicationResult | void>,
+      operation: () => Promise<SessionGitHubPublicationResult | void | null>,
       settle: (result: SessionGitHubPublicationResult) => Promise<SessionGitHubPublicationResult>,
     ) {
       const requestId = row.request_id;
@@ -76,7 +77,12 @@ export function createGitHubPublicationRecoveryBackoff() {
         if ((previous?.attempts ?? 0) >= 3) {
           throw new Error(previous?.diagnostic);
         }
-        result = await operation();
+        const attempted = await operation();
+        // A skipped attempt preserves prior failures; a healthy wait clears them.
+        if (attempted === null) {
+          return;
+        }
+        result = attempted;
         if (!result || (result.status !== "requested" && result.status !== "publishing")) {
           failures.delete(requestId);
           return result;
@@ -112,7 +118,7 @@ export function createGitHubPublicationRecoveryBackoff() {
       return failure && (result.status === "requested" || result.status === "publishing")
         ? {
             ...result,
-            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil(Math.min(failure.delayMs, failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
           }
         : result;
     },
@@ -244,6 +250,35 @@ type GitHubPublicationObservation<Row extends GitHubPublicationExecutionRow> = {
   pushOnly?: "observed" | "dispatched";
   beforeRetry?: boolean;
 };
+
+export async function observeGitHubPublicationRemoteHead(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  remote: string,
+  branch: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const result = await run(githubPublicationRemoteHeadArgs(remote, branch), {
+    cwd,
+    env,
+  });
+  if (result.code !== 0) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  const observed = result.stdout.toString("utf8").trim();
+  if (!observed) {
+    return "";
+  }
+  const fields = observed.split(/\s+/u);
+  if (
+    fields.length !== 2 ||
+    fields[1] !== `refs/heads/${branch}` ||
+    !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(fields[0]!)
+  ) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  return fields[0]!;
+}
 
 /** Observe a recorded update independently of fresh branch, base and workspace eligibility. */
 export async function observeGitHubPublication<Row extends GitHubPublicationExecutionRow>(

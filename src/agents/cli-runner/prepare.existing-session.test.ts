@@ -28,7 +28,6 @@ import {
   createCliRunnerPrepareFixture,
   createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
   createWeatherSkillFixture,
 } from "../cli-runner.test-helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../command/claude-cli-project-dir.js";
@@ -110,10 +109,10 @@ beforeEach(() => {
       ownerToken: "fixture-owner",
       nonOwnerToken: "fixture-reader",
     }),
-    createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: () => true,
+    revokeMintedMcpLoopbackClientGrant: () => true,
     resolveMcpLoopbackPolicyTools,
     resolveMcpLoopbackScopedTools,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
@@ -360,6 +359,8 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     await completion.preparedBackend.cleanup?.();
   }
 
+  // Discovery changes only loading hints; it must not override safe prompt drift.
+  config.tools = { ...config.tools, toolSearch: true };
   const drifted = await prepareTurn(false, upgradedBinding, true);
   try {
     expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
@@ -374,7 +375,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
   expect(sent[1]?.sessionId).toBe(nativeSessionId);
   expect(sent[1]?.useResume).toBe(true);
   expect(sent[1]?.args).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
-  for (const turn of sent) {
+  for (const [index, turn] of sent.entries()) {
     expect(turn.args).toEqual(
       expect.arrayContaining(["--strict-mcp-config", "--disable-slash-commands"]),
     );
@@ -389,7 +390,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     expect(turn.toolAvailability).toEqual({
       native: [],
       openClaw: ["read"],
-      ...(toolSearch === false ? {} : { discovery: ["ToolSearch"] }),
+      ...(toolSearch === false && index < 2 ? {} : { discovery: ["ToolSearch"] }),
     });
     expect(turn.systemPrompt).toContain("OPENCLAW_CONTEXT_SURVIVES_UPGRADE");
     expect(turn.systemPrompt).toContain("weather");
@@ -397,9 +398,12 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     expect(turn.prompt).not.toContain("OpenClaw resumed this CLI session");
   }
   expect(nativeSkillsPlugin).not.toHaveBeenCalled();
-  // A fresh session learns the chat has history without taking another account's text.
-  expect(sent[0]?.promptContext?.prependContext).toContain("2 earlier messages in this chat");
-  expect(sent[0]?.prompt).toBe("What did I ask you to remember?");
+  // No other account ran this chat, so the fresh session receives its saved history.
+  expect(sent[0]?.prompt).toContain("<conversation_history>");
+  expect(sent[0]?.prompt).toContain("User: Remember UPGRADE-HISTORY-42.");
+  expect(sent[0]?.prompt).toContain(
+    "<next_user_message>\nWhat did I ask you to remember?\n</next_user_message>",
+  );
   expect(sent[2]?.promptContext?.prependContext).toContain(
     "OpenClaw resumed this CLI session after prompt content changed.",
   );

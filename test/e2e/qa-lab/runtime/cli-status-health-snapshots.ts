@@ -3,6 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "cli-status-health-snapshots";
@@ -22,15 +23,6 @@ type CliResult = {
 };
 
 type JsonRecord = Record<string, unknown>;
-
-function artifactBase(argv: readonly string[]): string {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
 
 function parseJsonRecord(label: string, text: string): JsonRecord {
   let parsed: unknown;
@@ -223,7 +215,7 @@ export async function runCliStatusHealthSnapshots(repoRoot: string): Promise<Jso
 
 async function main(): Promise<void> {
   const repoRoot = process.cwd();
-  const outputRoot = artifactBase(process.argv.slice(2));
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
   const startedAt = Date.now();
   const writer = createQaScriptEvidenceWriter({
     artifactBase: outputRoot,

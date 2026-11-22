@@ -18,7 +18,10 @@ import {
   resolveCatalogDecisionRuntime,
 } from "../../agents/model-catalog-decisions.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
+import {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  resolveDefaultModelForAgent,
+} from "../../agents/model-selection.js";
 import { resolveNativeWebSearchRoute } from "../../agents/native-web-search.js";
 import { hasAuthProfileForProvider } from "../../agents/tools/model-config.helpers.js";
 import {
@@ -36,6 +39,7 @@ import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-ty
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import {
   isWebSearchProviderConfigured,
   listConfiguredWebSearchProviders,
@@ -102,10 +106,13 @@ async function prepareWebSearchStatus(
     profiles: {},
   };
   const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId: scope.agentId });
-  const modelRef = {
-    provider: request.modelProvider?.trim() || defaultModel.provider,
-    model: request.modelId?.trim() || defaultModel.model,
-  };
+  const modelProvider = request.modelProvider?.trim() || defaultModel?.provider;
+  const modelId = request.modelId?.trim() || defaultModel?.model;
+  if (!modelProvider || !modelId) {
+    // Search routing depends on the model's runtime; without one there is nothing to report.
+    return { error: errorShape(ErrorCodes.INVALID_REQUEST, NO_MODEL_CONFIGURED_MESSAGE) };
+  }
+  const modelRef = { provider: modelProvider, model: modelId };
   const activateDiscovery = await prepareBundledDiscoveryMode();
   const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config });
   activateDiscovery();
@@ -182,7 +189,7 @@ async function prepareWebSearchStatus(
         const chatLogin = buildOAuthRefreshFailureLoginCommand(health.provider, {
           surface: "chat",
         });
-        selectedAuthIssue = `The ${health.provider} sign-in this provider uses is ${health.status}. If a test search fails, send \`${chatLogin}\` from a private chat or Control UI session, or run \`${buildOAuthRefreshFailureLoginCommand(health.provider)}\`.`;
+        selectedAuthIssue = `The ${health.provider} sign-in this provider uses is ${health.status}. If a test search fails, send \`${chatLogin}\` from a private chat or the OpenClaw app, or run \`${buildOAuthRefreshFailureLoginCommand(health.provider)}\`.`;
       }
     }
   }
@@ -257,6 +264,7 @@ async function prepareWebSearchStatus(
         entry,
         evaluation,
         pluginRegistry: catalog.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       });
       status.model.runtime = runtime?.id ?? "openclaw";
       status.model.runtimeLabel =
@@ -486,7 +494,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const startedAt = Date.now();
+      const startedAt = monotonicNow();
       let result: WebSearchTestResult;
       try {
         assertSecretOwnerAvailable("capability", runtimeWebSecretOwnerId("search", provider));
@@ -519,7 +527,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
           },
         });
         const normalized = normalizeWebSearchOutput({ ...executed, query });
-        const latencyMs = Date.now() - startedAt;
+        const latencyMs = monotonicNow() - startedAt;
         if (normalized.kind === "results" || normalized.kind === "answer") {
           result = {
             provider: executed.provider,
@@ -556,7 +564,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       } catch (error) {
         result = {
           provider,
-          latencyMs: Date.now() - startedAt,
+          latencyMs: monotonicNow() - startedAt,
           status: "error",
           error: searchTestError(error),
         };

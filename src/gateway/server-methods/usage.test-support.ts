@@ -147,7 +147,7 @@ export const contextReport = (generatedAt: number, ordinal = 0): SessionSystemPr
 
 export const usageRoleConfig = (
   base: OpenClawConfig,
-  others: "none" | "view" = "none",
+  others: "none" | "invited" | "view" = "none",
 ): OpenClawConfig => ({
   ...base,
   gateway: {

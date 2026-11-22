@@ -28,16 +28,6 @@ export function shouldMintChannelSourceTurnId(ingressProvider: string | undefine
   return !isInternalMessageChannel(ingressProvider);
 }
 
-/** Uses the same short-id-first identity as durable reply admission. */
-export function resolveReplyAdmissionRunId(context: {
-  MessageSid?: unknown;
-  MessageSidFull?: unknown;
-}): string | undefined {
-  return (
-    normalizeOptionalString(context.MessageSid) ?? normalizeOptionalString(context.MessageSidFull)
-  );
-}
-
 /** Preserve the admitted input identity when a queued turn gets a new run ID. */
 export function resolveReplySourceTurnId(params: {
   sourceTurnId?: string;

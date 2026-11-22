@@ -49,10 +49,8 @@ describe("Devices inventory actions", () => {
       const approve = () => button(page.container, t("devices.inventory.approve"));
       await waitForSolid(() => expect(approve().disabled).toBe(false));
       const details = Array.from(
-        page.container.querySelectorAll<HTMLDetailsElement>(".device-entry__details"),
-      ).find((element) =>
-        element.closest(".device-entry")?.textContent?.includes("Paired browser"),
-      );
+        page.container.querySelectorAll<HTMLDetailsElement>("details.device-entry"),
+      ).find((element) => element.textContent?.includes("Paired browser"));
       if (!details) {
         throw new Error("Expected the paired browser details");
       }

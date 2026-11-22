@@ -9,7 +9,8 @@ export type ChatComposerPlusMenuView =
   | "skills"
   | "connectors"
   | "libraries"
-  | `library:${string}`;
+  | `library:${string}`
+  | `plugin:${string}`;
 
 export type ChatComposerMenuSkill = {
   key: string;
@@ -27,6 +28,7 @@ export type ChatComposerCapabilityMenuProps = {
   skillsRead: Promise<readonly ChatComposerMenuSkill[] | null> | null;
   library?: ComposerLibraryProps;
   mcpServers: readonly McpServerSummary[];
+  mcpServersReadState: "ready" | "restricted" | "loading" | "unavailable";
   toolsEffectiveResult: ToolsEffectiveResult | null;
   toolsEffectiveLoading: boolean;
   toolsEffectiveError: boolean;

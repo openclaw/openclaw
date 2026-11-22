@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
@@ -6,13 +8,15 @@ import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox/context.js";
+import type { resolveSandboxContext } from "./sandbox/context.js";
 import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
+import { resolveSessionWorktree } from "./worktrees/session-lifecycle.js";
 
 export type WorkspaceSandboxParams = Pick<
   EmbeddedRunAttemptParams,
@@ -129,6 +133,35 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  let preparedWorktreePath: string | undefined;
+  if (params.sessionKey?.trim()) {
+    const entry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: sessionAgentId,
+        sessionKey,
+        storePath: resolveSessionStorePathCore(params.config?.session?.store, {
+          agentId: sessionAgentId,
+        }),
+      },
+      assertCurrent,
+    );
+    if (entry?.worktree) {
+      const prepared = await resolveSessionWorktree({
+        binding: entry.worktree,
+        sessionKey,
+        assertCurrent,
+        turn: true,
+      });
+      if (prepared) {
+        await recordRegistryWorktreeActivity(
+          prepared.context.environment,
+          prepared.worktree,
+          assertCurrent,
+        );
+      }
+      preparedWorktreePath = prepared?.worktree.path;
+    }
+  }
   const prepareWorkspace = async (
     sandboxRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>,
   ) =>
@@ -140,22 +173,30 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         assertCurrent();
       }
       phases.mark("attempt.setup.workspace.mkdir");
-      await fs.mkdir(resolvedWorkspace, { recursive: true });
+      if (resolvedWorkspace !== preparedWorktreePath) {
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+      }
       assertCurrent();
       phases.mark("attempt.setup.workspace.sandbox");
-      const sandbox = sandboxRuntimeStatus
-        ? await resolveSandboxContext({
-            config: params.config,
-            agentId: sandboxRuntimeStatus.agentId,
-            execOverrides: params.execOverrides,
-            sessionKey: sandboxSessionKey,
-            skillsSnapshot: params.skillsSnapshot,
-            workspaceDir: resolvedWorkspace,
-            assertCurrent,
-            admittedRunContext: params.admittedRunContext,
-            preparedRuntimeStatus: sandboxRuntimeStatus,
-          })
-        : null;
+      const sandboxRuntime = sandboxRuntimeStatus?.sandboxed
+        ? await import("./sandbox/context.js")
+        : undefined;
+      assertCurrent();
+      const sandbox =
+        sandboxRuntime && sandboxRuntimeStatus
+          ? await sandboxRuntime.resolveSandboxContext({
+              config: params.config,
+              agentId: sandboxRuntimeStatus.agentId,
+              execOverrides: params.execOverrides,
+              sessionKey: sandboxSessionKey,
+              skillsSnapshot: params.skillsSnapshot,
+              workspaceDir: resolvedWorkspace,
+              assertCurrent,
+              abortSignal: params.abortSignal,
+              admittedRunContext: params.admittedRunContext,
+              preparedRuntimeStatus: sandboxRuntimeStatus,
+            })
+          : null;
       try {
         phases.mark("attempt.setup.workspace.roots");
         assertCurrent();

@@ -11,11 +11,10 @@ export {
 } from "./model-selection-error.js";
 
 /** User or automatic model/provider override selection for a session entry. */
-export type ModelOverrideSelection = {
-  provider: string;
-  model: string;
-  isDefault?: boolean;
-};
+export type ModelOverrideSelection =
+  | { provider: string; model: string; isDefault?: boolean }
+  /** Returning to the default when the agent has no configured model to name. */
+  | { provider?: undefined; model?: undefined; isDefault: true };
 
 export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
   "This session cannot be reset while model selection is locked.";

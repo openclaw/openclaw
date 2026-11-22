@@ -1,14 +1,10 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
-import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
+import { hasErrnoCode } from "./errno.js";
 import { readPackageManagerSpec } from "./package-json.js";
-import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
@@ -17,12 +13,10 @@ import {
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
-import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
-  buildDevTargetRefResolutionCandidates,
   classifyPreflightFailure,
   createGitStepFactory,
   createPreflightRoot,
@@ -30,105 +24,52 @@ import {
   prepareCandidateCommandEnv,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
-  resolveTagFetchRef,
+  resolveGitNoLazyFetchArgs,
   resetPreflightCandidateWorktree,
   type StepFactory,
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
+import {
+  hasSameReplayConflictObjects,
+  LOCAL_REPLAY_CONFLICT_REASON,
+  replayLocalCommits,
+} from "./update-runner-git-replay.js";
 import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
-import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
+import {
+  isInterruptedGitStep,
+  resolveExplicitGitPreflightTarget,
+  runClassifiedGitStep,
+  runGitCleanCheckStep,
+} from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const PREFLIGHT_MAX_COMMITS = 10;
+const LOCAL_REPLAY_TIMEOUT_MS = 10 * 60_000;
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
 
 type GitCandidatePreflightResult =
   | {
       status: "ok";
       candidateSha: string;
-      selectedDevUpstream: string | null;
-      localDevBranchExists: boolean | null;
     }
   | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> };
-
-async function resolveExplicitTarget(params: {
-  devTargetRef: string;
-  refreshedRemotes: readonly string[];
-  gitRoot: string;
-  step: StepFactory;
-  workStep: StepFactory;
-}): Promise<string | null> {
-  const step = createGitStepFactory(params.gitRoot, params.step);
-  const workStep = createGitStepFactory(params.gitRoot, params.workStep);
-  const warnings: string[] = [];
-  for (const candidate of buildDevTargetRefResolutionCandidates(params.devTargetRef)) {
-    if (
-      candidate.startsWith("refs/remotes/") &&
-      !params.refreshedRemotes.some((remote) => candidate.startsWith(`refs/remotes/${remote}/`))
-    ) {
-      continue;
-    }
-    const tagFetchRef = resolveTagFetchRef(candidate);
-    if (tagFetchRef) {
-      const remoteStep = await runStep(step("git-remote", "remote"));
-      if (isFailedUpdateStep(remoteStep)) {
-        return null;
-      }
-      const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
-      let fetchedTag = false;
-      for (const remote of remotes) {
-        const options = workStep(
-          "git-fetch-target-tag",
-          "fetch",
-          remote,
-          `+${tagFetchRef}:${tagFetchRef}`,
-        );
-        const fetchOutcome = await runClassifiedGitStep(options, (fetchStep) => {
-          const interrupted =
-            fetchStep.termination === "signal" ||
-            fetchStep.exitCode === 130 ||
-            fetchStep.exitCode === 143;
-          const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
-          if (!fetchedSuccessfully && !interrupted) {
-            fetchStep.advisory = {
-              kind: "recoverable-maintenance",
-              message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
-            };
-            warnings.push(fetchStep.advisory.message);
-          }
-          if (warnings.length > 0) {
-            fetchStep.warnings = [...warnings];
-          }
-          return { interrupted, fetchedSuccessfully };
-        });
-        if (fetchOutcome.interrupted) {
-          return null;
-        }
-        if (fetchOutcome.fetchedSuccessfully) {
-          fetchedTag = true;
-          break;
-        }
-      }
-      if (remotes.length > 0 && !fetchedTag) {
-        continue;
-      }
-    }
-    const shaStep = await runStep(step("git-resolve-target", "rev-parse", candidate));
-    const sha = shaStep.stdoutTail?.trim();
-    if (!isFailedUpdateStep(shaStep) && sha) {
-      return sha;
-    }
-  }
-  return null;
-}
 
 type PreflightCandidateResult =
   | { status: "ok"; candidateSha: string }
   | { status: "manager-unavailable"; reason: string }
-  | { status: "failed" | "insufficient-space" | "node-runtime-incompatible" };
+  | {
+      status:
+        | "failed"
+        | "insufficient-space"
+        | "node-runtime-incompatible"
+        | "stopped"
+        | "replay-timeout";
+      /** Paths Git left unmerged when replaying local commits onto this candidate. */
+      replayConflictPaths?: string[];
+    };
 
 async function testPreflightCandidate(
   params: Parameters<typeof runGitCandidatePreflight>[0] & {
@@ -149,8 +90,25 @@ async function testPreflightCandidate(
     factory = params.workStep,
   ) => {
     const check = factory(`preflight-${name}`, argv, params.worktreeDir, env);
-    const result = await runStep(check);
-    return isFailedUpdateStep(result) ? result : null;
+    const optionalReplay =
+      !params.referenceSource && (name === "local-checkout" || name === "rebase");
+    if (optionalReplay) {
+      check.timeoutMs = Math.min(check.timeoutMs ?? Infinity, LOCAL_REPLAY_TIMEOUT_MS);
+    }
+    return runClassifiedGitStep(check, (result) => {
+      const failed = isFailedUpdateStep(result);
+      if (
+        optionalReplay &&
+        (result.termination === "timeout" || result.termination === "no-output-timeout")
+      ) {
+        result.advisory = {
+          kind: "recoverable-maintenance",
+          message:
+            "Local commit replay exceeded its deadline; validating this candidate without replay. Excluded commits are preserved before main moves.",
+        };
+      }
+      return failed ? result : null;
+    });
   };
   const checkout = await runCandidateCheck("checkout", [
     "git",
@@ -164,32 +122,10 @@ async function testPreflightCandidate(
     return { status: classifyPreflightFailure(checkout) };
   }
   if (params.rebaseFrom) {
-    const source = await runCandidateCheck("local-checkout", [
-      "git",
-      "-C",
-      params.worktreeDir,
-      "checkout",
-      "--detach",
-      params.rebaseFrom,
-    ]);
-    const rebase =
-      source ??
-      (await runCandidateCheck("rebase", [
-        "git",
-        "-C",
-        params.worktreeDir,
-        "rebase",
-        ...(params.referenceSource ? ["--rebase-merges"] : []),
-        params.sha,
-      ]));
-    if (rebase) {
-      await runCandidateCheck(
-        "rebase-abort",
-        ["git", "-C", params.worktreeDir, "rebase", "--abort"],
-        undefined,
-        params.step,
-      );
-      return { status: classifyPreflightFailure(rebase) };
+    const rebaseFrom = params.rebaseFrom;
+    const replay = await replayLocalCommits({ ...params, rebaseFrom, runCandidateCheck });
+    if (replay) {
+      return replay;
     }
   }
   const candidateHead = await params.runCommand(
@@ -332,31 +268,9 @@ async function testPreflightCandidate(
     if (failure) {
       return { status: classifyPreflightFailure(failure) };
     }
-    // Global source exposure can run package lifecycle scripts. Validate and retain
-    // the resulting candidate only after that preparation finishes.
-    await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
-    // Exposure can run another install after postbuild. Its final topology, not
-    // the earlier build graph, must own the packaged plugin dependency links.
-    const metadataScript = fileURLToPath(
-      resolveExternalPackageRuntimeEntrypointUrl("sourcePluginMetadata", params.worktreeDir),
-    );
-    if (
-      params.prepareGitExposure &&
-      (await fs.stat(metadataScript).catch(ignoreMissingPath))?.isFile()
-    ) {
-      const relink = await runCandidateCheck(
-        "bundled-plugin-dependency-links",
-        ["node", metadataScript],
-        candidateCommand.env,
-      );
-      if (relink) {
-        return { status: classifyPreflightFailure(relink) };
-      }
-    }
     await candidateCommand.restoreWorkspace?.();
     params.steps.push(...((await params.validateCandidate(params.worktreeDir)) ?? []));
-    // Activation checks out candidateSha and promotes only generated runtime paths.
-    // Check after repair so validated source edits cannot disappear at activation.
+    // Verify repairs preserve the selected source before publishing the release.
     const { result: cleanCheck } = await runGitCleanCheckStep(
       params.step(
         "preflight-update-clean-check",
@@ -403,12 +317,11 @@ export async function runGitCandidatePreflight(params: {
   sourceRuntimePrepared?: boolean;
   /** Immutable releases must build exactly the candidate's recorded dependency graph. */
   frozenLockfile?: boolean;
-  beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
+  /** Build in this release worktree, under `prefix`, instead of a temporary one. */
+  release?: { prefix: string; worktreeDir: string };
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
-  prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
-  onCleanupReportingError?: (error: unknown) => void;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -444,8 +357,8 @@ export async function runGitCandidatePreflight(params: {
     ? normalizeNullableString(resolveDevUpdateTargetRevision(params.devTarget))
     : null;
   let candidates: string[];
-  let selectedDevUpstream: string | null = null;
   let localDevBranchExists: boolean | null = null;
+  let localDevBranchSha: string | undefined;
   if (params.targetRevision) {
     const result = await params.runCommand(
       ["git", "-C", params.gitRoot, "rev-parse", `${params.targetRevision}^{commit}`],
@@ -459,7 +372,7 @@ export async function runGitCandidatePreflight(params: {
     }
     candidates = [result.stdout.trim()];
   } else if (devTargetRef) {
-    const targetSha = await resolveExplicitTarget({ ...params, devTargetRef });
+    const targetSha = await resolveExplicitGitPreflightTarget({ ...params, devTargetRef });
     if (!targetSha) {
       return { status: "error", reason: "no-target-sha" };
     }
@@ -483,7 +396,11 @@ export async function runGitCandidatePreflight(params: {
       const localMainStep = await runStep(
         step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
       );
+      if (isInterruptedGitStep(localMainStep)) {
+        return { status: "error", reason: "preflight-no-good-commit" };
+      }
       localDevBranchExists = localMainStep.exitCode === 0;
+      localDevBranchSha = localMainStep.stdoutTail?.trim().split(" ")[0];
     }
     const readGit = async (...args: string[]) => {
       const result = await runStep(step("upstream-check", ...args));
@@ -493,16 +410,19 @@ export async function runGitCandidatePreflight(params: {
     if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
-    if (!upstreamRef) {
+    // Keep the cache ref identity separate from the fetched source revision.
+    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, {
+      remote: source.remote,
+      mergeRef: source.mergeRef,
+    });
+    const revision = source.revision ?? upstreamRef;
+    if (!revision) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
+    const upstreamSha = await readGit("rev-parse", "--verify", `${revision}^{commit}`);
     if (!upstreamSha) {
       return { status: "error", reason: "no-upstream-sha" };
     }
-    // Local branches are operator state, not remote cache refs to publish after admission.
-    selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
     const revListStep = await runStep(
       step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
     );
@@ -517,17 +437,46 @@ export async function runGitCandidatePreflight(params: {
 
   // Reference builds must consume operator inputs even when their Git HEAD is current.
   // Source identity alone cannot prove the installed build is complete.
-  const canSkipActivation =
-    !params.referenceSource && !params.prepareGitExposure && params.beforeRuntimeVerified;
-  const rebaseFrom = params.referenceSource
+  const canSkipActivation = !params.referenceSource && params.beforeRuntimeVerified;
+  let rebaseFrom = params.referenceSource
     ? params.referenceSource.branch === DEV_BRANCH
       ? undefined
       : (params.beforeSha ?? undefined)
     : !params.targetRevision && !params.devTarget && localDevBranchExists !== false
       ? params.needsCheckoutMain
-        ? DEV_BRANCH
+        ? localDevBranchSha
         : (params.beforeSha ?? undefined)
       : undefined;
+
+  if (rebaseFrom && !params.referenceSource) {
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(params.runCommand, {
+      cwd: params.gitRoot,
+      timeoutMs: params.timeoutMs,
+    });
+    const relation = await runClassifiedGitStep(
+      step("preflight-local-history", ...noLazyFetchArgs, "merge-base", rebaseFrom, candidates[0]!),
+      (result) => {
+        if (
+          result.exitCode === 1 &&
+          !isInterruptedGitStep(result) &&
+          !result.killed &&
+          !result.outputLimitExceeded &&
+          (!result.termination || result.termination === "exit")
+        ) {
+          rebaseFrom = undefined;
+          result.advisory = {
+            kind: "recoverable-maintenance",
+            message:
+              "Local main has no visible shared history with the update target (shallow or unrelated history); validating upstream without replay. Excluded commits are preserved before main moves.",
+          };
+        }
+        return result;
+      },
+    );
+    if (isFailedUpdateStep(relation)) {
+      return { status: "error", reason: "preflight-no-good-commit" };
+    }
+  }
 
   const checkNodeRuntime = async (sha: string) => {
     if (params.referenceSource || (canSkipActivation && sha === params.beforeSha)) {
@@ -575,20 +524,13 @@ export async function runGitCandidatePreflight(params: {
   if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
-  if (params.beforeGitStaging) {
-    const admission = await params.beforeGitStaging();
-    params.steps.push(admission.step);
-    if (isFailedUpdateStep(admission.step)) {
-      return { status: "error", reason: admission.failureReason };
-    }
-  }
 
   // Worktree checkout can execute filters, and subsequent checks run target code.
   // Admit its metadata before either operation, then admit each distinct fallback.
   await params.beforeCandidate(preflightBaseSha);
   let preflightRoot: string;
   try {
-    preflightRoot = await createPreflightRoot(params.artifactRoot);
+    preflightRoot = params.release?.prefix ?? (await createPreflightRoot(params.artifactRoot));
   } catch (error) {
     return {
       status: "error",
@@ -597,8 +539,12 @@ export async function runGitCandidatePreflight(params: {
         : "preflight-worktree-failed",
     };
   }
-  const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+  const worktreeDir =
+    params.release?.worktreeDir ?? path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
   let tested: PreflightCandidateResult | undefined;
+  let replayConflict: { sha: string; paths: string[] } | undefined;
+  // Stays true only while every candidate was rejected by a local replay conflict.
+  let onlyReplayConflicts = true;
   let cleanupUncertain = false;
   try {
     const worktreeStep = await runStep(
@@ -617,20 +563,46 @@ export async function runGitCandidatePreflight(params: {
       if (canSkipActivation && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
       }
+      if (
+        rebaseFrom &&
+        replayConflict &&
+        (await hasSameReplayConflictObjects({ ...params, worktreeDir }, replayConflict, sha))
+      ) {
+        // Replaying here would stop on the same conflict; keep walking back.
+        continue;
+      }
       if (sha !== preflightBaseSha) {
         if (!(await checkNodeRuntime(sha))) {
+          onlyReplayConflicts = false;
           continue;
         }
         await params.beforeCandidate(sha);
       }
-      const candidate = await testPreflightCandidate({
-        ...params,
-        worktreeDir,
-        preflightRoot,
-        sha,
-        rebaseFrom,
-        runLint: !params.targetRevision && shouldRunDevPreflightLint(),
-      });
+      const testCandidate = () =>
+        testPreflightCandidate({
+          ...params,
+          worktreeDir,
+          preflightRoot,
+          sha,
+          rebaseFrom,
+          runLint: !params.targetRevision && shouldRunDevPreflightLint(),
+        });
+      let candidate = await testCandidate();
+      if (candidate.status === "stopped") {
+        onlyReplayConflicts = false;
+        tested = { status: "failed" };
+        break;
+      }
+      if (candidate.status === "replay-timeout") {
+        // Retry only this candidate clean, then keep the original walk-back order.
+        rebaseFrom = undefined;
+        candidate = await testCandidate();
+      }
+      if (candidate.status === "failed" && candidate.replayConflictPaths) {
+        replayConflict = { sha, paths: candidate.replayConflictPaths };
+      } else {
+        onlyReplayConflicts = false;
+      }
       // Node requirements and package managers can differ across older revisions.
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
         tested = candidate;
@@ -645,15 +617,7 @@ export async function runGitCandidatePreflight(params: {
     }
   } catch (error) {
     cleanupUncertain = hasCommandProcessCleanupError(error);
-    const failedStep = params.steps.findLast(isFailedUpdateStep);
-    throw cleanupUncertain ||
-      failedStep?.name !== "preflight-runtime-stage" ||
-      error instanceof UpdatePreMutationError
-      ? error
-      : new UpdatePreMutationError("git-preflight-failed", formatErrorMessage(error), {
-          cause: error,
-          stepResult: { steps: params.steps, failedStep },
-        });
+    throw error;
   } finally {
     if (!cleanupUncertain) {
       const cleanup = () =>
@@ -669,7 +633,8 @@ export async function runGitCandidatePreflight(params: {
           });
           return false;
         });
-      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+      // Failed candidates still need their private Git repository until cleanup settles.
+      if (!params.retainCleanup?.(cleanup)) {
         await cleanup();
       }
     }
@@ -684,13 +649,13 @@ export async function runGitCandidatePreflight(params: {
             ? tested.reason
             : tested?.status === "node-runtime-incompatible"
               ? "preflight-node-runtime-incompatible"
-              : "preflight-no-good-commit",
+              : replayConflict && onlyReplayConflicts
+                ? LOCAL_REPLAY_CONFLICT_REASON
+                : "preflight-no-good-commit",
     };
   }
   return {
     status: "ok",
     candidateSha: tested.candidateSha,
-    selectedDevUpstream,
-    localDevBranchExists,
   };
 }

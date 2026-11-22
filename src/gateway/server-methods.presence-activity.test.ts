@@ -56,7 +56,7 @@ it.each([
   },
   {
     connect: { scopes: ["operator.pairing"] },
-    error: { code: "FORBIDDEN", message: "missing scope: operator.read" },
+    error: { code: "FORBIDDEN", message: "missing scope: operator.sessions.read" },
   },
   { connect: { role: "node" }, error: { code: "INVALID_REQUEST" } },
 ])(

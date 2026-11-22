@@ -1,18 +1,21 @@
 import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
-import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
-import { historySessionId } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import { clearHistoryCursor, historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -25,11 +28,40 @@ import { readChatHistoryCursor, readChatHistoryState } from "./session-message-c
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
-  supersedeInFlight?: boolean;
+  /** `append`: a transcript append that the first publication may precede. */
+  supersedeInFlight?: boolean | "append";
   startup?: boolean;
 };
 
 type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
+
+export function requiresChatHistoryReload(
+  result: ChatHistoryResult,
+  sessionId: string,
+  boundary?: string | null,
+): boolean {
+  return Boolean(
+    result.windowReset ||
+    (sessionId && historySessionId(result) !== sessionId) ||
+    (boundary && nativeHistoryMessageSourceIdentity(result.messages?.[0]) !== boundary),
+  );
+}
+
+export async function reloadChatHistoryWindow(state: ChatHistoryHost): Promise<void> {
+  const ownsConnection = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const agentId = resolveChatAgentId(state);
+  // Cursor reset is not an empty snapshot. Keep the observed reset until
+  // authoritative hydration adopts history with pending and live custody.
+  chatHistoryRequests(state).windowReset = {
+    isCurrent: () =>
+      ownsConnection() && state.sessionKey === sessionKey && resolveChatAgentId(state) === agentId,
+  };
+  clearHistoryCursor(state, sessionKey, agentId);
+  if (!(await loadChatHistory(state, { supersedeInFlight: true }))) {
+    throw new Error(state.chatError ?? t("chat.thread.earlierInterrupted"));
+  }
+}
 
 export async function loadChatHistory(
   state: ChatHistoryHost,
@@ -90,20 +122,30 @@ export async function loadChatHistory(
     if (inFlight.refresh) {
       inFlight.refresh.startup ||= startup;
       inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      // A queued append refresh may have kept the read; stronger changes retire it.
+      if (opts.supersedeInFlight === true) {
+        inFlight.refresh.version = ++requests.historyVersion;
+      }
       return inFlight.refresh.promise;
     }
-    if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
+    if (!opts.supersedeInFlight && inFlight.key === requestKey) {
       return inFlight.promise;
     }
-    const version = ++requests.historyVersion;
+    // An append cannot be erased before any transcript is shown, and the refresh
+    // still follows. Retiring the first read anyway lets a busy run's appends keep
+    // the chat loading forever.
+    if (opts.supersedeInFlight !== "append" || requests.acceptedHistory) {
+      requests.historyVersion++;
+    }
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,
+      version: requests.historyVersion,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
     refresh.promise = inFlight.request.then(() => {
       if (
-        requests.historyVersion !== version ||
+        requests.historyVersion !== refresh.version ||
         !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
         !agentIsCurrent()

@@ -36,6 +36,7 @@ import {
   HOST_READ_DECLARED_TEXT_ERROR,
   type HostReadHtmlTrust,
 } from "./host-read-media-policy.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -45,6 +46,7 @@ import {
   getDefaultLocalRootsCore,
   HostReadMediaTypeError,
   LocalMediaAccessError,
+  localMediaNotFoundError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
@@ -52,12 +54,11 @@ import { MediaReferenceError, resolveInboundMediaReference } from "./media-refer
 import {
   createImageProcessor,
   isAnimatedWebpBuffer,
-  readImageMetadataFromHeader,
   readImageProbeFromHeader,
   type ImageMetadata,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
-import { formatMediaSize } from "./store.shared.js";
+import { formatMediaSize, SaveMediaSourceError } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -565,39 +566,34 @@ async function loadWebMediaInternal(
   const clampAndFinalize = async (params: WebMediaResult): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
-    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
-    if (params.kind === "image") {
-      if (optimizeImages) {
-        return await optimizeImageBufferForWebMedia({
-          buffer: params.buffer,
-          contentType: params.contentType,
-          fileName: params.fileName,
-          maxBytes: cap,
-          imageCompression,
-        });
-      }
-      const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
-      const isGif = params.contentType === "image/gif";
-      if (params.buffer.length > imageCap) {
-        throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
-      }
-      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
-      return {
+    let cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
+    if (params.kind === "image" && optimizeImages) {
+      return await optimizeImageBufferForWebMedia({
         buffer: params.buffer,
         contentType: params.contentType,
-        kind: params.kind,
         fileName: params.fileName,
-      };
+        maxBytes: cap,
+        imageCompression,
+      });
+    }
+    if (params.kind === "image") {
+      cap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
     }
     if (params.buffer.length > cap) {
-      throw new Error(formatCapLimit("Media", cap, params.buffer.length));
+      const label = params.kind === "image" && params.contentType === "image/gif" ? "GIF" : "Media";
+      throw new SaveMediaSourceError("too-large", formatCapLimit(label, cap, params.buffer.length));
+    }
+    if (params.kind === "image") {
+      assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
     }
     return {
       buffer: params.buffer,
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
-      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
+      ...(params.kind !== "image" && params.trustedGeneratedHtmlSource
+        ? { trustedGeneratedHtmlSource: true }
+        : {}),
     };
   };
 
@@ -697,9 +693,7 @@ async function loadWebMediaInternal(
           });
         }
         if (err.code === "not-found") {
-          throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
-            cause: err,
-          });
+          throw localMediaNotFoundError(mediaUrl, err);
         }
         if (err.code === "not-file") {
           throw new LocalMediaAccessError(
