@@ -394,7 +394,14 @@ a resource bound on serialized model-context events, not a token count. Private
 transcript metadata and tool-result details are excluded, but event envelopes and
 other content can still reach the byte cap before the model's token budget is full.
 
-When this cap is exceeded, the history loader advances the omitted prefix in
+Stored tool results such as screenshots cost far more bytes than model tokens. Before
+the loader drops older messages, it replaces only as many tool-result bodies as the
+view needs, largest first, with omission notices that name the tool, call, and
+original size. Conversation messages, tool calls, and their pairing stay in the
+model's view, so token-based compaction can still summarize them. Each newly omitted
+body changes the prompt prefix from that message on. The stored transcript is unchanged.
+
+When the notices alone still exceed this cap, the history loader advances the omitted prefix in
 quarter-cap steps. It prefers complete turns, keeps tool calls with their results,
 and reserves the latest compaction summary. The retained history starts near 75%
 of the available byte capacity, subject to event and turn sizes, then grows toward
