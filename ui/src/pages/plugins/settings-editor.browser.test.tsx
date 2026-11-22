@@ -384,6 +384,57 @@ describe("grouped plugin settings", () => {
     expect(query('[data-setting="search.apiKey"]')).not.toBeNull();
     expect(query<HTMLInputElement>('input[aria-label="Search: Mode"]')?.value).toBe("web");
   });
+  it.each([1, 1.4])(
+    "at %s text scale, keeps compact checkboxes next to their titles without narrowing the explanation or stacking text fields beside them",
+    async (scale) => {
+      await page.viewport(390, 844);
+      try {
+        const { editor, query } = await mount({
+          configSchema: objectSchema({
+            enabled: { type: "boolean", title: "Enable the optional review workflow" },
+            label: { type: "string", title: "Workspace label" },
+          }),
+          configValue: configValue({ enabled: false, label: "Review" }),
+          configHints: {
+            [prefix + ".enabled"]: {
+              help: "This long explanation wraps over several lines on small screens. The title and the checkbox should still identify one setting before any of the explanation is read.",
+            },
+          },
+        });
+        editor.style.width = "364px";
+        const rootStyle = document.documentElement.style;
+        const previous = rootStyle.getPropertyValue("--control-ui-text-scale");
+        onTestFinished(() => rootStyle.setProperty("--control-ui-text-scale", previous));
+        rootStyle.setProperty("--control-ui-text-scale", String(scale));
+        const bounds = (selector: string) => query<HTMLElement>(selector)!.getBoundingClientRect(),
+          row = '[data-setting="enabled"]',
+          title = bounds(row + " .plugin-editor__title"),
+          note = bounds(row + " .plugin-editor__copy p"),
+          box = bounds(row + ' input[type="checkbox"]');
+        expect(
+          parseFloat(
+            getComputedStyle(query<HTMLElement>(row + " .plugin-editor__title")!).fontSize,
+          ),
+        ).toBeCloseTo(scale * 14, 2);
+        expect(
+          parseFloat(
+            getComputedStyle(query<HTMLElement>(row + " .plugin-editor__copy p")!).fontSize,
+          ),
+        ).toBeCloseTo(scale * 14, 2);
+        expect(box.width).toBeGreaterThan(0);
+        expect(box.top + box.height / 2).toBeGreaterThanOrEqual(title.top - 1);
+        expect(box.top + box.height / 2).toBeLessThanOrEqual(title.bottom + 1);
+        expect(note.top).toBeGreaterThanOrEqual(title.bottom - 1);
+        expect(note.right).toBeGreaterThanOrEqual(box.right - 1);
+        const text = '[data-setting="label"]';
+        expect(bounds(text + " input").top).toBeGreaterThanOrEqual(
+          bounds(text + " .plugin-editor__title").bottom,
+        );
+      } finally {
+        await page.viewport(800, 600);
+      }
+    },
+  );
   it.each(["row", "input"])(
     "toggles from the checkbox %s once and ignores non-editing clicks",
     async (target) => {

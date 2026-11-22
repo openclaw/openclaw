@@ -82,7 +82,10 @@ function PluginSettingsRow(props: FieldProps) {
   const credential = createMemo(() => props.resolveCredential?.(controlParams()));
   return (
     <div
-      class="plugin-editor__row"
+      class={[
+        "plugin-editor__row",
+        { "plugin-editor__row--checkbox": isBoolean() && !credential() },
+      ]}
       data-setting={props.field.path.slice(props.field.path[3] === "config" ? 4 : 3).join(".")}
       onClick={(event: MouseEvent) => {
         if (!isBoolean() || props.field.disabled || getSelection()?.toString()) {

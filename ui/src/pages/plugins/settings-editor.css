@@ -73,11 +73,13 @@ openclaw-plugin-settings-groups {
   padding-top: 4px;
 }
 .plugin-editor__title {
+  font-size: var(--control-ui-text-md);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .plugin-editor__copy p {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   margin: 6px 0 0;
   overflow-wrap: anywhere;
@@ -158,6 +160,29 @@ openclaw-plugin-settings-groups {
   .plugin-editor__control {
     grid-column: 1;
     grid-row: 2;
+  }
+
+  .plugin-editor__row--checkbox {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+
+    > .plugin-editor__copy {
+      display: contents;
+    }
+
+    .plugin-editor__title {
+      grid-area: 1 / 1;
+      padding-top: 4px;
+    }
+
+    .plugin-editor__copy > p {
+      grid-area: 2 / 1 / auto / -1;
+      margin: 0;
+    }
+
+    > .plugin-editor__control {
+      grid-area: 1 / 2;
+    }
   }
 }
 
