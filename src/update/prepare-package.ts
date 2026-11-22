@@ -7,6 +7,13 @@ import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { PrepareResult } from "./prepare-git.js";
 
+const PROJECT_ONLY_INSTALL_SCRIPTS = [
+  "prepublish",
+  "preprepare",
+  "prepare",
+  "postprepare",
+] as const;
+
 export async function preparePackage(params: {
   spec: string;
   staging: string;
@@ -59,9 +66,13 @@ export async function preparePackage(params: {
       durable: false,
     });
     await fs.rm(archivePath);
-    const manifest: { version?: string; engines?: { node?: string } } = JSON.parse(
-      await fs.readFile(path.join(releaseRoot, "package.json"), "utf8"),
-    );
+    const manifestPath = path.join(releaseRoot, "package.json");
+    const manifest: {
+      version?: string;
+      engines?: { node?: string };
+      devDependencies?: unknown;
+      scripts?: Record<string, string>;
+    } = JSON.parse(await fs.readFile(manifestPath, "utf8"));
     const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
     if (!version) {
       throw new Error("Prepared package has no package version.");
@@ -83,6 +94,19 @@ export async function preparePackage(params: {
           `The new release requires Node ${manifest.engines.node}; the service uses ${runtime.stdout.trim() || params.node}. Upgrade the service's Node and retry.`,
         );
       }
+    }
+    // npm resolves root dev peers even with --omit=dev. This is a published production
+    // package, not a checkout: preserve install scripts, but not development/prepare hooks.
+    let changed = Object.hasOwn(manifest, "devDependencies");
+    delete manifest.devDependencies;
+    for (const name of PROJECT_ONLY_INSTALL_SCRIPTS) {
+      if (manifest.scripts && Object.hasOwn(manifest.scripts, name)) {
+        delete manifest.scripts[name];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     }
     await params.onStep?.("install");
     const result = await runCommandWithTimeout(
