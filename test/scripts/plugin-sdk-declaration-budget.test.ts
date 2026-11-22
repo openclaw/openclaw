@@ -11,8 +11,8 @@ import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries
 const continuationDeclarationGrowth = {
   previousRatchetBytes: 5_320_000,
   varianceBytes: 64 * 1024,
-  upstreamBytes: 5_382_601, // upstream 1129d4c071
-  candidateBytes: 5_403_948, // continuation candidate aa67d24e3b
+  upstreamBytes: 5_284_546, // upstream 5a3e6b1cb0
+  candidateBytes: 5_306_133, // continuation stage 4 head 32285fa3ee
   // Public roots that publish the continuation contracts, and the bundled plugins reading them.
   consumers: {
     "agent-harness": ["extensions/codex (disableContinuationTools)"],
