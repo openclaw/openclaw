@@ -4,6 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import * as turnService from "../gateway/agent-turn/agent-turn-service.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
   createContext,
@@ -12,6 +13,7 @@ import {
 import {
   captureAgentHarnessCompletionCustody as captureCustody,
   deliverAgentHarnessCompletion as deliverCompletion,
+  registerAgentHarnessCompletionHandoff,
   type AgentHarnessCompletionDelivery,
   type AgentHarnessCompletionCustody,
 } from "../plugin-sdk/agent-harness-completion.js";
@@ -33,10 +35,13 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { runWithAgentHarnessCompletionCustody as runWithCustody } from "./agent-harness-completion-custody.js";
 import { createAgentHarnessCompletionScope as makeScope } from "./agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { settleRequesterRun } from "./requester-run-settlement.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 afterEach(() => resetGatewayWorkAdmission());
@@ -327,6 +332,145 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
         }
       } finally {
         custody?.release();
+      }
+    }),
+);
+
+it.each(["current", "released", "requester-replaced", "gateway-revoked"] as const)(
+  "revalidates native completion at the requester execution boundary: %s",
+  (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const { context, resolver, scope } = gateway();
+      const replaceRequester = requester(state);
+      await replaceRequester("native-requester");
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const committed: string[] = [];
+      const createService = turnService.createAgentTurnService;
+      // Isolate requester execution; host custody, requester storage, announcement,
+      // typed Gateway dispatch, preflight and the propagated commit guard remain real.
+      const service = vi
+        .spyOn(turnService, "createAgentTurnService")
+        .mockImplementation((...args) => ({
+          ...createService(...args),
+          startTurn: async ({ assertAdmissionCurrent, io, preflight }) => {
+            const admission = prepareSystemAgentRunAdmission(
+              {},
+              preflight.runId,
+              "main",
+              "native-completion-replay",
+              assertAdmissionCurrent,
+            );
+            try {
+              await admission.admit("embedded");
+              if (!custody) {
+                throw new Error("Expected retained native custody");
+              }
+              registerAgentHarnessCompletionHandoff({
+                scope: makeScope({
+                  requesterSessionKey,
+                  gatewayContextResolver: resolver,
+                  run: {
+                    instance: admission.operationalRunInstance,
+                    assertCurrent: () => admission.assertSourceCurrent(),
+                  },
+                }),
+                completionCustody: custody,
+                runId: "native:next-followup",
+              });
+              entered.resolve();
+              await resume.promise;
+              assertAdmissionCurrent?.();
+              const result: EmbeddedAgentRunResult = {
+                payloads: [],
+                meta: { durationMs: 1, yielded: true },
+              };
+              await settleRequesterRun(
+                {
+                  sessionKey: requesterSessionKey,
+                  agentId: "main",
+                  runId: preflight.runId,
+                  preparedRunAdmission: admission,
+                },
+                result,
+                () => admission.assertSourceCurrent(),
+              );
+              expect(result.requesterContinuationSettled).toBe(true);
+              committed.push(preflight.request.sessionKey!);
+              io.emitAcceptance([
+                true,
+                { runId: preflight.runId, status: "ok", result },
+                undefined,
+              ]);
+            } finally {
+              admission.close();
+            }
+          },
+        }));
+      const root = tryBeginGatewayRootWorkAdmission("test:native-completion-effect")!;
+      let custody: AgentHarnessCompletionCustody | undefined;
+      let callerCurrent = true;
+      try {
+        custody = await root.run(() =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+              operationalRunInstance:
+                createTestAdmittedRunContext("native-parent").operationalRunInstance,
+              receiptAuthority: () => callerCurrent,
+              gatewayContextResolver: resolver,
+            },
+            () => captureCustody(scope),
+          ),
+        );
+        expect(custody?.isCurrent()).toBe(true);
+        root.release();
+        callerCurrent = false;
+        const pending = deliverCompletion({
+          scope,
+          completionCustody: custody,
+          childSessionKey: "native:followup",
+          childSessionId: "native-child",
+          announceId: "native:followup:succeeded",
+          status: "succeeded",
+          result: "Native result",
+          isSourceSessionAdmissionAllowed: () => custody?.isCurrent() === true,
+        });
+        const checked = pending.then(
+          (delivery) => ({ delivery, error: undefined }),
+          (error: unknown) => ({ delivery: undefined, error }),
+        );
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "entered"),
+            checked.then(() => "completed"),
+          ]),
+        ).toBe("entered");
+        expect(service).toHaveBeenCalledOnce();
+        if (ending === "released") {
+          custody?.release();
+        } else if (ending === "requester-replaced") {
+          await replaceRequester("replacement-requester");
+        } else if (ending === "gateway-revoked") {
+          getGatewayContextLifetime(resolver).abort();
+        }
+        resume.resolve();
+        const outcome = await checked;
+        expect(committed).toEqual(ending === "current" ? [requesterSessionKey] : []);
+        if (ending === "current") {
+          expect(outcome.error).toBeUndefined();
+          expect(outcome.delivery).toMatchObject({ delivered: true, path: "direct" });
+        } else {
+          expect(outcome.delivery?.delivered ?? false).toBe(false);
+        }
+        expect(context.dedupe.size).toBe(0);
+      } finally {
+        resume.resolve();
+        custody?.release();
+        root.release();
+        service.mockRestore();
       }
     }),
 );
