@@ -19,7 +19,6 @@ import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   createGatewaySchedulerClock,
@@ -41,6 +40,7 @@ import {
   expectCronJobIdFromResponse,
   expectCronRows as rows,
 } from "./server.cron.assertions.test-support.js";
+import { runCronFailureAlertOutcomeCase } from "./server.cron.failure-alert.test-support.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -103,6 +103,8 @@ async function rmTempDir(dir: string) {
 
 let activeCronRun: Parameters<typeof cleanupCronTestRun>[0] | undefined;
 let disposeCronEventConsumer: (() => void) | undefined;
+let cronNotifications: typeof import("./server-cron-notifications.js");
+let cronLogging: typeof import("../logging.js");
 
 async function startCronClient() {
   const { server, ws } = await startServerWithClient();
@@ -324,6 +326,10 @@ describe("gateway server cron", () => {
       import("../config/config.js"),
       import("./server-cron.js"),
       import("./server-methods/cron.js"),
+    ]);
+    [cronNotifications, cronLogging] = await Promise.all([
+      import("./server-cron-notifications.js"),
+      import("../logging.js"),
     ]);
   });
 
@@ -874,66 +880,17 @@ describe("gateway server cron", () => {
     expect(JSON.stringify(directCall.body)).not.toContain("ABCD-1234");
   }, 45_000);
 
-  test("persists settled failure-alert outcomes for cron get and list", async () => {
-    // Delivery persistence is independent of cold fallback-session creation and runtime preparation.
-    testState.sessionStorePath = path.join(caseDir, "sessions.json");
-    await writeSessionStore({
-      entries: { main: { sessionId: "cron-failure-alert-session", updatedAt: Date.now() } },
+  test("persists settled failure-alert outcomes for cron get and list", async ({ signal }) => {
+    expect.hasAssertions();
+    await runCronFailureAlertOutcomeCase({
+      signal,
+      caseDir,
+      startCronClient,
+      cronNotifications,
+      cronLogging,
+      fetchWithSsrFGuardMock,
+      sendCronAnnouncePayloadStrictMock,
     });
-    const { request, add, run } = await startCronClient();
-    await prepareGatewayReplyRuntimeForTest({ force: true });
-
-    const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
-      await vi.waitFor(async () => {
-        const getResult = await request("cron.get", { id: jobId });
-        expect(getResult.payload).toMatchObject(expected);
-        for (const compact of [false, true]) {
-          const listResult = await request("cron.list", {
-            compact,
-            includeDeliveryPreviews: false,
-          });
-          const listed = rows(listResult, "jobs").find((job) => job.id === jobId);
-          expect(listed).toMatchObject(expected);
-        }
-      });
-    };
-    const runFailureAlert = async (name: string, failureAlert: Record<string, unknown>) => {
-      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
-      const jobId = await add(name, {
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        failureAlert: { after: 1, ...failureAlert },
-      });
-      await run(jobId);
-      return jobId;
-    };
-
-    for (const outcome of ["delivered", "failed", "unreached"] as const) {
-      const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
-      if (outcome === "failed") {
-        fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(error));
-      } else if (outcome === "unreached") {
-        sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
-          params.onDeliveryAttempt?.(false);
-          return { status: "suppressed", reason: "adapter_returned_no_send" };
-        });
-      }
-      const jobId = await runFailureAlert(
-        `${outcome} failure alert`,
-        outcome === "unreached"
-          ? { mode: "announce", channel: "telegram", to: "123" }
-          : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
-      );
-      await expectOutcome(jobId, {
-        lastFailureNotificationDelivered: outcome === "delivered",
-        lastFailureNotificationDeliveryStatus:
-          outcome === "delivered" ? "delivered" : "not-delivered",
-        ...(outcome === "delivered"
-          ? {}
-          : { lastFailureNotificationDeliveryError: expect.stringContaining(error) }),
-      });
-    }
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);
   test("rejects malformed cron payload and trigger scripts before persistence", async () => {
     testState.cronEnabled = true;
