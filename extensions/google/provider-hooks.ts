@@ -1,5 +1,6 @@
 import type {
   ProviderFailoverErrorContext,
+  ProviderReplayPolicyContext,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -11,13 +12,29 @@ import {
   isGoogleVertexBaseUrl,
   resolveGoogleServiceTier,
   resolveGoogleThinkingProfile,
+  usesGoogleVertexTransport,
 } from "./provider-policy.js";
 import { sanitizeGoogleThinkingPayload } from "./thinking-api.js";
 
+const googleReplayHooks = buildProviderReplayFamilyHooks({ family: "google-gemini" });
+
 export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
-  ...buildProviderReplayFamilyHooks({
-    family: "google-gemini",
-  }),
+  ...googleReplayHooks,
+  buildReplayPolicy: (ctx: ProviderReplayPolicyContext) => {
+    const policy = googleReplayHooks.buildReplayPolicy?.(ctx);
+    if (
+      usesGoogleVertexTransport({
+        api: ctx.model?.api ?? ctx.modelApi,
+        provider: ctx.model?.provider ?? ctx.provider,
+        baseUrl: ctx.model?.baseUrl,
+      })
+    ) {
+      // Keep Vertex history stable for implicit caching. The direct Gemini
+      // transport's managed explicit cache uses a transient runtime suffix.
+      return { ...policy, appendOnlyRuntimeContext: true };
+    }
+    return policy;
+  },
   ...buildProviderToolCompatFamilyHooks("gemini"),
   resolveThinkingProfile: resolveGoogleThinkingProfile,
   wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
