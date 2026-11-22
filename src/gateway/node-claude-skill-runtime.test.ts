@@ -9,12 +9,14 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
+import { applyConfiguredClaudeCliRunPlacement } from "../agents/cli-runner/prepare-claude.js";
 import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
@@ -67,6 +69,8 @@ async function fixture(
     authoring?: boolean;
     capability?: boolean;
     resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
+    /** Place the run with tools.exec.claudeCliHost (or, when false, with no key) and store no binding. */
+    claudeCliHostKey?: boolean;
   } = {},
 ) {
   const root = await fs.realpath(temps.make("node-skill-wire-"));
@@ -112,15 +116,18 @@ async function fixture(
   const pins = await seedSkillLibrarySelection(authority);
   const sessionKey = "agent:main:node-skills";
   const sessionId = "node-skills";
+  const unplaced = options.claudeCliHostKey !== undefined;
+  const config: OpenClawConfig = options.claudeCliHostKey
+    ? { tools: { exec: { claudeCliHost: "node" as const, node: "node-1" } } }
+    : {};
+  const stored = { sessionId, updatedAt: 1, skillLibrarySelections: pins };
   const entry = {
-    sessionId,
-    updatedAt: 1,
+    ...stored,
     execHost: "node" as const,
     execNode: "node-1",
-    execCwd: workspace,
-    skillLibrarySelections: pins,
+    ...(unplaced ? {} : { execCwd: workspace }),
   };
-  await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, unplaced ? stored : entry);
   const runId = "node-skill-turn";
   const claim = await placements.claimTurn({
     agentId: "main",
@@ -146,7 +153,11 @@ async function fixture(
     workspaceDir: workspace,
     sessionKey,
     sessionId,
-    sessionEntry: entry,
+    // Without the key, the run is placed as before while the stored session is not.
+    sessionEntry: options.claudeCliHostKey
+      ? applyConfiguredClaudeCliRunPlacement({ config, sessionKey, provider: "claude-cli" }, stored)
+      : entry,
+    config,
     runId,
     agentId: "main",
     skillsSnapshot: snapshot,
@@ -435,6 +446,19 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
  const updated=await call('tools/call',{name:'skill_library',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
  console.log(JSON.stringify({type:'result',listed,created,updated}));
 })().catch(e=>{console.error(String(e));process.exitCode=1;});`;
+
+it("compares a session placed by tools.exec.claudeCliHost with that placement, not a stored binding", async () => {
+  await using f = await fixture(authorScript, { authoring: true, claudeCliHostKey: true });
+  expect(f.context.params.sessionEntry).toMatchObject({ execHost: "node", execNode: "node-1" });
+  expect((await f.execute()).result.exitCode).toBe(0);
+  expect((await listSkillLibrary(f.authority)).entries).toHaveLength(1);
+});
+
+it("still refuses a node run for an unbound stored session when no key places it", async () => {
+  await using f = await fixture(authorScript, { authoring: true, claudeCliHostKey: false });
+  await expect(f.execute()).rejects.toThrow("Paired-node skill assignment or run authority changed");
+  expect(f.requests).toEqual([]);
+});
 
 it("authors through the node MCP proxy using the actual host capability without a preselected skill", async () => {
   await using f = await fixture(authorScript, { authoring: true });

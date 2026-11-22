@@ -74,18 +74,31 @@ export function applyConfiguredClaudeCliPlacement<
     : { ...entry, execHost: "node", execNode: node };
 }
 
-/** Places a CLI run before preparation, so every reader of its session sees one placement. */
-export function placeConfiguredClaudeCliRun(params: RunCliAgentParams): RunCliAgentParams {
-  const sessionEntry = applyConfiguredClaudeCliPlacement({
-    config: params.config ?? getRuntimeConfig(),
+/**
+ * The configured placement of one run's session entry. The binding is not stored, so readers
+ * of the stored session on the run's path compare through this, with the run's own inputs.
+ */
+export function applyConfiguredClaudeCliRunPlacement<
+  Entry extends Pick<SessionEntry, "execHost" | "execNode">,
+>(
+  run: Pick<RunCliAgentParams, "config" | "sessionKey" | "agentId" | "provider">,
+  sessionEntry: Entry | undefined,
+): Entry | undefined {
+  return applyConfiguredClaudeCliPlacement({
+    config: run.config ?? getRuntimeConfig(),
     // The session owner, as preparation resolves it.
     agentId: normalizeAgentId(
-      parseAgentSessionKey(params.sessionKey)?.agentId ||
-        params.agentId?.trim() ||
+      parseAgentSessionKey(run.sessionKey)?.agentId ||
+        run.agentId?.trim() ||
         LEGACY_IMPLICIT_AGENT_ID,
     ),
-    backendId: params.provider,
-    sessionEntry: params.sessionEntry,
+    backendId: run.provider,
+    sessionEntry,
   });
+}
+
+/** Places a CLI run before preparation, so every reader of its session sees one placement. */
+export function placeConfiguredClaudeCliRun(params: RunCliAgentParams): RunCliAgentParams {
+  const sessionEntry = applyConfiguredClaudeCliRunPlacement(params, params.sessionEntry);
   return sessionEntry === params.sessionEntry ? params : { ...params, sessionEntry };
 }

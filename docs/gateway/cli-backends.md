@@ -877,6 +877,12 @@ of starting it on the Gateway when `tools.exec.node` is unset, when the session 
 bound to another node, or when the run has no session. `tools.exec.host: "node"`
 alone keeps the CLI on the Gateway, as described above.
 
+The key does not store a binding on the session: Gateway session views such as
+the session list and its files still show the session as Gateway-local, and
+turning the key off returns its next turn to the Gateway. The CLI on the node
+uses the node host's own credentials. Scheduled runs without a recorded account
+use only the node's native Claude login, as they do on the Gateway.
+
 When another backend passes configured MCP servers to its harness natively,
 `tools.allow` and `tools.deny` also constrain those servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
