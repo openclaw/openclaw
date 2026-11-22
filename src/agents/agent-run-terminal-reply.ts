@@ -63,22 +63,30 @@ export function filterAgentRunTerminalPayloadsForPresentation(params: {
 
 /** Returns full prepared text, or undefined for an explicitly silent reply. */
 export function prepareAgentRunReplyText(rawText: string): string | undefined {
-  // An exact token after closed reasoning is silent; the reducer decides what was reasoning.
-  const lastClose = scanReasoningTags(rawText).tags.findLast((tag) => tag.isClose);
-  const silent = lastClose
-    ? isSilentReplyText(rawText.slice(lastClose.index + lastClose.text.length)) &&
-      isSilentReplyText(stripReasoningTagsFromMarkdown(rawText, { mode: "strict", scope: "all" }))
-    : isSilentReplyText(rawText);
-  if (silent) {
+  if (isSilentReplyText(rawText)) {
     return undefined;
   }
   return stripMixedSilentReplyTokens(rawText) ?? rawText.replace(/[\r\n]\s*NO_REPLY\s*$/iu, "");
 }
 
+// An exact token after reasoning the model closed is silent (#203424); the reducer decides
+// what was reasoning. Stored-history readers keep their raw exact contract.
+function isSilentAfterClosedReasoning(rawText: string): boolean {
+  const lastClose = scanReasoningTags(rawText).tags.findLast((tag) => tag.isClose);
+  return (
+    lastClose !== undefined &&
+    isSilentReplyText(rawText.slice(lastClose.index + lastClose.text.length)) &&
+    isSilentReplyText(stripReasoningTagsFromMarkdown(rawText, { mode: "strict", scope: "all" }))
+  );
+}
+
 export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
 }): PreparedAgentRunTerminalReply {
-  const text = prepareAgentRunReplyText(params.rawText ?? "");
+  const rawText = params.rawText ?? "";
+  const text = isSilentAfterClosedReasoning(rawText)
+    ? undefined
+    : prepareAgentRunReplyText(rawText);
   return {
     text: text ?? "",
     terminalReply:
