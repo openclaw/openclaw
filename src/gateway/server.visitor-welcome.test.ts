@@ -250,15 +250,18 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(revoked?.payload?.messageId).toBeUndefined();
       expect(transcriptAppend.onStart).toBeUndefined();
       visitorGrant = new AbortController();
-      expect((await history(revokedKey)).payload?.messages).toMatchObject([
-        {
-          role: "assistant",
-          content: [
-            { text: "Welcome! @Staff invited you. Please test [[audio_as_voice]] replies." },
-          ],
-        },
-      ]);
-      expect((await inbox()).payload?.items).toHaveLength(2);
+      // The probe replies before the admitted append settles.
+      await expect
+        .poll(async () => (await history(revokedKey)).payload?.messages)
+        .toMatchObject([
+          {
+            role: "assistant",
+            content: [
+              { text: "Welcome! @Staff invited you. Please test [[audio_as_voice]] replies." },
+            ],
+          },
+        ]);
+      await expect.poll(async () => (await inbox()).payload?.items).toHaveLength(2);
     } finally {
       staffWs.close();
       guestWs.close();
