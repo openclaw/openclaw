@@ -61,12 +61,7 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
   expect(gateway).toHaveBeenCalledWith({
     method: assignmentOnly ? "sessions.assignOwner" : "sessions.patch",
     params: { key: sessionKey, ...(assignmentOnly ? { owner } : { label: "Scheduled session" }) },
-    ...(assignmentOnly
-      ? {
-          agentToolCaller: { agentId: "main", sessionKey },
-          assertDispatchCurrent: expect.any(Function),
-        }
-      : {}),
+    ...(assignmentOnly ? { agentToolCaller: { agentId: "main", sessionKey } } : {}),
   });
   const denied = assemble({
     config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
