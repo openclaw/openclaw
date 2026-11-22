@@ -150,6 +150,7 @@ export async function prepareUpdate(params: {
         checkout: install.checkout,
         tag: params.tag,
         sha: params.sha,
+        timeoutMs: Math.max(1, deadline - Date.now()),
       });
     } catch (error) {
       return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);

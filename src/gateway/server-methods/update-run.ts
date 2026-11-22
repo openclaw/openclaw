@@ -11,6 +11,7 @@ import {
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
+import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import {
@@ -81,6 +82,31 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     });
     return;
   }
+  // A scheduled campaign pins its commit; a manual request applies that commit, as package installs do.
+  const adoption = currentUpdateCheckLifecycle().campaign?.adopt(
+    params.target ? devUpdateTargetFromGitTarget(params.target) : undefined,
+  );
+  if (adoption?.status === "mismatch" || adoption?.status === "applying") {
+    const reason =
+      adoption.status === "mismatch"
+        ? "update-target-campaign-mismatch"
+        : "update-campaign-applying";
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: reason,
+      message:
+        adoption.status === "mismatch"
+          ? "A scheduled update targets a different commit. Update without --sha to apply it."
+          : "A scheduled update is being applied. Try again in a few minutes.",
+      result: { status: "skipped", reason },
+    });
+    return;
+  }
+  const campaign = adoption?.status === "adopted" ? adoption : undefined;
+  const sha =
+    params.target?.upstreamSha ??
+    (campaign?.target.kind === "git" ? campaign.target.upstreamSha : undefined);
   const trigger = fromChat
     ? "chat"
     : isBrowserOperatorUiClient(client?.connect.client) || params.sessionKey
@@ -91,16 +117,20 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     ? undefined
     : appUpdateNoticePublisher(request, requester?.channel);
   const run = await createUpdateRunAsync({
-    trigger,
+    trigger: campaign ? "campaign" : trigger,
     origin: {
       ...(publishAppUpdate ? { noticeSurface: "app" as const } : {}),
+      ...(campaign ? { campaignId: campaign.campaignId } : {}),
       ...(requester ? { requester } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(fromChat ? {} : { deliveryContext: { channel: INTERNAL_MESSAGE_CHANNEL } }),
     },
     before: { version: VERSION },
-    ...(params.target ? { target: { kind: "git", sha: params.target.upstreamSha } } : {}),
+    ...(sha ? { target: { kind: "git", sha } } : {}),
   });
+  if (campaign) {
+    currentUpdateCheckLifecycle().campaign?.bindRun(campaign.campaignId, run.runId);
+  }
   publishAppUpdate?.(run);
   context.logGateway?.info(
     `update.run ${run.runId} ${formatControlPlaneActor(resolveControlPlaneActor(client))}`,
@@ -125,7 +155,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     root: installed.root,
     channel: normalizeUpdateChannel(config.update?.channel),
     git: installed.status.git,
-    sha: params.target?.upstreamSha,
+    sha,
     timeoutMs: params.timeoutMs,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),

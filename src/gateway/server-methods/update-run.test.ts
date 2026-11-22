@@ -83,3 +83,29 @@ it("shows a Control UI update in the app instead of the conversation", async () 
     expect.objectContaining({ runId: payload.runId, status: "running" }),
   );
 });
+
+it("applies the commit a scheduled campaign pinned instead of the moving upstream", async () => {
+  const sha = "c".repeat(40);
+  const bindRun = vi.fn();
+  lifecycle.campaign = {
+    adopt: () => ({
+      status: "adopted",
+      campaignId: "campaign-1",
+      target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha, commitsBehind: 1 },
+    }),
+    bindRun,
+    clear: vi.fn(),
+  } as unknown as NonNullable<UpdateCheckLifecycle["campaign"]>;
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ ok: true });
+  const run = await getUpdateRunAsync(payload.runId);
+  expect(run).toMatchObject({
+    trigger: "campaign",
+    origin: { campaignId: "campaign-1" },
+    target: { sha },
+  });
+  expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(expect.objectContaining({ sha })),
+  );
+});
