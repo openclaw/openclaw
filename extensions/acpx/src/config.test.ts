@@ -91,6 +91,65 @@ it("injects the built-in plugin-tools MCP server only when explicitly enabled", 
   });
 });
 
+it("propagates pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny into managed server env", () => {
+  const resolved = resolve({
+    pluginToolsMcpBridge: true,
+    pluginToolsMcpBridgeAllow: [" memory-core ", "github"],
+    pluginToolsMcpBridgeDeny: ["diffs", " codex "],
+  });
+  expect(resolved.pluginToolsMcpBridgeAllow).toEqual(["memory-core", "github"]);
+  expect(resolved.pluginToolsMcpBridgeDeny).toEqual(["diffs", "codex"]);
+  expect(resolved.mcpServers["openclaw-plugin-tools"]?.env).toEqual({
+    OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW: JSON.stringify(["memory-core", "github"]),
+    OPENCLAW_PLUGIN_TOOLS_MCP_DENY: JSON.stringify(["diffs", "codex"]),
+  });
+  expect(
+    resolve({ pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: [] }).mcpServers[
+      "openclaw-plugin-tools"
+    ]?.env,
+  ).toBeUndefined();
+});
+
+it.each([
+  [
+    "pluginToolsMcpBridgeAllow",
+    [],
+    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeAllow",
+    "memory-core",
+    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeAllow",
+    ["   "],
+    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeAllow",
+    [42],
+    "pluginToolsMcpBridgeAllow must be a non-empty array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeDeny",
+    "diffs",
+    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeDeny",
+    [""],
+    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
+  ],
+  [
+    "pluginToolsMcpBridgeDeny",
+    [42],
+    "pluginToolsMcpBridgeDeny must be an array of plugin IDs or tool names",
+  ],
+] as const)("rejects invalid %s %j", (key, value, message) => {
+  expect(() => resolve({ [key]: value })).toThrow(message);
+});
+
 it("launches managed bridges from the host package when acpx is an external package", () => {
   const tmp = fs.realpathSync(tempDirs.make("openclaw-acpx-external-"));
   const hostRoot = path.join(tmp, "lib", "node_modules", "openclaw");
@@ -127,6 +186,27 @@ it("launches managed bridges from the host package when acpx is an external pack
         command: process.execPath,
         args: [...runtimeArgs, path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js")],
       },
+    });
+
+    // Older external hosts without filter capability fail closed when filters are configured.
+    expect(() =>
+      resolve(
+        { pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: ["diffs"] },
+        { moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href },
+      ),
+    ).toThrow("require an OpenClaw host with plugin-tools MCP bridge filter support");
+
+    // Once the host advertises filter support, external ACPX propagates filter env cleanly.
+    fs.writeFileSync(
+      path.join(hostRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", openclaw: { pluginToolsMcpBridgeFilter: 1 } }),
+    );
+    const filtered = resolve(
+      { pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: ["diffs"] },
+      { moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href },
+    );
+    expect(filtered.mcpServers["openclaw-plugin-tools"]?.env).toEqual({
+      OPENCLAW_PLUGIN_TOOLS_MCP_DENY: JSON.stringify(["diffs"]),
     });
   } finally {
     process.argv = originalArgv;

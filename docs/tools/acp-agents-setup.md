@@ -384,6 +384,23 @@ OpenClaw plugin tools such as memory recall/store, enable the dedicated bridge:
 openclaw config set plugins.entries.acpx.config.pluginToolsMcpBridge true
 ```
 
+To limit which plugins or plugin tools are loaded and exposed to ACP sessions
+without changing the owning agent's normal tool policy, set optional
+ACPX-scoped filters:
+
+```bash
+openclaw config set plugins.entries.acpx.config.pluginToolsMcpBridgeAllow '["memory-core","github"]'
+openclaw config set plugins.entries.acpx.config.pluginToolsMcpBridgeDeny '["diffs","codex"]'
+```
+
+These filters only narrow (never widen) the owning agent's effective OpenClaw
+tool policy: they never grant optional plugin tools that are not already
+authorized by the base policy, and plugins whose declared tools are excluded by
+the combined base and bridge policy are skipped before standalone bridge
+loading. Exact plugin IDs and exact tool names match in both lists; globs match
+tool names in `pluginToolsMcpBridgeAllow` and both plugin IDs and tool names in
+`pluginToolsMcpBridgeDeny`.
+
 What this does:
 
 - Injects a built-in MCP server named `openclaw-plugin-tools` into ACPX session

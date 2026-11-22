@@ -26,6 +26,9 @@ const MANAGED_MCP_BRIDGES = [
   ["openClawToolsMcpBridge", "openclaw-tools", "openclawToolsServe"],
 ] as const;
 
+const OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
+const OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
+
 function isAcpxPluginRoot(dir: string): boolean {
   return (
     fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
@@ -149,12 +152,37 @@ function resolveHostPackageRoot(argv1: string | undefined): string | null {
   }
 }
 
+function hostSupportsPluginToolsMcpBridgeFilter(openClawRoot: string): boolean {
+  try {
+    const manifest: unknown = JSON.parse(
+      fs.readFileSync(path.join(openClawRoot, "package.json"), "utf8"),
+    );
+    return (
+      isRecord(manifest) &&
+      manifest.name === "openclaw" &&
+      isRecord(manifest.openclaw) &&
+      manifest.openclaw.pluginToolsMcpBridgeFilter === 1
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveManagedToolsMcpServerConfig(
   entryPoint: "pluginToolsServe" | "openclawToolsServe",
   moduleUrl: string = import.meta.url,
+  options: { requirePluginToolsFilterSupport?: boolean } = {},
 ): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
+  if (
+    options.requirePluginToolsFilterSupport &&
+    !hostSupportsPluginToolsMcpBridgeFilter(openClawRoot)
+  ) {
+    throw new Error(
+      "pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny require an OpenClaw host with plugin-tools MCP bridge filter support",
+    );
+  }
   const entry = resolvePackageRuntimeProcessEntrypointUrl(entryPoint, openClawRoot);
   return {
     command: process.execPath,
@@ -162,9 +190,25 @@ function resolveManagedToolsMcpServerConfig(
   };
 }
 
+function resolvePluginToolsMcpBridgeEnv(params: {
+  pluginToolsMcpBridgeAllow?: string[];
+  pluginToolsMcpBridgeDeny?: string[];
+}): Record<string, string> | undefined {
+  const env: Record<string, string> = {};
+  if (params.pluginToolsMcpBridgeAllow && params.pluginToolsMcpBridgeAllow.length > 0) {
+    env[OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW_ENV] = JSON.stringify(params.pluginToolsMcpBridgeAllow);
+  }
+  if (params.pluginToolsMcpBridgeDeny && params.pluginToolsMcpBridgeDeny.length > 0) {
+    env[OPENCLAW_PLUGIN_TOOLS_MCP_DENY_ENV] = JSON.stringify(params.pluginToolsMcpBridgeDeny);
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
 function resolveConfiguredMcpServers(params: {
   mcpServers?: Record<string, McpServerConfig>;
   pluginToolsMcpBridge: boolean;
+  pluginToolsMcpBridgeAllow?: string[];
+  pluginToolsMcpBridgeDeny?: string[];
   openClawToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
@@ -176,7 +220,15 @@ function resolveConfiguredMcpServers(params: {
   }
   for (const [flag, name, entryPoint] of MANAGED_MCP_BRIDGES) {
     if (params[flag]) {
-      resolved[name] = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
+      const env =
+        name === "openclaw-plugin-tools" ? resolvePluginToolsMcpBridgeEnv(params) : undefined;
+      const server = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl, {
+        requirePluginToolsFilterSupport: env !== undefined,
+      });
+      if (env) {
+        server.env = { ...server.env, ...env };
+      }
+      resolved[name] = server;
     }
   }
   return resolved;
@@ -216,6 +268,8 @@ export function resolveAcpxPluginConfig(params: {
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,
     pluginToolsMcpBridge,
+    pluginToolsMcpBridgeAllow: normalized.pluginToolsMcpBridgeAllow,
+    pluginToolsMcpBridgeDeny: normalized.pluginToolsMcpBridgeDeny,
     openClawToolsMcpBridge,
     moduleUrl: params.moduleUrl,
   });
@@ -237,6 +291,8 @@ export function resolveAcpxPluginConfig(params: {
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
+    pluginToolsMcpBridgeAllow: normalized.pluginToolsMcpBridgeAllow,
+    pluginToolsMcpBridgeDeny: normalized.pluginToolsMcpBridgeDeny,
     openClawToolsMcpBridge,
     timeoutSeconds: normalized.timeoutSeconds,
     agentProcessEnvAllow: normalized.agentProcessEnvAllow,

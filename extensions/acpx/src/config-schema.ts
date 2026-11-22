@@ -49,6 +49,8 @@ export type ResolvedAcpxPluginConfig = {
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
+  pluginToolsMcpBridgeAllow?: string[];
+  pluginToolsMcpBridgeDeny?: string[];
   openClawToolsMcpBridge: boolean;
   timeoutSeconds?: number;
   agentProcessEnvAllow?: string[];
@@ -69,6 +71,18 @@ const envNameListSchema = (option: string) => {
     .regex(/^[^=\s]+$/, { error: message })
     .refine((value) => !value.includes("\0"), { error: message });
   return z.array(name, { error: message }).optional();
+};
+
+const pluginToolsMcpBridgeFilterListSchema = (
+  option: "pluginToolsMcpBridgeAllow" | "pluginToolsMcpBridgeDeny",
+  options: { nonEmpty?: boolean } = {},
+) => {
+  const message = options.nonEmpty
+    ? `${option} must be a non-empty array of plugin IDs or tool names`
+    : `${option} must be an array of plugin IDs or tool names`;
+  const item = nonEmptyTrimmedString(message);
+  const list = z.array(item, { error: message });
+  return (options.nonEmpty ? list.min(1, { error: message }) : list).optional();
 };
 
 const McpServerConfigSchema = z.object({
@@ -106,6 +120,10 @@ export const AcpxPluginConfigSchema = z.strictObject({
     })
     .optional(),
   pluginToolsMcpBridge: z.boolean({ error: "pluginToolsMcpBridge must be a boolean" }).optional(),
+  pluginToolsMcpBridgeAllow: pluginToolsMcpBridgeFilterListSchema("pluginToolsMcpBridgeAllow", {
+    nonEmpty: true,
+  }),
+  pluginToolsMcpBridgeDeny: pluginToolsMcpBridgeFilterListSchema("pluginToolsMcpBridgeDeny"),
   openClawToolsMcpBridge: z
     .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
     .optional(),
