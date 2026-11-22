@@ -55,9 +55,10 @@ function outcomeOf(error: unknown): UnlinkSendOutcome {
 }
 
 /**
- * Creates the sender. `start` resumes delivery and joins an active run without extending it.
- * `flush` sends newly queued statements now, requesting a follow-up pass during an active run.
- * `stop` cancels retries and requests; restarting waits for the stopped run before sending.
+ * Creates the sender. `start` resumes delivery once per lifetime, joining an active run without
+ * extending it. `flush` sends one newly committed unlink on its own request, alongside any run, and
+ * resolves when that attempt ends, so older pending unlinks never delay it. `stop` cancels retries
+ * and requests; a start after a stop waits for the stopped run to end, then runs anew.
  */
 export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   const initialDelay = params.initialDelayMs ?? PUBLICATION_RETRY_INITIAL_MS;
@@ -65,10 +66,13 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   const random = params.random ?? Math.random;
   let active = false;
   let inflight: { done: Promise<void>; signal: AbortSignal } | undefined;
-  let rerun = false;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lifetime = new AbortController();
+  // Claws a flush is sending right now; runs skip them so one statement has one request.
+  const flushing = new Set<string>();
+  // A flush that failed while a run was in flight; that run arms the retry when it ends.
+  let flushFailed = false;
 
   const cancelTimer = () => {
     if (timer) {
@@ -89,68 +93,68 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     timer.unref?.();
   };
 
+  type Pending = NonNullable<StoredClaw["pending_unlinks"]>[number];
+
+  // Sends one pending unlink and records a final answer; true when it must be sent again.
+  const sendOne = async (pending: Pending, signal: AbortSignal): Promise<boolean> => {
+    const label = `${pending.hostname} (claw ${pending.statement.body.claw_id})`;
+    let outcome: UnlinkSendOutcome;
+    try {
+      await createDiscoveryClient({
+        baseUrl: pending.discovery_url,
+        signer: await params.signer(),
+        signal,
+        ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+      }).unlinkClaw(pending.statement);
+      outcome = { kind: "confirmed" };
+    } catch (error) {
+      if (signal.aborted) {
+        return false;
+      }
+      outcome = outcomeOf(error);
+      if (outcome.kind === "retry") {
+        params.log.warn(`openclaw-id: unlink of ${label} not sent yet: ${String(error)}`);
+        return true;
+      }
+    }
+    if (outcome.kind === "confirmed") {
+      params.log.info(`openclaw-id: Discovery unlinked ${label}`);
+    } else {
+      params.log.warn(
+        `openclaw-id: Discovery refused the unlink of ${label} (${outcome.code}); it is not sent again`,
+      );
+    }
+    await params.settle(pending.statement, outcome);
+    return false;
+  };
+
   // Sends each unsettled pending unlink once; true when one must be sent again.
-  const sendAll = async (signal: AbortSignal, attempted: Set<string>): Promise<boolean> => {
+  const sendAll = async (signal: AbortSignal): Promise<boolean> => {
     let retry = false;
     for (const pending of params.current()?.pending_unlinks ?? []) {
       if (signal.aborted) {
         return false;
       }
-      const clawId = pending.statement.body.claw_id;
-      if (pending.refused || attempted.has(clawId)) {
+      if (pending.refused || flushing.has(pending.statement.body.claw_id)) {
         continue;
       }
-      attempted.add(clawId);
-      const label = `${pending.hostname} (claw ${pending.statement.body.claw_id})`;
-      let outcome: UnlinkSendOutcome;
-      try {
-        await createDiscoveryClient({
-          baseUrl: pending.discovery_url,
-          signer: await params.signer(),
-          signal,
-          ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
-        }).unlinkClaw(pending.statement);
-        outcome = { kind: "confirmed" };
-      } catch (error) {
-        if (signal.aborted) {
-          return false;
-        }
-        outcome = outcomeOf(error);
-        if (outcome.kind === "retry") {
-          retry = true;
-          params.log.warn(`openclaw-id: unlink of ${label} not sent yet: ${String(error)}`);
-          continue;
-        }
-      }
-      if (outcome.kind === "confirmed") {
-        params.log.info(`openclaw-id: Discovery unlinked ${label}`);
-      } else {
-        params.log.warn(
-          `openclaw-id: Discovery refused the unlink of ${label} (${outcome.code}); it is not sent again`,
-        );
-      }
-      await params.settle(pending.statement, outcome);
+      retry = (await sendOne(pending, signal)) || retry;
     }
     return retry;
   };
 
-  // One run attempts each claw once, including newly queued work, then backs off failed sends.
-  // A flush that joins a lifecycle-started pass must not resend the same stalled statement.
+  // One run sends everything pending, then arms a retry if a send failed. A stopped run ends
+  // without arming anything.
   const runOnce = async (signal: AbortSignal): Promise<void> => {
-    let retry = false;
-    const attempted = new Set<string>();
-    for (;;) {
-      rerun = false;
-      try {
-        retry = (await sendAll(signal, attempted)) || retry;
-      } catch (error) {
-        params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
-        retry = true;
-      }
-      if (!rerun || signal.aborted) {
-        break;
-      }
+    let retry: boolean;
+    try {
+      retry = await sendAll(signal);
+    } catch (error) {
+      params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
+      retry = true;
     }
+    retry ||= flushFailed;
+    flushFailed = false;
     if (!active || signal.aborted) {
       return;
     }
@@ -166,11 +170,7 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
       return Promise.resolve();
     }
     if (inflight) {
-      if (inflight.signal.aborted) {
-        return inflight.done.then(run);
-      }
-      rerun = true;
-      return inflight.done;
+      return inflight.signal.aborted ? inflight.done.then(run) : inflight.done;
     }
     cancelTimer();
     const signal = lifetime.signal;
@@ -181,25 +181,54 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     return done;
   };
 
+  const resume = (): Promise<void> => {
+    if (active) {
+      return inflight?.done ?? Promise.resolve();
+    }
+    active = true;
+    attempt = 0;
+    return run();
+  };
+
   return {
     /** Resumes delivery once per lifetime, joining active work or preserving its backoff. */
-    start(): Promise<void> {
-      if (active) {
-        return inflight?.done ?? Promise.resolve();
+    start: resume,
+    /**
+     * Sends the newly committed unlink of `clawId` now, on its own request, and resolves when that
+     * attempt ends. Other pending unlinks keep their own run and backoff.
+     */
+    async flush(clawId: string): Promise<void> {
+      const pending = params
+        .current()
+        ?.pending_unlinks?.find((entry) => entry.statement.body.claw_id === clawId);
+      if (!pending || pending.refused) {
+        await resume();
+        return;
       }
-      active = true;
-      attempt = 0;
-      return run();
-    },
-    /** Sends newly queued unlinks now, including a follow-up pass when a run is active. */
-    flush(): Promise<void> {
-      active = true;
-      attempt = 0;
-      return run();
+      flushing.add(clawId);
+      void resume();
+      const signal = lifetime.signal;
+      let retry: boolean;
+      try {
+        retry = await sendOne(pending, signal);
+      } catch (error) {
+        params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
+        retry = true;
+      } finally {
+        flushing.delete(clawId);
+      }
+      if (!retry || !active || signal.aborted) {
+        return;
+      }
+      if (inflight) {
+        flushFailed = true;
+      } else if (!timer) {
+        schedule();
+      }
     },
     stop(): void {
       active = false;
-      rerun = false;
+      flushFailed = false;
       cancelTimer();
       lifetime.abort();
       lifetime = new AbortController();

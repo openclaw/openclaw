@@ -125,7 +125,7 @@ it("sends again when started after a stop that cut a send short", async () => {
   sender.stop();
 });
 
-it("flushes a newly queued unlink after an active pass without dropping it", async () => {
+it("sends a newly committed unlink at once, without waiting on an older stalled one", async () => {
   const held = Promise.withResolvers<Response>();
   const { sender, fetchImpl, enqueue, pending } = await setup([
     () => Response.json({ claw_id: "b".repeat(32), hostname: "h", unlinked_at: 1 }),
@@ -135,9 +135,12 @@ it("flushes a newly queued unlink after an active pass without dropping it", asy
   try {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
     await enqueue();
-    const flush = sender.flush();
+    // The older unlink's request is still open; the new one is sent and settled regardless.
+    await sender.flush("b".repeat(32));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pending()?.map((entry) => entry.statement.body.claw_id)).toEqual(["a".repeat(32)]);
     held.resolve(Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }));
-    await Promise.all([first, flush]);
+    await first;
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(pending()).toBeUndefined();
   } finally {
