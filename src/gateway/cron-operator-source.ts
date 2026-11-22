@@ -21,7 +21,10 @@ import {
   decodeGatewayOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
-import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import {
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** Re-admit a job's captured parent-conversation source, never a session owner or ambient scheduler. */
@@ -37,7 +40,7 @@ export async function restoreCronOperatorSource(params: {
   if (!params.job.operatorSource) {
     return undefined;
   }
-  let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+  let operator: RestoredGatewayOperatorAuthority | undefined;
   try {
     const captured = params.job.operatorSource;
     const source = decodeGatewayOperatorRecoverySource(captured.source);
@@ -90,10 +93,10 @@ export async function restoreCronOperatorSource(params: {
       }
     };
     assertCurrent();
-    operator = await restoreGatewayOperatorSource({
+    operator = await restoreScheduledAutomationOperator({
       agentId: target?.agentId ?? source.agentId,
-      snapshot: source.snapshot,
-      source,
+      source: { kind: "gateway", snapshot: source.snapshot },
+      operatorSource: source,
       context,
       assertCurrent,
     });
