@@ -215,13 +215,12 @@ async function inspectGatewayServiceFacts(
   }
   return {
     packageRoot,
+    // A pruned previous entry is someone else's to prove: without the owner's verdict the
+    // readers stay silent and the existing guidance stands.
     owned:
-      (verdict.kind === "owned" &&
-        verdict.requiresInstallRootRefresh === true &&
-        verdict.root === packageRoot) ||
-      // pnpm pruned the previous entry; the same-home check above already placed it here, and
-      // the fixed updater proves it against this global root before rewriting the service.
-      (packageRoot !== undefined && !(await pathEntryExists(packageRoot))),
+      verdict.kind === "owned" &&
+      verdict.requiresInstallRootRefresh === true &&
+      verdict.root === packageRoot,
     // An absent capability is writable to the existing owners as well (service-layout.ts).
     writable: (state.definitionMutationCapability?.kind ?? "writable") === "writable",
   };

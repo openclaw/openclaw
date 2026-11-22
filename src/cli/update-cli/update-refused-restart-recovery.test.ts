@@ -104,7 +104,7 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
 
   it.each([
     { name: "the shipped pnpm switch", notice: true },
-    { name: "a pruned previous entry", service: "pruned", notice: true },
+    { name: "a pruned previous entry its owner verified", service: "pruned", notice: true },
     // The package-step Doctor has no run id; its driver is found as an ancestor alone.
     { name: "a tarball candidate", candidate: "tarball" as const, ancestor: true, notice: true },
     {
@@ -198,7 +198,7 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
 
   it.each([
     { name: "a service still on the previous package", recovery: true },
-    { name: "a pruned previous entry", service: "pruned", recovery: true },
+    { name: "a pruned previous entry its owner verified", service: "pruned", recovery: true },
     { name: "another failure", reason: "doctor-failed" },
     { name: "a service already on this package", service: "current" },
     { name: "a service of another pnpm home", service: "foreign" },

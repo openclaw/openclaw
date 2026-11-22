@@ -657,8 +657,10 @@ async function inspectUpdateStatus(
       // the live service just now; name it as the next step, not as saved triage advice.
       const refusedRestartRecovery =
         currentRunHealth?.kind === "unavailable"
-          ? await resolveRefusedRestartRecovery({ run, activeRoot: update.root }).catch(
-              () => undefined,
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
             )
           : undefined;
       const report = renderUpdateRunReport(
