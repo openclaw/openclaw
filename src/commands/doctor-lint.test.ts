@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   prepareSqliteReadOnlyLocation: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveDoctorContributionHealthChecks: vi.fn(),
+  progressEvents: [] as string[],
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -47,6 +48,27 @@ vi.mock("../config/config.js", async (importOriginal) => {
     readConfigFileSnapshotWithPluginMetadata: async () => ({
       snapshot: await mocks.readConfigFileSnapshot({ observe: false }),
     }),
+  };
+});
+vi.mock("../cli/progress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/progress.js")>();
+  return {
+    ...actual,
+    createCliProgress: (options: Parameters<typeof actual.createCliProgress>[0]) => {
+      mocks.progressEvents.push(`create enabled=${String(options.enabled)}`);
+      const progress = actual.createCliProgress(options);
+      return {
+        ...progress,
+        setLabel: (label: string) => {
+          mocks.progressEvents.push(`label ${label}`);
+          progress.setLabel(label);
+        },
+        done: () => {
+          mocks.progressEvents.push("done");
+          progress.done();
+        },
+      };
+    },
   };
 });
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
@@ -598,14 +620,16 @@ describe("runDoctorLintCli", () => {
   describe("progress on an interactive stderr", () => {
     const originalStderrIsTTY = process.stderr.isTTY;
     let stderr: MockInstance<typeof process.stderr.write>;
-    const progressLines = () =>
-      stderr.mock.calls
-        .map(([line]) => String(line))
-        .filter((line) => line.startsWith("Doctor: lint "));
+    const stderrText = () => stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    const labels = () =>
+      mocks.progressEvents
+        .filter((event) => event.startsWith("label "))
+        .map((event) => event.slice("label ".length));
     const setStderrTTY = (value: boolean) =>
       Object.defineProperty(process.stderr, "isTTY", { configurable: true, value });
 
     beforeEach(() => {
+      mocks.progressEvents.length = 0;
       stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     });
     afterEach(() => {
@@ -629,27 +653,30 @@ describe("runDoctorLintCli", () => {
       return () => release();
     }
 
-    it("names the pending check on stderr and keeps the JSON report on stdout", async () => {
+    it("shows the pending check on one spinner line and erases it before the report", async () => {
       mockConfig();
       setStderrTTY(true);
       const release = registerPendingCheck("test/pending-check");
 
-      const run = runDoctorLintCli(runtime, { json: true, onlyIds: ["test/pending-check"] });
+      const run = runDoctorLintCli(runtime, { onlyIds: ["test/pending-check"] });
       await vi.waitFor(() =>
-        expect(progressLines()).toContain("Doctor: lint check 1/1 test/pending-check\n"),
+        expect(stderrText()).toContain("Doctor lint: check 1/1 (0%) test/pending-check"),
       );
-      expect(progressLines().slice(0, 2)).toEqual([
-        "Doctor: lint preparing state snapshot\n",
-        "Doctor: lint loading config and checks\n",
+      expect(mocks.progressEvents[0]).toBe("create enabled=true");
+      expect(labels()).toEqual([
+        "Doctor lint: preparing state snapshot",
+        "Doctor lint: loading config and checks",
+        "Doctor lint: check 1/1 (0%) test/pending-check",
       ]);
       expect(stdout).not.toHaveBeenCalled();
 
       release();
       expect(await run).toBe(0);
+      expect(mocks.progressEvents.at(-1)).toBe("done");
       expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1, findings: [] });
     });
 
-    it("shows preparation as pending while the config snapshot is still loading", async () => {
+    it("shows preparation while the config snapshot is still loading", async () => {
       let resolveSnapshot: () => void = () => {};
       mocks.readConfigFileSnapshot.mockImplementation(
         () =>
@@ -665,15 +692,15 @@ describe("runDoctorLintCli", () => {
         detect: async () => [],
       });
 
-      const run = runDoctorLintCli(runtime, { json: true, onlyIds: ["test/after-preparation"] });
+      const run = runDoctorLintCli(runtime, { onlyIds: ["test/after-preparation"] });
       await vi.waitFor(() =>
-        expect(progressLines().at(-1)).toBe("Doctor: lint loading config and checks\n"),
+        expect(labels().at(-1)).toBe("Doctor lint: loading config and checks"),
       );
-      expect(progressLines().some((line) => line.includes(" check "))).toBe(false);
+      expect(labels().some((label) => label.includes(" check "))).toBe(false);
 
       resolveSnapshot();
       expect(await run).toBe(0);
-      expect(progressLines()).toContain("Doctor: lint check 1/1 test/after-preparation\n");
+      expect(labels()).toContain("Doctor lint: check 1/1 (0%) test/after-preparation");
       expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
     });
 
@@ -687,8 +714,27 @@ describe("runDoctorLintCli", () => {
         detect: async () => [],
       });
 
-      expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/piped"] })).toBe(0);
-      expect(progressLines()).toEqual([]);
+      expect(await runDoctorLintCli(runtime, { onlyIds: ["test/piped"] })).toBe(0);
+      expect(stderrText()).not.toContain("Doctor lint:");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
+    });
+
+    it("writes no progress for an explicit --json", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      registerHealthCheck({
+        id: "test/explicit-json",
+        kind: "plugin",
+        description: "explicit json run",
+        detect: async () => [],
+      });
+
+      expect(await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/explicit-json"] })).toBe(
+        0,
+      );
+      expect(mocks.progressEvents[0]).toBe("create enabled=false");
+      expect(stderrText()).not.toContain("Doctor lint:");
+      expect(JSON.parse(outputText())).toMatchObject({ ok: true, checksRun: 1 });
     });
 
     it("writes no progress during an update Doctor lint pass", async () => {
@@ -702,8 +748,37 @@ describe("runDoctorLintCli", () => {
         detect: async () => [],
       });
 
-      await runDoctorLintCli(runtime, { json: true, onlyIds: ["test/update-pass"] });
-      expect(progressLines()).toEqual([]);
+      await runDoctorLintCli(runtime, { onlyIds: ["test/update-pass"] });
+      expect(mocks.progressEvents[0]).toBe("create enabled=false");
+      expect(stderrText()).not.toContain("Doctor lint:");
+    });
+
+    it("stops the spinner when a check throws", async () => {
+      mockConfig();
+      setStderrTTY(true);
+      registerHealthCheck({
+        id: "test/throws",
+        kind: "plugin",
+        description: "throws while the spinner runs",
+        detect: async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 200);
+          });
+          throw new Error("boom");
+        },
+      });
+
+      expect(await runDoctorLintCli(runtime, { onlyIds: ["test/throws"] })).toBe(1);
+      expect(mocks.progressEvents.at(-1)).toBe("done");
+      expect(JSON.parse(outputText())).toMatchObject({
+        ok: false,
+        findings: [expect.objectContaining({ checkId: "test/throws", severity: "error" })],
+      });
+      const writesAfterRun = stderr.mock.calls.length;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
+      expect(stderr.mock.calls.length).toBe(writesAfterRun);
     });
   });
 

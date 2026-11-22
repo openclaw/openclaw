@@ -106,7 +106,7 @@ export async function runDoctorLintCliInProcess(
 ): Promise<number> {
   let reported: DoctorLintExecution | undefined;
   // Rehearsal workers report through their update parent, which parses their stderr.
-  const progress = worker ? noDoctorLintProgress : createDoctorLintProgress();
+  const progress = worker ? noDoctorLintProgress : createDoctorLintProgress(opts);
   const report = (execution: DoctorLintExecution) => {
     progress.stop();
     execution.writeOutput();
@@ -534,8 +534,7 @@ async function executeDoctorLint(
     includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     skipIds: [...(opts.skipIds ?? []), ...(stateView.deferredCheckIds ?? [])],
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
-    onCheckStart: (check, index, total) =>
-      stateView.progress.phase(`check ${index + 1}/${total} ${check.id}`),
+    onCheckStart: (check, index, total) => stateView.progress.check(index, total, check.id),
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
   stateView.progress.phase("finishing report");

@@ -141,8 +141,8 @@ export async function runDoctorLintChecks(
     });
   }
   for (const [index, check] of selected.entries()) {
-    opts.onCheckStart?.(check, index, selected.length);
     try {
+      opts.onCheckStart?.(check, index, selected.length);
       const out = await check.detect(ctx);
       for (const f of out) {
         findings.push(f);

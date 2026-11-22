@@ -1,4 +1,5 @@
 import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { createCliProgress } from "../cli/progress.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { exitCodeFromFindings } from "../flows/doctor-lint-flow.js";
 import {
@@ -6,7 +7,6 @@ import {
   type HealthFinding,
   type HealthFindingSeverity,
 } from "../flows/health-checks.js";
-import { startDoctorProgress } from "../infra/doctor-progress.js";
 import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -105,31 +105,37 @@ export type DoctorLintExecution = {
 
 export type DoctorLintProgress = {
   phase: (label: string) => void;
+  check: (index: number, total: number, checkId: string) => void;
   stop: () => void;
 };
 
-export const noDoctorLintProgress: DoctorLintProgress = { phase() {}, stop() {} };
+export const noDoctorLintProgress: DoctorLintProgress = { phase() {}, check() {}, stop() {} };
 
 /**
- * Lint progress goes to stderr only when a person is watching it. Piped stderr belongs to
- * update parents and log captures, which keep their current output; stdout never changes.
+ * One spinner line on an interactive stderr, like the other long CLI commands. An explicit
+ * `--json` turns it off, as it does for them; update passes and rehearsals keep their parents'
+ * parsed stderr unchanged. createCliProgress itself stays silent when stderr is not a terminal.
  */
 export function createDoctorLintProgress(
+  opts: DoctorLintCliOptions,
   env: NodeJS.ProcessEnv = process.env,
-  stderrIsTTY = process.stderr.isTTY,
 ): DoctorLintProgress {
-  if (!stderrIsTTY || isUpdateDoctorLintPass(env) || resolveUpdateRehearsalRoot(env)) {
-    return noDoctorLintProgress;
-  }
-  let stopCurrent = () => {};
+  const progress = createCliProgress({
+    label: "Doctor lint: starting",
+    indeterminate: true,
+    enabled: opts.json !== true && !isUpdateDoctorLintPass(env) && !resolveUpdateRehearsalRoot(env),
+  });
   return {
     phase(label) {
-      stopCurrent();
-      stopCurrent = startDoctorProgress(`lint ${label}`, true);
+      progress.setLabel(`Doctor lint: ${label}`);
+    },
+    check(index, total, checkId) {
+      const percent = total > 0 ? Math.round((index / total) * 100) : 0;
+      progress.setPercent(percent);
+      progress.setLabel(`Doctor lint: check ${index + 1}/${total} (${percent}%) ${checkId}`);
     },
     stop() {
-      stopCurrent();
-      stopCurrent = () => {};
+      progress.done();
     },
   };
 }
