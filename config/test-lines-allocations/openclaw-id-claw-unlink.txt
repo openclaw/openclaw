@@ -11,4 +11,7 @@
 # The pin is also read after persistence but before acknowledgement, including initial linking.
 # Lifecycle resume joins an active send without extending the committed reply; explicit flush
 # preserves newly queued statements, stop/start cancellation and retry backoff.
-592
+# A newly committed unlink is sent on its own request, so older stalled pending unlinks never
+# hold its reply.
+# A flush that fails during a run, or is cut short by a stop and restart, is retried later.
+639

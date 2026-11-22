@@ -125,7 +125,7 @@ it("sends again when started after a stop that cut a send short", async () => {
   sender.stop();
 });
 
-it("flushes a newly queued unlink after an active pass without dropping it", async () => {
+it("sends a newly committed unlink at once, without waiting on an older stalled one", async () => {
   const held = Promise.withResolvers<Response>();
   const { sender, fetchImpl, enqueue, pending } = await setup([
     () => Response.json({ claw_id: "b".repeat(32), hostname: "h", unlinked_at: 1 }),
@@ -135,11 +135,58 @@ it("flushes a newly queued unlink after an active pass without dropping it", asy
   try {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
     await enqueue();
-    const flush = sender.flush();
+    // The older unlink's request is still open; the new one is sent and settled regardless.
+    await sender.flush(pending()![1]!.statement);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pending()?.map((entry) => entry.statement.body.claw_id)).toEqual(["a".repeat(32)]);
     held.resolve(Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }));
-    await Promise.all([first, flush]);
+    await first;
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(pending()).toBeUndefined();
+  } finally {
+    sender.stop();
+  }
+});
+
+it("retries a flush that failed during a run once that run ends", async () => {
+  const held = Promise.withResolvers<Response>();
+  const { sender, fetchImpl, enqueue, pending } = await setup([
+    () => Response.json({ error: { code: "unavailable", message: "down" } }, { status: 503 }),
+    () => Response.json({ claw_id: "b".repeat(32), hostname: "h", unlinked_at: 1 }),
+  ]);
+  fetchImpl.mockImplementationOnce(() => held.promise);
+  const first = sender.start();
+  try {
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    await enqueue();
+    await sender.flush(pending()![1]!.statement);
+    held.resolve(Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }));
+    await first;
+    await vi.waitFor(() => expect(pending()).toBeUndefined(), { timeout: 3_000 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  } finally {
+    sender.stop();
+  }
+});
+
+it("retries a flush cut short by a stop and restart", async () => {
+  const { sender, fetchImpl, pending } = await setup([
+    () => Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }),
+  ]);
+  fetchImpl.mockImplementationOnce(
+    (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+  );
+  const flush = sender.flush(pending()![0]!.statement);
+  try {
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    sender.stop();
+    await sender.start();
+    await flush;
+    await vi.waitFor(() => expect(pending()).toBeUndefined(), { timeout: 3_000 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   } finally {
     sender.stop();
   }
