@@ -564,7 +564,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     ...(sessionFork
       ? {
           finalizePayload: (payload: Record<string, unknown>) =>
-            applySessionForkRequest(payload, {
+            applySessionForkRequest(payload, sessionFork, {
               api: attempt.model.api,
               allowedTools: attempt.toolExecutionAllow ?? [],
             }),
