@@ -242,4 +242,44 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.logger.debug).toHaveBeenCalledWith(line);
     expect(params.logger.info).toHaveBeenCalledWith(line);
   });
+
+  it("escalates German verb-first recall questions through the default prompt hook", async () => {
+    const skipped =
+      "Active Memory intentionally skipped deep recall because this turn did not ask for past context.";
+    params.registerPluginConfig({ mode: undefined });
+    const context = {
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+    };
+    const ordinary = await params.runPromptBuild(
+      { prompt: "Habe ich gesagt, dass wir das Plugin sperren" },
+      context,
+    );
+    params.expectPrependContextContains(ordinary, skipped);
+    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
+    const future = await params.runPromptBuild(
+      { prompt: "Hast du morgen Zeit für das Gespräch?" },
+      context,
+    );
+    params.expectPrependContextContains(future, skipped);
+    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
+    const reminder = await params.runPromptBuild(
+      { prompt: "Erinnere mich morgen an das Gespräch von gestern" },
+      context,
+    );
+    params.expectPrependContextContains(reminder, skipped);
+    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
+    const recall = await params.runPromptBuild(
+      { prompt: "Hatten wir nicht schon mal entschieden, das Plugin zu sperren?" },
+      context,
+    );
+    expect(params.runEmbeddedAgent).toHaveBeenCalledOnce();
+    params.expectPrependContextContains(recall, "lemon pepper wings");
+    const recallParams = params.runEmbeddedAgent.mock.calls.at(-1)?.[0] as
+      | { messageChannel?: string; messageProvider?: string }
+      | undefined;
+    expect(recallParams?.messageChannel).toBe("telegram");
+    expect(recallParams?.messageProvider).toBe("telegram");
+  });
 }

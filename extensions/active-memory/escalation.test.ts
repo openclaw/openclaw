@@ -84,6 +84,15 @@ describe("active-memory escalation", () => {
     "Weißt du noch, was gestern Morgen passiert ist?",
     "Weißt du noch, was vorgestern Morgen passiert ist?",
     "Was hattest du mir gestern gesagt?",
+    "Hatten wir nicht schon mal entschieden, das Plugin zu sperren?",
+    "Hatten wir nicht schon mal besprochen, welche Speicherpfade wir sperren?",
+    "Haben wir das nicht gestern beschlossen?",
+    "Habt ihr das nicht gestern entschieden?",
+    "Hab ich das nicht gesagt?",
+    "Hattet ihr das nicht schon vereinbart?",
+    "Hatten Sie das nicht damals gesagt?",
+    "Haben wir für morgen geplant, wer das Plugin sperren soll?",
+    "Haben wir das nicht abgemacht?",
   ])("recognizes recall intent in %j", (message) => {
     expect(decide("escalate", message)).toBe("recall");
   });
@@ -152,6 +161,21 @@ describe("active-memory escalation", () => {
     "Was wollten wir morgen kaufen?",
     "Schreib als letztes Wort ENDE",
     "Erinnerst du dich morgen daran, was mit dem Kunden besprochen werden soll?",
+    "Habe ich gesagt, dass wir das Plugin sperren",
+    "Haben wir das nicht gestern beschlossen.",
+    "Hast du morgen Zeit für das Gespräch?",
+    "Hatten wir vor, das Plugin zu sperren?",
+    "Haben wir morgen eine Besprechung?",
+    "Erinnere mich morgen an das Gespräch von gestern",
+    "Erinnere mich morgen an das Gespräch von gestern?",
+    "Haben sie das entschieden?",
+    "Hatten sie das gesagt?",
+    "Hast du morgen Zeit, damit das besprochen werden kann?",
+    "Haben Sie morgen Zeit, damit das besprochen werden kann?",
+    "Haben wir morgen ein Meeting, in dem das entschieden wird?",
+    "Wie lange haben wir noch, bis das entschieden ist?",
+    "Haben wir einen Plan, wie das gesagt werden soll?",
+    "Haben Sie morgen ein Meeting, in dem das entschieden wird?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
