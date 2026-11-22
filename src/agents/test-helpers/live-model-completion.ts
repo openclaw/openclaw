@@ -1,8 +1,8 @@
 import { writeSync } from "node:fs";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { type Api, completeSimple, type Model } from "../../plugin-sdk/llm.js";
 import {
   resolveLiveCompletionSessionId,
   resolveLiveSystemPrompt,
