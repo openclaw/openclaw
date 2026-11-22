@@ -141,10 +141,13 @@ async function updateWithoutGateway(
   opts: ReleaseUpdateOptions,
 ): Promise<UpdateRunRecord | undefined> {
   const run = await createUpdateRunAsync({ trigger: "cli", before: { version: VERSION } });
+  // The checkout's tag and branch facts, as the Gateway route passes: a stable tag stays stable.
+  const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
   const channel = resolveEffectiveUpdateChannel({
     configChannel: opts.channel ?? opts.storedChannel,
     currentVersion: VERSION,
     installKind: "git",
+    git: status.git,
   }).channel;
   const outcome = await prepareUpdate({
     runId: run.runId,
@@ -155,7 +158,7 @@ async function updateWithoutGateway(
     timeoutMs: opts.timeoutMs,
     acceptCapabilities: opts.acceptCapabilities,
   });
-  if (outcome.status === "pending") {
+  if (outcome.status === "pending" && !opts.json) {
     defaultRuntime.log(
       `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,
     );

@@ -10,9 +10,33 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
       root: "/tmp/openclaw-checkout",
       installKind: "git",
       packageManager: "pnpm",
-      git: { upstream: "origin/main" },
+      git: { upstream: "origin/main", tag: "v2026.11.6", branch: null },
     },
     installReceipt: null,
+  }),
+}));
+const prepared = vi.hoisted(() => [] as unknown[]);
+// mock-isolation: preparation builds a real release; this test checks only the channel it is given.
+vi.mock("./run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./run.js")>()),
+  prepareUpdate: async (params: unknown) => {
+    prepared.push(params);
+    return { status: "current", version: "2026.11.6", pluginsChanged: false };
+  },
+}));
+vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-write.async.js")>()),
+  createUpdateRunAsync: async () => ({ runId: "run-cli" }),
+}));
+vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
+  getUpdateRunAsync: async () => ({
+    status: "skipped",
+    reason: "already-current",
+    phase: "finished",
+    steps: [],
+    after: {},
+    origin: {},
   }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
@@ -34,6 +58,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 
 afterEach(() => {
   sent.length = 0;
+  prepared.length = 0;
   runsGet.length = 0;
   process.exitCode = undefined;
 });
@@ -54,6 +79,12 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
     { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha }, timeoutMs: 5_000 },
   ]);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
+});
+
+it("keeps a stable-tag checkout on stable when it updates without the Gateway", async () => {
+  const { runReleaseUpdateCli } = await import("./cli.js");
+  await runReleaseUpdateCli({ json: true, restart: false, runningRoot: "/tmp/openclaw-checkout" });
+  expect(prepared).toEqual([expect.objectContaining({ channel: "stable" })]);
 });
 
 it("keeps following the run while the restarting Gateway refuses connections", async () => {
