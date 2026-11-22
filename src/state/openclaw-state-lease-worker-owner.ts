@@ -21,7 +21,13 @@ import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
+export type OpenClawStateLeaseWorkerPurpose =
+  | "write"
+  | "acquire"
+  | "verify"
+  | "renew"
+  | "recover"
+  | "release";
 
 export type OpenClawStateLeaseWorkerAuthority = {
   signal?: AbortSignal;
@@ -188,7 +194,10 @@ function createLeaseAdmissionFactory(
           grant();
         },
         options.expiryObservation &&
-          (purpose === "acquire" || purpose === "verify" || purpose === "renew")
+          (purpose === "acquire" ||
+            purpose === "verify" ||
+            purpose === "renew" ||
+            purpose === "recover")
           ? {
               kind: "state-lease-expiry",
               identity: firstScope.identity,
@@ -390,7 +399,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
       owners.set(lease, owner);
     },
     runLifecycle<T>(
-      purpose: "acquire" | "verify" | "renew" | "release",
+      purpose: "acquire" | "verify" | "renew" | "recover" | "release",
       operation: (scope: WorkerLeaseScope) => Promise<T>,
     ): Promise<T> {
       return owner.run(params.databasePath, operation, purpose);
