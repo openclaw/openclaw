@@ -8,7 +8,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
-import { ProviderAccountSummary } from "./profiles-view.tsx";
+import { hasProviderAccounts, ProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
   const picker = createMemo(() => props.controller.pickerView());
@@ -199,7 +199,7 @@ function PickerDialog(props: {
                   <Show when={current().unavailable}>
                     {(unavailable) => <p role="status">{unavailable().message}</p>}
                   </Show>
-                  <Show when={!current().unavailable}>
+                  <Show when={!current().unavailable && hasProviderAccounts(current().accounts)}>
                     <ProviderAccountSummary
                       cards={current().accounts}
                       recovery={
@@ -214,7 +214,9 @@ function PickerDialog(props: {
                     />
                   </Show>
                   <section class="model-provider-login__methods">
-                    <h3>{t("modelProviders.login.connectAccount")}</h3>
+                    <Show when={hasProviderAccounts(current().accounts)}>
+                      <h3>{t("modelProviders.login.connectAccount")}</h3>
+                    </Show>
                     <div
                       data-models-login-choice
                       ref={props.controller.setMethodChoices.bind(props.controller)}
@@ -248,7 +250,7 @@ function PickerDialog(props: {
             </Show>
           </Show>
         </div>
-        <Show when={current().provider || current().showDiscover}>
+        <Show when={(current().provider && current().showBack) || current().showDiscover}>
           <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <Show
               when={current().provider}

@@ -74,17 +74,20 @@ export async function handleChatSendWithStorage(
   options?: ChatSendInternalOptions,
   storage?: { release(): void; retain(): void },
 ): Promise<void> {
-  const {
-    req,
-    respond,
-    context,
-    client,
-    hasCurrentClientAuthority,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = handlerOptions;
-  const releaseSessionAuthorization =
+  const { req, respond, context, client, hasCurrentClientAuthority, sessionMutationCommitGuard } =
+    handlerOptions;
+  const { sessionMutationAuthorization } = handlerOptions;
+  // Prepared sharing facts keep their original source after the submitting turn closes.
+  const releaseOperatorSource = client?.internal?.operatorRunAuthority?.retain?.();
+  const releaseSharing =
     sessionMutationAuthorization?.takeRelease?.() ?? sessionMutationAuthorization?.release;
+  const releaseSessionAuthorization = () => {
+    try {
+      releaseSharing?.();
+    } finally {
+      releaseOperatorSource?.();
+    }
+  };
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
   const setup = await prepareAndAdmitChatSend(
@@ -103,6 +106,7 @@ export async function handleChatSendWithStorage(
   }
   storage?.retain();
   const { request, session, admission } = setup;
+  const requestAuthority = readGatewayRequestMutationAuthority(handlerOptions);
   admission.setPendingInputCleanup(() => releaseSessionAuthorization?.());
   using admittedCleanup = {
     dispatched: false,
@@ -211,14 +215,12 @@ export async function handleChatSendWithStorage(
         assertSource();
       },
     );
-    const assertInputAdmissionCurrent = options?.stageCreatedInput
-      ? createDynamicSessionSourceAssertion(
-          () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
-          () => {
-            throw new Error("Chat input custody changed before admission");
-          },
-        )
-      : assertUnacceptedInputCurrent;
+    const assertInputAdmissionCurrent = createDynamicSessionSourceAssertion(
+      () => assertAcceptedInputCurrent ?? assertUnacceptedInputCurrent,
+      () => {
+        throw new Error("Chat input custody changed before admission");
+      },
+    );
     assertInputAdmissionCurrent();
     const goalCommitGuard = request.goalOperation
       ? createChatSendGoalCommitGuard({
@@ -227,7 +229,6 @@ export async function handleChatSendWithStorage(
           client,
           context,
           sessionMutationAuthorization,
-          sessionMutationCommitGuard,
         })
       : undefined;
     const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
@@ -271,9 +272,7 @@ export async function handleChatSendWithStorage(
           });
           needsSessionCreationBinding = false;
         }
-        if (options?.stageCreatedInput) {
-          assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-        }
+        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
         admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       });
     const persistGatewayUserTurnTranscript = (
@@ -397,11 +396,9 @@ export async function handleChatSendWithStorage(
       if (!staged) {
         throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
-      if (options?.stageCreatedInput) {
-        // Only committed input custody can outlive the originating tool, while
-        // the retained operator, destination and Gateway authority stay live.
-        assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-      }
+      // Committed input keeps its destination and cancellation fences, not the
+      // submitting invocation's permission or transport checks.
+      assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
       admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
@@ -514,8 +511,6 @@ export async function handleChatSendWithStorage(
       session,
       client,
       context,
-      hasCurrentClientAuthority,
-      sessionMutationCommitGuard,
       sessionMutationAuthorization,
       externalAuthorityAdmission,
       externalAdmissionParams,
@@ -616,7 +611,8 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
-    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+    assertAcceptedInputCurrent ??= pendingAdmission.assertAdmittedCurrent;
+    if (requestAuthority.family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     }
     if (!admission.codexGoalAdmission) {
@@ -644,10 +640,7 @@ export async function handleChatSendWithStorage(
         owner: {
           client,
           context,
-          sessionMutationCommitGuard: () => {
-            sessionMutationCommitGuard?.();
-            admission.assertWorkAdmissionCurrent();
-          },
+          sessionMutationCommitGuard: assertInputAdmissionCurrent,
         },
         isHumanTurn:
           !options &&

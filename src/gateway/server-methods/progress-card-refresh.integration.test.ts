@@ -28,7 +28,7 @@ import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-cata
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -379,7 +379,7 @@ describe("registered progress refresh admission", () => {
         hasAvatar: false,
         updatedAt: profile.updatedAt,
       };
-      const captured = await captureGatewayOperatorRunAuthority({
+      const captured = await prepareGatewayOperatorRunAuthority({
         client: { ...f.client, connId: "original-owner-connection" },
         context: f.context,
       });

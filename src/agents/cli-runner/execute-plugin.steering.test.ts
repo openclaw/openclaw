@@ -41,10 +41,10 @@ import {
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
   readRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import {
   bindWorkerToolPreparation,
@@ -421,7 +421,7 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
     const { sessionId } = params;
     let revoked = false;
     // Spawn admits the child with the requester's operator source and origin.
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "owner",
       scopes: ["operator.read", "operator.write"],
       gatewayAccessGrant: null,

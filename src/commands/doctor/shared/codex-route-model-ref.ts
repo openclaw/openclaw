@@ -1,13 +1,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-selection-normalize.js";
 import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_PRIMARY_MODEL_REF } from "../../../config/utility-model-separation-migration.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import type { MutableRecord } from "./codex-route-types.js";
@@ -138,7 +139,7 @@ export function modelRefUsesCodexRuntime(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const effectiveModelRef = params.modelRef?.trim() || `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+  const effectiveModelRef = params.modelRef?.trim() || LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
   if (isOpenAICodexModelRef(effectiveModelRef)) {
     return true;
   }
@@ -160,7 +161,7 @@ export function resolveRuntimeModelRef(params: {
   agentId?: string;
 }): string {
   const effectiveModelRef =
-    normalizeProviderModelRefAuthProfile(params.modelRef) ?? `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+    normalizeProviderModelRefAuthProfile(params.modelRef) ?? LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
   const legacyCodexModel = toCanonicalOpenAIModelRef(effectiveModelRef);
   if (legacyCodexModel) {
     return legacyCodexModel;
@@ -354,13 +355,13 @@ export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig, agentId
     cfg,
     agentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   });
+  // Codex route repair migrates state written while the legacy implicit primary ran.
   return fallbackProvider
     ? normalizeProviderModelRef(fallbackProvider.provider, fallbackProvider.model)
-    : `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+    : LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
 }
 
 export function agentUsesCodexRuntimeForCompaction(params: {

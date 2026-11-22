@@ -342,6 +342,7 @@ export async function inspectInterruptedUpdateRecovery(
   const installKey = resolveUpdateInstallRoot(root);
   const repair = formatCliCommand("openclaw update repair", env);
   const update = formatCliCommand("openclaw update", env);
+  const agentRoute = `Run ${formatCliCommand("openclaw triage", env)} for an agent that reads this update history and settles it.`;
   const pendingRecovery = () =>
     assertUpdateRecoveryAdmission({ env }).then(
       () => undefined,
@@ -356,11 +357,18 @@ export async function inspectInterruptedUpdateRecovery(
       return undefined;
     }
     const installKind = await resolveUpdateInstallKind(root);
+    // An agent with the recorded history can settle it; the manual command comes last.
     const refuse = (
       why: string,
       next = `Run ${repair}, then retry ${update}.`,
       cause: unknown = pending,
-    ) => new Error([pending.message, why, next].filter(Boolean).join(" "), { cause });
+    ) =>
+      new Error(
+        [pending.message, why, agentRoute, next && `By hand: ${next}`].filter(Boolean).join(" "),
+        {
+          cause,
+        },
+      );
     /**
      * The stage finishes only the killed run. Repair would also finish any other run
      * the history still owes recovery, including another update's pending Gateway stop.

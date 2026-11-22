@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { gitReleaseSlot } from "../../infra/git-release-paths.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import * as exec from "../../process/exec.js";
@@ -135,6 +135,41 @@ describe("retireStandaloneGitWrapper", () => {
     await write("@echo off\r\necho unrelated\r\n");
     await expect(retire()).resolves.toEqual({});
     await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
+  });
+
+  it("points the wrapper install.ps1 wrote, with its doubled backslash, at the release launcher", async () => {
+    const { base, wrapper, write, root } = await fixture("win32");
+    const installed = `@echo off\r\nnode "${root}\\dist\\\\entry.js" %*\r\n`;
+    await write(installed);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
+    // The updater spells Windows paths with path.win32, also on this test host.
+    const prefix = path.win32.join(resolveGitReleasePrefix());
+    const repoint = () =>
+      retireStandaloneGitWrapper({
+        previousRoot: root,
+        replacementRoot: path.win32.join(prefix, "openclaw"),
+        platform: "win32",
+        searchDirs: [base],
+      });
+    await expect(repoint()).resolves.toEqual({});
+    const repointed = await fs.readFile(wrapper, "utf8");
+    expect(repointed).toMatch(/^@goto run\r\n@rem x*\r\n@exit \/b %errorlevel%\r\n:run\r\n/u);
+    expect(repointed).toContain(
+      `@node "${path.win32.join(prefix, "openclaw-launcher.mjs")}" %*\r\n`,
+    );
+    // cmd.exe running `openclaw update` through the old wrapper resumes at the old length.
+    expect(Buffer.from(repointed).subarray(Buffer.byteLength(installed)).toString()).toMatch(
+      /^@exit \/b %errorlevel%\r\n/u,
+    );
+    // A later update recognizes the wrapper it wrote and leaves it alone.
+    await expect(repoint()).resolves.toEqual({});
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(repointed);
+    // A switch back to a package retires it.
+    await expect(
+      retireStandaloneGitWrapper({ previousRoot: root, platform: "win32", searchDirs: [base] }),
+    ).resolves.toEqual({});
+    await expect(fs.access(wrapper)).rejects.toThrow();
+    vi.unstubAllEnvs();
   });
 
   it("points the installer wrapper at the release launcher, so `openclaw gateway` on PATH starts a pending release", async () => {

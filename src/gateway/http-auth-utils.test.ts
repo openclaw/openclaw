@@ -32,7 +32,7 @@ import {
 } from "./http-auth-utils.js";
 import { bindHttpOperatorAccessAuthority } from "./http-operator-access.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -293,7 +293,7 @@ describe("HTTP gateway owner profiles", () => {
   );
 
   it(
-    "binds revocation to an active response and releases completed keep-alive responses",
+    "ends active HTTP responses on revocation without cancelling retained admitted work",
     inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       setRuntimeConfigSnapshot(cfg);
@@ -336,7 +336,7 @@ describe("HTTP gateway owner profiles", () => {
 
         await admitResponse(aliasStreaming, email);
         // The child keeps its source after the parent releases it and its response disconnects.
-        const captured = await captureGatewayOperatorRunAuthority({
+        const captured = await prepareGatewayOperatorRunAuthority({
           client: {
             connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
             internal: { operatorRoleActor: { kind: "operator", profileId: person.id } },
@@ -361,7 +361,8 @@ describe("HTTP gateway owner profiles", () => {
         await linkCanonicalUserProfileEmail(email, replacement.id);
         await linkCanonicalUserProfileEmail(email, person.id);
         expect(aliasStreaming.res.destroyed).toBe(true);
-        expect(captured.authority.signal?.aborted).toBe(true);
+        expect(captured.authority.signal?.aborted).toBe(false);
+        expect(captured.authority.assertCurrent).not.toThrow();
         expect(nextAuthority.signal.aborted).toBe(true);
         expect(access.grant.signal.aborted).toBe(false);
         expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);

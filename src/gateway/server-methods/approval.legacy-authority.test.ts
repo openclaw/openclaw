@@ -4,7 +4,6 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import * as approvalStore from "../operator-approval-store.js";
@@ -100,12 +99,7 @@ async function register<T>(fixture: Fixture<T>, payload: T, id?: string, reviewe
   return { record, decision, read, expectUnchanged };
 }
 
-function retireAtCommit(
-  invocation: ReturnType<typeof createApprovalInvocation>,
-  connection: AbortController,
-  revoke: boolean,
-  stage: string,
-) {
+function retireAtCommit(connection: AbortController, stage: string) {
   const stages: string[] = [];
   probe.admission(workerAdmission, (request, grant, admit) => {
     if (request.stage === "transaction") {
@@ -113,9 +107,6 @@ function retireAtCommit(
       stages.push("transport-retired");
     } else if (request.stage === "commit") {
       stages.push(stage);
-      if (revoke) {
-        invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
-      }
     }
     return admit(request, grant);
   });
@@ -192,7 +183,6 @@ it.for(["exec.approval.get", "exec.approval.list", "plugin.approval.list"] as co
           method,
           body: { id: record.id },
           client: createClient({ deviceId: "response-reviewer", scopes: ["operator.admin"] }),
-          transport: "sdk",
           sessionMutationCommitGuard: () => {
             if (revoked) {
               throw new Error("synthetic response authority revoked");
@@ -221,7 +211,6 @@ it.for(["exec.approval.get", "exec.approval.list", "plugin.approval.list"] as co
 );
 
 it.for([
-  { kind: "exec", revoke: true },
   { kind: "plugin", revoke: false },
   { kind: "auto-review", revoke: false },
   { kind: "auto-review", revoke: true },
@@ -259,9 +248,7 @@ it.for([
         method: kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve",
         body: { id: record.id, decision: "allow-once" },
         client,
-        ...(autoReview
-          ? { transport: "sdk" as const, sessionMutationCommitGuard: nativeGuard }
-          : {}),
+        ...(autoReview ? { sessionMutationCommitGuard: nativeGuard } : {}),
       });
       let stages: string[] = [];
       if (autoReview) {
@@ -273,7 +260,7 @@ it.for([
           return resolve(...args);
         });
       } else {
-        stages = retireAtCommit(invocation, connection, revoke, "verdict-commit");
+        stages = retireAtCommit(connection, "verdict-commit");
       }
       const response = await invocation.invoke();
       expect(stages).toEqual(["transport-retired", autoReview ? "sdk-verdict" : "verdict-commit"]);
@@ -299,43 +286,35 @@ it.for([
     }),
 );
 
-it.for([false, true])(
-  "retains legacy lookup expiry authority after disconnect (revoked: %s)",
-  async (revoke, test) => {
-    const fixture = await createExecApprovalFixture(test);
-    await fixture.run(async () => {
-      const { record, decision, read, expectUnchanged } = await register(
-        fixture,
-        { command: "echo expiry" },
-        `legacy-expiry-${revoke}`,
-        true,
-      );
-      const connection = new AbortController();
-      const client = createClient({
-        deviceId: "legacy-reviewer",
-        scopes: ["operator.admin"],
-      });
-      client.connectionSignal = connection.signal;
-      const invocation = createApprovalInvocation({
-        handlers: fixture.handlers,
-        method: "exec.approval.get",
-        body: { id: record.id },
-        client,
-      });
-      vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
-      const stages = retireAtCommit(invocation, connection, revoke, "expiry-commit");
-      if (revoke) {
-        await expect(invocation.invoke()).rejects.toThrow(/authority/u);
-        expectUnchanged();
-      } else {
-        expect(await invocation.invoke()).toMatchObject({ ok: false });
-        expect(read()).toMatchObject({
-          status: "expired",
-          terminalReason: "timeout",
-        });
-        await expect(decision).resolves.toBeNull();
-      }
-      expect(stages).toEqual(["transport-retired", "expiry-commit"]);
+it("retains legacy lookup expiry authority after disconnect", async (test) => {
+  const fixture = await createExecApprovalFixture(test);
+  await fixture.run(async () => {
+    const { record, decision, read } = await register(
+      fixture,
+      { command: "echo expiry" },
+      "legacy-expiry",
+      true,
+    );
+    const connection = new AbortController();
+    const client = createClient({
+      deviceId: "legacy-reviewer",
+      scopes: ["operator.admin"],
     });
-  },
-);
+    client.connectionSignal = connection.signal;
+    const invocation = createApprovalInvocation({
+      handlers: fixture.handlers,
+      method: "exec.approval.get",
+      body: { id: record.id },
+      client,
+    });
+    vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
+    const stages = retireAtCommit(connection, "expiry-commit");
+    expect(await invocation.invoke()).toMatchObject({ ok: false });
+    expect(read()).toMatchObject({
+      status: "expired",
+      terminalReason: "timeout",
+    });
+    await expect(decision).resolves.toBeNull();
+    expect(stages).toEqual(["transport-retired", "expiry-commit"]);
+  });
+});

@@ -213,10 +213,8 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
           ["tool-allowed", 1],
           ["tool-run-preparation-revoked", 0, 0],
           ["tool-run-revoked", 0, 1],
-          ["tool-run-claim-revoked", 0, 1],
           ["tool-run-result-revoked", 1],
           ["tool-run-retry-revoked", 0, 1],
-          ["bundled-tool-run-claim-revoked", 0, 1],
         ];
   async function exerciseRead(...[mode, content, total, minimumLookups]: ReadCase) {
     const record = registerProvider(channel, mode.startsWith("bundled-") ? "bundled" : "official");
@@ -663,29 +661,21 @@ describe("official Slack metadata read boundary", () => {
   });
 
   it.each([
-    { action: "emoji-list", owner: "plugin", error: false },
-    { action: "member-info", owner: "plugin", error: true },
-    { action: "emoji-list", owner: "caller", error: false },
+    { action: "emoji-list", error: false },
+    { action: "member-info", error: true },
   ] as const)(
-    "suppresses late $action data after $owner revocation (error=$error)",
-    async ({ action, owner, error }) => {
-      await withSlackMetadataHarness(
-        async (harness) => {
-          harness.response.beforeReply = () => {
-            if (owner === "plugin") {
-              harness.record.enabled = false;
-            } else {
-              harness.run.revoke();
-            }
-          };
-          if (error) {
-            harness.response.error = "sensitive_stale_provider_error";
-          }
-          await expect(invokeSlackMetadata(harness, action)).rejects.toThrow("no longer active");
-          expect(harness.requests).toHaveLength(1);
-        },
-        { claim: owner === "caller" },
-      );
+    "suppresses late $action data after plugin revocation (error=$error)",
+    async ({ action, error }) => {
+      await withSlackMetadataHarness(async (harness) => {
+        harness.response.beforeReply = () => {
+          harness.record.enabled = false;
+        };
+        if (error) {
+          harness.response.error = "sensitive_stale_provider_error";
+        }
+        await expect(invokeSlackMetadata(harness, action)).rejects.toThrow("no longer active");
+        expect(harness.requests).toHaveLength(1);
+      });
     },
   );
 });

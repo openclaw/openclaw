@@ -35,6 +35,7 @@ import {
   removeSessionWorktree,
   chatSendOwner,
 } from "./server.sessions.create.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import * as sharingAuthorization from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -87,8 +88,8 @@ type CreatedSession = { key: string; sessionId: string; entry: SessionEntry; run
 type CreateParams = Parameters<
   (typeof import("./session-create-service.js"))["createGatewaySession"]
 >[0];
-const adminClient = () => ({ client: { connect: { scopes: ["operator.admin"] } } as never });
-const writeClient = () => ({ client: { connect: { scopes: ["operator.write"] } } as never });
+const adminClient = () => ({ client: { connect: gatewayConnect(["operator.admin"]) } as never });
+const writeClient = () => ({ client: { connect: gatewayConnect(["operator.write"]) } as never });
 const mainReset = { parentSessionKey: "main", emitCommandHooks: true };
 const expectOk = (result: { ok: boolean }) => expect(result.ok).toBe(true);
 const missingAdmin = {
@@ -567,11 +568,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
   const context = { dedupe: new Map() };
   const ownerId = ensureProfileForEmail("replay@owner.test").id;
   const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
-    connect: {
-      role: "operator",
-      scopes,
-      device: { id: "control-ui-device" },
-    },
+    connect: { ...gatewayConnect(scopes), device: { id: "control-ui-device" } },
     authenticatedUserProfile: { profileId },
   });
   const params = {
@@ -643,8 +640,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
 test("durable creation replays before label claims and refuses a reset incarnation", async () => {
   const client = {
     connect: {
-      role: "operator",
-      scopes: ["operator.write", "operator.admin"],
+      ...gatewayConnect(["operator.write", "operator.admin"]),
       device: { id: "receipt-device" },
     },
     authenticatedUserProfile: { profileId: ensureProfileForEmail("receipt-owner@example.test").id },
@@ -853,7 +849,7 @@ test.each(["new-session", "reset"] as const)(
   "warm replay uses the replacement receipt for %s",
   async (replacement) => {
     const client = {
-      connect: { role: "operator", scopes: ["operator.write", "operator.admin"] },
+      connect: gatewayConnect(["operator.write", "operator.admin"]),
       authenticatedUserProfile: {
         profileId: ensureProfileForEmail("receipt-replacement@example.test").id,
       },

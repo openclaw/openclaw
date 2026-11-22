@@ -38,9 +38,6 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
       aria-label={t("presence.peopleTitle")}
       data-session-section={sectionId}
     >
-      {host.peopleView?.directory()?.loading && (
-        <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
-      )}
       {Boolean(host.peopleView?.directory()?.error) && (
         <button
           type="button"
@@ -76,12 +73,17 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
             : t("presence.usersTitle")}
         </span>
       </div>
-      <div class="sidebar-online__list">
+      <div
+        class="sidebar-online__list"
+        aria-busy={host.peopleView?.directory()?.loading ? "true" : undefined}
+      >
         {listUsers().length === 0 ? (
           <span class="sidebar-session-empty-hint">
-            {counts() === null
-              ? t("presence.sessions.unavailable")
-              : t("presence.filters.noMatches")}
+            {host.peopleView?.directory()?.loading
+              ? t("common.loading")
+              : counts() === null
+                ? t("presence.sessions.unavailable")
+                : t("presence.filters.noMatches")}
           </span>
         ) : undefined}
         <For each={listUsers()} keyed={presenceUserKey}>

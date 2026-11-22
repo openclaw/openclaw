@@ -299,20 +299,44 @@ suite.define(() => {
     });
   });
 
-  it("hides toolbar actions in the resting phone composer, like its other controls", async () => {
+  it("groups phone toolbar actions by plugin and keeps the invoked task alive after closing +", async () => {
     const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
     await suite.withPage(phone, async ({ page }) => {
       const { textarea } = await open(page);
-      const action = page.getByRole("button", { name: "Rewrite", exact: true });
+      const plus = page.getByRole("button", { name: "Add attachment" });
+      const group = page.getByRole("menuitem", { name: "Composer fixture", exact: true });
+      await page.route("**/__openclaw__/plugin-icon/composer-fixture", (route) =>
+        route.fulfill({ path: "extensions/knowledge/assets/icon.png", contentType: "image/png" }),
+      );
       await textarea.fill("");
-      // An outside pointer action ends editing and selects the one-line layout.
       await page.mouse.click(100, 80);
-      const shell = page.locator('.agent-chat__composer-shell[data-composer-resting="true"]');
-      await shell.waitFor();
-      // A shown action would fall to its own row under the one-line composer.
-      expect(await action.isVisible()).toBe(false);
+      await page.locator('.agent-chat__composer-shell[data-composer-resting="true"]').waitFor();
+      await plus.click();
+      const artwork = group.locator("img");
+      await expect
+        .poll(() =>
+          artwork.evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth > 0),
+        )
+        .toBe(true);
+      await group.click();
+      expect(
+        await page.getByRole("menuitem", { name: "Insert rewrite", exact: true }).isDisabled(),
+      ).toBe(true);
+      await page.keyboard.press("Escape");
       await textarea.fill(DRAFT);
-      await expect.poll(() => action.isVisible()).toBe(true);
+      expect(await page.locator(".agent-chat__composer-action").count()).toBe(0);
+      await plus.click();
+      await group.click();
+      expect(
+        await page.getByRole("menuitem", { name: "Insert rewrite", exact: true }).isEnabled(),
+      ).toBe(true);
+      await page.getByRole("menuitem", { name: "Rewrite", exact: true }).click();
+      await page.locator('.agent-chat__composer-task[data-state="working"]').waitFor();
+      expect(await plus.getAttribute("aria-expanded")).toBe("false");
+      await finish(page);
+      await page.getByRole("button", { name: "Use", exact: true }).click();
+      await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
+      expect(await sendCount(page)).toBe(0);
     });
   });
 

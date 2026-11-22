@@ -480,6 +480,16 @@ The Gateway keeps one prepared checkout per active repository, destination root,
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
+When a managed or sandbox refresh selects a cold rebuild, `refreshRejectReason`
+distinguishes a missing template directory, failed old-generation validation,
+changed `.gitattributes`, incompatible checkout policy, or a failed Git diff probe.
+`validationFailure` identifies checkout policy, status-probe failure, malformed
+status output, dirty files, or a mismatched HEAD. Failed probes include the bounded
+`refreshErrorClass`: `exit-nonzero`, `timeout`, `no-output-timeout`, `signal`, or
+`output-truncated`. These facts survive through the final preparation outcome;
+they contain no command output or paths. `missReason=commit-changed` still describes
+why selection missed, separately from why incremental refresh was rejected.
+
 Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
 `setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
 `templateApply` measures each private clone separately. A warm caller waiting
@@ -801,7 +811,8 @@ the writer queue and rechecks the current session and permissions before committ
 Explicit unarchiving restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. An incoming message can reopen an archived session only while its workspace is available; a removed workspace requires explicit restoration first. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for saved work during unarchiving.
 
 If a conversation's worktree was removed by cleanup or deletion, the Control UI
-shows a warning above the composer's pickers and disables Send. Choose **Restore**
+shows a restore prompt in place of the message composer. Your chat history stays
+visible, and your draft returns with the composer. Choose **Restore workspace**
 to recover its snapshot, including saved uncommitted work. If the registry record
 has no snapshot, **Restore fresh checkout** recreates its recorded branch, or its
 recorded base if that branch is gone. Invalid saved snapshots report an error;
