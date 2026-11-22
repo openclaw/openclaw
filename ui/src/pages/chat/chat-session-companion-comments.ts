@@ -17,7 +17,7 @@ export class ChatSessionCompanionComments {
   private saved = "[]";
   private intentRevision = 0;
   private retiredIntentRevision = 0;
-  private loaded = false;
+  private readStatus: "pending" | "ready" | "unavailable" = "pending";
   private failed = false;
   private invalidated = false;
   private write = Promise.resolve();
@@ -32,7 +32,9 @@ export class ChatSessionCompanionComments {
     private readonly onError: () => void,
     private readonly onChange: () => void,
   ) {
-    this.restoration = this.read().catch(() => this.reportError());
+    this.restoration = this.read().catch(() => {
+      this.readStatus = "unavailable";
+    });
   }
 
   dispose() {
@@ -56,9 +58,9 @@ export class ChatSessionCompanionComments {
   }
 
   get ready(): boolean {
-    // A reported read failure leaves the pane usable in memory. Writes still
+    // A read failure leaves the pane usable in memory. Writes still
     // require a loaded durable revision, and owner replacement always fences input.
-    return (this.loaded || this.failed) && this.current();
+    return this.readStatus !== "pending" && this.current();
   }
 
   private current() {
@@ -78,14 +80,14 @@ export class ChatSessionCompanionComments {
       return;
     }
     if (result.status === "storage-failed") {
-      this.reportError();
+      this.readStatus = "unavailable";
       return;
     }
     this.revision = result.status === "found" ? result.draft.revision : (result.revision ?? 0);
     this.writeId = result.status === "found" ? result.draft.writeId : result.writeId;
     const comments = result.status === "found" ? (result.draft.selectionAnnotations ?? []) : [];
     this.saved = JSON.stringify(comments);
-    this.loaded = true;
+    this.readStatus = "ready";
     // Edits made while IndexedDB opens win over an older saved snapshot. A
     // deletion/Incognito tombstone still fences intent predating retirement.
     if (
@@ -127,11 +129,14 @@ export class ChatSessionCompanionComments {
       .then(async () => {
         await this.restoration;
         if (
-          !this.loaded ||
           !this.current() ||
           intentRevision <= this.retiredIntentRevision ||
           signature === this.saved
         ) {
+          return;
+        }
+        if (this.readStatus !== "ready") {
+          this.reportError();
           return;
         }
         const owner = await store();

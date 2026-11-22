@@ -74,12 +74,12 @@ export class ChatComposerPersistence {
   #durableRetiredScopeKey = "";
   #forceDurableOwnerRestore = false;
   readonly #durablePersistence = new DurableChatComposerPersistence(
-    () => {
+    (operation) => {
       const state = this.#getState();
       if (!state) {
         return;
       }
-      reportChatComposerDraftStorageError(state);
+      reportChatComposerDraftStorageError(state, operation);
     },
     () => this.persistChangedState(),
   );

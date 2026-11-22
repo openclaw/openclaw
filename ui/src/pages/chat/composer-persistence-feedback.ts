@@ -4,10 +4,17 @@ export function chatComposerDraftStorageError(): string {
   return t("chat.queue.draftStorageFailed");
 }
 
-export function reportChatComposerDraftStorageError(host: {
-  lastError?: string | null;
-  chatError?: string | null;
-}): void {
-  host.lastError = chatComposerDraftStorageError();
-  host.chatError = chatComposerDraftStorageError();
+export function reportChatComposerDraftStorageError(
+  host: {
+    lastError?: string | null;
+    chatError?: string | null;
+  },
+  operation: "save" | "restore" = "save",
+): void {
+  const message =
+    operation === "restore"
+      ? t("chat.outboxRecoveryStorageFailed")
+      : chatComposerDraftStorageError();
+  host.lastError = message;
+  host.chatError = message;
 }

@@ -220,6 +220,21 @@ it.each([false, true])(
   },
 );
 
+it("reports a failed draft read without consuming the warning for a later failed save", async () => {
+  draftRead().mockResolvedValue({ status: "storage-failed" });
+  vi.mocked(write).mockResolvedValue({ status: "storage-failed" });
+  const state = createState();
+  const persistence = persistenceFor(state);
+  await settleStorage();
+  expect(state.chatError).toContain("Couldn’t access your saved messages.");
+  expect(write).not.toHaveBeenCalled();
+  state.chatMessage = "Keep my edit";
+  persistence.persistNow();
+  await settleStorage();
+  expect(state.chatError).toContain("Couldn’t save the previous draft.");
+  expect(state.chatMessage).toBe("Keep my edit");
+});
+
 it("retires pending restoration on stop and restores again after restart", async () => {
   const state = createState();
   const { pending, persistence } = pendingRestore(state);
