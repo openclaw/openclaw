@@ -5,6 +5,7 @@ import type { DoctorMemoryStatusPayload } from "../../../packages/gateway-protoc
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -63,6 +64,59 @@ const memoryStatus: DoctorMemoryStatusPayload = {
 };
 
 suite.define(() => {
+  it("scales the dream thought and diary prose with the reader’s text setting", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, reducedMotion: "reduce", locale: "en-US" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "doctor.memory.status",
+            "doctor.memory.dreamDiary",
+          ],
+          methodResponses: {
+            "config.get": sourceConfigSnapshot(
+              {
+                plugins: {
+                  entries: {
+                    "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
+                  },
+                },
+              },
+              "dreams-reading",
+            ),
+            "doctor.memory.status": memoryStatus,
+            "doctor.memory.dreamDiary": {
+              found: true,
+              path: "DREAMS.md",
+              content: "The survey team checked the notes before the handoff.",
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/agents/main/memory");
+        const thought = page.locator(".dreams__bubble-text");
+        const paragraph = page.locator(".dreams-diary__para").first();
+        const readSizes = async () => {
+          await paragraph.waitFor();
+          return Promise.all(
+            [thought, paragraph].map((locator) =>
+              locator.evaluate((node) => parseFloat(getComputedStyle(node).fontSize)),
+            ),
+          );
+        };
+        const regular = await readSizes();
+        await page.evaluate((key) => {
+          const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+          localStorage.setItem(key, JSON.stringify({ ...settings, textScale: 140 }));
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        await page.reload();
+        const enlarged = await readSizes();
+        expect(enlarged[0]).toBeCloseTo(regular[0] * 1.4, 1);
+        expect(enlarged[1]).toBeCloseTo(regular[1] * 1.4, 1);
+      },
+    );
+  });
+
   it("does not infer empty review lists from a failed initial status read", async () => {
     await suite.withPage(
       {
