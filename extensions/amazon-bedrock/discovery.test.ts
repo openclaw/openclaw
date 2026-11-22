@@ -393,23 +393,73 @@ it("uses the plugin default when both region env overrides are blank", async () 
   expectModel(provider?.models ?? [], "xai.grok-4.6", { contextWindow: 500_000, maxTokens: 4096 });
 });
 
-// Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
-it("resolves au. and apac. prefixes for regional inference profiles", async () => {
+it("uses the documented 256K context windows for the Qwen3 Coder 480B, Next 80B, and 235B 2507 models", async () => {
+  const models = await discoverFixture(
+    [
+      foundation("qwen.qwen3-coder-480b-a35b-v1:0"),
+      foundation("qwen.qwen3-next-80b-a3b"),
+      foundation("qwen.qwen3-235b-a22b-2507-v1:0"),
+    ],
+    [profile("us.qwen.qwen3-next-80b-a3b", ["qwen.qwen3-next-80b-a3b"])],
+    { region: "us-east-1" },
+  );
+  expectModel(models, "qwen.qwen3-coder-480b-a35b-v1:0", {
+    contextWindow: 256_000,
+    maxTokens: 4096,
+  });
+  expectModel(models, "qwen.qwen3-next-80b-a3b", { contextWindow: 256_000, maxTokens: 4096 });
+  expectModel(models, "qwen.qwen3-235b-a22b-2507-v1:0", {
+    contextWindow: 256_000,
+    maxTokens: 4096,
+  });
+  expectModel(models, "us.qwen.qwen3-next-80b-a3b", { contextWindow: 256_000, maxTokens: 4096 });
+});
+
+it.each([
+  { id: "zai.glm-5.3", window: 1_000_000, doc: "GLM 5.3" },
+  { id: "moonshotai.kimi-k3", window: 1_000_000, doc: "Kimi K3" },
+  { id: "moonshotai.kimi-k2.5", window: 256_000, doc: "Kimi K2.5" },
+])(
+  "uses the documented $doc context window for base and prefixed profile ids",
+  async ({ id, window }) => {
+    const models = await discoverFixture([foundation(id)], [profile(`us.${id}`, [id])], {
+      region: "us-east-1",
+    });
+    expectModel(models, id, { contextWindow: window, maxTokens: 4096 });
+    expectModel(models, `us.${id}`, { contextWindow: window, maxTokens: 4096 });
+  },
+);
+
+it("uses the documented Grok 4.7 context window for base and prefixed profile ids", async () => {
+  const models = await discoverFixture(
+    [foundation("xai.grok-4.7")],
+    [profile("us.xai.grok-4.7", ["xai.grok-4.7"])],
+    { region: "us-east-1" },
+  );
+  expectModel(models, "xai.grok-4.7", { contextWindow: 524_288, maxTokens: 4096 });
+  expectModel(models, "us.xai.grok-4.7", { contextWindow: 524_288, maxTokens: 4096 });
+});
+
+// Ported from #65449 by @alickgithub2 — extended to also cover apac. and in. prefixes
+it("resolves au., apac., and in. prefixes for regional inference profiles", async () => {
   const models = await discoverFixture(
     [sonnetSummary()],
     [
       // Empty model ARNs intentionally force the regional prefix fallback.
       sonnetProfile("au", []),
       sonnetProfile("apac", []),
+      sonnetProfile("in", []),
     ],
     { region: "ap-southeast-2" },
   );
-  expect(models).toHaveLength(3);
-  for (const prefix of ["au", "apac"]) {
+  expect(models).toHaveLength(4);
+  for (const prefix of ["au", "apac", "in"]) {
     const id = `${prefix}.${sonnetId}`;
     expectModel(models, id, {
       name: `${prefix.toUpperCase()} Anthropic Claude Sonnet 4.6`,
       input: ["text", "image"],
     });
   }
+  // The in. India geo prefix must resolve the base model's known window too.
+  expectModel(models, `in.${sonnetId}`, { contextWindow: 1_000_000 });
 });
