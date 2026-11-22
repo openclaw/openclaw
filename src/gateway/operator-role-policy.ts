@@ -355,15 +355,22 @@ type ProjectGrantSubject =
 /**
  * Project grants are never admission facts. Retained clients and run authorities pass the
  * ordinary role boundary, then read their canonical profile's current role from live config.
+ * A profile merged away since admission resolves to another person's role, so it grants nothing.
  */
 export function resolveCurrentProjectGrant(
   cfg: OpenClawConfig,
   subject: ProjectGrantSubject,
 ): GatewayOperatorRoleDefinition["projects"] {
   if ("profileId" in subject) {
-    return openclawIdSubjectRolePolicy(subject.openclawIdPrincipal, () =>
-      resolveOperatorRolePolicyForProfile(subject.profileId, cfg),
-    )?.projects;
+    const { profileId } = subject;
+    return openclawIdSubjectRolePolicy(subject.openclawIdPrincipal, () => {
+      const policy = resolveOperatorRolePolicyForProfile(profileId, cfg);
+      return policy &&
+        profileId &&
+        captureResidentUserProfileAccess(profileId).assertCurrent().id !== profileId
+        ? undefined
+        : policy;
+    })?.projects;
   }
   const { client } = subject;
   if (!resolveOperatorRolePolicy(client ?? null, cfg)) {

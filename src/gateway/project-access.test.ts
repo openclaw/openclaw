@@ -4,12 +4,18 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "../state/user-profile-list.js";
+import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   canRequesterUseRepositoryUrl,
   filterProjectsForRequester,
+  projectRequesterForClient,
+  projectRequesterForProfile,
   type ProjectRequester,
   resolveProjectAccess,
   resolveRunProjectRequester,
@@ -204,6 +210,48 @@ describe("project access", () => {
       expect(resolveRunProjectRequester(cfg, { profileId: profile.id })).toEqual({
         kind: "internal",
       });
+    });
+  });
+
+  it("keeps live grants on the admitted profile when it is merged into another person", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const merged = ensureProfileForEmail("merged-guest@example.test");
+      const staff = ensureProfileForEmail("staff@example.test");
+      setUserProfileRole(staff.id, "staff");
+      const catalog = await prepareUserProfileCatalog();
+      using _ = { [Symbol.dispose]: catalog.release };
+      const role = {
+        scopes: ["operator.sessions.write" as const],
+        sessions: { others: "view" as const },
+      };
+      const roleCfg = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: { ...role, agents: ["main"] },
+              staff: { ...role, agents: ["main"], projects: ["staff-secret"] },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const scopes = ["operator.sessions.write"];
+      const staffGrant = { ...guest, projects: ["staff-secret"] };
+      expect(projectRequesterForProfile(roleCfg, scopes, staff.id)).toEqual(staffGrant);
+      mergeProfiles(merged.id, staff.id);
+      // The merged profile now resolves to the staff role, but its admitted work keeps no grant.
+      const operatorAuthority = { profileId: merged.id, scopes };
+      expect(resolveRunProjectRequester(roleCfg, { operatorAuthority })).toEqual(guest);
+      expect(projectRequesterForProfile(roleCfg, scopes, merged.id)).toEqual(guest);
+      // Creator-fallback scopes still follow the merge; its grant does not.
+      expect(resolveRunProjectRequester(roleCfg, { profileId: merged.id })).toEqual(guest);
+      // A client prepared for the canonical profile keeps that profile's grant for its aliases.
+      const aliasClient = {
+        connect: { scopes },
+        authenticatedUserProfile: { profileId: merged.id },
+        preparedSessionProfile: readResidentUserProfileIdentity(staff.id),
+      } as unknown as Parameters<typeof projectRequesterForClient>[0];
+      expect(projectRequesterForClient(aliasClient, roleCfg)).toEqual(staffGrant);
     });
   });
 

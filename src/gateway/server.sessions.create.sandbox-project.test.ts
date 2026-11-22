@@ -11,9 +11,10 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import * as directoryObservation from "../infra/owned-directory-observation.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { projectRequesterForClient } from "./project-access.js";
+import { projectRequesterForClient, resolveRunProjectRequester } from "./project-access.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
@@ -387,6 +388,12 @@ test("retained run clients read project grants live for creation and inherited s
             sessions: { others: "none" as const },
             ...(projects ? { projects } : {}),
           },
+          staff: {
+            scopes,
+            agents: ["main"],
+            sessions: { others: "none" as const },
+            projects: [project.id],
+          },
         },
       },
     },
@@ -478,4 +485,18 @@ test("retained run clients read project grants live for creation and inherited s
   expect(
     await managedWorktrees.findLiveByOwner("session", (child as { key: string }).key),
   ).toMatchObject({ repoRoot: privateRepo });
+
+  // Merging the person into a granted staff profile never lends that grant to the retained run.
+  const staff = ensureProfileForEmail("run-grant-staff@example.test");
+  setUserProfileRole(staff.id, "staff");
+  activeCfg = configFor();
+  mergeProfiles(profile.id, staff.id);
+  expect(resolveRunProjectRequester(activeCfg, { profileId: staff.id })).toMatchObject({
+    projects: [project.id],
+  });
+  expect(projectRequesterForClient(runClient(), activeCfg)).toEqual({ kind: "operator", scopes });
+  expect(resolveRunProjectRequester(activeCfg, { operatorAuthority: admitted.authority })).toEqual({
+    kind: "operator",
+    scopes,
+  });
 });

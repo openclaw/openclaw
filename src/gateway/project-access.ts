@@ -111,7 +111,7 @@ export function resolveRunProjectRequester(
     ? resolveOperatorRolePolicyForProfile(spawnedBy.profileId, cfg)
     : undefined;
   return policy
-    ? operatorProjectRequester(policy.scopes, () => policy.projects)
+    ? projectRequesterForProfile(cfg, policy.scopes, spawnedBy.profileId)
     : INTERNAL_PROJECT_REQUESTER;
 }
 
