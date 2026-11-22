@@ -187,16 +187,16 @@ it("keeps oversized and unparsed JSON text whole when unbounded without leaking 
   expect(project(script)).toBe("[Malformed diagnostic JSON redacted]");
   expect(project(large, { unbounded: true })).toBe(large);
   expect(project(script, { unbounded: true })).toBe(script);
-  expect(project('{"name":"password","value":"opaque-clipped-secret"', { unbounded: true })).toBe(
-    '{"name":"password","value":"<redacted>"',
-  );
-  expect(project('{"value":"opaque-reversed-secret","key":"api_key"', { unbounded: true })).toBe(
-    '{"value":"<redacted>","key":"api_key"',
-  );
-  expect(
-    project('{\\"name\\":\\"token\\",\\"value\\":\\"opaque-nested\\"', { unbounded: true }),
-  ).toBe('{\\"name\\":\\"token\\",\\"value\\":\\"<redacted>\\"');
-  expect(project('{"name":"region","value":"eu-west-1"', { unbounded: true })).toBe(
-    '{"name":"region","value":"eu-west-1"',
-  );
+  const malformed = "[Malformed diagnostic JSON redacted]";
+  for (const record of [
+    '{"name":"password","type":"string","value":"opaque-clipped-secret"',
+    '{"value":"opaque-reversed-secret","key":"api_key"',
+    '{\\"name\\":\\"token\\",\\"value\\":\\"opaque-nested\\"',
+    '{"type":"image","data":"QUJDRA=="',
+    '{"mimeType":"audio/wav","payload":"QUJDRA=="',
+  ]) {
+    expect(project(record, { unbounded: true })).toBe(malformed);
+  }
+  const ordinary = '{"name":"region","value":"eu-west-1"';
+  expect(project(ordinary, { unbounded: true })).toBe(ordinary);
 });

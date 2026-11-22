@@ -65,29 +65,23 @@ const JSON_ARRAY_START_RE = /\[\s*(?:[{"\d\]-]|true\b|false\b|null\b)/u;
 const MALFORMED_JSON_RE =
   /\{|(?:"[^"]+"|\b(?:b64_json|data|(?:input|output)?(?:audio|image|video)[\w-]*))\s*:/iu;
 
-// Projection redacts a `{ name|key: <credential field>, value }` pair only after JSON.parse.
-// Unbounded callers keep unparsed JSON-like text, so these pairs are redacted textually.
-const PAIR_QUOTE = String.raw`\\*"`;
-const PAIR_NAME = String.raw`${PAIR_QUOTE}(?:name|key)${PAIR_QUOTE}\s*:\s*${PAIR_QUOTE}([^"\\]{1,128})${PAIR_QUOTE}`;
-const PAIR_VALUE = String.raw`(${PAIR_QUOTE}value${PAIR_QUOTE}\s*:\s*${PAIR_QUOTE})((?:[^"\\]|\\(?!\\*"))*)`;
-const CREDENTIAL_PAIR_RE = new RegExp(String.raw`${PAIR_NAME}\s*,\s*${PAIR_VALUE}`, "giu");
-const CREDENTIAL_PAIR_REVERSED_RE = new RegExp(
-  String.raw`${PAIR_VALUE}(${PAIR_QUOTE}\s*,\s*${PAIR_NAME})`,
-  "giu",
-);
+// Projection judges `{ name|key: <credential>, value }` records and contextual media only after
+// JSON.parse. Unbounded callers keep unparsed JSON-like text (clipped output, scripts) whole
+// unless it carries one of those markers in any field order; then the value is still dropped.
+const UNPARSED_DISCRIMINATOR_RE = /\\*"(?:name|key)\\*"\s*:\s*\\*"([^"\\]{1,128})/giu;
+const UNPARSED_MEDIA_RE =
+  /\\*"(?:type|mime_?type|media_?type|content_?type)\\*"\s*:\s*\\*"(?:input_?|output_?)?(?:audio|image|video)|b64_json/iu;
 
-function redactCredentialPairs(text: string): string {
-  return text
-    .replace(CREDENTIAL_PAIR_RE, (match, name: string, _prefix: string, secret: string) =>
-      isCredentialFieldName(name)
-        ? `${match.slice(0, match.length - secret.length)}<redacted>`
-        : match,
-    )
-    .replace(
-      CREDENTIAL_PAIR_REVERSED_RE,
-      (match, prefix: string, _secret: string, rest: string, name: string) =>
-        isCredentialFieldName(name) ? `${prefix}<redacted>${rest}` : match,
-    );
+function hasUnparsedSensitiveRecord(text: string): boolean {
+  if (UNPARSED_MEDIA_RE.test(text)) {
+    return true;
+  }
+  for (const match of text.matchAll(UNPARSED_DISCRIMINATOR_RE)) {
+    if (isCredentialFieldName(expectDefined(match[1], "record discriminator"))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function looksLikeDiagnosticJson(value: string): boolean {
@@ -487,13 +481,16 @@ function projectDiagnosticText(value: string, bounded = true): string {
       if (bounded) {
         return "[Malformed diagnostic JSON redacted]";
       }
+      unstructured += fragment.json;
       redacted += fragment.json;
     }
     cursor = fragment.endIndex + 1;
   }
   const remainder = text.slice(cursor);
   if (!bounded) {
-    return redactCredentialPairs(redacted + remainder);
+    return hasUnparsedSensitiveRecord(unstructured + remainder)
+      ? "[Malformed diagnostic JSON redacted]"
+      : redacted + remainder;
   }
   return looksLikeDiagnosticJson(unstructured + remainder)
     ? "[Malformed diagnostic JSON redacted]"
