@@ -5,6 +5,8 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Original transport for presentation only; never grants authority. */
+  clientId?: import("../../packages/gateway-protocol/src/client-info.js").GatewayClientId;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */

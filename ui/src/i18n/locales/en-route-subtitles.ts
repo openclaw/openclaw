@@ -22,7 +22,7 @@ const enRouteSubtitles = {
     cron: "Schedule recurring tasks for your agent.",
     skills: "Manage your agent skills",
     plugins: "Add capabilities with plugins.",
-    skillWorkshop: "Skills your agent learned, recent changes, and undo.",
+    skillWorkshop: "Drafts, recent changes, and skills your agent learned.",
     devices: "Manage paired devices and connection requests.",
     templates: "Explore and add official Templates.",
     cloudWorkers: "Manage repository snapshots and cloud devices.",
