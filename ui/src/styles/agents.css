@@ -399,6 +399,11 @@
   justify-content: space-between;
 }
 
+.agent-files-workspace,
+.agent-file-sub {
+  overflow-wrap: anywhere;
+}
+
 .agent-file-sub {
   color: var(--muted);
   font-size: 12px;
