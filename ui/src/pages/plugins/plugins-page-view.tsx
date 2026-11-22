@@ -277,12 +277,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
             canCallGatewayMethod(page().gateway.snapshot, "models.authLogin", "operator.admin")
               ? () =>
                   page().context.navigate("model-providers", {
-                    search:
-                      "?" +
-                      new URLSearchParams({
-                        connect: "1",
-                        plugin: detailProps.pluginId,
-                      }),
+                    search: `?${new URLSearchParams({
+                      connect: "1",
+                      plugin: detailProps.pluginId,
+                    }).toString()}`,
                   })
               : undefined
           }

@@ -139,6 +139,7 @@ async function mountInventory(
 it.each([true, false])(
   "limits provider sign-in to plugin settings (declared=%s)",
   async (declared) => {
+    await import("./settings-view.tsx");
     const plugin = createPlugin({ enabled: true, state: "enabled" });
     const result = createResult(plugin);
     const inspection = createInspectResult({
@@ -160,16 +161,13 @@ it.each([true, false])(
       Array.from(page.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) => button.textContent?.trim() === "Sign in",
       );
-    await settlePlugins();
+    await waitForText(page, plugin.name, "h1");
     expect(signIn()).toBeUndefined();
 
-    page.routeData = createPluginsRouteData(
-      harness.gateway,
-      result,
-      createPluginsRouteLocation(detail + "#configuration"),
+    page.routeData = routeFor(harness.gateway, result, `${detail}?view=settings`);
+    await waitForSolid(() =>
+      expect(page.querySelector('input[aria-label="Search settings"]')).not.toBeNull(),
     );
-    await settlePlugins();
-    await waitForSolid(() => expect(page.querySelector(".plugin-editor__search")).not.toBeNull());
     if (declared) {
       await waitForSolid(() => expect(signIn()).toBeDefined());
       signIn()!.click();

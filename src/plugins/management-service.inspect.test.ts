@@ -202,8 +202,10 @@ describe("managed plugin inspection", () => {
     const pluginId = "cloud-plugin";
     const provider = "cloud-models";
     const snapshot = metadataSnapshot({ enabled: true, id: pluginId });
-    const owners = makeEmptyPluginMetadataOwners();
-    owners.providers.set(provider, [pluginId]);
+    const owners = {
+      ...makeEmptyPluginMetadataOwners(),
+      providers: new Map([[provider, [pluginId]]]),
+    };
     const manifest = snapshot.plugins[0]!;
     manifest.providers = [provider];
     mocks.metadata.mockReturnValue({ ...snapshot, owners });
