@@ -67,6 +67,9 @@ const HOST_MEMORY_COPY =
   "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish.";
 
 async function settleWithSavedLogin(error: unknown): Promise<string[]> {
+  if (!(error instanceof Error)) {
+    throw new TypeError("Expected a CLI failure", { cause: error });
+  }
   const context = buildPreparedCliRunContext({ provider: "claude-cli", sessionId: "settle" });
   context.effectiveAuthProfileId = "claude-cli:default";
   context.authProfileStore = {
