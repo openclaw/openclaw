@@ -396,6 +396,8 @@ export function createModelProviderLogin(options: {
       disabled: !authStatus || !picker.isCurrent(),
       canStart: options.canStart(),
       showDiscover: !picker.providers && Boolean(options.onDiscover),
+      // Back returns to the dialog's own catalog, so it shows only when the dialog opened there.
+      showBack: !picker.providers,
       discoverDisabled: !picker.isCurrent(),
       description: recovery
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })

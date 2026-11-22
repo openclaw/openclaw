@@ -250,7 +250,7 @@ function PickerDialog(props: {
             </Show>
           </Show>
         </div>
-        <Show when={current().provider || current().showDiscover}>
+        <Show when={(current().provider && current().showBack) || current().showDiscover}>
           <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <Show
               when={current().provider}

@@ -793,10 +793,11 @@ suite.define(() => {
           .waitFor();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
+        // Opened from the page's catalog, the method step has no footer; the last method stays in view.
         const footerFits = () =>
           dialog.evaluate((element) => {
-            const footer = element.querySelector(".model-setup-wizard__footer")!;
-            return footer.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
+            const methods = element.querySelector(".model-provider-login__methods")!;
+            return methods.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
           });
         expect(await footerFits()).toBe(true);
         await captureProviderProof("login-provider-accounts-and-methods.png", dialog);
