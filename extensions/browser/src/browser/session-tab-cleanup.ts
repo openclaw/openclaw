@@ -28,7 +28,7 @@ function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
 
 /** Subagent tabs only close at session end otherwise; cap them so long-running helpers cannot pile up tabs. */
 function isCapTrackedBrowserSessionKey(sessionKey: string): boolean {
-  return !isCronSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
+  return isPrimaryTrackedBrowserSessionKey(sessionKey) || isSubagentSessionKey(sessionKey);
 }
 
 function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
