@@ -456,7 +456,9 @@ it("compares a session placed by tools.exec.claudeCliHost with that placement, n
 
 it("still refuses a node run for an unbound stored session when no key places it", async () => {
   await using f = await fixture(authorScript, { authoring: true, claudeCliHostKey: false });
-  await expect(f.execute()).rejects.toThrow("Paired-node skill assignment or run authority changed");
+  await expect(f.execute()).rejects.toThrow(
+    "Paired-node skill assignment or run authority changed",
+  );
   expect(f.requests).toEqual([]);
 });
 
