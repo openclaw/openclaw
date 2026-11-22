@@ -3,8 +3,10 @@ import { prepareGitReleaseLayout } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { isMainPackageTarget, resolveGlobalInstallSpec } from "../../infra/update-global.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -14,9 +16,10 @@ import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-defer
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
-import { confirmUpdateDowngrade, type UpdateCommandOptions } from "./shared.js";
+import { confirmUpdateDowngrade, normalizeTag, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
+  assertReleaseUpdateAdmission,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -96,25 +99,6 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  // Git installs that stay on Git update through prepared releases; every refusal above still
-  // applies. A requested non-dev channel switches the checkout to a package (the package flow).
-  const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
-  if (prepared.installKind === "git" && staysGit && !inputOpts.dryRun) {
-    const [{ runReleaseUpdateCli }, { readUpdateChannelConfig }] = await Promise.all([
-      import("../../update/cli.js"),
-      import("./update-command-config.js"),
-    ]);
-    return await runReleaseUpdateCli({
-      json: Boolean(inputOpts.json),
-      restart: prepared.shouldRestart,
-      runningRoot: prepared.discoveredRoot,
-      channel: prepared.requestedChannel ?? undefined,
-      storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
-      sha: inputOpts.sha,
-      timeoutMs: prepared.timeoutMs,
-      acceptCapabilities: Boolean(inputOpts.acceptCapabilities),
-    });
-  }
   const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
   return await withUpdateAdmissionReporting(
     inputOpts,
@@ -135,6 +119,57 @@ async function updateCommandWithRuntime(
         async (configReadable, malformedConfig) => {
           // Late admission refusals retain the captured malformed-source report decision.
           reportHints.writeArtifacts = !malformedConfig;
+          // Channel conversions, unsupported package targets and dry runs retain their owners.
+          const channelConfig = inputOpts.dryRun
+            ? undefined
+            : await (await import("./update-command-config.js")).readUpdateChannelConfig(false);
+          const switchesToGit =
+            prepared.requestedChannel === "dev" ||
+            (prepared.requestedChannel === null &&
+              channelConfig?.storedChannel === "dev" &&
+              normalizeTag(inputOpts.tag) === null);
+          const staysGit =
+            prepared.requestedChannel === null || prepared.requestedChannel === "dev";
+          if (
+            ((prepared.installKind === "package" &&
+              !switchesToGit &&
+              !isMainPackageTarget(normalizeTag(inputOpts.tag))) ||
+              (prepared.installKind === "git" && staysGit)) &&
+            !inputOpts.dryRun
+          ) {
+            await assertReleaseUpdateAdmission({
+              root: prepared.discoveredRoot,
+              installKind: prepared.installKind,
+              timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+              pkgOwnership: prepared.pkgOwnership,
+              opts: inputOpts,
+              controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+            });
+            await assertUpdateRecoveryAdmission();
+            const { runReleaseUpdateCli } = await import("../../update/cli.js");
+            let tag =
+              prepared.installKind === "git"
+                ? undefined
+                : (normalizeTag(inputOpts.tag) ?? undefined);
+            if (prepared.installKind !== "git") {
+              const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
+              if (spec !== `openclaw@${tag ?? ""}`) {
+                tag = spec;
+              }
+            }
+            return await runReleaseUpdateCli({
+              json: Boolean(inputOpts.json),
+              restart: prepared.shouldRestart,
+              runningRoot: prepared.discoveredRoot,
+              channel: prepared.requestedChannel ?? undefined,
+              storedChannel: channelConfig?.storedChannel ?? undefined,
+              sha: inputOpts.sha,
+              tag,
+              yes: Boolean(inputOpts.yes),
+              timeoutMs: prepared.timeoutMs,
+              acceptCapabilities: Boolean(inputOpts.acceptCapabilities),
+            });
+          }
           if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
             defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
           }

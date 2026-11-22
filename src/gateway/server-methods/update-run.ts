@@ -4,6 +4,10 @@
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
 import { resolveGatewayRestartDecision } from "../../infra/process-respawn.js";
 import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import {
@@ -13,12 +17,14 @@ import {
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
+import type { StartupInstallStatus } from "../../infra/update-install-status.types.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import {
   createUpdateRunAsync,
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
+import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -35,13 +41,35 @@ import { updateHandlers as legacyUpdateHandlers } from "./update.js";
 
 export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const { respond, client, context } = request;
-  // Git installs move to the release launcher first; package installs follow in the next change.
   const installed = await readInstallStatus();
-  if (!installed.root || installed.status.installKind !== "git") {
-    return await legacyUpdateHandlers["update.run"]!(request);
-  }
   const params = await admitGatewayUpdateRequest(request);
   if (!params) {
+    return;
+  }
+  if (isGatewayExternallySupervised()) {
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+      message:
+        "Use the external supervisor's update workflow to stop, update, and restart the Gateway.",
+      result: { status: "skipped", reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON },
+    });
+    return;
+  }
+  const root = installed.root ?? installed.status.root;
+  if (
+    !root ||
+    (installed.status.installKind !== "git" && installed.status.installKind !== "package")
+  ) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: reason,
+      message: "Update this installation with its original installation method.",
+      result: { status: "skipped", reason },
+    });
     return;
   }
   const config = context.getRuntimeConfig();
@@ -107,6 +135,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const sha =
     params.target?.upstreamSha ??
     (campaign?.target.kind === "git" ? campaign.target.upstreamSha : undefined);
+  const tag = campaign?.target.kind === "package" ? campaign.target.version : undefined;
   const trigger = fromChat
     ? "chat"
     : isBrowserOperatorUiClient(client?.connect.client) || params.sessionKey
@@ -127,6 +156,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     },
     before: { version: VERSION },
     ...(sha ? { target: { kind: "git", sha } } : {}),
+    ...(tag ? { target: { kind: "package", version: tag } } : {}),
   });
   if (campaign) {
     currentUpdateCheckLifecycle().campaign?.bindRun(campaign.campaignId, run.runId);
@@ -152,10 +182,12 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
   });
   wakeUpdateRunWatcher();
   void runUpdateInBackground(run.runId, {
-    root: installed.root,
+    root,
+    installKind: installed.status.installKind,
     channel: normalizeUpdateChannel(config.update?.channel),
     git: installed.status.git,
     sha,
+    tag,
     timeoutMs: params.timeoutMs,
     restartDelayMs: params.restartDelayMs,
     sessionKey: params.sessionKey,
@@ -167,10 +199,12 @@ async function runUpdateInBackground(
   runId: string,
   options: {
     root: string;
+    installKind: StartupInstallStatus["status"]["installKind"];
     channel: ReturnType<typeof normalizeUpdateChannel>;
     /** The checkout's tag and branch facts; a stable tag keeps a configless checkout on stable. */
     git?: { tag?: string | null; branch?: string | null };
     sha?: string;
+    tag?: string;
     /** The requester's overall budget (`timeoutMs`). */
     timeoutMs?: number;
     /** The requester's `restartDelayMs`, as the package route honors it. */
@@ -183,7 +217,7 @@ async function runUpdateInBackground(
     const channel = resolveEffectiveUpdateChannel({
       configChannel: options.channel,
       currentVersion: VERSION,
-      installKind: "git",
+      installKind: options.installKind,
       git: options.git,
     }).channel;
     const outcome = await prepareUpdate({
@@ -192,6 +226,7 @@ async function runUpdateInBackground(
       runningVersion: VERSION,
       channel,
       sha: options.sha,
+      tag: options.tag,
       timeoutMs: options.timeoutMs,
     });
     const restart = {
@@ -234,7 +269,7 @@ async function readInstallStatus() {
   );
 }
 
-/** The update handlers with `update.run` routed by install kind. */
+/** All owned installs update through prepared releases. */
 export const routedUpdateHandlers: GatewayRequestHandlers = {
   ...legacyUpdateHandlers,
   "update.run": updateRunHandler,

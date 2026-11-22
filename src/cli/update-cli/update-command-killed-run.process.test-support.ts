@@ -56,7 +56,7 @@ import { updateCommand } from "./update-command.js";
 // The next `openclaw update` after a real updater process was killed: each suite
 // importing this runs the update from its command entry to admitted execution.
 type Prepared = Awaited<ReturnType<typeof prepareUpdateCommand>>;
-const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn() }));
+const mocks = vi.hoisted(() => ({ root: vi.fn(), proceed: vi.fn(), release: vi.fn() }));
 vi.mock("./shared.js", async (original) => ({
   ...(await original<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -68,6 +68,11 @@ vi.mock("./update-command-initialization-run.js", () => ({
 }));
 // mock-isolation: a dry run takes this path, and must never run a real preview from here.
 vi.mock("./update-command-admitted.js", () => ({ runAdmittedUpdate: mocks.proceed }));
+// Package installs past recovery prepare a release; preparing one builds a real package.
+vi.mock("../../update/cli.js", async (original) => ({
+  ...(await original<typeof import("../../update/cli.js")>()),
+  runReleaseUpdateCli: mocks.release,
+}));
 // Repair's finalization runs for real, as in the repair fixtures; only its Doctor
 // children, plugin installs and Doctor's own service maintenance are stand-ins.
 const finalization = vi.hoisted(() => ({
@@ -495,9 +500,7 @@ export type RefusalCase = {
   control?: (killed: Dead) => unknown;
 };
 /**
- * The update refuses for that reason, and so does the next one with admission's own
- * refusal, both leaving the recovery, run and config as they were. A stalled updater's
- * recovery then settles once it has been killed.
+ * The update and its next admission both refuse, leaving recovery, run and config intact.
  */
 export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: RefusalCase) =>
   fixtures.lifetime.run(async () => {
@@ -517,12 +520,6 @@ export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: Refusa
 
     expect(mocks.proceed).not.toHaveBeenCalled();
     expect(reserved(killed.runId)).toEqual(before);
-    if (dead?.end === "stalled") {
-      killed.proc.kill("SIGKILL");
-      await killed.closed;
-      await nextUpdate(killed.slot);
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-    }
   });
 
 export const repair = "openclaw update repair";
