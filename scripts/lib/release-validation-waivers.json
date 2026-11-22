@@ -397,7 +397,7 @@
       "targetVersion": "2026.11.10-beta.2",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-38 (node)",
-      "reason": "Accepted exact successor-chat timeout after both same local private child-completion tests passed unchanged. Raw failure retained; requires trusted evaluator support for the native two-part project label.",
+      "reason": "Accepted exact successor-chat timeout after both same local private child-completion tests passed unchanged. Raw failure retained; requires trusted evaluator support for the native two-part project label. Also accepted the complete two-config.apply-timeout signature set after unchanged config-write-reread tests passed 2/2 and the exact numeric-record-key case passed 1/1 with Node workers. Non-reproduction is not a proven flake or fix; both current failures are required together and the historical signature remains unchanged.",
       "aggregates": [
         {
           "jobName": "openclaw/ci-gate",
@@ -415,6 +415,20 @@
             "file": "src/gateway/server.private-completion.test.ts",
             "test": "private subagent completion processing receipts > settles a sessions_send child reply through real private admission (processed) :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     function cleanup() {\n❯ Object.verifyChatSuccessor src/gateway/server.private-completion.test.ts:252:24\n❯ src/gateway/server.private-completion.sessions-send.test-support.ts:<redacted len=6>"
           }
+        ],
+        "alternativeSignatures": [
+          [
+            {
+              "kind": "vitest",
+              "file": "src/gateway/server.config-record-keys.test.ts",
+              "test": "accepts exact numeric record keys in replacePaths :: GatewayClientRequestTimeoutError: gateway request timeout for config.apply\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+            },
+            {
+              "kind": "vitest",
+              "file": "src/gateway/server.config-write-reread.test.ts",
+              "test": "gateway config canonical rereads > config.set settles when an external edit invalidates the canonical reread :: GatewayClientRequestTimeoutError: gateway request timeout for config.apply\n❯ Object.createRequestTimeoutError packages/gateway-client/src/client.ts:285:9\n283|       createRequestError: (error) => new GatewayClientRequestError(err…\n284|       createRequestTimeoutError: (method, timeoutMs, requestSent) =>\n285|         new GatewayClientRequestTimeoutError({ method, timeoutMs, requ…\n|         ^\n286|       createRequestAbortError: (method) =>\n287|         createAbortError(`gateway request aborted for ${method}`),\n❯ Timeout.<anonymous> packages/gateway-client/src/pending-request.ts:243:23"
+            }
+          ]
         ]
       }
     },
@@ -687,6 +701,31 @@
           ]
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-16 (node)",
+      "reason": "Accepted exact prepared-runtime publication timeout after unchanged focused context-engine tests passed 3/3. Non-reproduction is not a proven flake or fix; raw failure retained and only the complete frozen-P-parsed signature is accepted.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-context-engine.test.ts",
+            "test": "prepares and settles with direct ownership :: Error: prepared model runtime publication (workspace plugins; agent main) timed out\n❯ Timeout.<anonymous> src/node-host/with-timeout.ts:36:25\n34|       () => {\n35|         const operation = typeof label === \"function\" ? label() : (lab…\n36|         abortCtrl.abort(new Error(`${operation} timed out`));\n|                         ^\n37|       },\n38|       Math.max(0, Math.min(resolved, remainingMs)),"
+          }
+        ]
+      }
     }
   ]
 }
