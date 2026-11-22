@@ -10,13 +10,11 @@ import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
+import { isImplicitPrimaryEraConfig } from "../../../config/implicit-primary-era.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_PRIMARY_MODEL_REF } from "../../../config/utility-model-separation-migration.js";
-import { compareOpenClawVersions } from "../../../config/version.js";
 
-/** The last release that ran an implicit model when config named none. */
-const LAST_IMPLICIT_PRIMARY_RELEASE = "2026.11.6";
 const LEGACY_MODEL_ID = LEGACY_IMPLICIT_PRIMARY_MODEL_REF.slice("openai/".length);
 
 /**
@@ -33,15 +31,13 @@ export async function preserveImplicitOpenAIPrimary(
 ): Promise<{ config: OpenClawConfig; changes: string[] }> {
   const unchanged = { config: cfg, changes: [] };
   const defaultsModel = cfg.agents?.defaults?.model;
-  const touched = cfg.meta?.lastTouchedVersion;
   const affected = listAgentIds(cfg).filter(
     (candidate) => !resolveAgentEffectiveModelPrimary(cfg, candidate),
   );
   if (
     affected.length === 0 ||
     resolveAgentModelPrimaryValue(defaultsModel) ||
-    (touched !== undefined &&
-      (compareOpenClawVersions(touched, LAST_IMPLICIT_PRIMARY_RELEASE) ?? 1) > 0)
+    !isImplicitPrimaryEraConfig(cfg)
   ) {
     return unchanged;
   }
