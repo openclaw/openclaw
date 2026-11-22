@@ -363,6 +363,12 @@ describe.skipIf(!stableCli)("published stable to channel-scoped Gateway recall",
             expect(result.ok, JSON.stringify({ tool: name, result })).toBe(true);
             return result.output?.details;
           };
+          // Compare the migrated override before exercising any tool that can change it.
+          expect(
+            await candidate.client.request("sessions.describe", { key: sibling }),
+          ).toMatchObject({
+            session: { model: "retained-model-override", modelProvider: "synthetic-proof" },
+          });
           const history = await invoke("sessions_history", { sessionKey: sibling, limit: 20 });
           expect(JSON.stringify(history)).toContain(stableWrite);
           expect(JSON.stringify(history)).toContain("same-channel-retained");

@@ -14,6 +14,34 @@ import type { DeferredPluginMigration } from "../../infra/deferred-plugin-migrat
 import { commitPluginInstallRecordsOnly } from "../../plugins/install-record-commit.js";
 
 /**
+ * Hooks for publishing changed plugin records. The combined writer commits the install index
+ * before the config writer's `beforeCommit`, so `beforeRecordWrite` guards that index write and
+ * `beforeCommit` the config write and the records-only index write; each first runs the caller's
+ * `beforeRecordPublication` (an update copies its originals there, once).
+ */
+export function createPluginRecordPublicationHooks(params: {
+  beforeRecordPublication?: () => Promise<void>;
+  configBeforeCommit?: () => void | Promise<void>;
+  assertCurrent: () => void;
+  assertRecoveryCurrent: () => Promise<void>;
+}) {
+  const beforeRecordWrite = async () => {
+    await params.beforeRecordPublication?.();
+    params.assertCurrent();
+  };
+  return {
+    beforeRecordWrite,
+    beforeCommit: async () => {
+      await beforeRecordWrite();
+      await params.configBeforeCommit?.();
+      params.assertCurrent();
+      await params.assertRecoveryCurrent();
+      params.assertCurrent();
+    },
+  };
+}
+
+/**
  * Publishes plugin records alone when convergence changes no config path: the config write would
  * only restamp the file, so a config path the update cannot write cannot fail converged plugin
  * work. Returns false when the config does not read as valid, leaving that case to the write.

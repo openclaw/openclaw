@@ -10,6 +10,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
+  encodeGitHubPublicationRequester,
   type GitHubPublicationOrigin,
 } from "../state/github-publication-requester.js";
 import {
@@ -51,6 +52,8 @@ import { insertGitHubPublicationRequestAsync } from "./github-publication-reques
 import {
   restoreGitHubPublicationRequester,
   isGitHubPublicationRequesterV2,
+  type GitHubPublicationRequesterPolicyV2,
+  type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
@@ -252,6 +255,7 @@ export function createGitHubPublicationCoordinator(params: {
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
     recoveryResult?: SessionGitHubPublicationResult,
+    admittedRequester?: GitHubPublicationRequesterV2,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -281,9 +285,10 @@ export function createGitHubPublicationCoordinator(params: {
           };
           let effect: SessionGitHubPublicationResult["effect"];
           let dispatched = false;
-          let requester: Awaited<ReturnType<typeof restoreGitHubPublicationRequester>> | undefined;
+          let requester: GitHubPublicationRequesterPolicyV2 | undefined;
+          let releaseRequester: (() => void) | undefined;
           let lifecycleRevision: string | null | undefined;
-          const revokeInvocation = () => requester?.release();
+          const revokeInvocation = () => releaseRequester?.();
           invocationSignal?.addEventListener("abort", revokeInvocation, { once: true });
           signal.addEventListener("abort", revokeInvocation, { once: true });
           const getRequester = () => {
@@ -376,11 +381,21 @@ export function createGitHubPublicationCoordinator(params: {
                 assertInvocationCurrent?.();
                 invocationSignal?.throwIfAborted();
                 signal.throwIfAborted();
-                requester = await restoreGitHubPublicationRequester(
-                  lifecycle?.requester_authority_json,
-                  { sessionKey: claimed.session_key, agentId: claimed.agent_id },
-                  params.getCommittedRuntimeConfig,
-                );
+                if (
+                  admittedRequester &&
+                  encodeGitHubPublicationRequester(admittedRequester.snapshot) ===
+                    lifecycle?.requester_authority_json
+                ) {
+                  requester = admittedRequester;
+                } else {
+                  const restored = await restoreGitHubPublicationRequester(
+                    lifecycle?.requester_authority_json,
+                    { sessionKey: claimed.session_key, agentId: claimed.agent_id },
+                    params.getCommittedRuntimeConfig,
+                  );
+                  requester = restored;
+                  releaseRequester = restored.release;
+                }
                 lifecycleRevision = lifecycle?.lifecycle_revision;
                 signal.throwIfAborted();
                 invocationSignal?.throwIfAborted();
@@ -469,7 +484,7 @@ export function createGitHubPublicationCoordinator(params: {
           } finally {
             signal.removeEventListener("abort", revokeInvocation);
             invocationSignal?.removeEventListener("abort", revokeInvocation);
-            requester?.release();
+            releaseRequester?.();
             await lease.release();
           }
         }),

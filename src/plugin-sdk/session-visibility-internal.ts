@@ -140,7 +140,7 @@ function channelScopeMatchesSessionKey(
   );
 }
 
-function sameChannelScope(left?: SessionChannelScope, right?: SessionChannelScope): boolean {
+export function sameChannelScope(left?: SessionChannelScope, right?: SessionChannelScope): boolean {
   return Boolean(
     left?.provider &&
     left.accountId &&

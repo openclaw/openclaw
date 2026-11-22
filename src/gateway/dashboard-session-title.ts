@@ -157,7 +157,7 @@ function resolveDashboardTitleAuthProfile(params: {
     return undefined;
   }
   const configuredModel = resolveSessionModelRef(params.cfg, undefined, params.agentId);
-  return configuredModel.provider === params.regularProvider ? configuredProfile : undefined;
+  return configuredModel?.provider === params.regularProvider ? configuredProfile : undefined;
 }
 
 // Introductions models put before the requested title, e.g. "Session title:",
@@ -297,6 +297,14 @@ async function generateDashboardSessionTitle(params: {
 }): Promise<string | null> {
   const sourceText = params.sourceText;
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!regularModel) {
+    // No configured model can write a title; take the same fallback as a failed model.
+    if (params.utilityOnly || params.callerFallback) {
+      return null;
+    }
+    params.onFallback?.();
+    return createCrustaceanSlug();
+  }
   const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: regularModel.provider,
     entry: params.entry,

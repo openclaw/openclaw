@@ -90,7 +90,6 @@ function createOriginatingRun(currentChat = CURRENT) {
     },
     toolContext,
     revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
-    releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
     createTool: (config: OpenClawConfig) =>
       wrapToolWithGatewayCallerIdentity(
         createMessageTool({
@@ -612,39 +611,33 @@ it.each(["channel-list", "member-info"] as const)(
   },
 );
 
-it.each(["allowed", "turn", "claim"] as const)(
-  "uses the normal local message tool (%s)",
-  async (mode) => {
-    const fixture = createFixture();
-    setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-    const tool = fixture.run.createTool(fixture.cfg);
-    beforeReply = (request) => {
-      if (request.path !== CHAT_PATH) {
-        return;
-      }
-      if (mode === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (mode === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
-    const result = track(
-      tool.execute("feishu-read", {
-        action: "read",
-        channel: "feishu",
-        target: `chat:${ALLOWED}`,
-        messageId: MESSAGE,
-      }),
-    );
-    if (mode === "allowed") {
-      expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
-    } else {
-      await expect(result).rejects.toThrow("no longer active");
+it.each(["allowed", "turn"] as const)("uses the normal local message tool (%s)", async (mode) => {
+  const fixture = createFixture();
+  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+  const tool = fixture.run.createTool(fixture.cfg);
+  beforeReply = (request) => {
+    if (request.path !== CHAT_PATH) {
+      return;
     }
-    expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
-  },
-);
+    if (mode === "turn") {
+      fixture.run.revokeTurn();
+    }
+  };
+  const result = track(
+    tool.execute("feishu-read", {
+      action: "read",
+      channel: "feishu",
+      target: `chat:${ALLOWED}`,
+      messageId: MESSAGE,
+    }),
+  );
+  if (mode === "allowed") {
+    expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
+  } else {
+    await expect(result).rejects.toThrow("no longer active");
+  }
+  expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
+});
 
 it("rejects a configured account disabled after local message-tool creation", async () => {
   const fixture = createFixture();

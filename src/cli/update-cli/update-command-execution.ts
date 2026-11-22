@@ -465,12 +465,6 @@ export async function executeMutableUpdate(
       );
     }
     assertExecutionCurrent();
-    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
-    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
-    await prepareMutableUpdate(env, activationTimeoutMs);
-    assertExecutionCurrent();
-    await recordPhase("activating");
-    assertExecutionCurrent();
     const publication = {
       // Every consumer keeps the release it started from; a release replaces no root.
       roots: params.updateInstallKind === "git" ? [] : roots,
@@ -485,6 +479,17 @@ export async function executeMutableUpdate(
       selected: preManagedServiceStop,
       phase: "before-stop",
     });
+    // Activation is this run's first state change. Copy the originals after the last
+    // pre-stop refusal, while the Gateway still serves, and before the activation clock
+    // starts: a refused run copies nothing and the copy never spends activation time.
+    await originalRun?.captureOriginal?.();
+    assertExecutionCurrent();
+    const activationTimeoutMs = params.opts.run?.deadline?.remainingMs() ?? params.timeoutMs;
+    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+    await prepareMutableUpdate(env, activationTimeoutMs);
+    assertExecutionCurrent();
+    await recordPhase("activating");
+    assertExecutionCurrent();
     if (!servicePrepared) {
       await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);

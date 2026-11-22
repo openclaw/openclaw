@@ -14,7 +14,10 @@ import {
   type SessionStoreTarget,
 } from "../../config/sessions/targets.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility-internal.js";
+import {
+  resolveSessionChannelScope,
+  sameChannelScope,
+} from "../../plugin-sdk/session-visibility-internal.js";
 import { createAgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -243,22 +246,32 @@ export async function searchRecallSessionTranscripts(params: {
         if (revision !== projection.sharingRevision) {
           return false;
         }
+        const liveRequester =
+          recall.visibility === "channel"
+            ? read.describe({ agentId: recall.requesterAgentId, key: recall.requesterSessionKey })
+            : undefined;
         const requesterCurrent =
           recall.visibility !== "channel" ||
-          (requester !== undefined &&
-            read.describe({
-              agentId: recall.requesterAgentId,
-              key: recall.requesterSessionKey,
-            })?.entry.sessionId === requester.sessionId);
+          (liveRequester !== undefined && liveRequester.entry.sessionId === requester?.sessionId);
+        const requesterScope = liveRequester && channelScopeFor(liveRequester);
         const current = requesterCurrent
           ? pages.filter(({ target, page }) =>
               recall.visibility === "channel"
                 ? page.hits.every((hit) => {
                     const expected = admittedSessionIds.get(targetIdentity(target, hit.sessionKey));
+                    const row = read.describe({ ...target, key: hit.sessionKey });
+                    if (!row || expected === undefined || row.entry.sessionId !== expected) {
+                      return false;
+                    }
+                    if (
+                      hit.sessionKey === recall.requesterSessionKey &&
+                      target.agentId === recall.requesterAgentId
+                    ) {
+                      return true;
+                    }
                     return (
-                      expected !== undefined &&
-                      read.describe({ ...target, key: hit.sessionKey })?.entry.sessionId ===
-                        expected
+                      sameChannelScope(requester?.channelScope, requesterScope) &&
+                      sameChannelScope(requesterScope, channelScopeFor(row))
                     );
                   })
                 : authorize(
