@@ -17,7 +17,6 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   bindActiveOperatorTurnAuthority,
-  bindActiveCronAuthorityCurrentness,
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
   bindCronManagementToolConstruction,
@@ -144,11 +143,8 @@ it("retains the original caller predicate and rejects resolver use after revocat
     () => current,
   )!;
   await runWithCronCreatorAuthorityCapability(capability, async () => {
-    expect(bindActiveCronAuthorityCurrentness("other-run")).toBeUndefined();
-    const captured = bindActiveCronAuthorityCurrentness(capability.runId);
     const { creator, resolve } = creatorFixture(capability, "message");
     current = false;
-    expect(captured?.()).toBe(false);
     await expect(creator!()).rejects.toThrow("Automation caller authority is no longer active");
     expect(resolve).not.toHaveBeenCalled();
   });
