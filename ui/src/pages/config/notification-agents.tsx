@@ -49,17 +49,20 @@ export function NotificationAgentsRow(props: AgentRowProps) {
       })
       .join(", ");
   };
-  const summary = createMemo(() =>
-    props.agentIds === undefined
-      ? t("configView.notifications.inheritAgents", {
-          agents: props.inheritedAgentIds?.length
-            ? names(props.inheritedAgentIds)
-            : t("configView.notifications.allAgents"),
-        })
-      : props.agentIds.length
-        ? names(props.agentIds)
-        : t("configView.notifications.allAgents"),
-  );
+  const summary = createMemo(() => {
+    const ids = props.agentIds ?? props.inheritedAgentIds ?? [];
+    const full = ids.length ? names(ids) : t("configView.notifications.allAgents");
+    // Keep small selections readable without growing a settings row for an entire roster.
+    const compact =
+      ids.length > 2
+        ? t("configView.notifications.agentsSelected", { count: String(ids.length) })
+        : full;
+    const scoped = (agents: string) =>
+      props.agentIds === undefined
+        ? t("configView.notifications.inheritAgents", { agents })
+        : agents;
+    return { full: scoped(full), compact: scoped(compact) };
+  });
   return (
     <>
       <SettingsRow
@@ -67,10 +70,11 @@ export function NotificationAgentsRow(props: AgentRowProps) {
         control={
           <button
             type="button"
-            class="btn"
+            class="btn notification-agents__trigger"
             disabled={props.disabled}
             aria-label={t("configView.notifications.chooseAgents")}
-            title={summary()}
+            aria-description={summary().full}
+            title={summary().full}
             onClick={() => {
               setDraft({
                 mode:
@@ -84,7 +88,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
               props.onLoadAgents?.();
             }}
           >
-            <span class="picker-select__label">{summary()}</span>
+            <span>{summary().compact}</span>
             <Icon name="chevronDown" />
           </button>
         }

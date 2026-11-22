@@ -1964,6 +1964,26 @@ openclaw-approvals-page .data-table-pagination__info {
   align-self: start;
 }
 
+.settings-row__control > .notification-agents__trigger {
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: var(--settings-control-height);
+  padding-block: 4px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  white-space: normal;
+  text-align: start;
+
+  > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  > svg {
+    flex: none;
+  }
+}
+
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
 .quiet-hours-window .settings-row {
   padding-top: 0;
