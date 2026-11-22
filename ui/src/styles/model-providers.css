@@ -315,25 +315,29 @@
     width: 100%;
   }
 
+  .model-picker .picker-select__trigger .picker-select__label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .model-picker .picker-select__option {
-    /* Access metadata belongs to the option list, beside the model name. */
+    /* Keep access beside short names; give it its own line when the two do not fit. */
     .picker-select__copy {
       display: flex;
       flex: 1;
       align-items: center;
-      gap: var(--space-2);
+      flex-wrap: wrap;
+      gap: 2px var(--space-2);
     }
 
     .picker-select__label {
-      flex: 1;
-      white-space: nowrap;
+      flex: 1 1 max-content;
     }
 
     .picker-select__description {
-      max-width: 50%;
+      max-width: 100%;
       color: var(--muted);
-      text-align: end;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
     }
   }
 

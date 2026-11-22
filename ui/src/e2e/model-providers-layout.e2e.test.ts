@@ -59,6 +59,59 @@ const gatewayScenario = {
 };
 
 suite.define(() => {
+  it("shows both runtime names in the phone picker and the saved fallback", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" },
+      async ({ page }) => {
+        const name = "Studio documentation review extended context";
+        const ref = "openai/studio-review";
+        const entry = {
+          ...models[0],
+          id: "studio-review",
+          name,
+          defaultModelRuntimes: {
+            base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+            alternatives: [{ agentRuntime: { id: "codex", source: "model" }, available: true }],
+          },
+        };
+        const saved = {
+          agents: {
+            defaults: {
+              ...config.agents.defaults,
+              model: { primary: "openai/gpt-5.5", fallbacks: [ref] },
+              models: { [ref]: { agentRuntime: { id: "codex" } } },
+            },
+          },
+        };
+        const gw = await installMockGateway(page, {
+          ...gatewayScenario,
+          methodResponses: {
+            ...gatewayScenario.methodResponses,
+            "models.list": { ...catalog, models: [...models, entry] },
+            "config.patch": { ok: true, config: saved, hash: "saved" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/model-providers");
+        const defaults = page.locator(".model-providers__defaults");
+        const trigger = defaults.getByRole("button", { name: /^Fallback model:/ });
+        await trigger.tap();
+        const list = defaults.getByRole("listbox");
+        const variants = list.getByRole("option").filter({ hasText: name });
+        await expect.poll(() => variants.count()).toBe(2);
+        const overflow = (el: Element) => el.scrollWidth - el.clientWidth;
+        expect(
+          await variants
+            .locator(".picker-select__label")
+            .evaluateAll((els) => els.map((el) => el.scrollWidth - el.clientWidth)),
+        ).toEqual([0, 0]);
+        await gw.setMethodResponse("config.get", sourceConfigSnapshot(saved, "saved"));
+        await variants.filter({ hasText: "Codex" }).tap();
+        await gw.waitForRequest("config.patch");
+        await expect.poll(() => trigger.textContent()).toContain(name + " · Codex");
+        expect(await trigger.locator(".picker-select__label").evaluate(overflow)).toBe(0);
+      },
+    );
+  });
   it.each([1440, 1100, 768, 640, 390])(
     "Models page keeps controls separate during discovery at %ipx",
     async (width) => {
