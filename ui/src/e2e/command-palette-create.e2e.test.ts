@@ -177,38 +177,40 @@ suite.define(() => {
           await installMockGateway(page, scenario());
           const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
           await input.press("Tab");
-          const popup = palette.locator(".oc-popover.palette-session-settings");
+          const popup = palette.getByRole("dialog", {
+            name: "New session settings",
+            includeHidden: true,
+            exact: true,
+          });
           await changePicker(popup, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
           const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
           expect(await remember.isVisible()).toBe(true);
-          const workspaceButton = popup.locator(".palette-session-settings__workspace");
-          const search = popup.getByRole("searchbox", { name: "Search", exact: true });
-          await workspaceButton.click();
-          await search.waitFor({ state: "visible" });
-          await expectPaletteProjectGrouping(popup);
-          expect.soft(await remember.count()).toBe(0);
-          // The nested view opens in its search field, by pointer or by keyboard.
-          expect
-            .soft(await search.evaluate((element) => document.activeElement === element))
-            .toBe(true);
-          await page.keyboard.press("Escape");
-          expect(await remember.isVisible()).toBe(true);
-          expect(
-            await workspaceButton.evaluate((element) => document.activeElement === element),
-          ).toBe(true);
-          await workspaceButton.press("Enter");
-          await search.waitFor({ state: "visible" });
-          expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
-          await page.keyboard.type("no-such-workspace");
-          expect(await popup.locator("[data-machine]").count()).toBe(0);
-          await popup.getByRole("button", { name: "Back", exact: true }).click();
-          expect(await remember.isVisible()).toBe(true);
-          await workspaceButton.press("Enter");
+          expect(await popup.getByRole("switch", { name: "New worktree" }).count()).toBe(0);
+          const workspaceButton = palette.locator(".palette-session-settings__workspace");
+          const projects = palette.locator(".palette-session-project");
+          await changePicker(projects, "overlay-after-show", () => workspaceButton.click());
+          const search = projects.getByRole("searchbox", { name: "Search", exact: true });
+          await expectPaletteProjectGrouping(projects);
+          expect(await remember.isVisible()).toBe(false);
+          expect(await projects.getByRole("checkbox", { name: /Remember/ }).count()).toBe(0);
+          await search.fill("no-such-workspace");
+          expect(await projects.locator("[data-machine]").count()).toBe(0);
+          await search.press("Escape");
           expect(await search.inputValue()).toBe("");
-          await popup.locator('[data-machine="local"][data-project=""]').click();
-          expect(await remember.isVisible()).toBe(true);
+          await changePicker(projects, "overlay-after-hide", () => page.keyboard.press("Escape"));
+          expect(await workspaceButton.evaluate((el) => el === document.activeElement)).toBe(true);
+          await changePicker(projects, "overlay-after-show", () => workspaceButton.press("Enter"));
+          expect(await search.inputValue()).toBe("");
+          expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
+          const worktree = projects.getByRole("switch", { name: "New worktree" });
+          await worktree.check();
+          expect(await workspaceButton.getAttribute("aria-label")).toContain("New worktree");
+          await changePicker(projects, "overlay-after-hide", () =>
+            projects.locator('[data-machine="local"][data-project=""]').click(),
+          );
+          expect(await workspaceButton.evaluate((el) => el === document.activeElement)).toBe(true);
         },
       );
     },
@@ -278,7 +280,11 @@ suite.define(() => {
             ),
           ).toEqual([]);
 
-          const settings = palette.locator(".oc-popover.palette-session-settings");
+          const settings = palette.getByRole("dialog", {
+            name: "New session settings",
+            includeHidden: true,
+            exact: true,
+          });
           await changePicker(settings, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
@@ -304,34 +310,28 @@ suite.define(() => {
           expect(await input.isVisible()).toBe(true);
           expect(page.url()).toBe(url);
 
+          const project = palette.locator(".palette-session-settings__workspace");
+          const projects = palette.locator(".palette-session-project");
+          await changePicker(projects, "overlay-after-show", () => project.click());
           if (destination === "local") {
-            const worktree = settings.getByRole("switch", { name: "New worktree", exact: true });
+            const worktree = projects.getByRole("switch", { name: "New worktree", exact: true });
             if ((await worktree.getAttribute("aria-checked")) !== "true") {
               await worktree.click();
             }
+            await changePicker(projects, "overlay-after-hide", () => worktree.press("Escape"));
           }
           if (destination === "device") {
             await gateway.waitForRequest("environments.list");
-            const workspaceChoice = settings.locator(".palette-session-settings__workspace");
-            await workspaceChoice.click();
-            const search = settings.getByRole("searchbox");
+            const search = projects.getByRole("searchbox");
             await search.fill("Palette runner");
-            await search.press("Escape");
-            await page.keyboard.press("Escape");
-            await workspaceChoice.waitFor({ state: "visible" });
-            expect(await input.isVisible()).toBe(true);
-            await workspaceChoice.press("Enter");
-            const runner = settings.locator(
+            const runner = projects.locator(
               '[data-machine="device:palette-runner"][data-project=""]',
             );
             await runner.waitFor();
             await runner.focus();
             await runner.press("Enter");
-            await expect.poll(() => workspaceChoice.textContent()).toContain("Palette runner");
+            await expect.poll(() => project.getAttribute("aria-label")).toContain("Palette runner");
           }
-          await changePicker(settings, "overlay-after-hide", () =>
-            settings.locator(".palette-session-settings__workspace").press("Escape"),
-          );
           const start = palette.getByRole("button", {
             name: "Start new session in background",
             exact: true,

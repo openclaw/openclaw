@@ -45,14 +45,13 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
   );
-  const workspace = get(host, ".palette-session-settings__workspace");
+  expect(settings.querySelector(".palette-session-settings__workspace")).toBeNull();
   const trigger = get(host, ".agent-select__trigger");
   const remember = expectDefined(
     host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
     "remember checkbox",
   );
   expect(remember.disabled).toBe(true);
-  expectArrow(workspace, "ArrowDown", trigger);
 
   trigger.click();
   const menu = get(host, ".agent-select__menu");
@@ -106,8 +105,10 @@ it("uses current placement and preference retry controls after their branches ch
   await host.updateComplete;
   const placementRetry = get(host, "[data-required-placement] button");
   const preferenceRetry = get(host, ".palette-session-settings__error button");
-  const trigger = get(host, ".agent-select__trigger");
-  expectArrow(placementRetry, "ArrowDown", preferenceRetry);
+  expect(get(host, ".palette-session-project").contains(placementRetry)).toBe(true);
+  expect(get(host, ".palette-session-settings").contains(preferenceRetry)).toBe(true);
+  get(host, ".palette-session-settings__workspace").click();
+  expectArrow(placementRetry, "ArrowDown", placementRetry);
 
   available = true;
   await context.agents.refreshList();
@@ -120,12 +121,12 @@ it("uses current placement and preference retry controls after their branches ch
     expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
   );
   const replacementRetry = get(host, "[data-required-placement] button");
-  expectArrow(replacementRetry, "ArrowDown", preferenceRetry);
+  expectArrow(replacementRetry, "ArrowDown", replacementRetry);
 
   options.preferences.failed = false;
   options.onChange();
   await host.updateComplete;
-  expectArrow(replacementRetry, "ArrowDown", trigger);
+  expect(host.querySelector(".palette-session-settings__error button")).toBeNull();
   required = false;
   await context.agents.refreshList();
   await waitForSolid(() =>
@@ -133,7 +134,7 @@ it("uses current placement and preference retry controls after their branches ch
   );
 });
 
-it("keeps filtered choices and unavailable rows in DOM order before the existing footer", async () => {
+it("keeps filtered choices and unavailable rows in DOM order within the project picker", async () => {
   const { host } = await mount({
     scopes: ["operator.admin", "operator.read", "operator.write"],
     agents: [{ id: "main", workspace: "/workspace", model: { primary: "example/local" } }],
@@ -174,7 +175,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   options.preferences.failed = true;
   options.onChange();
   await openSettings(host);
-  const retry = get(host, ".palette-session-settings__error button");
+  expect(get(host, ".palette-session-settings__error button")).toBeDefined();
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
   );
@@ -185,8 +186,8 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   await waitForSolid(() =>
     expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
   );
-  const content = get(host, ".palette-session-settings__content");
-  const back = get(content, ".palette-session-settings__back");
+  const content = get(host, ".palette-session-project .palette-session-settings__content");
+  expect(content.querySelector(".palette-session-settings__remember")).toBeNull();
   await waitForSolid(() =>
     expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );
@@ -207,8 +208,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(search, "ArrowDown", unavailable);
   expectArrow(alpha, "ArrowDown", beta);
   expectArrow(beta, "ArrowDown", connect);
-  expectArrow(connect, "ArrowDown", retry);
-  expectArrow(retry, "ArrowDown", back);
+  expectArrow(connect, "ArrowDown", search);
 
   search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
