@@ -894,6 +894,27 @@ describe("buildInboundUserContextPrefix", () => {
     expect(historyLines[0]).toContain("#msg-0 sender-0: body-0");
   });
 
+  it("bounds compact thread, reply and location strings and neutralizes fences like the default path", () => {
+    const projection = buildCompactInboundUserContextPrefix({
+      ChatType: "group",
+      ThreadStarterBody: "T".repeat(10_000),
+      ReplyToSender: "sender-1",
+      ReplyToBody: `before ${"`".repeat(3)} after`,
+      LocationName: "L".repeat(10_000),
+      LocationLat: 1,
+      LocationLon: 2,
+    } as TemplateContext);
+
+    const lines = projection.text.split("\n");
+    for (const prefix of ["Thread starter:", "Location:"]) {
+      const line = lines.find((candidate) => candidate.startsWith(prefix));
+      expect(line, prefix).toBeDefined();
+      expect(line?.length ?? 0, prefix).toBeLessThan(2_200);
+      expect(line, prefix).toContain("…[truncated]");
+    }
+    expect(projection.text).not.toContain("`".repeat(3));
+  });
+
   it("removes transcript-backed history by durable identity in compact mode", () => {
     const projection = buildCompactInboundUserContextPrefix({
       ChatType: "group",

@@ -12,7 +12,11 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
-import { formatContextJsonBlock, selectInboundHistoryContext } from "./channel-prompt-context.js";
+import {
+  formatContextJson,
+  formatContextJsonBlock,
+  selectInboundHistoryContext,
+} from "./channel-prompt-context.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { formatTelegramCurrentMessageContext } from "./inbound-meta.current-message.js";
@@ -392,14 +396,14 @@ export function buildCompactInboundUserContextPrefix(
     mention_source: normalizePromptMetadataString(ctx.MentionSource),
   };
   if (Object.values(compactFacts).some((value) => value !== undefined)) {
-    blocks.push(`Context: ${JSON.stringify(compactFacts)}`);
+    blocks.push(`Context: ${formatContextJson(compactFacts)}`);
   }
 
   const replyBody = sanitizeTranscriptText(ctx.ReplyToBody, "body");
   const replySender = normalizePromptMetadataString(ctx.ReplyToSender);
   if (replyBody || replySender) {
     blocks.push(
-      `Reply target: ${JSON.stringify({
+      `Reply target: ${formatContextJson({
         sender: replySender,
         body: replyBody,
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
@@ -409,13 +413,13 @@ export function buildCompactInboundUserContextPrefix(
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
-    blocks.push(`Thread starter: ${JSON.stringify({ body: threadStarterBody })}`);
+    blocks.push(`Thread starter: ${formatContextJson({ body: threadStarterBody })}`);
   }
 
   const forwardedFrom = normalizePromptMetadataString(ctx.ForwardedFrom);
   if (forwardedFrom) {
     blocks.push(
-      `Forwarded: ${JSON.stringify({
+      `Forwarded: ${formatContextJson({
         from: forwardedFrom,
         type: normalizePromptMetadataString(ctx.ForwardedFromType),
         username: normalizePromptMetadataString(ctx.ForwardedFromUsername),
@@ -426,7 +430,7 @@ export function buildCompactInboundUserContextPrefix(
 
   const location = buildLocationContextPayload(ctx);
   if (location) {
-    blocks.push(`Location: ${JSON.stringify(location)}`);
+    blocks.push(`Location: ${formatContextJson(location)}`);
   }
 
   const seenMessageIds = new Set<string>();
