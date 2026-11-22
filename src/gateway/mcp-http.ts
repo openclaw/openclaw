@@ -297,7 +297,11 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: isGrantAndLineageCurrent,
+                  receiptAuthority: () => {
+                    if (!isGrantAndLineageCurrent()) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                   receiptAdmission: lineage.admission,
                   approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
                   // Management binding needs the admitted identity, not execution's issuer.

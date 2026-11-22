@@ -87,7 +87,13 @@ export function createCodingToolsGatewayCaller(params: {
             ? { sessionEventDelivery: false as const }
             : {}),
           // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
+          receiptAuthority:
+            settleBatch &&
+            (() => {
+              if (!settleBatch.isCurrent()) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            }),
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,
@@ -127,7 +133,7 @@ export function createCodingToolsGatewayCaller(params: {
         ...identity,
         receiptAuthority: () => {
           assertDelegationCurrent();
-          return identity.receiptAuthority?.() ?? true;
+          identity.receiptAuthority?.();
         },
       },
     );
