@@ -9,15 +9,18 @@ import type { GatewayServerOptions } from "./server-public.js";
 const CONFIGURED_PROFILES: ReadonlySet<unknown> = new Set(["auto", "standard", "lean"]);
 
 async function readStartupSourceConfig(): Promise<OpenClawConfig> {
-  const [{ createConfigIO }, { cloneEnvWithPlatformSemantics }] = await Promise.all([
-    import("../config/io.js"),
-    import("../config/config-env-vars.js"),
-  ]);
-  // Bootstrap reads the authoritative snapshot later; this read must not change process env.
-  return await createConfigIO({
-    env: cloneEnvWithPlatformSemantics(process.env),
-    observe: false,
-  }).readSourceConfigBestEffort();
+  const [{ createConfigIO }, { cloneEnvWithPlatformSemantics }, { loadDotEnv }] = await Promise.all(
+    [
+      import("../config/io.js"),
+      import("../config/config-env-vars.js"),
+      import("../infra/dotenv.js"),
+    ],
+  );
+  // Bootstrap reads the authoritative snapshot later and applies dotenv to process env.
+  // Resolve the same dotenv values here without changing process env.
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  loadDotEnv({ env });
+  return await createConfigIO({ env, observe: false }).readSourceConfigBestEffort();
 }
 
 /**

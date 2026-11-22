@@ -15,7 +15,6 @@ import {
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import {
-  createPostReadyWorkGate,
   LEAN_POST_READY_FIRST_CHECK_MS,
   schedulePostReadyWorkRelease,
 } from "./server-post-ready-release.js";
@@ -42,38 +41,39 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
-  it("starts lean maintenance at the first idle check although its root awaits the barrier", async () => {
+  it("waits for post-ready work before admitting maintenance, so lean releases when idle", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const gate = createPostReadyWorkGate();
+    const gate = createDeferredCore();
     const start = vi.fn(async () => {});
     const startMaintenance = vi.fn(async () => null);
     try {
       scheduleGatewayPostReadyMaintenance(
         createPostReadyMaintenanceScheduleParams({
           scheduler,
-          waitForPostReadyWork: gate.wait,
+          waitForPostReadyWork: () => gate.promise,
           startMaintenance,
           cronState: createTestCronState({ start }),
         }),
       );
-      // Maintenance admits its root, then waits for the barrier inside this wake.
+      // Maintenance waits for the barrier inside this wake without holding root work.
       const maintenanceWake = clock.advanceBy(1);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-      expect(gate.isBusy()).toBe(false);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const release = vi.fn(gate.resolve);
       schedulePostReadyWorkRelease({
         scheduler,
         profile: "lean",
-        release: gate.release,
+        release,
         isClosing: () => false,
-        isBusy: gate.isBusy,
       });
       await clock.advanceBy(LEAN_POST_READY_FIRST_CHECK_MS);
+      expect(release).toHaveBeenCalledOnce();
       await maintenanceWake;
       await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
       expect(startMaintenance).toHaveBeenCalledOnce();
     } finally {
-      gate.release();
+      gate.resolve();
       await scheduler.stop();
     }
   });

@@ -65,13 +65,17 @@ it("falls back to automatic selection for unreadable or invalid settings", async
   );
 });
 
-it("reads the configured profile from the config file without changing process env", async () => {
+it("resolves the profile with the dotenv values bootstrap will apply, without changing process env", async () => {
   const directory = tempDirs.make("startup-resource-profile-");
   const configPath = path.join(directory, "openclaw.json");
-  fs.writeFileSync(configPath, JSON.stringify({ gateway: { resources: { profile: "standard" } } }));
-  fs.writeFileSync(path.join(directory, ".env"), "OPENCLAW_PROFILE_PREDICTION_PROBE=loaded\n");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ gateway: { resources: { profile: "${OPENCLAW_PREDICTED_PROFILE_PROBE}" } } }),
+  );
+  fs.writeFileSync(path.join(directory, ".env"), "OPENCLAW_PREDICTED_PROFILE_PROBE=standard\n");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   vi.stubEnv("OPENCLAW_STATE_DIR", directory);
+  vi.stubEnv("OPENCLAW_PREDICTED_PROFILE_PROBE", undefined);
   try {
     const before = { ...process.env };
     await expect(predictGatewayStartupResourceProfile(undefined)).resolves.toBe("standard");

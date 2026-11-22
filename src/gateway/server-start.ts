@@ -4,13 +4,11 @@ import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
-import {
-  createPostReadyWorkGate,
-  schedulePostReadyWorkRelease,
-} from "./server-post-ready-release.js";
+import { schedulePostReadyWorkRelease } from "./server-post-ready-release.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
@@ -44,8 +42,7 @@ async function startGatewayServerWithSdkHost(
   sdkResourceHost: LegacyPluginSdkResourceHost,
   signal?: AbortSignal,
 ): Promise<GatewayServer> {
-  const postReadyWork = createPostReadyWorkGate();
-  const releasePostReadyWork = postReadyWork.release;
+  const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     deferRequestRuntime: true,
@@ -128,7 +125,7 @@ async function startGatewayServerWithSdkHost(
       logChannels,
       logCron,
       logReload,
-      waitForPostReadyWork: postReadyWork.wait,
+      waitForPostReadyWork: () => postReadyWorkBarrier,
     });
     startupSettled = startup.startupSettled;
     signal?.throwIfAborted();
@@ -153,7 +150,6 @@ async function startGatewayServerWithSdkHost(
         profile: getResourceProfile(),
         release: releasePostReadyWork,
         isClosing: () => gatewayKernel.lifecycle.closePreludeStarted,
-        isBusy: postReadyWork.isBusy,
       });
     },
     // The caller owns deferred startup failure; close releases the background waiters.
