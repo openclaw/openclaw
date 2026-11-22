@@ -71,6 +71,10 @@ describe("prepareAgentRunTerminalReply", () => {
     ["Nothing to report, so NO_REPLY.\n</think>\n\nNO_REPLY", undefined],
     ["<think>quiet</think>\nno_reply", undefined],
     ["<think>quiet</think>\nanswer\nNO_REPLY", "<think>quiet</think>\nanswer"],
+    [
+      "Alert: disk full.\n<think>check</think>\nNO_REPLY",
+      "Alert: disk full.\n<think>check</think>",
+    ],
   ])("classifies the answer after closed reasoning in %j", (rawText, text) => {
     expect(prepareAgentRunTerminalReply({ rawText }).terminalReply).toEqual(
       text === undefined ? { disposition: "silent" } : { disposition: "visible", text },

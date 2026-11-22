@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { scanReasoningTags } from "../../packages/markdown-core/src/reasoning-tags-batch.js";
+import {
+  scanReasoningTags,
+  stripReasoningTagsFromMarkdown,
+} from "../../packages/markdown-core/src/reasoning-tags-batch.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
@@ -60,10 +63,13 @@ export function filterAgentRunTerminalPayloadsForPresentation(params: {
 
 /** Returns full prepared text, or undefined for an explicitly silent reply. */
 export function prepareAgentRunReplyText(rawText: string): string | undefined {
-  // Reasoning the model closed before an exact token is not an answer.
+  // An exact token after closed reasoning is silent; the reducer decides what was reasoning.
   const lastClose = scanReasoningTags(rawText).tags.findLast((tag) => tag.isClose);
-  const answer = lastClose ? rawText.slice(lastClose.index + lastClose.text.length) : rawText;
-  if (isSilentReplyText(answer)) {
+  const silent = lastClose
+    ? isSilentReplyText(rawText.slice(lastClose.index + lastClose.text.length)) &&
+      isSilentReplyText(stripReasoningTagsFromMarkdown(rawText, { mode: "strict", scope: "all" }))
+    : isSilentReplyText(rawText);
+  if (silent) {
     return undefined;
   }
   return stripMixedSilentReplyTokens(rawText) ?? rawText.replace(/[\r\n]\s*NO_REPLY\s*$/iu, "");
