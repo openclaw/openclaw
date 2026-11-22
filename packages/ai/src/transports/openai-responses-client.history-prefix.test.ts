@@ -10,8 +10,8 @@ import {
 import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-sanitize.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
-import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
+import { writerState } from "../provider-state.test-support.js";
+import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createModel, outputMessage } from "./openai-responses-prompt-observer.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
@@ -129,7 +129,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         const response = await stream(model, context, {
           apiKey: "synthetic-prefix-key",
           sessionId,
-          [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+          ...writerState(sessionId),
           transport: "sse",
         });
         const assistant = await response.result();

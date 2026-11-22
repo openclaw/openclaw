@@ -3,6 +3,7 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { transformTransportMessages } from "../../../../src/agents/transport-message-transform.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
 import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
@@ -308,7 +309,7 @@ it.each(["sse", "websocket-cached"] as const)(
       {
         apiKey: "synthetic-conflict-key",
         sessionId: "recovery-exhausted",
-        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("recovery-exhausted"),
+        ...writerState("recovery-exhausted"),
         transport,
       },
     );

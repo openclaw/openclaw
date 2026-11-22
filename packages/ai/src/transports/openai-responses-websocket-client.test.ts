@@ -15,6 +15,7 @@ import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
 import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { createOpenAIResponsesClient as createClient } from "../providers/openai-provider-client.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
@@ -520,7 +521,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     const responseStream = await createStreamFn()(model, history(user("hello", 1)), {
       apiKey: "test-key",
       sessionId: "session-1",
-      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("session-1"),
+      ...writerState("session-1"),
       transport: "auto",
       onResponse,
     });

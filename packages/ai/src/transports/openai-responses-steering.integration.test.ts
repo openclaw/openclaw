@@ -4,6 +4,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { forceFullGc } from "../../../../src/test-utils/retention.js";
 import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { writerState } from "../provider-state.test-support.js";
 import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import type { Context, Model, StreamOptions } from "../types.js";
@@ -367,7 +368,7 @@ describe("Responses WebSocket steering handoff", () => {
         { messages: [{ role: "user", content: "original", timestamp: 0 }] },
         {
           sessionId: "payload-projection",
-          [PROVIDER_STATE_SCOPE]: claimConversationProviderState("payload-projection"),
+          ...writerState("payload-projection"),
           onPayload: (payload) => {
             const request = payload as { input: unknown[] };
             return {

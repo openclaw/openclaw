@@ -323,12 +323,12 @@ export function usePrefixStabilityJourney() {
         seen.push(
           `${session} bytes=${body.length} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`,
         );
-        const wide = requestSession(wire) === WIDE;
-        if (wide) {
-          wideBytes = Math.max(wideBytes, body.length);
-        }
         // Continued Responses requests count their expanded history, like a full request.
         const sent = JSON.stringify(json);
+        const wide = requestSession(wire) === WIDE;
+        if (wide) {
+          wideBytes = Math.max(wideBytes, sent.length);
+        }
         const result = writeReply(api, response, reply, ++ordinal, {
           // A provider counts an image as a fixed token cost, not its base64 length.
           inputTokens: Math.ceil(

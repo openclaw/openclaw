@@ -405,6 +405,8 @@ export function writeReply(
       ]),
     );
   }
+  // Only Responses returns its stored response, for `previous_response_id` expansion.
+  return undefined;
 }
 
 /**

@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, onTestFinished } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { writerState } from "../provider-state.test-support.js";
 import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { claimConversationProviderState } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -472,9 +473,7 @@ describe("streamed argument conflicts", () => {
         {
           apiKey: "synthetic-key-a",
           sessionId: `${transport}-${identityConflict}`,
-          [PROVIDER_STATE_SCOPE]: claimConversationProviderState(
-            `${transport}-${identityConflict}`,
-          ),
+          ...writerState(`${transport}-${identityConflict}`),
           cacheRetention: "none",
           transport,
         },
