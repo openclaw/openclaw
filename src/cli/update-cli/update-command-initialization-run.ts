@@ -227,8 +227,11 @@ export async function initializeAndRunUpdate(
                       // The copy has its own step bound. It spends neither the operator's
                       // --timeout budget nor the executor's activation clock, as before it
                       // became lazy.
+                      // A lazy copy can follow this run's own prepared package activation;
+                      // the held executor fence, not package admission, proves ownership.
+                      const capture = () => captureOriginal({ ownedActivation: true });
                       const outsideActivation = () =>
-                        executor.exclude ? executor.exclude(captureOriginal) : captureOriginal();
+                        executor.exclude ? executor.exclude(capture) : capture();
                       await (run.deadline
                         ? run.deadline.exclude(outsideActivation)
                         : outsideActivation());
@@ -282,7 +285,7 @@ export async function initializeAndRunUpdate(
                 }
                 await runInitialized(initialization);
               };
-              const captureOriginal = async () => {
+              const captureOriginal = async (options?: { ownedActivation?: boolean }) => {
                 if (!policy.captureOriginal || originalCaptureAttempted) {
                   return;
                 }
@@ -293,7 +296,9 @@ export async function initializeAndRunUpdate(
                 const authority = captureUpdateCommandExecutorAuthority(fence, runId);
                 const assertCurrent = () => {
                   fence.assertCurrent();
-                  assertUpdatePackageActivationAdmission(root, packageAdmission);
+                  if (!options?.ownedActivation) {
+                    assertUpdatePackageActivationAdmission(root, packageAdmission);
+                  }
                 };
                 const warn = warnOriginalCapture;
                 originalCaptureAttempted = true;

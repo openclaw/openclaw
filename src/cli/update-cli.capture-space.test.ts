@@ -9,6 +9,7 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as workerRuntime from "../infra/runtime-worker-url.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
+import * as postCoreCapability from "../infra/update-post-core-capability.js";
 import * as recoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { VERSION } from "../version.js";
@@ -250,6 +251,20 @@ describe("original-state capture follows the first state change", () => {
     expect(await captures()).toEqual([result.runId]);
     const store = resolveUpdateCaptureRoot(resolveStateDir());
     await expect(fs.stat(path.join(store, result.runId!, "manifest.json"))).resolves.toBeTruthy();
+    expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
+  });
+
+  it("copies the originals after this run prepares its package publication", async () => {
+    await setup.mockPackageInstallAtCaseDir();
+    // A delegated-post-core candidate gets a prepared publication journal before activation.
+    vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(true);
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    const result = output();
+    expect(getErrorOutput()).toContain("Package publication recovery:");
+    expect(result).not.toMatchObject({ reason: "update-recovery-pending" });
+    expect(await captures()).toEqual([result.runId]);
     expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
   });
 
