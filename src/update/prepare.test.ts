@@ -237,6 +237,8 @@ describe("already-current update", () => {
   ])("still maintains plugins with the serving code and records $name", async (expected) => {
     const { checkout, sha } = await repository();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    // The serving build was made from the target commit.
+    vi.stubEnv("GIT_COMMIT", sha);
     // The serving release's own `update plugins`: records its argv and prints its result.
     await fs.writeFile(
       path.join(checkout, "openclaw.mjs"),

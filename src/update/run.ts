@@ -6,6 +6,7 @@ import path from "node:path";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import {
   finishUpdateRunAsync,
@@ -169,14 +170,11 @@ export async function prepareUpdate(params: {
     if (target.kind === "package" && target.version === params.runningVersion) {
       return await current(target.version);
     }
-    if (target.kind === "git") {
-      const head = await runCommandWithTimeout(
-        ["git", "-C", params.runningRoot, "rev-parse", "HEAD"],
-        { timeoutMs: 10_000 },
-      );
-      if (head.code === 0 && head.stdout.trim() === target.sha) {
-        return await current(target.version);
-      }
+    // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
+    // old code. An unknown build commit prepares a release.
+    const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
+    if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
+      return await current(target.version);
     }
     const checked = await preflight({
       kind: install.kind,
