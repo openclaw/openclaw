@@ -61,7 +61,7 @@
   color: var(--muted);
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .cmd-palette__filter:hover {
@@ -100,7 +100,7 @@
   justify-content: space-between;
   padding: 12px 10px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   line-height: 1.2;
   text-transform: uppercase;
@@ -115,7 +115,7 @@
   min-height: 40px;
   padding: 6px 10px;
   border-radius: calc(12px * var(--openclaw-corner-radius-scale));
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   transition: background var(--duration-fast) ease;
 }
 
@@ -213,7 +213,7 @@
   min-width: 0;
   color: var(--text-strong);
   font-weight: var(--control-ui-font-weight-normal);
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -223,7 +223,7 @@
   grid-row: 1 / span 2;
   align-self: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -232,8 +232,8 @@
   display: block;
   grid-column: 1;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(16px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -269,7 +269,7 @@
   overflow-y: auto;
   padding: 8px 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* On the dock below the panel, as the composer's status band sits below its surface. */

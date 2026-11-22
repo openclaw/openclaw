@@ -2945,7 +2945,7 @@ select.data-table-pagination__size {
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: var(--control-ui-font-weight-normal);
   white-space: nowrap;
   transition:
@@ -2978,7 +2978,7 @@ select.data-table-pagination__size {
   margin-inline-start: auto;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   white-space: nowrap;
 }
 
@@ -3004,7 +3004,7 @@ select.data-table-pagination__size {
   box-shadow: none;
   color: var(--muted);
   font-family: inherit;
-  font-size: 11px;
+  font-size: inherit;
   font-weight: var(--control-ui-font-weight-normal);
   line-height: 1;
 }
@@ -3184,7 +3184,7 @@ select.data-table-pagination__size {
   flex: 0 0 auto;
   padding: 8px 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 @media (max-width: 768px) {

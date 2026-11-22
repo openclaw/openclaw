@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   foregroundKey,
   foregroundDraft,
@@ -16,6 +20,35 @@ import {
 const suite = createControlUiE2eSuite({ name: "command palette mode and submit" });
 
 suite.define(() => {
+  it("scales search result text and its line spacing on a phone", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await page.addInitScript(
+          ({ key }) => {
+            localStorage.setItem(key, JSON.stringify({ textScale: 140 }));
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+        );
+        await installMockGateway(page);
+        await page.goto(new URL("sessions", suite.server.baseUrl).toString());
+        await page.locator("openclaw-sessions-page").waitFor();
+        await page.keyboard.press("ControlOrMeta+K");
+        const palette = page.locator("openclaw-command-palette");
+        const meetings = palette.getByRole("option").filter({ hasText: "Meetings" });
+        await meetings.waitFor();
+        const type = await meetings.evaluate((row) => {
+          const title = getComputedStyle(row.querySelector(".cmd-palette__item-title")!);
+          const description = getComputedStyle(row.querySelector(".cmd-palette__item-desc")!);
+          return [title.fontSize, title.lineHeight, description.fontSize, description.lineHeight];
+        });
+        expect(type).toEqual(["19.6px", "28px", "16.8px", "22.4px"]);
+        await meetings.tap();
+        await page.waitForURL("**/meetings");
+      },
+    );
+  });
+
   it("remembers explicit mode choices across reloads without saving automatic switches", async () => {
     await suite.withPage({}, async ({ page }) => {
       await installMockGateway(page, scenario());
