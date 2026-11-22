@@ -544,6 +544,7 @@ export async function handleChatSendWithStorage(
       session,
       admittedSessionSettings: admission.admittedSessionSettings,
       turn: preparedUserTurn,
+      offloadedRefs: preparedAttachments.value.offloadedRefs,
       imageOrder,
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,

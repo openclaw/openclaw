@@ -54,7 +54,11 @@ import { recordAcceptedSessionParticipantInput } from "../../sessions/session-pa
 import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import type { ChatImageContent } from "../chat-attachments.js";
+import {
+  stripOffloadedMediaMarkers,
+  type ChatImageContent,
+  type OffloadedRef,
+} from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
@@ -114,6 +118,7 @@ export function createChatSendMessageInjectionStarter(params: {
     Awaited<ReturnType<typeof prepareChatSendUserTurn>>,
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
+  offloadedRefs?: readonly OffloadedRef[];
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   documentContext?: ({ status: "rendered" } & InboundDocumentContext) | { status: "failed" };
   userTurnTranscriptRecorder: NonNullable<
@@ -300,12 +305,16 @@ export function createChatSendMessageInjectionStarter(params: {
       }
       const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
       const documentContext = rendered?.text.trim();
-      const text =
-        ctx.media?.length || documentContext || params.documentContext?.status === "failed"
-          ? [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
-              .filter(Boolean)
-              .join("\n\n")
-          : baseText;
+      let text = baseText;
+      if (ctx.media?.length || documentContext || params.documentContext?.status === "failed") {
+        const mediaNote = buildInboundMediaNoteProjection(ctx);
+        const describedRefs = new Set(mediaNote.media.map((fact) => fact.url));
+        const steerBody = stripOffloadedMediaMarkers(
+          baseText,
+          params.offloadedRefs?.filter((ref) => describedRefs.has(ref.mediaRef)) ?? [],
+        );
+        text = [mediaNote.text, steerBody.trim(), documentContext].filter(Boolean).join("\n\n");
+      }
       let admissionRefused = false;
       phase?.mark("detail.run_admission.steer_admit");
       const attempt = await beginSessionControllerSteer({

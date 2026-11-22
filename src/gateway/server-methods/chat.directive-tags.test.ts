@@ -1709,6 +1709,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
     expect(queueMessage).toHaveBeenCalledOnce();
     const [injectedText] = expectDefined(queueMessage.mock.calls[0], "injected document text");
+    expect(injectedText.match(/\[media attached: /gu)).toHaveLength(1);
+    expect(injectedText).toContain(`media://inbound/${document.id}`);
+    expect(injectedText).toContain(" (text/plain)");
     if (renderFails) {
       expect(respond).toHaveBeenCalledWith(
         true,
