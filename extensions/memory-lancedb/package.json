@@ -7,9 +7,6 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "bundleDependencies": [
-    "apache-arrow"
-  ],
   "dependencies": {
     "apache-arrow": "21.2.0",
     "openai": "7.47.0",
@@ -48,6 +45,7 @@
       ]
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

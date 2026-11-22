@@ -203,7 +203,6 @@ extensions/teams-meetings/src/transports/teams-meetings-page-scripts.ts	3
 extensions/teams-meetings/src/transports/teams-meetings-status-prejoin-source.ts	2
 extensions/telegram/src/bot-handlers.callback-router.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
-extensions/telegram/src/bot-native-command-login.ts	1
 extensions/telegram/src/thread-bindings-reconcile.ts	1
 extensions/telegram/src/thread-bindings-state.ts	1
 extensions/tlon/src/monitor/index.ts	1
@@ -317,7 +316,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	41
+src/agents/cron-creator-authority-context.ts	39
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -510,7 +509,7 @@ src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
 src/agents/tools/cron-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
-src/agents/tools/gateway-caller-context.ts	5
+src/agents/tools/gateway-caller-context.ts	2
 src/agents/tools/image-generate-review-actions.ts	7
 src/agents/tools/media-generate-background-completion.ts	4
 src/agents/tools/media-generate-background-shared.ts	1
@@ -582,7 +581,6 @@ src/auto-reply/reply/bash-command.ts	2
 src/auto-reply/reply/channel-run-admission.ts	2
 src/auto-reply/reply/commands-compact.runtime.ts	12
 src/auto-reply/reply/commands-fork.ts	4
-src/auto-reply/reply/commands-login.ts	1
 src/auto-reply/reply/commands-session-abort.ts	2
 src/auto-reply/reply/commands-session-store.ts	2
 src/auto-reply/reply/conversation-turn-capture.ts	4
@@ -707,7 +705,7 @@ src/config/control-ui-link-base.ts	2
 src/config/io.audit.ts	1
 src/context-engine/delegate.ts	2
 src/context-engine/transcript-byte-limit.ts	2
-src/cron/active-jobs.ts	11
+src/cron/active-jobs.ts	4
 src/cron/isolated-agent/run-prepare-runtime.ts	2
 src/cron/isolated-agent/run-prompt-executor.ts	1
 src/cron/isolated-agent/run-session-state.ts	2
@@ -847,7 +845,6 @@ src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
 src/gateway/operator-invocation-authority.ts	3
 src/gateway/operator-run-authority.ts	1
-src/gateway/operator-run-recovery.ts	3
 src/gateway/plugin-command-scheduled-run.ts	9
 src/gateway/question-manager.ts	4
 src/gateway/question-session-access.ts	4
@@ -897,9 +894,9 @@ src/gateway/server-methods/chat-prediction-handler.ts	6
 src/gateway/server-methods/chat-reply-media.ts	1
 src/gateway/server-methods/chat-send-admission-errors.ts	1
 src/gateway/server-methods/chat-send-admission.ts	6
-src/gateway/server-methods/chat-send-agent-dispatch.ts	4
+src/gateway/server-methods/chat-send-agent-dispatch.ts	3
 src/gateway/server-methods/chat-send-commentary-media.ts	5
-src/gateway/server-methods/chat-send-dashboard-authority.ts	2
+src/gateway/server-methods/chat-send-dashboard-authority.ts	1
 src/gateway/server-methods/chat-send-delivery-authority.ts	1
 src/gateway/server-methods/chat-send-dispatch-errors.ts	1
 src/gateway/server-methods/chat-send-goal-admission.ts	5
@@ -949,7 +946,7 @@ src/gateway/server-methods/nodes.invoke.ts	2
 src/gateway/server-methods/plugin-approval.ts	3
 src/gateway/server-methods/plugins-mutations.ts	1
 src/gateway/server-methods/projects-session-store.ts	2
-src/gateway/server-methods/request-authorization.ts	7
+src/gateway/server-methods/request-authorization.ts	6
 src/gateway/server-methods/requester-model-catalog.ts	2
 src/gateway/server-methods/session-active-runs.ts	4
 src/gateway/server-methods/session-activity-summary.ts	4
@@ -1002,7 +999,6 @@ src/gateway/server-methods/update-admission.ts	1
 src/gateway/server-methods/update-report.ts	2
 src/gateway/server-methods/update-status.ts	4
 src/gateway/server-methods/update.ts	1
-src/gateway/server-methods/usage-overview-report.ts	2
 src/gateway/server-methods/usage-session-selection.ts	9
 src/gateway/server-methods/usage.ts	2
 src/gateway/server-plugin-forked-turn.ts	2

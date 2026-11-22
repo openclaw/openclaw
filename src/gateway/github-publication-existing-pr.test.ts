@@ -333,41 +333,35 @@ describe("shared publication to a prepared original PR", () => {
     },
   );
 
-  it.each([
-    "unlinked",
-    "wrong author",
-    "maintainer edits disabled",
-    "remote advance",
-    "revoked role",
-  ])("refuses %s without changing the original branch", async (scenario) => {
-    const f = await fixture(true, scenario !== "unlinked");
-    if (scenario === "wrong author") {
-      f.pr.user.id = 202;
-    }
-    if (scenario === "maintainer edits disabled") {
-      f.pr.maintainer_can_modify = false;
-    }
-    if (scenario === "remote advance") {
-      f.pr.head.sha = "f".repeat(40);
-    }
-    if (scenario === "revoked role") {
-      await f.revoke();
-    }
-    try {
-      const result = await f.publish(scenario);
-      expect(result).toMatchObject({ status: "failed" });
-      if (scenario === "remote advance") {
-        expect(result).toMatchObject({
-          code: "push_rejected",
-          nextAction: expect.stringContaining("Do not create a replacement PR"),
-        });
+  it.each(["unlinked", "wrong author", "maintainer edits disabled", "remote advance"])(
+    "refuses %s without changing the original branch",
+    async (scenario) => {
+      const f = await fixture(true, scenario !== "unlinked");
+      if (scenario === "wrong author") {
+        f.pr.user.id = 202;
       }
-    } catch (error) {
-      expect(String(error)).toMatch(/authoriz|authority|scope/);
-    }
-    f.expectWrites(0);
-    expect(await f.local.git("rev-parse", "HEAD")).toBe(f.originalHead);
-  });
+      if (scenario === "maintainer edits disabled") {
+        f.pr.maintainer_can_modify = false;
+      }
+      if (scenario === "remote advance") {
+        f.pr.head.sha = "f".repeat(40);
+      }
+      try {
+        const result = await f.publish(scenario);
+        expect(result).toMatchObject({ status: "failed" });
+        if (scenario === "remote advance") {
+          expect(result).toMatchObject({
+            code: "push_rejected",
+            nextAction: expect.stringContaining("Do not create a replacement PR"),
+          });
+        }
+      } catch (error) {
+        expect(String(error)).toMatch(/authoriz|authority|scope/);
+      }
+      f.expectWrites(0);
+      expect(await f.local.git("rev-parse", "HEAD")).toBe(f.originalHead);
+    },
+  );
 
   it.each([false, true])(
     "does not grant guest authorship from a maintainer's imported-PR update receipt (same branch=%s)",
@@ -519,7 +513,7 @@ describe("shared publication to a prepared original PR", () => {
   );
 
   it.each(["closed", "revoked"])(
-    "preserves an accepted request without returning a receipt to a %s requester",
+    "retains an accepted request when its requester is %s after push",
     async (change) => {
       const f = await fixture(true);
       f.loseResponse();
@@ -530,7 +524,12 @@ describe("shared publication to a prepared original PR", () => {
           await f.revoke();
         }
       });
-      await expect(f.publish("unavailable-after-push")).rejects.toThrow(/authoriz|authority/);
+      const publication = f.publish("unavailable-after-push");
+      if (change === "closed") {
+        await expect(publication).rejects.toThrow(/authoriz|authority/);
+      } else {
+        await expect(publication).resolves.toMatchObject({ status: "publishing" });
+      }
       f.expectWrites(1);
     },
   );

@@ -16,7 +16,13 @@ import {
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
+  type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import {
+  createSidebarRenameScope,
+  SidebarRenameScope,
+  orderWhileRenaming,
+} from "./sidebar-rename-order.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
@@ -28,8 +34,12 @@ export function renderSessionSection(params: {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section),
     personHeaders = createMemo(() => params.personHeaders);
+  const renameScope = createSidebarRenameScope();
+  const displayRows = createMemo((previous: readonly SidebarRecentSession[] | undefined) =>
+    orderWhileRenaming(section().rows, previous, renameScope.editing),
+  );
   const sessionWindow = createSidebarSessionWindow(
-    () => section().rows,
+    displayRows,
     host,
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
@@ -403,22 +413,24 @@ export function renderSessionSection(params: {
                 ref={sessionWindow.bind}
                 class="sidebar-session-window"
                 role="presentation"
-                style={{ position: "relative", height: sessionWindow.height() }}
+                style={{ "padding-block-end": sessionWindow.trailingSpace() }}
               >
-                <For each={sessionWindow.rows()} keyed={(session) => session.key}>
-                  {(session) => (
-                    <SessionTree
-                      host={host()}
-                      session={session()}
-                      pinReorder={pinned()}
-                      window={sessionWindow}
-                      listPosition={{
-                        index: section().rows.indexOf(session()),
-                        count: section().rows.length,
-                      }}
-                    />
-                  )}
-                </For>
+                <SidebarRenameScope value={renameScope}>
+                  <For each={sessionWindow.rows()} keyed={(session) => session.key}>
+                    {(session) => (
+                      <SessionTree
+                        host={host()}
+                        session={session()}
+                        pinReorder={pinned()}
+                        window={sessionWindow}
+                        listPosition={{
+                          index: displayRows().indexOf(session()),
+                          count: section().rows.length,
+                        }}
+                      />
+                    )}
+                  </For>
+                </SidebarRenameScope>
               </div>
             </div>
           ) : undefined}

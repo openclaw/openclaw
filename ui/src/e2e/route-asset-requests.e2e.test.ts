@@ -44,7 +44,8 @@ const suite = createControlUiE2eSuite({
 });
 // First visits must not regain the removed request wave or eager Markdown reader.
 const readyWindowRequestLimits = {
-  skills: 28,
+  // The two Customize sidebar assets can settle before page readiness on Linux.
+  skills: 30,
   // The three Settings sidebar assets can settle before page readiness on Linux.
   "skill-settings": 31,
   plugins: 56,

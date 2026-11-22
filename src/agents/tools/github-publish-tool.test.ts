@@ -43,6 +43,28 @@ function setup() {
   return { callGateway, tool, execute };
 }
 
+it("offers issue creation without workspace publication, but not in observation-only mode", async () => {
+  const input = { action: "create_issue", title: "Report", body: "Details" };
+  const tool = createGitHubPublishTool({ publicationAvailable: false });
+  expect(Value.Check(tool.parameters, input)).toBe(true);
+  expect(Value.Check(createGitHubPublishTool({ observationOnly: true }).parameters, input)).toBe(
+    false,
+  );
+  const { callGateway } = setup();
+  await withGatewayToolCallerIdentity(caller, () => tool.execute("issue", input));
+  expect(callGateway).toHaveBeenCalledWith("sessions.github.action", {
+    sessionKey: caller.sessionKey,
+    agentId: caller.agentId,
+    ...input,
+  });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () =>
+      tool.execute("issue", { ...input, publishingSessionKey: "other" }),
+    ),
+  ).rejects.toThrow(/only/);
+  expect(callGateway).toHaveBeenCalledTimes(1);
+});
+
 it("does not execute inventory previews even with a current Gateway caller", async () => {
   const { callGateway } = setup();
   const tool = createGitHubPublishTool({ preview: true });

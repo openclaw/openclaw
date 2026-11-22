@@ -135,7 +135,7 @@ export function runWithGatewayToolCleanupContext<T>(
 /** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
 export async function runWithGatewayToolContinuationContext<T>(
   run: () => Promise<T>,
-  options?: { retainRequester?: true },
+  options?: { retainRequester?: true; agentId?: string },
 ): Promise<T> {
   const resolveGatewayContext = callerGatewayContextResolver();
   if (options?.retainRequester) {
@@ -145,18 +145,20 @@ export async function runWithGatewayToolContinuationContext<T>(
     if (preparation) {
       const captured = await preparation;
       try {
-        return await captured.runWithRequester(run);
+        return await captured.runWithRequester(run, options.agentId);
       } finally {
         captured.release();
       }
     }
   }
-  return runWithOperatorToolGatewayContinuationContext(() =>
-    withoutGatewayToolCallerIdentity(() =>
-      resolveGatewayContext
-        ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
-        : run(),
-    ),
+  return runWithOperatorToolGatewayContinuationContext(
+    () =>
+      withoutGatewayToolCallerIdentity(() =>
+        resolveGatewayContext
+          ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
+          : run(),
+      ),
+    options?.agentId,
   );
 }
 

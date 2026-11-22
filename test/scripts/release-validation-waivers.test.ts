@@ -255,9 +255,15 @@ it("matches explicit test signatures only with a complete report and approved fa
   const validate = (text = log, job = testLeaf) =>
     validateReleaseWaiverAggregates({ policy, jobs: [job], getJobLog: () => text });
   await expect(validate()).resolves.toBeUndefined();
+  const timestampedLog = log
+    .split("\n")
+    .map((line) => `\uFEFF2026-11-22T04:00:00.0000000Z ${line}`)
+    .join("\n");
+  await expect(validate(timestampedLog)).resolves.toBeUndefined();
   for (const changed of [
     log.replace("synthetic failure", "different failure"),
     log.replace('"completed":1', '"completed":0'),
+    timestampedLog.replace('"completed":1', '"completed":0'),
   ]) {
     await expect(validate(changed)).rejects.toThrow();
   }

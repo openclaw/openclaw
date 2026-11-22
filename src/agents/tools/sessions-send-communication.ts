@@ -29,10 +29,7 @@ import {
 import { registerActiveEmbeddedRunHumanInputWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
@@ -95,7 +92,6 @@ export async function prepareSessionsSendCommunication(params: {
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
   const caller = getGatewayToolCallerIdentity();
-  const assertCaller = captureGatewayToolCallerAssertion();
   const context = getInProcessGatewayToolContext();
   // Never replace the config against which identities and source ceilings were prepared.
   const config = params.config;
@@ -137,7 +133,6 @@ export async function prepareSessionsSendCommunication(params: {
       throw new Error("Session communication admission closed.");
     }
     params.signal?.throwIfAborted();
-    assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
     const targetEntry = currentTarget.entry;
@@ -401,7 +396,7 @@ export async function prepareSessionsSendCommunication(params: {
         );
       }
       await refresh();
-      if (!context || (!assertCaller && !params.assertSourceCurrent)) {
+      if (!context || (!caller?.operationalRunInstance && !params.assertSourceCurrent)) {
         throw new Error("Human communication approval requires a live admitted Gateway caller.");
       }
       await requestSessionCommunicationApproval({

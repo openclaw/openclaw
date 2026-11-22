@@ -25,7 +25,7 @@ const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
     backend: "builtin",
   })),
 );
-const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
+const prepareGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
   vi.fn<(workspaceDir: string) => { memoryFiles?: { maintenance?: Maintenance } } | undefined>(),
 );
@@ -39,7 +39,7 @@ beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
   resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
   getActiveMemoryProviderCore.mockReset();
-  captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
+  prepareGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
     authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
     release: vi.fn(),
   });
@@ -98,7 +98,7 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 }));
 
 // mock-isolation: Exercise fixture-owned authority without a running Gateway session.
-vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority }));
+vi.mock("../operator-run-authority.js", () => ({ prepareGatewayOperatorRunAuthority }));
 
 // mock-isolation: Exercise Doctor through the existing bundled-runtime module boundary.
 vi.mock("../../plugin-sdk/memory-core-bundled-runtime.js", () => ({
