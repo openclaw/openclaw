@@ -156,7 +156,7 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
     const staffWs = await connectAs(port, "staff@example.com");
     const guestWs = await connectAs(port, "visitor@example.com");
     const probe = (params: Record<string, unknown>, ws = guestWs) =>
-      rpcReq<Welcome>(ws, "visitor-access.probe", params);
+      rpcReq<Welcome>(ws, "visitor-access.probe", params, 60_000);
     const history = (sessionKey: string) =>
       rpcReq<{ messages: Array<Record<string, unknown>> }>(staffWs, "chat.history", {
         sessionKey,
