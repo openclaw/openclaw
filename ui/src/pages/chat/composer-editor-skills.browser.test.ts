@@ -243,41 +243,6 @@ it("reconciles unchanged native and rich drafts when the catalog arrives, rename
   expect([f.input.selectionStart, f.input.selectionEnd]).toEqual([0, 3]);
 });
 
-it("maps unaffected skills and invalidates token, escape, command and code changes", async () => {
-  const f = fixture("@Alex use $clawhub after", true);
-  await expect.poll(f.chip).not.toBeNull();
-  const trailingColons = "$clawhub" + ":".repeat(64);
-  const cases = [
-    [trailingColons, trailingColons.length, trailingColons.length, "x"],
-    [trailingColons + "x", trailingColons.length, trailingColons.length + 1, ""],
-    ["hello $clawhub after", 0, 0, "please "],
-    ["hello $clawhub after", 14, 19, "later"],
-    ["$clawhu after", 7, 7, "b"],
-    ["\\ $clawhub", 1, 2, ""],
-    ["$clawhub", 0, 0, "/say "],
-    ["/say $clawhub", 0, 5, ""],
-    ["$clawhub", 0, 0, "    "],
-    ["    $clawhub", 0, 4, ""],
-    ["$clawhub", 0, 0, "~~~\n"],
-    ["~~~\n$clawhub\n~~~", 0, 4, ""],
-    ["Intro `x` $clawhub ``tail``", 7, 8, ""],
-    ["Intro `` $clawhub ``tail``", 7, 7, "x"],
-    ["Intro `code\n=====\n$clawhub`", 17, 17, "x"],
-    ["Intro `code\n_____\n$clawhub`", 17, 17, "x"],
-    ["Intro\n        text\n    $clawhub", 14, 18, ""],
-  ] as const;
-  for (const [before, from, to, insert] of cases) {
-    f.input.value = before;
-    syncComposerInput(f.input);
-    await expect.poll(() => f.view().state.doc.toString()).toBe(before);
-    f.view().dispatch({ changes: { from, to, insert }, userEvent: "input.complete" });
-    const expected = readComposerSkillReferences(f.input.value).map((item) => item.label);
-    expect(
-      [...f.surface.querySelectorAll(".chat-composer-skill")].map((node) => node.textContent),
-    ).toEqual(expected);
-  }
-});
-
 it("keeps single-line prose edits local and reparses combined indentation", async () => {
   const f = fixture("$clawhub ");
   await expect.poll(f.chip).not.toBeNull();
@@ -316,6 +281,8 @@ it("matches canonical skill parsing after structural and ordinary owner edits", 
   const f = fixture("");
   const documents = [
     "Intro $clawhub after",
+    "$clawhub" + ":".repeat(64),
+    "\\ $clawhub",
     "Intro \u0060x\u0060 $clawhub \u0060\u0060tail\u0060\u0060",
     "Intro\n\n    $clawhub\n\nAfter $clawhub",
     "~~~ js\n$clawhub\n~~~\n$clawhub",
