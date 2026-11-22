@@ -8,7 +8,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import type { TranscriptUtterance } from "../../transcripts/provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "../../transcripts/sqlite-schema.js";
 import {
   queryTranscriptReadEntries,
@@ -16,6 +15,7 @@ import {
 } from "../../transcripts/store-read.js";
 import { writeMeetingTranscriptSessionInDatabase } from "../../transcripts/store-sqlite-write.js";
 import { appendMeetingTranscriptUtterance } from "../../transcripts/store-sqlite.js";
+import type { TranscriptUtterance } from "../../transcripts/types.js";
 import type { EngineConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";

@@ -5,6 +5,8 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Original transport for presentation only; never grants authority. */
+  clientId?: import("../../packages/gateway-protocol/src/client-info.js").GatewayClientId;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
@@ -20,6 +22,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;
+  /** Check current admission once when queued/replayed work starts; never revokes other holders. */
+  reauthorize?: () => void;
   signal?: AbortSignal;
   /** Opaque authenticated source identity, independent of per-invocation restrictions. */
   source?: object;
@@ -29,6 +33,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Assignment and verified login from one check of the original live profile authority. */
   readCurrentRoleFacts?: (this: void) => Readonly<{
+    openclawIdAccountIds?: readonly string[];
     assignedRole: string | null;
     githubLogin?: string | null;
     /** Non-named source policy, checked by the original authority before each read. */

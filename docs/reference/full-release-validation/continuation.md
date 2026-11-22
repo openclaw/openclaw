@@ -41,6 +41,11 @@ tooling (P) using `--workflow-sha <P>` or `--publish-workflow-ref <tag>`; Q is n
 publication-tooling selection. Supply the intended tag, channel, route, and any
 required SDK acknowledgement separately. `--json` retains the verifier evidence alone.
 
+For active child jobs, `status` shows the running step and its elapsed seconds (or
+`unknown` when GitHub has not supplied a step start time). JSON exposes this
+read-only progress as `activeJobs`, separately from the accepted job evidence and
+its digest. Progress does not establish that a job is healthy or qualified.
+
 Retry selection for `rerun --child` and continuation:
 
 | Condition                                                                                                                                  | Mode / action                                                                                                                                                                                                            |
@@ -115,9 +120,8 @@ Follow [dispatch identity/admission/ref rules](/reference/full-release-validatio
 Validation SHA = Code SHA (possibly Release SHA) or changelog-only Release SHA,
 not a third identity. Reject malformed/mismatched expected SHAs before children;
 all report Q. `-f reuse_evidence=false` forces fresh work. New publish defaults
-Q=C; admission-workflow arguments select P;
-`ci:full-release --trusted-workflow-ref candidate --workflow-sha <Q>` selects
-reviewed main-ancestor Q. Missing contracts need Q repair/candidate backport;
+Q=C; admission-workflow arguments select P; candidate `--workflow-sha <Q>` selects
+reviewed exact Q. Missing contracts need Q repair/candidate backport;
 new Q requires new request/admission, never continuation/plan edits/substitution.
 Historical identities stay frozen; workflows never create/update refs.
 
@@ -167,7 +171,7 @@ Readers preserve original plan digests and accept only empty `knownFlakyJobs`/
 [release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers).
 Older campaigns retain immutable tooling; strict tooling rejects retained
 `windows-node-ci` advisory evidence and retired candidate omissions/advisory
-allowances. Start fresh qualifying work: admit reviewed main-ancestor Q with C
+allowances. Start fresh qualifying work: admit reviewed exact Q with C
 unchanged, or backport/freeze new C. Never retarget old runs or silently use newer main.
 
 ### Read publication observations

@@ -95,7 +95,7 @@ describe("update-cli child-owned deferred completion", () => {
         ]);
         expect(cli.replaceConfigFile).not.toHaveBeenCalled();
       }
-      expect(cli.updateGitCheckout).not.toHaveBeenCalled();
+      expect(cli.updateGitRelease).not.toHaveBeenCalled();
     },
   );
 

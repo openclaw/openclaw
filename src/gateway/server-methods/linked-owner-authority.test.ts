@@ -92,9 +92,20 @@ it("seeds a linked owner's new session with the person's library skills", async 
 it("keeps a linked owner's accepted work when the person's stored role changes", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const person = ensureProfileForEmail("linked-owner-run@example.test");
+    const runConfig: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "admin",
+          definitions: {
+            ...cfg.gateway?.roles?.definitions,
+            admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "none" } },
+          },
+        },
+      },
+    };
     const context = createDirectChatContext({
-      getRuntimeConfig: () => ({}),
-      getCommittedRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => runConfig,
+      getCommittedRuntimeConfig: () => runConfig,
     });
     const capture = async (principal?: OpenClawIdTunnelPrincipal) =>
       expectDefined(
@@ -130,16 +141,23 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
     const owner = await capture(OWNER);
     const personal = await capture();
     // users.setRole persists the role, then publishes a role-only change.
-    await setCanonicalUserProfileRole(person.id, "reader", {
+    await setCanonicalUserProfileRole(person.id, "talker", {
       onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
     });
     expect(owner.authority.signal?.aborted).toBe(false);
     expect(() => owner.authority.assertCurrent()).not.toThrow();
-    // The person's own work follows their role.
-    expect(personal.authority.signal?.aborted).toBe(true);
-    // An identity change, such as a merge, still ends the owner's attributed work.
+    expect(personal.authority.signal?.aborted).toBe(false);
+    expect(personal.authority.assertCurrent).not.toThrow();
+    expect(personal.authority.reauthorize).toThrow();
+    await expect(capture()).rejects.toThrow();
+    const nextOwner = await capture(OWNER);
+    expect(nextOwner.authority.profileId).toBe(person.id);
+    expect(nextOwner.authority.assertCurrent).not.toThrow();
+    nextOwner.release();
+    // Identity publications apply to new admissions, not accepted work.
     invalidateOperatorRolePolicy(person.id);
-    expect(owner.authority.signal?.aborted).toBe(true);
+    expect(owner.authority.signal?.aborted).toBe(false);
+    expect(owner.authority.assertCurrent).not.toThrow();
     owner.release();
     personal.release();
   }));

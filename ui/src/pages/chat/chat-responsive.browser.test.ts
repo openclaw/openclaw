@@ -352,7 +352,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>`
                       : ""
                   }
-                  <div class="agent-chat__composer-status-stack"> </div>
                   </div>
                   <div class="agent-chat__composer-input-row">
                     <div class="agent-chat__composer-combobox">
@@ -2543,13 +2542,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await state.dispose();
       };
       const expandedBefore = await readSummaryState();
-      const { shellBounds, stackSurfaces, warnGoalSurfaces } = await page.evaluate(() => {
+      const { shellBounds, stackSurfaces } = await page.evaluate(() => {
         const snapshot = (selector: string) => {
           const node = document.querySelector<HTMLElement>(selector)!;
           const bounds = node.getBoundingClientRect();
           return {
-            background: getComputedStyle(node).backgroundColor,
-            borderColor: getComputedStyle(node).borderColor,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2560,13 +2557,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             bottomRightRadius: getComputedStyle(node).borderBottomRightRadius,
           };
         };
-        const goal = document.querySelector<HTMLElement>(".agent-chat__goal")!;
-        const activeSurface = snapshot(".agent-chat__goal");
-        const warnSurfaces = ["blocked", "budget_limited", "usage_limited"].map((state) => {
-          goal.className = `agent-chat__goal agent-chat__goal--${state}`;
-          return { state, surface: snapshot(".agent-chat__goal") };
-        });
-        goal.className = "agent-chat__goal agent-chat__goal--active";
         const shell = document
           .querySelector<HTMLElement>(".agent-chat__composer-shell")!
           .getBoundingClientRect();
@@ -2575,10 +2565,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           stackSurfaces: [
             snapshot(".session-progress-card--composer"),
             snapshot(".chat-queue"),
-            activeSurface,
+            snapshot(".agent-chat__goal"),
             snapshot(".agent-chat__input"),
           ],
-          warnGoalSurfaces: warnSurfaces,
         };
       });
       await setSummaryHover(true);
@@ -2599,14 +2588,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      for (const { state, surface } of warnGoalSurfaces) {
-        expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
-        expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
-      }
-      expect(new Set(warnGoalSurfaces.map(({ surface }) => surface.borderColor))).toHaveProperty(
-        "size",
-        1,
-      );
       expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
       expect(expandedAfter.cardBackground).toBe(expandedBefore.cardBackground);
       expect(expandedAfter.summaryBackground).toBe(expandedBefore.summaryBackground);

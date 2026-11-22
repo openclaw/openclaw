@@ -7,9 +7,14 @@ import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { getSessionStateVersions } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
+import * as snapshotSource from "./openclaw-state-read-snapshot-source.js";
 import {
   captureOpenClawStateReadSource,
   retireIdleOpenClawStateReadWorkers,
@@ -17,6 +22,50 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 const backupRead = { type: "backup.runs" } as const;
+
+it("captures borrowed session selectors before snapshot preparation and queued dispatch", async () => {
+  const { options } = source();
+  const preparation = createDeferredCore();
+  const dispatch = createDeferredCore();
+  const prepare = snapshotSource.prepareOpenClawStateReadSnapshotSource;
+  vi.spyOn(snapshotSource, "prepareOpenClawStateReadSnapshotSource").mockImplementation(
+    async (params) => ({
+      ...(await prepare(params)),
+      prepareSource: () => preparation.promise,
+      readSource: () => ({ location: params.pathname }),
+    }),
+  );
+  const task = queueTask(dispatch.promise);
+  const refs = [{ sessionKey: "agent:synthetic:original", agentId: "synthetic" }];
+  const versions = { synthetic: { "agent:synthetic:original": 7 } };
+  await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      const reading = getSessionStateVersions(refs, options);
+      refs[0]!.sessionKey = "changed during preparation";
+      refs.push({ sessionKey: "added", agentId: "synthetic" });
+      preparation.resolve();
+      await task.submitted;
+      refs[0]!.agentId = "changed while queued";
+      dispatch.resolve();
+      try {
+        expect((await task.captured).command).toEqual({
+          type: "sessionState.versions",
+          input: [{ sessionKey: "agent:synthetic:original", agentId: "synthetic" }],
+        });
+      } finally {
+        task.result.resolve({
+          ok: true,
+          type: "sessionState.versions",
+          sourceAdmitted: true,
+          versions,
+        });
+        await expect(reading).resolves.toEqual(versions);
+      }
+    },
+    { ...options, lazy: true },
+  );
+});
+
 function readyTask() {
   const task = queueTask();
   task.result.resolve(emptyReply);

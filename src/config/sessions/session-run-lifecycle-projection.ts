@@ -13,7 +13,10 @@ import {
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
-import { createRestartResumeMarker } from "./session-restart-resume-scope.js";
+import {
+  createRestartResumeMarker,
+  resolveRestartResumeScope,
+} from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -98,21 +101,25 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId" | "lifecycleRestartScope"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
 
-export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry) {
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  directChat = entry?.resumeAfterRestart?.directChat === true,
+) {
   if (isCronSessionKey(sessionKey)) {
     return "cron";
   }
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
+  if (isSubagentSessionKey(sessionKey) || (entry?.createdVia === "spawn" && !directChat)) {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {
@@ -282,7 +289,11 @@ export function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...snapshot,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? {
+          lifecycleRunId: runId,
+          lifecycleRestartScope: resolveRestartResumeScope(),
+          lastRunId: undefined,
+        }
       : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),

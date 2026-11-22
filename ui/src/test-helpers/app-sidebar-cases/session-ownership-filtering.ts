@@ -406,7 +406,7 @@ describe("AppSidebar session ownership filtering", () => {
     expect(`${link.textContent} ${name} ${description}`.match(/Unread/g)).toHaveLength(1);
   });
 
-  it("keeps owner avatars off child rows", async () => {
+  it("uses the same owner attribution for parent and child rows", async () => {
     const parentKey = "agent:main:parent";
     const childKey = "agent:main:child";
     const harness = createSessionsHarness("main", [parentKey]);
@@ -454,9 +454,6 @@ describe("AppSidebar session ownership filtering", () => {
     ).not.toBeNull();
     expect(
       sidebar.querySelector(`[data-session-key="${childKey}"] openclaw-session-owner-chip`),
-    ).toBeNull();
-    expect(
-      sidebar.querySelector(`[data-session-key="${childKey}"] [aria-label="Done"]`),
     ).not.toBeNull();
   });
 

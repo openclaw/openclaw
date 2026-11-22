@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { parseBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";

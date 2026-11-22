@@ -1,3 +1,4 @@
+import type { WizardPrompter } from "../../wizard/prompts.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   createAdmittedWizardSession,
@@ -131,47 +132,66 @@ export async function startSetupActivationWizard(params: {
       admitSetupActivationSession({ ...params, context }, create, assertCurrent),
     createSession: (assertCurrent) =>
       new WizardSession(
-        async (prompter, signal, runnerSession) => {
-          const result = await activateGatewaySetupInference({
-            ...params.activation,
-            surface: "gateway",
-            isRemoteProviderAuth: params.isLocalClient !== true,
-            runtime: createSystemAgentGatewayRuntime(),
+        (prompter, signal, runnerSession) =>
+          runSetupActivation({
+            activation: params.activation,
+            isLocalClient: params.isLocalClient,
             prompter,
             signal,
-            isCancelled: () => signal.aborted,
+            runnerSession,
             assertCurrent,
-            beforePersistentEffect: () => {
-              assertCurrent();
-              runnerSession.lockCancellationForPreparation();
-            },
-            onPreparationComplete: () => {
-              assertCurrent();
-              runnerSession.finishPreparation();
-            },
-            onCommitStarted: () => {
-              assertCurrent();
-              runnerSession.lockCancellation();
-            },
-          });
-          signal.throwIfAborted();
-          if (!result.ok) {
-            if (result.disposition === "rejected-before-promotion") {
-              runnerSession.setActivationRejection({
-                disposition: result.disposition,
-                status: result.status,
-              });
-            }
-            throw new Error(result.error);
-          }
-          runnerSession.setModelActivation({
-            modelRef: result.modelRef,
-            ...(result.modelName ? { modelName: result.modelName } : {}),
-            ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-            ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
-          });
-        },
+          }),
         { timeoutMs: params.timeoutMs },
       ),
+  });
+}
+
+/** Runs one setup activation in a wizard session and records the live-verified model. */
+export async function runSetupActivation(params: {
+  activation: SetupActivation;
+  isLocalClient?: boolean;
+  prompter: WizardPrompter;
+  signal: AbortSignal;
+  runnerSession: WizardSession;
+  assertCurrent: () => void;
+}): Promise<void> {
+  const { prompter, signal, runnerSession, assertCurrent } = params;
+  const result = await activateGatewaySetupInference({
+    ...params.activation,
+    surface: "gateway",
+    isRemoteProviderAuth: params.isLocalClient !== true,
+    runtime: createSystemAgentGatewayRuntime(),
+    prompter,
+    signal,
+    isCancelled: () => signal.aborted,
+    assertCurrent,
+    beforePersistentEffect: () => {
+      assertCurrent();
+      runnerSession.lockCancellationForPreparation();
+    },
+    onPreparationComplete: () => {
+      assertCurrent();
+      runnerSession.finishPreparation();
+    },
+    onCommitStarted: () => {
+      assertCurrent();
+      runnerSession.lockCancellation();
+    },
+  });
+  signal.throwIfAborted();
+  if (!result.ok) {
+    if (result.disposition === "rejected-before-promotion") {
+      runnerSession.setActivationRejection({
+        disposition: result.disposition,
+        status: result.status,
+      });
+    }
+    throw new Error(result.error);
+  }
+  runnerSession.setModelActivation({
+    modelRef: result.modelRef,
+    ...(result.modelName ? { modelName: result.modelName } : {}),
+    ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
+    ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
   });
 }

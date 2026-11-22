@@ -723,34 +723,45 @@ openclaw-systems-page {
     display: none;
   }
 
-  /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
-  .systems-desktop .bp:not(:fullscreen) {
-    background: transparent;
-  }
-
-  /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
-  .systems-desktop .desktop-toolbar__spacer {
-    display: none;
-  }
-  .systems-desktop .desktop-toolbar--connection > :last-child {
-    margin-inline-start: auto;
-  }
-  /* Without app launchers the spacer breaks view controls from window controls, and its
-     empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
-  .systems-desktop .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
-    row-gap: 4px;
-
-    & > .desktop-toolbar__spacer {
-      display: block;
-      flex: 0 0 100%;
-      order: 1;
+  .systems-desktop {
+    /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
+    .bp:not(:fullscreen) {
+      background: transparent;
     }
 
-    & > :nth-last-child(-n + 4),
-    & .desktop-fullscreen-button {
-      order: 2;
+    /* Keep the label's leading edge and the 88px hit area. Only reserve the
+       compact chevron inset used by the device picker above. */
+    @media (forced-colors: none) {
+      .desktop-toolbar select.desktop-sizing {
+        padding-inline-end: 28px;
+      }
+    }
+
+    /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
+    .desktop-toolbar__spacer {
+      display: none;
+    }
+    .desktop-toolbar--connection > :last-child {
+      margin-inline-start: auto;
+    }
+    /* Without app launchers the spacer breaks view controls from window controls, and its
+       empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
+    .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
+      row-gap: 4px;
+
+      & > .desktop-toolbar__spacer {
+        display: block;
+        flex: 0 0 100%;
+        order: 1;
+      }
+
+      & > :nth-last-child(-n + 4),
+      & .desktop-fullscreen-button {
+        order: 2;
+      }
     }
   }
+
   /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
   .systems-toolbar > .systems-mobile-picker {
     height: 32px;

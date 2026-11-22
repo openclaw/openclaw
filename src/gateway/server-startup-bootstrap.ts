@@ -29,6 +29,7 @@ import {
 import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { initializeGatewayResourceProfile } from "../infra/gateway-resource-profile.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -250,6 +251,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
   const seededMemberRoles = await startupTrace.measure("openclaw-id.member-roles", () =>
     memberRolePresets.reconcile(
       isOpenClawIdEnabled(startupConfigLoad.snapshot.config.gateway?.openclawId),
+      startupConfigLoad.snapshot.config,
     ),
   );
   if (seededMemberRoles) {
@@ -333,6 +335,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
     { omitErrorMessage: true },
   );
   const cfgAtStart = authBootstrap.cfg;
+  initializeGatewayResourceProfile(cfgAtStart.gateway?.resources);
   startupTrace.setConfig(cfgAtStart);
   if (!opts.updateCanary) {
     try {

@@ -129,8 +129,5 @@ export {
   resolveDurableExecApprovalRequirement,
 } from "./exec-approvals-allow-always.js";
 export type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
-export {
-  commitExecAuthorizationLocked,
-  recordAllowlistMatchesUse,
-} from "./exec-approvals-authorization.js";
+export { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 export type { ExecApprovalUsageAuthorization } from "./exec-approvals-authorization.js";

@@ -331,7 +331,7 @@ async function main() {
   for (const signal of signals) {
     process.once(signal, interrupt);
   }
-  const deadline = setTimeout(interrupt, 12 * 60_000);
+  const deadline = setTimeout(interrupt, 20 * 60_000);
   const watchdog = setInterval(() => void requireSpace(5).catch(interrupt), 10_000);
   let failure: unknown;
   try {
@@ -371,7 +371,8 @@ async function main() {
         "--no-install-recommends",
         ...packages,
       ],
-      { timeoutMs: 300_000 },
+      // Hosted APT mirrors can exceed five minutes before any desktop assertion runs.
+      { timeoutMs: 480_000 },
     );
     for (const name of packages) {
       const version = (await run(`version-${name}`, "dpkg-query", ["-W", "-f=${Version}", name]))

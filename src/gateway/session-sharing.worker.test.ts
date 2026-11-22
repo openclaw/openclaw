@@ -644,7 +644,7 @@ it.each(["membership", "routing", "policy"] as const)(
 );
 
 it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
-  "rechecks prepared %s policy at the next worker admission",
+  "keeps admitted role facts but retains config/data fences (%s)",
   (change) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
@@ -667,8 +667,13 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         cfg = restrictView(cfg, change === "agent" ? { agents: [] } : { sandbox: "required" });
       }
       const effect = vi.fn();
-      await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-      expect(effect).not.toHaveBeenCalled();
+      if (change === "role" || change === "unprepared-role") {
+        await authorization.withCurrent!(effect);
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
+      }
       if (change === "unprepared-role") {
         expect(client.preparedSessionProfile).toBeUndefined();
       }

@@ -1,10 +1,16 @@
 // A killed `openclaw update` that stopped a real managed Gateway: a plain next update
 // finishes it and the Gateway serves the version that update installed. With
 // --no-restart the next update refuses and names repair, which restores the Gateway.
+// The owed-plugin-retry cut instead proves that, with automatic updates on, the Gateway
+// itself retries owed plugin convergence once.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import {
   packFirstHopUpdateFixture,
@@ -59,11 +65,21 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   const hasStep = (run, name, status = "completed") =>
     run.steps.some((step) => step.step === name && step.status === status);
 
+  const cut = process.env.OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT;
+  assert(
+    ["live-gateway", "owed-plugin-retry", "data-at-risk"].includes(cut),
+    "unknown live Gateway cut",
+  );
   const evidence = {
     status: "running",
     runDirectory: path.basename(artifacts),
-    selectedCuts: ["live-gateway"],
-    scope: "installed-killed-update-live-gateway",
+    selectedCuts: [cut],
+    scope:
+      cut === "owed-plugin-retry"
+        ? "installed-owed-plugin-retry-live-gateway"
+        : cut === "data-at-risk"
+          ? "installed-data-at-risk-mark-live-gateway"
+          : "installed-killed-update-live-gateway",
     commands: [],
   };
   write(summary, evidence);
@@ -99,7 +115,9 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       status: result.status,
     });
     write(summary, evidence);
-    assert.equal(result.status, expected, `${name}: exit ${result.status}`);
+    if (expected !== null) {
+      assert.equal(result.status, expected, `${name}: exit ${result.status}`);
+    }
     return result;
   };
 
@@ -186,8 +204,439 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     );
   };
 
+  /** With automatic updates on, the Gateway itself retries owed plugin convergence once. */
+  const retryOwedPluginConvergence = async (previousPid) => {
+    // With automatic updates on, a kept update that still owes plugin convergence is
+    // retried once by the Gateway itself, through a campaign for the installed version.
+    const owedTarget = path.join(artifacts, "owed-update.tgz");
+    packFirstHopUpdateFixture(tarball, owedTarget, 5);
+    const owedVersion = packedVersion(owedTarget);
+    const beforeOwed = new Set(runs().map((row) => row.run_id));
+    await run("owed-update", ["update", "--tag", `file:${owedTarget}`, "--yes", "--json"], 0);
+    const [owner, ...extraOwners] = runs().filter((row) => !beforeOwed.has(row.run_id));
+    assert.equal(extraOwners.length, 0, "one update run installs the owed version");
+    assert.equal(owner?.status, "succeeded");
+    const owedPid = await assertServing("owed-update", owedVersion, previousPid);
+    const owedStep = "finalize:owed:plugin-convergence";
+    const unitFile = path.join(env.HOME, ".config/systemd/user/openclaw-gateway.service");
+    const unit = fs.readFileSync(unitFile, "utf8");
+    const registryDirectory = fs.mkdtempSync(path.join(artifacts, "owed-registry-"));
+    const registryPort = path.join(registryDirectory, "port");
+    const registryLog = fs.openSync(path.join(artifacts, "owed-registry.log"), "a");
+    // The package registry names the installed version as current for stable.
+    let registryError;
+    const registry = spawn(
+      node,
+      [
+        fileURLToPath(new URL("../plugins/npm-registry-server.mjs", import.meta.url)),
+        registryPort,
+        "openclaw",
+        owedVersion,
+        owedTarget,
+      ],
+      {
+        env: {
+          ...env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: "",
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "",
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: `beta=${owedVersion}`,
+          OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
+          OPENCLAW_NPM_REGISTRY_PORT: "0",
+        },
+        stdio: ["ignore", registryLog, registryLog],
+      },
+    );
+    registry.once("error", (error) => {
+      registryError = error;
+    });
+    const registryExit = once(registry, "close");
+    // The cell's shell opts out of automatic updates; this service runs without that opt-out.
+    const serviceEnv = { ...env };
+    delete serviceEnv.OPENCLAW_NO_AUTO_UPDATE;
+    const systemctl = (...args) => {
+      const manager = spawnSync("systemctl", ["--user", ...args], {
+        env: serviceEnv,
+        stdio: "ignore",
+      });
+      assert.equal(manager.status, 0, `systemctl ${args.join(" ")}`);
+    };
+    const waitFor = async (name, predicate, timeoutMs) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const value = await predicate();
+        if (value) {
+          return value;
+        }
+        assert(Date.now() < deadline, `${name}: timed out`);
+        await delay(1_000);
+      }
+    };
+    const checkState = () =>
+      readDatabase(stateDatabase, (db) =>
+        JSON.parse(
+          db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("update.checkState")?.value_json ?? "{}",
+        ),
+      );
+    const writeState = (mutate) => {
+      const db = new DatabaseSync(stateDatabase);
+      try {
+        mutate(db);
+      } finally {
+        db.close();
+      }
+    };
+    /** Fixture time: the hourly check and automatic-attempt throttles are two hours old. */
+    const shiftChecksBack = () => {
+      const earlier = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      const shifted = { ...checkState(), lastCheckedAt: earlier, autoLastAttemptAt: earlier };
+      writeState((db) =>
+        db
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms",
+          )
+          .run("update.checkState", JSON.stringify(shifted), Date.now()),
+      );
+      return earlier;
+    };
+    try {
+      const registryAddress = await waitFor(
+        "owed-registry",
+        () => {
+          if (registryError || registry.exitCode !== null) {
+            throw registryError ?? new Error(`owed registry exited ${registry.exitCode}`);
+          }
+          return fs.existsSync(registryPort) && fs.readFileSync(registryPort, "utf8");
+        },
+        30_000,
+      );
+      // Fixture: the update kept its result but owes plugin convergence, recorded in the
+      // same row shape the updater writes when convergence cannot complete.
+      systemctl("stop", "openclaw-gateway.service");
+      writeState((db) => {
+        // Reread after the stop so steps the Gateway recorded on this run are kept.
+        const steps = [
+          ...runs().find((row) => row.run_id === owner.run_id).steps,
+          {
+            step: owedStep,
+            status: "skipped",
+            endedAtMs: Date.now(),
+            detail: "Fixture: the plugin registry was unreachable",
+          },
+        ];
+        db.prepare("UPDATE update_runs SET steps_json = ? WHERE run_id = ?").run(
+          JSON.stringify(steps),
+          owner.run_id,
+        );
+      });
+      // Point this service's registry reads at the fixture registry: the updater's loopback
+      // seam, and a harness preload for the Gateway's release discovery, which reads public npm.
+      const registryUrl = `http://127.0.0.1:${registryAddress}`;
+      const redirect = fileURLToPath(new URL("./plugin-registry-redirect.mjs", import.meta.url));
+      assert(unit.includes("\nEnvironment=NODE_OPTIONS=\n"), "the unit must pin NODE_OPTIONS");
+      fs.writeFileSync(
+        unitFile,
+        unit.replace(
+          "\nEnvironment=NODE_OPTIONS=\n",
+          [
+            "",
+            `Environment=NODE_OPTIONS=--import=${redirect}`,
+            `Environment=OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY=${registryUrl}`,
+            "Environment=OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE=1",
+            "Environment=OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw",
+            `Environment=NPM_CONFIG_REGISTRY=${registryUrl}`,
+            "",
+          ].join("\n"),
+        ),
+      );
+      systemctl("daemon-reload");
+      await run(
+        "owed-enable-auto",
+        [
+          "config",
+          "set",
+          "update",
+          JSON.stringify({ channel: "stable", auto: { enabled: true } }),
+          "--strict-json",
+        ],
+        0,
+      );
+      await run("owed-status-before", ["update", "status", "--json"], 0);
+      // The update that installed this version ran its own check within the hour.
+      const firstEarlier = shiftChecksBack();
+      systemctl("start", "openclaw-gateway.service");
+      await waitFor(
+        "owed-first-check",
+        () => checkState().lastCheckedAt !== firstEarlier,
+        5 * 60_000,
+      );
+
+      // No person runs a command: the Gateway announces, waits for idle, and hands off.
+      const retry = await waitFor(
+        "owed-campaign",
+        () =>
+          runs().find(
+            (row) =>
+              !beforeOwed.has(row.run_id) &&
+              row.run_id !== owner.run_id &&
+              row.status !== "running",
+          ),
+        10 * 60_000,
+      );
+      const retryRecord = readDatabase(stateDatabase, (db) =>
+        db
+          .prepare("SELECT target_json, before_json FROM update_runs WHERE run_id = ?")
+          .get(retry.run_id),
+      );
+      const retryPid = await waitFor(
+        "owed-serving",
+        async () => {
+          const { pid } = read(runtimeFile);
+          return serviceActive() === 0 && pid > 1 && alive(pid) && (await readyz()) === 200 && pid;
+        },
+        5 * 60_000,
+      );
+      const statusAfter = await run("owed-status-after", ["update", "status", "--json"], 0);
+      const ownerAfter = runs().find((row) => row.run_id === owner.run_id);
+      evidence.owedPluginRetry = {
+        ownerRunId: owner.run_id,
+        version: owedVersion,
+        retry: {
+          runId: retry.run_id,
+          trigger: retry.trigger,
+          status: retry.status,
+          reason: retry.reason,
+          target: JSON.parse(retryRecord.target_json),
+          before: JSON.parse(retryRecord.before_json),
+          steps: retry.steps.map((entry) => `${entry.step}:${entry.status}`),
+        },
+        ownerOwedStep: ownerAfter.steps.find(({ step }) => step === owedStep)?.status,
+        owedSteps: JSON.parse(statusAfter.stdout).owedSteps ?? [],
+        gatewayPids: [owedPid, retryPid],
+      };
+      write(summary, evidence);
+      assert.equal(retry.trigger, "campaign");
+      assert.notEqual(retry.status, "failed", "the same-version update must keep its result");
+      assert.deepEqual(
+        [
+          evidence.owedPluginRetry.retry.target.version,
+          evidence.owedPluginRetry.retry.before.version,
+        ],
+        [owedVersion, owedVersion],
+      );
+      assert.equal(
+        evidence.owedPluginRetry.ownerOwedStep,
+        "completed",
+        "the retry settles the row",
+      );
+      assert.deepEqual(evidence.owedPluginRetry.owedSteps, [], "nothing stays owed");
+      assert.equal(installedVersion(), owedVersion, "the core is unchanged");
+      await assertServing("owed-retry", owedVersion);
+
+      // Two hours later the next check finds nothing to retry and starts no campaign.
+      systemctl("stop", "openclaw-gateway.service");
+      const earlier = shiftChecksBack();
+      const settledRuns = runs().map((row) => row.run_id);
+      systemctl("start", "openclaw-gateway.service");
+      await waitFor("owed-next-check", () => checkState().lastCheckedAt !== earlier, 5 * 60_000);
+      // Longer than the one-minute countdown a campaign would need before its update run.
+      await delay(90_000);
+      evidence.owedPluginRetry.nextCheck = {
+        lastCheckedAt: checkState().lastCheckedAt,
+        runs: runs().map((row) => row.run_id),
+      };
+      write(summary, evidence);
+      assert.deepEqual(evidence.owedPluginRetry.nextCheck.runs, settledRuns, "no second campaign");
+      await assertServing("owed-next-check", owedVersion);
+    } finally {
+      // Best effort: a failed assertion must still leave the original unit and no registry.
+      fs.writeFileSync(unitFile, unit);
+      spawnSync("systemctl", ["--user", "daemon-reload"], { env, stdio: "ignore" });
+      if (registry.exitCode === null && registry.signalCode === null) {
+        registry.kill("SIGTERM");
+        if ((await Promise.race([registryExit, delay(10_000, "timeout")])) === "timeout") {
+          registry.kill("SIGKILL");
+        }
+      }
+      await registryExit;
+      fs.closeSync(registryLog);
+      fs.rmSync(owedTarget, { force: true });
+    }
+  };
+
+  /**
+   * A failed post-activation schema read marks a run `rollback-state-unverified`. Write
+   * that mark onto a real killed update in the row shape the published 2026.10.33 and
+   * 2026.11.5 updaters persist: the failed `state-schema-verification` step, the
+   * `finalize:data-at-risk` fact, and a recovery object without the named risk. The run
+   * stays as the killed updater left it, so its own recovery still finishes it.
+   */
+  const recordDataAtRiskMark = (runId) => {
+    const db = new DatabaseSync(stateDatabase);
+    try {
+      const row = db
+        .prepare("SELECT steps_json, verification_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      const now = Date.now();
+      const steps = [
+        ...JSON.parse(row.steps_json),
+        {
+          step: "state-schema-verification",
+          status: "failed",
+          exitCode: 1,
+          endedAtMs: now,
+          stderrTail: "Fixture: SQLite source changed during the preserved copy",
+        },
+        {
+          step: "finalize:data-at-risk",
+          status: "completed",
+          failureFacts: [{ check: "update-recovery", code: "rollback-state-unverified" }],
+        },
+      ];
+      const verification = {
+        ...JSON.parse(row.verification_json),
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      };
+      db.prepare(
+        "UPDATE update_runs SET updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
+      ).run(now, JSON.stringify(steps), JSON.stringify(verification), runId);
+    } finally {
+      db.close();
+    }
+  };
+  const repairMarked = async (name, marked) => {
+    const before = new Set(runs().map((row) => row.run_id));
+    const result = await run(name, ["update", "repair", "--yes"], null);
+    // Repair can first settle an earlier killed run as its own ledger row, so pick the
+    // run that did the repair work rather than the first new row.
+    const created = runs().filter((row) => !before.has(row.run_id));
+    const repairRun =
+      created.find((row) => row.steps.some(({ step }) => step.startsWith("finalize:"))) ??
+      created.find((row) => !hasStep(row, "reconcile:settle")) ??
+      created[0];
+    const output = `${result.stdout}\n${result.stderr}`;
+    evidence.dataAtRisk[name] = {
+      markedRunId: marked.runId,
+      exit: result.status,
+      createdRunIds: created.map((row) => row.run_id),
+      repairRunId: repairRun?.run_id,
+      repairStatus: repairRun?.status,
+      steps: repairRun?.steps.map(({ step, status }) => `${step}:${status}`),
+    };
+    write(summary, evidence);
+    return { result, repairRun, output };
+  };
+
+  /** A recorded data-at-risk mark is checked against state on disk before anything acts on it. */
+  const verifyRecordedDataAtRisk = async (servingPid) => {
+    evidence.dataAtRisk = {};
+    // A false mark on an update killed after it stopped the Gateway: the next plain
+    // update checks it, resolves it in one line, finishes that update and installs its own
+    // version, with no repair first. (A Gateway serving through a mark is the Git
+    // release-mode cell's already-current case.)
+    const marked = await killUpdate("marked-update", 1, servingPid);
+    recordDataAtRiskMark(marked.runId);
+    const nextTarget = path.join(artifacts, "after-mark-update.tgz");
+    packFirstHopUpdateFixture(tarball, nextTarget, 2);
+    const nextVersion = packedVersion(nextTarget);
+    const before = new Set(runs().map((row) => row.run_id));
+    const next = await run(
+      "after-mark-update",
+      ["update", "--tag", `file:${nextTarget}`, "--yes", "--json"],
+      null,
+    );
+    const nextRun = runs().find((row) => !before.has(row.run_id) && hasStep(row, "requested"));
+    evidence.dataAtRisk["after-mark-update"] = {
+      markedRunId: marked.runId,
+      exit: next.status,
+      runId: nextRun?.run_id,
+      steps: nextRun?.steps.map(({ step, status }) => `${step}:${status}`),
+    };
+    write(summary, evidence);
+    assert.equal(next.status, 0, "after-mark-update: exit");
+    assert.match(
+      next.stderr,
+      /recorded data at risk \(rollback-state-unverified\); verification found the state schemas match installed OpenClaw .+ so that mark is resolved\./u,
+    );
+    assert(
+      runs().some((row) => hasStep(row, `finalize:data-at-risk-verified:${marked.runId}`)),
+      "after-mark-update: an update run must record the verification",
+    );
+    const nextPid = await assertServing("after-mark-update", nextVersion, servingPid);
+    fs.unlinkSync(nextTarget);
+
+    // A false mark on an update that stopped the Gateway: repair verifies it, then starts
+    // and verifies the Gateway.
+    const stopped = await killUpdate("stopped-marked-update", 3, nextPid);
+    recordDataAtRiskMark(stopped.runId);
+    const resolved = await repairMarked("marked-repair", stopped);
+    assert.equal(resolved.result.status, 0, "marked-repair: exit");
+    assert.match(
+      resolved.output,
+      /recorded data at risk \(rollback-state-unverified\); verification found the state schemas match installed OpenClaw .+ so that mark is resolved\./u,
+    );
+    assert.doesNotMatch(resolved.output, /Gateway remains stopped|Keep the Gateway stopped/u);
+    assert(
+      hasStep(resolved.repairRun, `finalize:data-at-risk-verified:${stopped.runId}`),
+      "marked-repair: the repair run must record the verification",
+    );
+    const resolvedPid = await assertServing("marked-repair", stopped.version, nextPid);
+    evidence.dataAtRisk.gatewayPids = [servingPid, nextPid, resolvedPid];
+    write(summary, evidence);
+
+    // A real inconsistency: the marked update's database rollback moved migrated state
+    // aside and stopped, so the shared database may be only partly restored.
+    const inconsistent = await killUpdate("inconsistent-update", 5, resolvedPid);
+    recordDataAtRiskMark(inconsistent.runId);
+    const leftover = `${stateDatabase}.migrated-${inconsistent.runId}`;
+    fs.copyFileSync(stateDatabase, leftover);
+    const refused = await repairMarked("inconsistent-repair", inconsistent);
+    assert.notEqual(refused.result.status, 0, "inconsistent-repair: exit");
+    assert.match(
+      refused.output,
+      /recorded data at risk \(rollback-state-unverified\)\. The Gateway is stopped\./u,
+    );
+    assert.match(
+      refused.output,
+      /Run `?openclaw triage`? for an agent with the recorded facts, or by hand: /u,
+    );
+    assert(
+      refused.output.includes(leftover),
+      "inconsistent-repair: the finding names the leftover",
+    );
+    await assertStopped("inconsistent-repair", resolvedPid);
+    assert(fs.existsSync(leftover), "refused repair must leave the leftover as it was");
+    // Once the leftover is resolved, the same repair proceeds.
+    fs.unlinkSync(leftover);
+    const restored = await repairMarked("restored-repair", inconsistent);
+    assert.equal(restored.result.status, 0, "restored-repair: exit");
+    assert.match(restored.output, /so that mark is resolved\./u);
+    await assertServing("restored-repair", inconsistent.version, resolvedPid);
+  };
+
   const baselineVersion = installedVersion();
   const firstPid = await assertServing("baseline", baselineVersion);
+  if (cut === "data-at-risk") {
+    await verifyRecordedDataAtRisk(firstPid);
+    evidence.status = "passed";
+    delete evidence.current;
+    write(summary, evidence);
+    console.log(
+      "[installed-recovery-gateway] PASS: repair verified recorded data risk before acting on it",
+    );
+    return;
+  }
+  if (cut === "owed-plugin-retry") {
+    await retryOwedPluginConvergence(firstPid);
+    evidence.status = "passed";
+    delete evidence.current;
+    write(summary, evidence);
+    console.log(
+      "[installed-recovery-gateway] PASS: the Gateway retried owed plugin convergence once",
+    );
+    return;
+  }
 
   // A plain next update finishes the killed one itself: one result document,
   // the Gateway serving the version this update installed.
@@ -280,6 +729,8 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   assertKilledRetired("update-repair", stopped.runId);
   const repairedPid = await assertServing("update-repair", stopped.version, nextPid);
   evidence.noRestart.gatewayPids = [nextPid, repairedPid];
+  write(summary, evidence);
+
   evidence.status = "passed";
   delete evidence.current;
   write(summary, evidence);

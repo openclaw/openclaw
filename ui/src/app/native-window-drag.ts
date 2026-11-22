@@ -47,9 +47,10 @@ export function beginNativeWindowDragFromTitlebar(event: MouseEvent): void {
   ) {
     return;
   }
-  const height = Number.parseFloat(
-    getComputedStyle(shell).getPropertyValue("--openclaw-native-titlebar-height"),
-  );
+  const style = getComputedStyle(shell);
+  const height =
+    Number.parseFloat(style.getPropertyValue("--openclaw-native-titlebar-height")) -
+    (Number.parseFloat(style.getPropertyValue("--mac-trim")) || 0);
   const y = event.clientY - shell.getBoundingClientRect().top;
   if (y >= 0 && y < height) {
     beginNativeWindowDrag(event);

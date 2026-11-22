@@ -34,7 +34,7 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
 }));
-const ownerTool = () => createGatewayTool({ senderIsOwner: true, allowConfigReads: false });
+const ownerTool = () => createGatewayTool({ senderIsOwner: true, allowManagementActions: false });
 const expectNoGatewayCall = () => {
   expect(callGatewayToolMock).not.toHaveBeenCalled();
   expect(dispatchMock).not.toHaveBeenCalled();
@@ -47,10 +47,10 @@ describe("gateway tool", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
-  it.each(["config.schema.lookup"])(
-    "rejects %s without config read authority before calling the Gateway",
+  it.each(["config.schema.lookup", "users.getRole", "users.setRole"])(
+    "rejects %s on the maintenance-only tool before calling the Gateway",
     async (action) => {
-      const tool = createGatewayTool({ allowConfigReads: false, senderIsOwner: true });
+      const tool = createGatewayTool({ allowManagementActions: false, senderIsOwner: true });
 
       await expect(tool.execute("denied-config", { action, path: "channels" })).rejects.toThrow(
         `Action not available: ${action}`,
@@ -58,6 +58,18 @@ describe("gateway tool", () => {
       expectNoGatewayCall();
     },
   );
+
+  it("does not use owner status or a remote connection to assign a role", async () => {
+    const tool = createGatewayTool({ senderIsOwner: true });
+    const assign = { action: "users.setRole", profileId: "fixture-profile", role: "reader" };
+    await expect(tool.execute("no-operator", assign)).rejects.toThrow(
+      "authenticated Gateway operator",
+    );
+    await expect(
+      tool.execute("remote", { ...assign, gatewayUrl: "ws://example.test" }),
+    ).rejects.toThrow("current Gateway");
+    expectNoGatewayCall();
+  });
 
   it("hands an owner restart to the real runtime scheduler and waits for active work", async () => {
     vi.useFakeTimers();

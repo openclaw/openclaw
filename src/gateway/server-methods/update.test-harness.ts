@@ -537,9 +537,11 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
-  authority: Pick<
-    GatewayRequestHandlerOptions,
-    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  authority: Partial<
+    Pick<
+      GatewayRequestHandlerOptions,
+      "sessionMutationCommitGuard" | "hasCurrentClientAuthority" | "client"
+    >
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);

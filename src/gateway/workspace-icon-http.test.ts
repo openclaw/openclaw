@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -18,10 +19,12 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   createOpenClawTestState,
+  withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
@@ -31,14 +34,18 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
+  authorizeRead: vi.fn(),
 }));
 
-vi.mock("./http-utils.js", () => ({
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: (...args: unknown[]) => mocks.authorizeRead(...args),
   authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
     mocks.authorize(...args),
 }));
 
 const {
+  handleProjectIconHttpRequest,
   handleWorkspaceIconHttpRequest,
   resolveWorkspaceIcon,
   SVG_ICON_MAX_BYTES,
@@ -444,6 +451,125 @@ describe("handleWorkspaceIconHttpRequest", () => {
       },
     );
     await requestIcon(401, "agent:main:hidden");
+    expect(reads).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleProjectIconHttpRequest", () => {
+  let operatorScopes: string[];
+  let origin: string;
+  let server: ReturnType<typeof createServer>;
+  let cfg: OpenClawConfig;
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      void handleProjectIconHttpRequest(req, res, {
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        config: cfg,
+      })
+        .then((handled) => {
+          if (!handled) {
+            res.statusCode = 418;
+            res.end("unhandled");
+          }
+        })
+        .catch(() => finishFailedGatewayHttpResponse(res));
+    });
+    origin = await listenLoopback(server);
+  });
+
+  afterAll(async () => {
+    await closeHttpServer(server);
+  });
+
+  beforeEach(() => {
+    operatorScopes = ["operator.read"];
+    mocks.authorizeRead
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority({ authMethod: "token", operatorScopes }, res, () => true),
+      );
+  });
+
+  const projectRoute = (projectId: string) =>
+    `${origin}/__openclaw__/project-icon/${encodeURIComponent(projectId)}`;
+
+  it("serves a listed project's icon to a read-scoped caller", async () => {
+    const root = await makeWorkspace({ "public/favicon.svg": SVG_BYTES });
+    cfg = { agents: { entries: { main: {} }, defaults: { workspace: root } } };
+    const response = await fetch(projectRoute("workspace:main"));
+    expect(response.status).toBe(200);
+    expectHeaders(response, {
+      "content-type": "image/svg+xml",
+      "content-disposition": 'attachment; filename="project-icon"',
+    });
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(SVG_BYTES);
+    expect(mocks.authorizeRead).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredOperatorMethod: "projects.list" }),
+    );
+  });
+
+  it("hides a private registered project's icon from readers, including after a writer loads it", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+      execFileSync("git", ["init", root], { stdio: "ignore" });
+      execFileSync(
+        "git",
+        [
+          "-C",
+          root,
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        { stdio: "ignore" },
+      );
+      cfg = { agents: { entries: { main: {} } } };
+      const project = await registerProjectRegistry({ path: root });
+      const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+      const hidden = await fetch(projectRoute(project.id));
+      expect(hidden.status).toBe(404);
+      expectHeaders(hidden, { "cache-control": "no-store" });
+      expect(reads).not.toHaveBeenCalled();
+
+      operatorScopes = ["operator.read", "operator.write"];
+      const visible = await fetch(projectRoute(project.id));
+      expect(visible.status).toBe(200);
+      expect(Buffer.from(await visible.arrayBuffer())).toEqual(PNG_BYTES);
+
+      operatorScopes = ["operator.read"];
+      expect((await fetch(projectRoute(project.id))).status).toBe(404);
+    });
+  });
+
+  it("answers an unknown project without reading files", async () => {
+    cfg = { agents: { entries: { main: {} } } };
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    const response = await fetch(projectRoute("workspace:missing"));
+    expect(response.status).toBe(404);
+    expectHeaders(response, { "cache-control": "no-store" });
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("never reads a project when authorization fails", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    cfg = { agents: { entries: { main: {} }, defaults: { workspace: root } } };
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    mocks.authorizeRead.mockImplementation(
+      async (params: { res: { statusCode: number; end: () => void } }) => {
+        params.res.statusCode = 401;
+        params.res.end();
+        return null;
+      },
+    );
+    expect((await fetch(projectRoute("workspace:main"))).status).toBe(401);
     expect(reads).not.toHaveBeenCalled();
   });
 });
