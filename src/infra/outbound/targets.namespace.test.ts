@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDirectOutboundTestAdapter } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resetDirectoryCache } from "./target-resolver.js";
 import { resolveOutboundTarget, resolveProactiveDeliveryTarget } from "./targets.js";
@@ -49,7 +50,7 @@ it.each([
     const normalizeTarget = vi.fn((raw: string) => `@${raw}`);
     const resolveTarget = vi.fn(({ to }: { to?: string }) => ({ ok: true as const, to: to ?? "" }));
     plugin.messaging = { normalizeTarget, targetResolver: { looksLikeId: () => true } };
-    plugin.outbound = { deliveryMode: "direct", resolveTarget };
+    plugin.outbound = createDirectOutboundTestAdapter({ channel: "alpha", resolveTarget });
 
     const result = await resolveProactiveDeliveryTarget({
       cfg: {},
@@ -92,7 +93,7 @@ it.each([
       inferTargetChatType: ({ to }) =>
         to === "42" ? "direct" : to.startsWith("alpha:") ? "group" : undefined,
     };
-    plugin.outbound = { deliveryMode: "direct", resolveTarget };
+    plugin.outbound = createDirectOutboundTestAdapter({ channel: "alpha", resolveTarget });
     plugin.directory = {
       listGroups: async () => (kind === "group" ? [{ kind, id, name: "alpha" }] : []),
       listPeers: async () => (kind === "user" ? [{ kind, id, name: "alpha" }] : []),
