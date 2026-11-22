@@ -329,32 +329,6 @@ describe("ModelSetupWizardRunner", () => {
     expect(onTerminal).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["models.authLogin", true],
-    ["openclaw.setup.auth.start", false],
-  ] as const)(
-    "marks a rejected model check after %s as signed in: %s",
-    async (method, signedIn) => {
-      const message =
-        "Your sign-in is saved. The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again.";
-      const request = vi.fn(async () => ({
-        done: true,
-        status: "error",
-        error: message,
-        activationRejection: { disposition: "rejected-before-promotion", status: "rate_limit" },
-      }));
-      const runner = createRunner({
-        getClient: () => ({ request }) as unknown as GatewayBrowserClient,
-      });
-      await runner.start("fixture-provider", method);
-      expect(runner.state).toEqual({
-        phase: "error",
-        message,
-        ...(signedIn ? { signedIn: true } : {}),
-      });
-    },
-  );
-
   it("starts, advances an unbounded note step, and guards duplicate answers", async () => {
     let resolveDone: ((value: unknown) => void) | null = null;
     const request = vi.fn((method: string, _params?: unknown, _options?: unknown) => {

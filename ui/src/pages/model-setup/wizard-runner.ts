@@ -556,15 +556,6 @@ export class ModelSetupWizardRunner {
         ? this.options.cancelledMessage()
         : this.options.requestFailedMessage(),
     );
-    // models.authLogin checks the new account's model only after the sign-in is saved.
-    if (
-      next.phase === "error" &&
-      session.startMethod === "models.authLogin" &&
-      "activationRejection" in result &&
-      result.activationRejection
-    ) {
-      next = { ...next, signedIn: true };
-    }
     // A device-code sign-in falls back to this browser step when its provider has no device code.
     if (
       next.phase === "step" &&
