@@ -80,12 +80,8 @@ async function existingCanonicalProject(
 /** Materializes and registers a project from an accepted GitHub remote. */
 export async function materializeProjectClone(
   input: { cfg: OpenClawConfig; gitUrl: string; name?: string; requiredCommit?: string },
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    token?: string;
-    assertCurrent?: () => void;
-    startRun?: GitOperationStarter;
+  options: ProjectCloneOperationOptions & {
+    cloneLeaseWaitMs?: number;
   } = {},
 ): Promise<ProjectRegistryRecord> {
   const { cfg, gitUrl, name, requiredCommit } = input;
@@ -106,7 +102,7 @@ export async function materializeProjectClone(
       scope: "projects.clone",
       key: fingerprint,
       leaseMs: PROJECT_CLONE_LEASE_MS,
-      waitMs: PROJECT_CLONE_WAIT_MS,
+      waitMs: options.cloneLeaseWaitMs ?? PROJECT_CLONE_WAIT_MS,
       ...(signal ? { signal } : {}),
       leaseLabel: "project clone lease",
       operationLabel: "projects.clone.lease",

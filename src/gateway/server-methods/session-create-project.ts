@@ -7,6 +7,7 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { WORKTREE_CREATE_LEASE_WAIT_MS } from "../../agents/worktrees/allocation.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -426,7 +427,11 @@ export async function prepareSessionWorkspaceForRun(params: {
         startRun: projectIdentity?.start,
       };
       const project = gitUrl
-        ? await materializeProjectClone({ cfg, gitUrl }, cloneOptions)
+        ? await materializeProjectClone(
+            { cfg, gitUrl },
+            // This admitted turn can stay pending and cancel through its existing signal.
+            { ...cloneOptions, cloneLeaseWaitMs: WORKTREE_CREATE_LEASE_WAIT_MS },
+          )
         : undefined;
       projectIdentity?.assertSelected();
       assertRunOwnership();

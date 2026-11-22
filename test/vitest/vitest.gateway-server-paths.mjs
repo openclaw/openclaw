@@ -260,6 +260,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-worker-placement-session-target.worktree.test.ts",
   "src/gateway/server-worker-placement-startup-maintenance.test.ts",
   "src/gateway/server.sessions.create-worktree-spawn.test.ts",
+  "src/gateway/server.sessions.create.project-clone-wait.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
   "src/gateway/server/skill-library-read.test.ts",
   "src/gateway/server/ws-connection.startup.test.ts",
