@@ -5,11 +5,11 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
-import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
+import type { OutboundTargetResolution } from "../../infra/outbound/targets-resolve-shared.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { chatRef } from "../../sessions/chat-ref.js";
@@ -66,7 +66,7 @@ const targetsRuntimeLoader = createLazyImportLoader(
 
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
-) {
+): Promise<OutboundTargetResolution> {
   try {
     const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
@@ -381,12 +381,7 @@ export async function resolveDeliveryTarget(
         channelInferred,
       });
       if (!currentTargetResolution.ok) {
-        if (
-          currentTargetResolution.error instanceof MessageActionDeniedError &&
-          ["message_target_missing", "message_target_ambiguous"].includes(
-            currentTargetResolution.error.reasonCode,
-          )
-        ) {
+        if (currentTargetResolution.namespaceResolutionFailed) {
           return failTarget(currentTargetResolution.error);
         }
         toCandidate = allowFromOverride[0];
@@ -514,8 +509,8 @@ export async function resolveDeliveryTarget(
   }
   let canUseSessionThread = false;
   if (options?.inheritSessionThread !== false && isNonEmptyThreadId(resolved.threadId)) {
-    if (explicitTo) {
-      // Only explicit targets need the previous route to prove same-peer thread inheritance.
+    if (explicitTo || namespaceTarget) {
+      // Resolved namespaces also need route evidence before borrowing the old peer's thread.
       const lastTo = resolved.lastTo;
       const lastRoute =
         lastTo && resolved.lastChannel === channel

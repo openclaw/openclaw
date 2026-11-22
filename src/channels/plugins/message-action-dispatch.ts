@@ -623,14 +623,34 @@ export async function dispatchChannelMessageAction(
         ctx: authorizedActionContext,
         ...prepared,
       };
-      if (
+      const admitAction = () => {
+        if (
+          actions.requiresTrustedRequesterSender?.({
+            action: authorizedActionContext.action,
+            toolContext: authorizedActionContext.toolContext,
+          }) &&
+          !authorizedActionContext.requesterSenderId?.trim()
+        ) {
+          throw new Error(
+            `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
+          );
+        }
+        return (
+          !actions.supportsAction ||
+          actions.supportsAction({ action: authorizedActionContext.action })
+        );
+      };
+      const hasNamespaceTarget =
         ctx.channelInferred &&
         ["to", "channelId"].some((key) =>
           resolveBareTargetChannelNamespace(authorizedActionContext.params[key], plugin),
-        )
-      ) {
+        );
+      if (hasNamespaceTarget) {
         if (prepared.assertReadAuthorityCurrent || isExternalDelegatedMessageActionRead(prepared)) {
           enforceMessageActionConversationReadGate(gateParams);
+        }
+        if (!admitAction()) {
+          return null;
         }
         const { resolveMessageTarget } =
           await import("../../infra/outbound/message-action-routing.js");
@@ -663,25 +683,7 @@ export async function dispatchChannelMessageAction(
         matches = match;
       }
       enforceMessageActionConversationReadMatch(gateParams, matches);
-      // Some plugin actions depend on the sender identity to enforce channel-local
-      // trust. Reject tool-driven calls before invoking the action without it.
-      if (
-        plugin.actions?.requiresTrustedRequesterSender?.({
-          action: authorizedActionContext.action,
-          toolContext: authorizedActionContext.toolContext,
-        }) &&
-        !authorizedActionContext.requesterSenderId?.trim()
-      ) {
-        throw new Error(
-          `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
-        );
-      }
-      // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
-      // action names before the dispatcher enters channel-specific behavior.
-      if (
-        actions.supportsAction &&
-        !actions.supportsAction({ action: authorizedActionContext.action })
-      ) {
+      if (!hasNamespaceTarget && !admitAction()) {
         return null;
       }
       try {

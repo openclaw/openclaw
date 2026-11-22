@@ -452,7 +452,11 @@ describe("resolveDeliveryTarget", () => {
   });
 
   it("preserves a namespace directory identity through cron session routing", async () => {
-    setSessionEntry(NAMESPACE_SESSION_KEY, { channel: "alpha", to: "alpha" });
+    setSessionEntry(NAMESPACE_SESSION_KEY, {
+      channel: "alpha",
+      to: "alpha",
+      threadId: "old-thread",
+    });
     setPlugins(
       plugin(
         "alpha",
@@ -486,12 +490,14 @@ describe("resolveDeliveryTarget", () => {
     expect(result).toMatchObject({
       ok: true,
       to: "channel:C12345678",
+      threadId: undefined,
       sessionRoute: { to: "channel:C12345678", peer: { kind: "channel", id: "C12345678" } },
     });
   });
 
   it.each([
     { channel: "last", expected: "missing" },
+    { channel: "last", expected: new Error("directory unavailable") },
     { channel: "last", destination: "allowed-room", expected: "allowed-room" },
     {
       channel: "last",
@@ -539,10 +545,14 @@ describe("resolveDeliveryTarget", () => {
               resolveAllowFrom: () => ["operator"],
             },
             directory: {
-              listGroups: async () =>
-                [destination, ...(ambiguous ? ["other-room"] : [])].flatMap((id) =>
+              listGroups: async () => {
+                if (expected instanceof Error) {
+                  throw expected;
+                }
+                return [destination, ...(ambiguous ? ["other-room"] : [])].flatMap((id) =>
                   id ? [{ kind: "group" as const, id, name: "alpha" }] : [],
-                ),
+                );
+              },
             },
           },
         ),
@@ -568,12 +578,16 @@ describe("resolveDeliveryTarget", () => {
           error: { reasonCode: "message_target_ambiguous" },
         });
         expect(resolveNative).not.toHaveBeenCalled();
-      } else if (expected === "missing" || expected === "denied") {
+      } else if (expected instanceof Error || expected === "missing" || expected === "denied") {
         expectTargetError(
           result,
-          expected === "missing" ? "does not specify a destination" : "cron target denied",
+          expected instanceof Error
+            ? expected.message
+            : expected === "missing"
+              ? "does not specify a destination"
+              : "cron target denied",
         );
-        if (expected === "missing") {
+        if (expected !== "denied") {
           expect(normalizeTarget).not.toHaveBeenCalled();
           expect(resolveNative).not.toHaveBeenCalled();
         }

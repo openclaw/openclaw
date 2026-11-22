@@ -23,7 +23,10 @@ afterEach(() => resetPluginRuntimeStateForTest());
 const entry = {
   sessionId: "namespace-source",
   updatedAt: 1,
-  delivery: normalizeSessionDeliveryState({ context: { channel: "alpha", to: "alpha" } }),
+  chatType: "group" as const,
+  delivery: normalizeSessionDeliveryState({
+    context: { channel: "alpha", to: "alpha", threadId: "old-thread" },
+  }),
 };
 
 it.each([
@@ -90,6 +93,7 @@ it.each([
     );
     plugin.messaging = {
       targetPrefixes: ["alpha"],
+      preserveHeartbeatThreadIdForGroupRoute: true,
       inferTargetChatType: ({ to }) =>
         to === "42" ? "direct" : to.startsWith("alpha:") ? "group" : undefined,
     };
@@ -108,7 +112,7 @@ it.each([
 
     expect(result).toMatchObject(
       expected === "alpha"
-        ? { channel: "alpha", to: rewritten, chatType: "group" }
+        ? { channel: "alpha", to: rewritten, chatType: "group", threadId: undefined }
         : { channel: "none", reason: expected },
     );
     if (expected === "no-target") {

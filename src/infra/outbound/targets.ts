@@ -429,6 +429,7 @@ async function resolveDeliveryTargetWithPolicy(
     Boolean(resolvedTarget.to) &&
     Boolean(resolvedTarget.lastTo) &&
     resolvedTarget.to === resolvedTarget.lastTo &&
+    (!namespaceTarget || resolved.to === resolvedTarget.to) &&
     normalizeChatType(entry?.chatType) === "group"
       ? resolvedTarget.lastThreadId
       : undefined;

@@ -233,18 +233,30 @@ describe("official plugin read-only authority", () => {
       { kind: "group" as const, id: "channel:resolved", name: fixture.plugin.id },
     ]);
     fixture.plugin.directory = { listGroups };
+    fixture.plugin.actions = {
+      ...fixture.plugin.actions,
+      requiresTrustedRequesterSender: () => true,
+      supportsAction: ({ action }) => action === "read",
+    };
     fixture.register();
-    const context: Context = {
-      ...fixture.context,
+    const context: Partial<Context> = {
       params: { channelId: fixture.plugin.id },
       channelInferred: true,
     };
     await expect(
-      dispatchChannelMessageAction({ ...context, requesterAccountId: "another-account" }),
+      fixture.dispatch({ ...context, requesterAccountId: "another-account" }),
     ).rejects.toThrow("requires current provider and account context");
     expect(listGroups).not.toHaveBeenCalled();
     expect(fixture.handleAction).not.toHaveBeenCalled();
-    await expect(dispatchChannelMessageAction(context)).resolves.toBe(receipt);
+    await expect(fixture.dispatch(context)).rejects.toThrow("Trusted sender identity");
+    expect(listGroups).not.toHaveBeenCalled();
+    await expect(
+      fixture.dispatch({ ...context, action: "search", requesterSenderId: "trusted-sender" }),
+    ).resolves.toBeNull();
+    expect(listGroups).not.toHaveBeenCalled();
+    await expect(
+      fixture.dispatch({ ...context, requesterSenderId: "trusted-sender" }),
+    ).resolves.toBe(receipt);
     expect(fixture.handleAction).toHaveBeenCalledWith(
       expect.objectContaining({ params: expect.objectContaining({ channelId: "resolved" }) }),
     );

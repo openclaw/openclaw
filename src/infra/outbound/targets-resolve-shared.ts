@@ -22,7 +22,7 @@ export type OutboundTargetResolution =
       /** Namespace identity before outbound policy; a policy rewrite may change the final `to`. */
       namespaceTarget?: ResolvedMessagingTarget;
     }
-  | { ok: false; error: Error };
+  | { ok: false; error: Error; namespaceResolutionFailed?: true };
 
 /**
  * Inputs shared by direct and heartbeat outbound target resolution.
@@ -100,7 +100,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
       error: err instanceof Error ? err : new Error(String(err)),
     }));
     if (!namespaceResolution.ok) {
-      return namespaceResolution;
+      return { ...namespaceResolution, namespaceResolutionFailed: true };
     }
     namespaceTarget = namespaceResolution.target;
     effectiveTo = namespaceTarget.to;
