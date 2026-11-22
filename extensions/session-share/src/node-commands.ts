@@ -19,22 +19,17 @@ import {
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitleAsync,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sessionShareSelection } from "./config.js";
 
 export const SESSION_SHARE_LIST_COMMAND = "openclaw.sessions.list.v1";
-export const SESSION_SHARE_LIST_WITH_LINKS_COMMAND = "openclaw.sessions.list-with-links.v1";
-export const SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND =
-  "openclaw.sessions.list-for-profile-with-links.v1";
 export const SESSION_SHARE_READ_COMMAND = "openclaw.sessions.read.v1";
-export const SESSION_SHARE_FILTERED_LIST_COMMAND = "openclaw.sessions.list-for-profile.v1";
-export const SESSION_SHARE_FILTERED_READ_COMMAND = "openclaw.sessions.read-for-profile.v1";
-export const SESSION_SHARE_COMMANDS = [
-  SESSION_SHARE_LIST_COMMAND,
-  SESSION_SHARE_LIST_WITH_LINKS_COMMAND,
-  SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND,
-  SESSION_SHARE_READ_COMMAND,
-  SESSION_SHARE_FILTERED_LIST_COMMAND,
-  SESSION_SHARE_FILTERED_READ_COMMAND,
+export const SESSION_SHARE_CATALOG_LIST_COMMAND = "openclaw.sessions.catalog.list.v1";
+export const SESSION_SHARE_CATALOG_READ_COMMAND = "openclaw.sessions.catalog.read.v1";
+export const SESSION_SHARE_COMMANDS = [SESSION_SHARE_LIST_COMMAND, SESSION_SHARE_READ_COMMAND];
+export const SESSION_SHARE_CATALOG_COMMANDS = [
+  SESSION_SHARE_CATALOG_LIST_COMMAND,
+  SESSION_SHARE_CATALOG_READ_COMMAND,
 ];
 
 const parameterMessages = {
@@ -128,7 +123,7 @@ function withSharedEntries<T>(
 export function createSessionShareNodeCommands(
   api: OpenClawPluginApi,
   authority?: SessionShareSourceAuthority,
-  filtered = false,
+  catalog = false,
 ): OpenClawPluginNodeHostCommand[] {
   const source = { pluginId: "session-share", sourceDomain: "openclaw" };
   const serializeResult = (payload: unknown) => {
@@ -214,27 +209,29 @@ export function createSessionShareNodeCommands(
     );
   }
   const commands: OpenClawPluginNodeHostCommand[] = [
-    ...[false, true].map((includeLinks): OpenClawPluginNodeHostCommand => ({
-      command: filtered
-        ? includeLinks
-          ? SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND
-          : SESSION_SHARE_FILTERED_LIST_COMMAND
-        : includeLinks
-          ? SESSION_SHARE_LIST_WITH_LINKS_COMMAND
-          : SESSION_SHARE_LIST_COMMAND,
+    {
+      command: catalog ? SESSION_SHARE_CATALOG_LIST_COMMAND : SESSION_SHARE_LIST_COMMAND,
       hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
       isAvailable: ({ config }) => sessionShareSelection(config) !== undefined,
       async handle(paramsJSON) {
-        const params = sessionCatalogPaging.parseListParams(parseNodeParams(paramsJSON), {
+        const raw = parseNodeParams(paramsJSON);
+        let includeLinks = false;
+        let listParams = raw;
+        if (catalog && isRecord(raw)) {
+          const { includeOriginalPath, ...rest } = raw;
+          if (includeOriginalPath !== undefined && typeof includeOriginalPath !== "boolean") {
+            throw new Error("includeOriginalPath must be a boolean");
+          }
+          includeLinks = includeOriginalPath === true;
+          listParams = rest;
+        }
+        const params = sessionCatalogPaging.parseListParams(listParams, {
           searchMaxLength: 500,
           messages: parameterMessages,
-          supportsProfileRelation: filtered,
+          supportsProfileRelation: catalog,
         });
-        if (filtered && !params.profileRelation) {
-          throw new Error("A relationship filter is required");
-        }
         const resolveOriginalPath = includeLinks
           ? await prepareStoredSessionControlUiPathResolver()
           : undefined;
@@ -377,9 +374,9 @@ export function createSessionShareNodeCommands(
           params.profileRelation,
         );
       },
-    })),
+    },
     {
-      command: filtered ? SESSION_SHARE_FILTERED_READ_COMMAND : SESSION_SHARE_READ_COMMAND,
+      command: catalog ? SESSION_SHARE_CATALOG_READ_COMMAND : SESSION_SHARE_READ_COMMAND,
       hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
@@ -390,11 +387,8 @@ export function createSessionShareNodeCommands(
           threadIdPattern: /^[^\0\r\n]+$/,
           cursorMaxLength: 2048,
           messages: parameterMessages,
-          supportsProfileRelation: filtered,
+          supportsProfileRelation: catalog,
         });
-        if (filtered && !params.profileRelation) {
-          throw new Error("A relationship filter is required");
-        }
         const session = (await readSharedEntries(params.profileRelation)).find(
           ({ sessionKey }) => sessionKey === params.threadId,
         );
@@ -456,7 +450,7 @@ export function createSessionShareNodeCommands(
       },
     },
   ];
-  return filtered
+  return catalog
     ? commands
     : [...commands, ...createSessionShareNodeCommands(api, authority, true)];
 }

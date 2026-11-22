@@ -118,7 +118,7 @@ function renderCatalogHostGroup(
       agentId: params.snapshot.newSessionAgentId,
       routeId,
       navigation: target().options,
-      profileRelation: readCatalog().profileRelation,
+      profileRelation: readHost().profileRelation,
       canOpenTerminal: readSession().canOpenTerminal === true,
       canDelete: readSession().canArchive && readCatalog().capabilities.archive,
       name: readSession().name ?? readSession().threadId,
@@ -211,7 +211,7 @@ function renderCatalogHostGroup(
                   params.host.prepareSessionNavigation(
                     key(),
                     target().options.pathname,
-                    readCatalog().profileRelation,
+                    readHost().profileRelation,
                   );
                   params.host.onNavigate?.(routeId, target().options);
                 }

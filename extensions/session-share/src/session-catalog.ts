@@ -15,16 +15,15 @@ import {
   type SessionCatalogHost,
   type SessionCatalogProvider,
   type SessionCatalogSession,
+  type SessionCatalogSourceProfileRelation,
 } from "openclaw/plugin-sdk/session-catalog";
 import { prepareSessionCatalogGitHubLinker } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sessionShareNodeBinding } from "./config.js";
 import {
-  SESSION_SHARE_FILTERED_LIST_COMMAND,
-  SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND,
-  SESSION_SHARE_FILTERED_READ_COMMAND,
+  SESSION_SHARE_CATALOG_LIST_COMMAND,
+  SESSION_SHARE_CATALOG_READ_COMMAND,
   SESSION_SHARE_LIST_COMMAND,
-  SESSION_SHARE_LIST_WITH_LINKS_COMMAND,
   SESSION_SHARE_READ_COMMAND,
 } from "./node-commands.js";
 import { sessionShareOriginalUrl } from "./original-url.js";
@@ -38,6 +37,9 @@ type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][
 type GitHubLinker = Awaited<ReturnType<typeof prepareSessionCatalogGitHubLinker>>;
 type CatalogIdentity = NonNullable<NonNullable<SessionCatalogSession["createdActor"]>["identity"]>;
 type NodeSnapshot = {
+  key: string;
+  profileRelation?: SessionCatalogSourceProfileRelation;
+  appliedRelation?: SessionCatalogSourceProfileRelation;
   node: CatalogNode;
   config: ReturnType<PluginRuntime["config"]["current"]>;
   scope: PluginServiceSchedulerV1;
@@ -206,9 +208,9 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
   const current = (entry: NodeSnapshot) =>
     !entry.scope.signal.aborted &&
     api.runtime.config.current() === entry.config &&
-    snapshots.get(entry.node.nodeId) === entry;
+    snapshots.get(entry.key) === entry;
   const retire = (entry: NodeSnapshot) => {
-    snapshots.delete(entry.node.nodeId);
+    snapshots.delete(entry.key);
     entry.sessions = undefined;
     void entry.scope.stop();
   };
@@ -216,8 +218,8 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     node?.connected &&
     isSessionHost(node) &&
     node.connectedAtMs === entry.node.connectedAtMs &&
-    node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND) ===
-      entry.node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND);
+    node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND) ===
+      entry.node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND);
 
   function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
     if (entry.pending) {
@@ -243,12 +245,16 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             async () => {
               const deadline = performance.now() + REFRESH_BUDGET_MS;
               const sessions: SessionShareSession[] = [];
-              const includeLinks =
+              let includeLinks =
                 Boolean(bindingFor(entry.node.nodeId).controlUiOrigin) &&
-                entry.node.commands?.includes(SESSION_SHARE_LIST_WITH_LINKS_COMMAND) === true;
+                entry.node.commands?.includes(SESSION_SHARE_CATALOG_LIST_COMMAND) === true;
               let cursor: string | undefined;
               let bytes = 0;
+              let relation = entry.profileRelation;
+              entry.error = undefined;
+              let retry = false;
               do {
+                retry = false;
                 if (!current(entry) || !owner.invokeNode) {
                   throw new Error("Session Share catalog owner retired");
                 }
@@ -256,18 +262,51 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 if (timeoutMs <= 0) {
                   throw new Error("Session Share catalog refresh timed out");
                 }
-                const page = parseSessionSharePage(
-                  await owner.invokeNode({
+                let raw: unknown;
+                try {
+                  raw = await owner.invokeNode({
                     nodeId: entry.node.nodeId,
-                    command: includeLinks
-                      ? SESSION_SHARE_LIST_WITH_LINKS_COMMAND
-                      : SESSION_SHARE_LIST_COMMAND,
-                    params: { limit: 100, ...(cursor ? { cursor } : {}) },
+                    command:
+                      includeLinks || relation
+                        ? SESSION_SHARE_CATALOG_LIST_COMMAND
+                        : SESSION_SHARE_LIST_COMMAND,
+                    params: {
+                      limit: 100,
+                      ...(includeLinks ? { includeOriginalPath: true } : {}),
+                      ...(relation ? { profileRelation: relation } : {}),
+                      ...(cursor ? { cursor } : {}),
+                    },
                     timeoutMs,
                     signal,
-                  }),
-                  includeLinks,
-                );
+                  });
+                } catch (error) {
+                  const details = asOptionalRecord(asOptionalRecord(error)?.details);
+                  const nodeError = asOptionalRecord(details?.nodeError);
+                  const message = nodeError?.message ?? asOptionalRecord(error)?.message;
+                  const unresolved =
+                    typeof message === "string" &&
+                    /^Profile selection is unresolved(?: or ambiguous)? on this source$/.test(
+                      message,
+                    );
+                  const unapproved = details?.reason === "command not allowlisted";
+                  if (!relation || (!unresolved && !unapproved)) {
+                    throw error;
+                  }
+                  // This is a new legacy read under its own policy, never an authorization bypass.
+                  relation = undefined;
+                  if (unapproved) includeLinks = false;
+                  cursor = undefined;
+                  sessions.length = 0;
+                  bytes = 0;
+                  retry = true;
+                  entry.error = {
+                    code: "FILTER_PARTIAL",
+                    message:
+                      "Source relationship filtering is unavailable. Showing authorized rows with client-side matching; check the identity link and catalog command approvals.",
+                  };
+                  continue;
+                }
+                const page = parseSessionSharePage(raw, includeLinks, relation);
                 bytes += Buffer.byteLength(JSON.stringify(page));
                 if (
                   sessions.length + page.sessions.length > MAX_SNAPSHOT_ROWS ||
@@ -278,13 +317,14 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 sessions.push(...page.sessions);
                 if (
                   page.nextCursor !== undefined &&
-                  sessionCatalogPaging.decodeCursor(page.nextCursor) <=
-                    sessionCatalogPaging.decodeCursor(cursor)
+                  sessionCatalogPaging.decodeCursor(page.nextCursor, relation) <=
+                    sessionCatalogPaging.decodeCursor(cursor, relation)
                 ) {
                   throw new Error("Session Share catalog cursor did not advance");
                 }
                 cursor = page.nextCursor;
-              } while (cursor);
+              } while (retry || cursor !== undefined);
+              entry.appliedRelation = relation;
               return sessions;
             },
             () => {
@@ -309,7 +349,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           entry.sessions = snapshot;
           entry.refreshedAt = performance.now();
           entry.retryMs = REFRESH_MS;
-          entry.error = undefined;
+          if (entry.error?.code !== "FILTER_PARTIAL") entry.error = undefined;
         } catch (error) {
           entry.retryMs = entry.error ? Math.min(entry.retryMs * 2, 300_000) : REFRESH_MS;
           entry.error =
@@ -356,7 +396,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     }
   }
 
-  function admit(nodes: CatalogNode[]) {
+  function admit(nodes: CatalogNode[], profileRelation?: SessionCatalogSourceProfileRelation) {
     const owner = context;
     if (!owner || owner.scheduler.signal.aborted) {
       return;
@@ -364,11 +404,14 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     const config = api.runtime.config.current();
     const selected = new Set(nodes.map((node) => node.nodeId));
     for (const node of nodes.filter((candidate) => candidate.connected)) {
-      const existing = snapshots.get(node.nodeId);
+      const key = JSON.stringify([node.nodeId, profileRelation ?? null]);
+      const existing = snapshots.get(key);
       if (existing) {
-        snapshots.delete(node.nodeId);
-        snapshots.set(node.nodeId, existing);
-        refresh(existing, owner);
+        snapshots.delete(key);
+        snapshots.set(key, existing);
+        if (!existing.sessions || performance.now() - existing.refreshedAt >= REFRESH_MS) {
+          refresh(existing, owner);
+        }
         continue;
       }
       if (snapshots.size >= MAX_SNAPSHOTS) {
@@ -381,13 +424,15 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         retire(victim);
       }
       const entry: NodeSnapshot = {
+        key,
+        profileRelation,
         node,
         config,
         scope: owner.scheduler.scope(),
         refreshedAt: 0,
         retryMs: REFRESH_MS,
       };
-      snapshots.set(node.nodeId, entry);
+      snapshots.set(key, entry);
       refresh(entry, owner);
     }
   }
@@ -443,64 +488,20 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     if (!node.connected) {
       return failed("NODE_OFFLINE", "Paired node is offline");
     }
-    if (query.profileRelation) {
-      if (
-        ![SESSION_SHARE_FILTERED_LIST_COMMAND, SESSION_SHARE_FILTERED_READ_COMMAND].every(
-          (command) => node.commands?.includes(command),
-        )
-      ) {
-        return failed(
-          "FILTER_UNSUPPORTED",
-          "This node does not support relationship filters. Update the source and approve its profile-filter commands, or choose All owners.",
-        );
-      }
-      const owner = context;
-      if (!owner?.invokeNode) {
-        return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
-      }
-      try {
-        const includeLinks =
-          Boolean(bindingFor(node.nodeId).controlUiOrigin) &&
-          node.commands?.includes(SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND) === true;
-        const raw = await owner.invokeNode({
-          nodeId: node.nodeId,
-          command: includeLinks
-            ? SESSION_SHARE_FILTERED_LIST_WITH_LINKS_COMMAND
-            : SESSION_SHARE_FILTERED_LIST_COMMAND,
-          params: {
-            limit,
-            profileRelation: query.profileRelation,
-            ...(query.search ? { searchTerm: query.search } : {}),
-            ...(cursor ? { cursor } : {}),
-          },
-          timeoutMs: 30_000,
-          signal,
-        });
-        const page = parseSessionSharePage(raw, includeLinks, query.profileRelation);
-        signal?.throwIfAborted();
-        const host = {
-          ...common,
-          ...page,
-          sessions: await bindSessions(node.nodeId, hostId, page.sessions),
-        };
-        publicationGuards.set(host, () => {
-          signal?.throwIfAborted();
-          if (context !== owner) {
-            throw new Error("Session Share service retired");
+    const supported = [
+      SESSION_SHARE_CATALOG_LIST_COMMAND,
+      SESSION_SHARE_CATALOG_READ_COMMAND,
+    ].every((command) => node.commands?.includes(command));
+    const appliedRelation = supported ? query.profileRelation : undefined;
+    const partial =
+      query.profileRelation && !supported
+        ? {
+            code: "FILTER_PARTIAL",
+            message:
+              "Relationship filtering is unavailable on this source. Showing authorized rows with client-side matching; update the source and allow both catalog commands on the receiver.",
           }
-        });
-        publicationGuards.get(host)?.();
-        onHost?.(host);
-        return host;
-      } catch {
-        signal?.throwIfAborted();
-        return failed(
-          "FILTER_UNAVAILABLE",
-          "Cannot apply this relationship filter. Check the source identity link and profile-filter command approval, or choose All owners.",
-        );
-      }
-    }
-    const entry = snapshots.get(node.nodeId);
+        : undefined;
+    const entry = snapshots.get(JSON.stringify([node.nodeId, appliedRelation ?? null]));
     const project = async (): Promise<SessionCatalogHost> => {
       if (!entry) {
         return failed(
@@ -527,7 +528,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
               session.threadId.toLowerCase().normalize("NFC").includes(search),
           )
         : entry.sessions;
-      const offset = sessionCatalogPaging.decodeCursor(cursor);
+      const offset = sessionCatalogPaging.decodeCursor(cursor, entry.appliedRelation);
       const selected = await bindSessions(
         node.nodeId,
         hostId,
@@ -539,9 +540,10 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const host: SessionCatalogHost = {
         ...common,
         sessions: selected,
-
+        ...(entry.appliedRelation ? { profileRelation: entry.appliedRelation } : {}),
+        ...((partial ?? entry.error) ? { error: partial ?? entry.error } : {}),
         ...(offset + limit < sessions.length
-          ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit) }
+          ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit, entry.appliedRelation) }
           : {}),
       };
       // Other hosts and identity linking may yield before aggregate publication.
@@ -633,8 +635,12 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             left.nodeId.localeCompare(right.nodeId),
         )
         .slice(0, MAX_SNAPSHOTS);
-      if (!query.profileRelation) {
-        admit(eligible);
+      for (const node of eligible) {
+        const supported = [
+          SESSION_SHARE_CATALOG_LIST_COMMAND,
+          SESSION_SHARE_CATALOG_READ_COMMAND,
+        ].every((command) => node.commands?.includes(command));
+        admit([node], supported ? query.profileRelation : undefined);
       }
       const owner = context;
       const hosts = await Promise.all(
@@ -666,10 +672,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           "OpenClaw session node is unavailable. Reconnect it and refresh the catalog.",
         );
       }
-      if (
-        request.profileRelation &&
-        !node.commands?.includes(SESSION_SHARE_FILTERED_READ_COMMAND)
-      ) {
+      if (request.profileRelation && !node.commands?.includes(SESSION_SHARE_CATALOG_READ_COMMAND)) {
         throw new Error(
           "This node does not support relationship filters. Update and approve the source commands, or choose All owners.",
         );
@@ -677,7 +680,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const raw = await api.runtime.nodes.invoke({
         nodeId,
         command: request.profileRelation
-          ? SESSION_SHARE_FILTERED_READ_COMMAND
+          ? SESSION_SHARE_CATALOG_READ_COMMAND
           : SESSION_SHARE_READ_COMMAND,
         timeoutMs: 30_000,
         scopes: ["operator.write"],

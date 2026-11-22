@@ -252,7 +252,9 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 "sessions.catalog.list",
                 {
                   agentId: params.agentId,
-                  ...(params.profileRelation ? { profileRelation: params.profileRelation } : {}),
+                  ...(params.profileRelation && catalog.capabilities.profileRelation
+                    ? { profileRelation: params.profileRelation }
+                    : {}),
                   catalogId: catalog.id,
                   hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },

@@ -75,3 +75,27 @@ it.each([false, true])(
     );
   },
 );
+
+it("registers one legacy and one optional catalog pair with strict options", async () => {
+  const api = createTestPluginApi({ runtime: createPluginRuntimeMock() });
+  const commands = createSessionShareNodeCommands(api);
+  expect(commands.map(({ command }) => command)).toEqual([
+    "openclaw.sessions.list.v1",
+    "openclaw.sessions.read.v1",
+    "openclaw.sessions.catalog.list.v1",
+    "openclaw.sessions.catalog.read.v1",
+  ]);
+  await expect(commands[0]!.handle(JSON.stringify({ includeOriginalPath: true }))).rejects.toThrow(
+    "Unknown session list parameter: includeOriginalPath",
+  );
+  await expect(commands[2]!.handle(JSON.stringify({ includeOriginalPath: "yes" }))).rejects.toThrow(
+    "includeOriginalPath must be a boolean",
+  );
+  await expect(
+    commands[2]!.handle(
+      JSON.stringify({
+        profileRelation: { relationship: "owned", target: { type: "profile", id: "local" } },
+      }),
+    ),
+  ).rejects.toThrow("profileRelation is invalid");
+});

@@ -170,7 +170,7 @@ export function projectSidebarSessionCatalogs(
         // Catalog access and creator attribution do not establish involvement.
         // Only the Gateway-filtered backing roster can admit a catalog row.
         if (
-          !catalog.profileRelation &&
+          !host.profileRelation &&
           involvingSessionKeys &&
           (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
         ) {
@@ -182,7 +182,7 @@ export function projectSidebarSessionCatalogs(
         if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
           return false;
         }
-        if (!ownerId || catalog.profileRelation) {
+        if (!ownerId || host.profileRelation) {
           return true;
         }
         const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;

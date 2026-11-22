@@ -96,6 +96,8 @@ export const SessionCatalogSessionSchema = closedObject({
 });
 
 export const SessionCatalogHostSchema = closedObject({
+  /** Relationship actually applied by this host; absent on legacy fallback. */
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   hostId: NonEmptyString,
   label: NonEmptyString,
   kind: stringLiteralUnion(["gateway", "node"]),

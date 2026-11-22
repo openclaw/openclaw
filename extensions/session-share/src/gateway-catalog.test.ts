@@ -265,7 +265,9 @@ it.each([
   expect(f.assertConnection).toThrow("configuration changed");
   const calls = f.client.request.mock.calls.length;
   expect((await f.catalog.list({}))[0]?.sessions).toHaveLength(0);
-  await expect(f.catalog.read({ hostId: "gateway:team", threadId: "one" })).rejects.toThrow();
+  await expect(f.catalog.read({ hostId: "gateway:team", threadId: "one" })).rejects.toThrow(
+    "configuration changed",
+  );
   expect(f.client.request).toHaveBeenCalledTimes(calls);
   f.replace(original);
   f.hello();
@@ -387,21 +389,23 @@ it("discovers peer filter support before sending and never retries a filter unsc
   (client.options.onHelloOk as (hello: unknown) => void)({
     features: { methods: ["session-share.list", "session-share.read"] },
   });
+  client.request.mockResolvedValue({ sessions: [] });
   expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
     sessions: [],
-    error: { code: "FILTER_UNSUPPORTED" },
+    error: { code: "FILTER_PARTIAL" },
   });
-  expect(client.request).not.toHaveBeenCalled();
+  expect(client.request).toHaveBeenLastCalledWith("session-share.list", { limit: 20 });
+  client.request.mockClear();
   await expect(
     catalog.read({ hostId: "gateway:team", threadId: "shared", profileRelation }),
-  ).rejects.toThrow();
+  ).rejects.toThrow("does not support relationship filters");
   expect(client.request).not.toHaveBeenCalled();
   (client.options.onHelloOk as (hello: unknown) => void)({
-    features: { methods: ["session-share.list-for-profile", "session-share.read-for-profile"] },
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
   });
   client.request.mockResolvedValue({ sessions: [] });
   expect((await catalog.list({ profileRelation }))[0]?.error).toBeUndefined();
-  expect(client.request).toHaveBeenLastCalledWith("session-share.list-for-profile", {
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", {
     limit: 20,
     profileRelation,
   });
@@ -410,6 +414,6 @@ it("discovers peer filter support before sending and never retries a filter unsc
     "relationship filter",
   );
   expect(
-    client.request.mock.calls.every(([method]) => method === "session-share.list-for-profile"),
+    client.request.mock.calls.every(([method]) => method === "session-share.catalog.list"),
   ).toBe(true);
 });

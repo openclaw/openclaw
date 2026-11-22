@@ -50,13 +50,13 @@ export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawCon
     listForProfile: async (params: Record<string, unknown>) =>
       JSON.parse(
         await commands
-          .find((command) => command.command === "openclaw.sessions.list-for-profile.v1")!
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
           .handle(JSON.stringify(params)),
       ) as SessionPage,
     readForProfile: async (threadId: string, params: Record<string, unknown>) =>
       JSON.parse(
         await commands
-          .find((command) => command.command === "openclaw.sessions.read-for-profile.v1")!
+          .find((command) => command.command === "openclaw.sessions.catalog.read.v1")!
           .handle(JSON.stringify({ threadId, ...params })),
       ) as TranscriptPage,
     list: async (params: Record<string, unknown> = {}) =>

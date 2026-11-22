@@ -30,6 +30,7 @@ import {
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status-state.ts";
 import {
+  selectSessionCatalogProfileRelation,
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
@@ -97,17 +98,11 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   sessionScopeGeneration = 0;
   private catalogRelationKey: string | undefined;
   get sessionCatalogProfileRelation(): SessionCatalogProfileRelation | undefined {
-    const { ownerId, involvingMe } = this.inputs.sidebarSessionOwnerFilter();
-    if (!involvingMe && !ownerId) {
-      return undefined;
-    }
-    return {
-      relationship: involvingMe ? "involving" : "owned",
-      target:
-        ownerId && !involvingMe && ownerId !== this.context.gateway.snapshot.selfUser?.id
-          ? { type: "local-profile", id: ownerId }
-          : { type: "me" },
-    };
+    return selectSessionCatalogProfileRelation(
+      this.sessionCatalogs,
+      this.inputs.sidebarSessionOwnerFilter(),
+      this.context.gateway.snapshot.selfUser?.id,
+    );
   }
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
@@ -418,7 +413,12 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
     if (agentChanged || catalogAgentChanged || relationChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
-      this.sessionCatalogs = [];
+      this.sessionCatalogs =
+        relationChanged && !agentChanged && !catalogAgentChanged
+          ? this.sessionCatalogs.map((catalog) =>
+              catalog.capabilities.profileRelation ? { ...catalog, hosts: [] } : catalog,
+            )
+          : [];
       this.sessionCatalogPageDepths.clear();
     }
     if (agentChanged && !ownsCurrentCanonicalList) {

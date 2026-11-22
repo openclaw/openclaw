@@ -191,7 +191,7 @@ it.each([
 it("retains the relationship target on every imported source page", async () => {
   const profileRelation = {
     relationship: "owned",
-    target: { type: "profile", id: "source-person" },
+    target: { type: "github-account", id: "101" },
   } as const;
   const test = fixture({}, profileRelation);
   test.read

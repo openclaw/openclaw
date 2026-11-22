@@ -51,10 +51,10 @@ suite.define(() => {
               archive: false,
               profileRelation: true,
             },
-            ...(profileRelation ? { profileRelation } : {}),
             hosts: [
               {
                 hostId: "node:team",
+                ...(profileRelation ? { profileRelation } : {}),
                 label: "Team Gateway",
                 kind: "node",
                 connected: true,

@@ -369,7 +369,7 @@ export async function resolveSessionCatalogProfileRelation(
     return undefined;
   }
   const { target, relationship } = query;
-  if (target.type === "profile" || target.type === "github-account") {
+  if (target.type === "github-account") {
     return { relationship, target: { type: target.type, id: target.id } };
   }
   const profileId = target.type === "me" ? authenticatedProfileId : target.id;
@@ -393,11 +393,11 @@ export async function prepareSessionCatalogRelationIdentity(
   const context = captureOpenClawStateReadWorkerContext(options);
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const target = query.target;
-  const facts =
-    target.type === "github-account"
-      ? await prepareIdentityFacts({ kind: "link", accountIds: [target.id], owners: [] }, options)
-      : undefined;
-  const profileId = target.type === "profile" ? target.id : facts?.accounts.get(target.id);
+  const facts = await prepareIdentityFacts(
+    { kind: "link", accountIds: [target.id], owners: [] },
+    options,
+  );
+  const profileId = facts.accounts.get(target.id);
   if (!profileId) {
     throw new Error("Profile selection is unresolved or ambiguous on this source");
   }

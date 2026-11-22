@@ -10,7 +10,12 @@ import { call, hoisted, resetSessionCatalogTestState } from "./session-catalog.t
 beforeEach(resetSessionCatalogTestState);
 
 it("separates shared queries while leaving local listing to its existing client-side filter", async () => {
-  const list = vi.fn<SessionCatalogProvider["list"]>(async () => [catalogHost()]);
+  const list = vi.fn<SessionCatalogProvider["list"]>(async (query) => [
+    {
+      ...catalogHost(),
+      ...(query.profileRelation ? { profileRelation: query.profileRelation } : {}),
+    },
+  ]);
   const read = vi.fn<SessionCatalogProvider["read"]>(async ({ hostId, threadId }) => ({
     hostId,
     threadId,
@@ -20,13 +25,13 @@ it("separates shared queries while leaving local listing to its existing client-
   hoisted.activeRegistry.sessionCatalogs = [{ provider }];
   const owned = {
     relationship: "owned",
-    target: { type: "profile", id: "source-profile" },
+    target: { type: "github-account", id: "101" },
   } as const;
   const involved = { ...owned, relationship: "involving" } as const;
   for (const profileRelation of [owned, involved]) {
     const result = await call("sessions.catalog.list", { catalogId: "shared", profileRelation });
     expectCatalog(result, {
-      profileRelation,
+      hosts: [expect.objectContaining({ profileRelation })],
       capabilities: expect.objectContaining({ profileRelation: true }),
     });
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ profileRelation }));
@@ -74,11 +79,17 @@ it("keeps local catalogs available when a shared relationship cannot resolve", a
       }),
       expect.objectContaining({
         id: "shared",
-        error: expect.objectContaining({ message: expect.stringContaining("authenticated human") }),
+        hosts: [
+          expect.objectContaining({
+            sessions: expect.any(Array),
+            error: expect.objectContaining({ code: "FILTER_PARTIAL" }),
+          }),
+        ],
       }),
     ]),
   });
   expect(localList).toHaveBeenCalledOnce();
   expect(localList.mock.calls[0]?.[0]).not.toHaveProperty("profileRelation");
-  expect(sharedList).not.toHaveBeenCalled();
+  expect(sharedList).toHaveBeenCalledOnce();
+  expect(sharedList.mock.calls[0]?.[0]).not.toHaveProperty("profileRelation");
 });

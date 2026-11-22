@@ -527,33 +527,36 @@ it("does not send relationship params to legacy nodes and pages only advertised 
     target: { type: "github-account", id: "101" },
   } as const;
   expect(await f.host({ profileRelation })).toMatchObject({
-    sessions: [],
-    error: { code: "FILTER_UNSUPPORTED" },
+    sessions: [nativeSession],
+    error: { code: "FILTER_PARTIAL" },
   });
-  expect(f.invoke).not.toHaveBeenCalled();
+  expect(f.invoke).toHaveBeenCalledWith(
+    expect.objectContaining({ command: commands[0], params: { limit: 100 } }),
+  );
+  f.invoke.mockClear();
   f.list.mockResolvedValue({
     nodes: [
       {
         ...makeNode("alpha"),
         commands: [
           ...commands,
-          "openclaw.sessions.list-for-profile.v1",
-          "openclaw.sessions.read-for-profile.v1",
+          "openclaw.sessions.catalog.list.v1",
+          "openclaw.sessions.catalog.read.v1",
         ],
       },
     ],
   });
-  const cursor = encodeCursor(1, profileRelation);
-  f.invoke.mockResolvedValue(wire({ sessions: [nativeSession], nextCursor: cursor }));
+  const cursor = encodeCursor(20, profileRelation);
+  f.invoke.mockResolvedValue(wire({ sessions: rows(21) }));
   expect(await f.host({ profileRelation })).toMatchObject({
-    sessions: [nativeSession],
+    sessions: rows(21).slice(0, 20),
     nextCursor: cursor,
   });
   expect(f.invoke).toHaveBeenCalledTimes(1);
   expect(f.invoke).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      command: "openclaw.sessions.list-for-profile.v1",
-      params: { limit: 20, profileRelation },
+      command: "openclaw.sessions.catalog.list.v1",
+      params: { limit: 100, profileRelation },
     }),
   );
 });
@@ -605,8 +608,8 @@ it("keeps configured owner and portable identity attribution on filtered node pa
         ...makeNode("alpha"),
         commands: [
           ...commands,
-          "openclaw.sessions.list-for-profile.v1",
-          "openclaw.sessions.read-for-profile.v1",
+          "openclaw.sessions.catalog.list.v1",
+          "openclaw.sessions.catalog.read.v1",
         ],
       },
     ],
@@ -645,7 +648,7 @@ it("keeps configured owner and portable identity attribution on filtered node pa
 });
 
 describe("optional source-link command", () => {
-  const linkedCommand = "openclaw.sessions.list-with-links.v1";
+  const linkedCommand = "openclaw.sessions.catalog.list.v1";
   const originalPath = "/chat/main/shared";
   const configure = () => {
     f.configure({
@@ -666,7 +669,7 @@ describe("optional source-link command", () => {
 
   it.each([false, true])("uses the advertised link variant (filtered: %s)", async (filtered) => {
     configure();
-    const command = filtered ? "openclaw.sessions.list-for-profile-with-links.v1" : linkedCommand;
+    const command = filtered ? "openclaw.sessions.catalog.list.v1" : linkedCommand;
     const profileRelation = filtered
       ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
       : undefined;
@@ -676,8 +679,8 @@ describe("optional source-link command", () => {
           ...linkedNode,
           commands: [
             ...linkedNode.commands,
-            "openclaw.sessions.list-for-profile.v1",
-            "openclaw.sessions.read-for-profile.v1",
+            "openclaw.sessions.catalog.list.v1",
+            "openclaw.sessions.catalog.read.v1",
             command,
           ],
         },

@@ -268,9 +268,9 @@ it.each([false, true])(
     expect(edgeHeadersSeen).toBe(true);
     expect(advertised.toSorted()).toEqual([
       "session-share.list",
-      "session-share.list-for-profile",
+      "session-share.catalog.list",
       "session-share.read",
-      "session-share.read-for-profile",
+      "session-share.catalog.read",
     ]);
     const list = () =>
       client.request<{ sessions: { threadId: string }[] }>("session-share.list", {});
@@ -291,47 +291,53 @@ it.each([false, true])(
       target: { type: "github-account", id: "25101" },
     };
     const filteredList = () =>
-      client.request<{ sessions: { threadId: string }[] }>("session-share.list-for-profile", {
+      client.request<{ sessions: { threadId: string }[] }>("session-share.catalog.list", {
         profileRelation,
       });
     expect((await filteredList()).sessions.map((row) => row.threadId)).toEqual([
       "agent:main:shared",
     ]);
     expect(
-      await client.request("session-share.read-for-profile", {
+      await client.request("session-share.catalog.read", {
         profileRelation,
         threadId: "agent:main:shared",
       }),
     ).toMatchObject({ items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }] });
     Object.assign(share, { involvingProfileId: undefined });
-    await expect(list()).rejects.toThrow();
-    await expect(filteredList()).rejects.toThrow();
+    await expect(list()).rejects.toThrow("Session Share request denied or source unavailable");
+    await expect(filteredList()).rejects.toThrow(
+      "Session Share request denied or source unavailable",
+    );
     await expect(
-      client.request("session-share.read-for-profile", {
+      client.request("session-share.catalog.read", {
         profileRelation,
         threadId: "agent:main:shared",
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
     share.involvingProfileId = alias.id;
     await expect(
-      client.request("session-share.read-for-profile", {
+      client.request("session-share.catalog.read", {
         profileRelation,
         threadId: "agent:main:other",
       }),
-    ).rejects.toThrow();
-    await expect(client.request("session-share.list-for-profile", {})).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
+    expect(
+      (await client.request<{ sessions: unknown[] }>("session-share.catalog.list", {})).sessions,
+    ).toHaveLength(1);
     expect(admitted).toBeDefined();
     expect(admitted?.client?.authenticatedUserProfile).toBeUndefined();
     expect(admitted?.client?.preparedSessionProfile).toBeUndefined();
     for (const name of ["other", "private"]) {
-      await expect(read(name)).rejects.toThrow();
+      await expect(read(name)).rejects.toThrow(
+        "Session Share request denied or source unavailable",
+      );
     }
     for (const method of ["sessions.list", "chat.history", "config.get", "sessions.send"]) {
-      await expect(client.request(method, {})).rejects.toThrow();
+      await expect(client.request(method, {})).rejects.toThrow("missing scope");
     }
     await expect(
       client.request("session-share.list", { involvingProfileId: other.id }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
     for (const patch of [
       { gateway: false },
       { gatewayDeviceIds: [] },
@@ -344,13 +350,13 @@ it.each([false, true])(
       const saved = { ...share };
       Object.assign(share, patch);
       try {
-        await expect(read()).rejects.toThrow();
+        await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
       } finally {
         Object.assign(share, saved);
       }
     }
     cfg.plugins!.entries!["session-share"]!.enabled = false;
-    await expect(read()).rejects.toThrow();
+    await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
     cfg.plugins!.entries!["session-share"]!.enabled = true;
     const holdRead = async (mutate: () => void | Promise<unknown>, disclose = false) => {
       const entered = createDeferredCore();
@@ -369,7 +375,7 @@ it.each([false, true])(
         ? expect(pending).resolves.toMatchObject({
             items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }],
           })
-        : expect(pending).rejects.toThrow();
+        : expect(pending).rejects.toThrow("Session Share request denied or source unavailable");
       try {
         await Promise.race([entered.promise, pending]);
         await mutate();
@@ -388,7 +394,7 @@ it.each([false, true])(
     await holdRead(() => {
       publishReaderEnabled(false);
     }, true);
-    await expect(read()).rejects.toThrow();
+    await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
     publishReaderEnabled(true);
     expect((await read()).items).toMatchObject([{ text: "SYNTHETIC_SHARED_MESSAGE" }]);
     await holdRead(() => {
@@ -407,7 +413,7 @@ it.each([false, true])(
         scopes: [scope],
       });
     });
-    await expect(list()).rejects.toThrow();
+    await expect(list()).rejects.toThrow("Session Share request denied or source unavailable");
     if (!rotated.ok) {
       throw new Error(`Fixture rotation refused: ${rotated.reason}`);
     }
@@ -428,6 +434,6 @@ it.each([false, true])(
     openOpenClawStateDatabase().db.prepare("DELETE FROM user_profiles WHERE id = ?").run(person.id);
     await expect(
       fresh.request("session-share.read", { threadId: "agent:main:shared" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
   },
 );
