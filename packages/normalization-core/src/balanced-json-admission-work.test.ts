@@ -4,7 +4,7 @@ import { extractBalancedJsonFragments } from "./balanced-json.js";
 describe("balanced JSON extraction", () => {
   const strictRecovery = { strictJson: true, recoverAtLineStart: true } as const;
 
-  it("retires indexed owners only at visible original endpoints across artificial descendants", () => {
+  it("retires indexed owners at original endpoints across artificial descendants", () => {
     for (const source of [
       '["]"]',
       '[" ] ",{}]',
@@ -36,17 +36,14 @@ describe("balanced JSON extraction", () => {
         strictJson: { source, opaqueSpans: [{ startIndex: 1, endIndex: 1 }] },
       }),
     ).toEqual([{ json: source, startIndex: 0, endIndex: source.length - 1 }]);
-    // This span starts at the original closing quote, so string ownership
-    // ignores the whole span even though it extends across the endpoint.
+    // A discovery mask preserves the original opening quote. Unlike accepted
+    // framing, it therefore makes the later closing-quote span an inside entry.
     expect(
-      extractBalancedJsonFragments('["]"]', {
+      extractBalancedJsonFragments('[ ]"]', {
         ...strictRecovery,
         strictJson: {
           source: '["]"]',
-          opaqueSpans: [
-            { startIndex: 1, endIndex: 1 },
-            { startIndex: 3, endIndex: 4 },
-          ],
+          opaqueSpans: [{ startIndex: 3, endIndex: 4 }],
         },
       }),
     ).toEqual([{ json: '["]"]', startIndex: 0, endIndex: 4 }]);
@@ -89,10 +86,7 @@ describe("balanced JSON extraction", () => {
       const suffix = '{"after":true}';
       const source = parent + "] " + suffix;
       const endpoint = parent.length - 1;
-      const opaqueSpans = [
-        { startIndex: 1, endIndex: 1 },
-        { startIndex: endpoint, endIndex: endpoint },
-      ];
+      const opaqueSpans = [{ startIndex: endpoint, endIndex: endpoint }];
       for (const raw of [source, source.replaceAll('"', " ")]) {
         for (const recoverAtLineStart of [false, true]) {
           expect(
@@ -141,8 +135,10 @@ describe("balanced JSON extraction", () => {
   });
 
   it("separates original lexical owners from crossing emission candidates", () => {
+    // Discovery masks preserve source quotes. Atomic framing removes their
+    // participation, so exposing both crossing candidates covers both quotes.
     const cases = [
-      { source: '["{",{}]', quotes: [1, 3], intervals: [[5, 6]] },
+      { source: '["{",{}]', quotes: [], intervals: [[5, 6]] },
       {
         source: '["{",{":1}":true}]',
         quotes: [1, 3],
@@ -153,13 +149,13 @@ describe("balanced JSON extraction", () => {
       },
       {
         source: '["{",{":0}":1}]',
-        quotes: [1],
+        quotes: [1, 3],
         intervals: [
           [2, 9],
           [5, 13],
         ],
       },
-      { source: '["[","]{}"]', quotes: [1], intervals: [] },
+      { source: '["[","]{}"]', quotes: [], intervals: [] },
     ];
     for (const { source, quotes, intervals } of cases) {
       const opaqueSpans = quotes.map((index) => ({ startIndex: index, endIndex: index }));
@@ -188,10 +184,8 @@ describe("balanced JSON extraction", () => {
     for (const newline of ["\n", "\r\n", "\r"]) {
       for (const prefix of ['["text",]', `["line one${newline}line two"]`]) {
         const source = prefix + newline + suffix;
-        const opaqueSpans = [
-          { startIndex: 1, endIndex: 1 },
-          { startIndex: 3, endIndex: source.length - 1 },
-        ];
+        // Hiding source quotes in discovery is not declaring them framing.
+        const opaqueSpans = [{ startIndex: 3, endIndex: source.length - 1 }];
         for (const raw of [source, source.replaceAll('"', " ")]) {
           for (const recoverAtLineStart of [false, true]) {
             expect(
@@ -213,14 +207,11 @@ describe("balanced JSON extraction", () => {
     const source = '["text"]{}';
     for (const recoverAtLineStart of [false, true]) {
       expect(
-        extractBalancedJsonFragments(source, {
+        extractBalancedJsonFragments("  " + source.slice(2), {
           recoverAtLineStart,
           strictJson: {
             source,
-            opaqueSpans: [
-              { startIndex: 0, endIndex: 1 },
-              { startIndex: 2, endIndex: source.length - 1 },
-            ],
+            opaqueSpans: [{ startIndex: 2, endIndex: source.length - 1 }],
           },
         }),
       ).toEqual([{ json: "{}", startIndex: 8, endIndex: 9 }]);
@@ -252,63 +243,508 @@ describe("balanced JSON extraction", () => {
     }
   });
 
-  it("bounds indexed retirement work when artificial descendants cross the original endpoint", () => {
-    for (const depth of [256, 1024, 4096]) {
-      const parent = `[${JSON.stringify("[".repeat(depth))},{}]`;
-      const suffix = '{"after":true}';
-      const source = parent + " " + suffix;
-      const stringEnd = parent.lastIndexOf('"');
-      const push = Array.prototype.push;
-      const pop = Array.prototype.pop;
-      const parse = JSON.parse;
-      const slice = String.prototype.slice;
-      let pushes = 0;
-      let pops = 0;
-      let parsedUnits = 0;
-      let copiedUnits = 0;
-      Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
-        pushes += items.length;
-        return Reflect.apply(push, this, items);
-      };
-      Array.prototype.pop = function (this: unknown[]) {
-        pops++;
-        return Reflect.apply(pop, this, []);
-      };
-      JSON.parse = (text, reviver) => {
-        parsedUnits += String(text).length;
-        return parse(text, reviver);
-      };
-      String.prototype.slice = function (this: string, start, end) {
-        const result = Reflect.apply(slice, this, [start, end]);
-        copiedUnits += result.length;
-        return result;
-      };
-      let result: ReturnType<typeof extractBalancedJsonFragments>;
-      try {
-        result = extractBalancedJsonFragments(source, {
-          ...strictRecovery,
+  it("keeps hidden malformed lexical owners separate from warning delimiters", () => {
+    const after = '{"after":1}';
+    for (const parent of ['["text",]', '{"text":}']) {
+      for (const separator of [" ", "\n", "\r\n", "\r"]) {
+        for (const recoverAtLineStart of [false, true]) {
+          for (const spanMode of ["inside-string", "visible-end", "masked-end"]) {
+            const prose = spanMode === "inside-string" ? "" : '"prose\n[0]\nend" ';
+            const source = parent + separator + prose + after;
+            const opaqueSpans =
+              spanMode === "inside-string" ? [{ startIndex: 2, endIndex: source.length - 3 }] : [];
+            const masked = source
+              .split("")
+              .map((char, index) =>
+                index <= 1 ||
+                (spanMode === "masked-end" && index === parent.length - 1) ||
+                opaqueSpans.some((span) => index >= span.startIndex && index <= span.endIndex)
+                  ? " "
+                  : char,
+              )
+              .join("");
+            for (const discovery of [source, masked]) {
+              expect(
+                extractBalancedJsonFragments(discovery, {
+                  recoverAtLineStart,
+                  strictJson: { source, opaqueSpans },
+                }),
+              ).toEqual([
+                {
+                  json: after,
+                  startIndex: source.length - after.length,
+                  endIndex: source.length - 1,
+                },
+              ]);
+            }
+          }
+        }
+      }
+    }
+    for (const [child, prose] of [
+      ['["text"]', ""],
+      ['["text",]', ""],
+      ['["text"]', '"prose [0] end" '],
+      ['["text",]', '"prose [0] end" '],
+    ]) {
+      const prefix = "warning: [";
+      const inside = '{"inside":0}';
+      const source = `${prefix}${child}${inside}] ${prose}${after}`;
+      for (const openers of [undefined, ["{"] as const]) {
+        expect(
+          extractBalancedJsonFragments(
+            source.slice(0, prefix.length) + "  " + source.slice(prefix.length + 2),
+            {
+              openers,
+              ...strictRecovery,
+              strictJson: {
+                source,
+              },
+            },
+          ),
+        ).toEqual(
+          (openers ? [inside, after] : [after]).map((json) => ({
+            json,
+            startIndex: source.indexOf(json),
+            endIndex: source.indexOf(json) + json.length - 1,
+          })),
+        );
+      }
+    }
+  });
+
+  it("keeps accepted framing from pushing or popping an active warning owner", () => {
+    const records = ['{"after":1}', "[2]"];
+    for (const [opener, closer] of [
+      ["[", "]"],
+      ["{", "}"],
+    ]) {
+      for (const framing of ["\u001b[31m", "\u001b]0;]} title\u0007"]) {
+        for (const separator of [" ", "\n", "\r\n", "\r"]) {
+          const prefix = `warning: ${opener}${framing}{"inside":0}${closer}${separator}`;
+          const source = prefix + records.join("");
+          const opaqueSpans = [{ startIndex: 10, endIndex: 9 + framing.length }];
+          for (const discovery of [source, source.replace(framing, " ".repeat(framing.length))]) {
+            for (const recoverAtLineStart of [false, true]) {
+              expect(
+                extractBalancedJsonFragments(discovery, {
+                  recoverAtLineStart,
+                  strictJson: { source, opaqueSpans },
+                }),
+              ).toEqual(
+                records.map((json) => ({
+                  json,
+                  startIndex: source.indexOf(json),
+                  endIndex: source.indexOf(json) + json.length - 1,
+                })),
+              );
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps accepted framing atomic before and after warning retirement", () => {
+    const records = ['{"after":1}', "[2]"];
+    for (const [opener, closer] of [
+      ["[", "]"],
+      ["{", "}"],
+    ]) {
+      for (const framing of [
+        '\u001b]0;"title\u0007',
+        '\u001b]0;"title"\u0007',
+        '\u001b[1"q',
+        'plain " frame',
+        "plain frame",
+      ]) {
+        for (const [inner, prose] of [
+          ["", ""],
+          ['{"inside":0}', ""],
+          ['"prose [0]"', ""],
+          ["", '"prose [0] end" '],
+          ['{"inside":0}', '"prose [0] end" '],
+          ['"prose [0]"', '"prose [0] end" '],
+        ]) {
+          for (const separator of [" ", "\n", "\r\n", "\r"]) {
+            const source = `warning: ${opener}${framing}${inner}${closer}${separator}${prose}${records.join("")}`;
+            const opaqueSpans = [{ startIndex: 10, endIndex: 9 + framing.length }];
+            for (const discovery of [source, source.replace(framing, " ".repeat(framing.length))]) {
+              for (const recoverAtLineStart of [false, true]) {
+                expect(
+                  extractBalancedJsonFragments(discovery, {
+                    recoverAtLineStart,
+                    strictJson: { source, opaqueSpans },
+                  }),
+                ).toEqual(
+                  records.map((json) => ({
+                    json,
+                    startIndex: source.lastIndexOf(json),
+                    endIndex: source.lastIndexOf(json) + json.length - 1,
+                  })),
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps consecutive accepted frames atomic across warning retirement and quoted prose", () => {
+    const records = ['{"after":1}', "[2]"];
+    for (const frames of [
+      ['\u001b]0;"title\u0007', '\u001b]0;"title\u0007'],
+      ['\u001b[1"q', '\u001b[1"q'],
+      ['generic "\\ frame', '\u001b]0;"title\u0007'],
+      ['generic "\n frame', "generic '\r\n frame"],
+    ]) {
+      for (const [opener, closer] of [
+        ["[", "]"],
+        ["{", "}"],
+      ]) {
+        for (const placement of ["inside", "across", "outside"]) {
+          for (const separator of [" ", "\n", "\r\n", "\r"]) {
+            let source = `warning: ${opener}${placement === "outside" ? "warning " : ""}`;
+            const opaqueSpans: { startIndex: number; endIndex: number }[] = [];
+            if (placement === "outside") source += closer + separator;
+            for (const [index, frame] of frames.entries()) {
+              opaqueSpans.push({
+                startIndex: source.length,
+                endIndex: source.length + frame.length - 1,
+              });
+              source += frame;
+              if (placement === "across" && index === 0) source += closer + separator;
+            }
+            if (placement === "inside") source += closer + separator;
+            source += '"prose [0] end" ' + records.join("");
+            const masked = source
+              .split("")
+              .map((char, index) =>
+                opaqueSpans.some((span) => index >= span.startIndex && index <= span.endIndex)
+                  ? " "
+                  : char,
+              )
+              .join("");
+            for (const raw of [source, masked]) {
+              for (const recoverAtLineStart of [false, true]) {
+                for (const openers of [undefined, ["{"] as const]) {
+                  expect(
+                    extractBalancedJsonFragments(raw, {
+                      openers,
+                      recoverAtLineStart,
+                      strictJson: { source, opaqueSpans },
+                    }),
+                  ).toEqual(
+                    records
+                      .filter((json) => !openers || json[0] === "{")
+                      .map((json) => ({
+                        json,
+                        startIndex: source.lastIndexOf(json),
+                        endIndex: source.lastIndexOf(json) + json.length - 1,
+                      })),
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("matches warning expiry with atomic framing and whitespace escape boundaries", () => {
+    const after = '{"after":1}';
+    for (const [opener, closer] of [
+      ["[", "]"],
+      ["{", "}"],
+    ]) {
+      for (const frame of [
+        '\u009d0;"title\u0007',
+        "\u009d0;xtitle\u0007",
+        '\u001b]0;"title\\[]}\u0007',
+        '\u001b]0;"title"\u0007',
+        '\u001b[1"q',
+        'generic "\\[]}',
+      ]) {
+        for (const newline of ["", "\n", "\r\n", "\r"]) {
+          const framing = frame + newline;
+          for (const escape of ["", "\\"]) {
+            for (const closed of [false, true]) {
+              const prefix = `warning: ${opener}${escape}`;
+              const source =
+                prefix + framing + ` "prose ${closer} end" ${closed ? closer : ""} ${after}`;
+              const opaqueSpans = [
+                { startIndex: prefix.length, endIndex: prefix.length + framing.length - 1 },
+              ];
+              const masked =
+                prefix +
+                framing.replace(/[^\r\n]/g, " ") +
+                source.slice(prefix.length + framing.length);
+              for (const raw of [source, masked]) {
+                for (const recoverAtLineStart of [false, true]) {
+                  for (const openers of [undefined, [opener as "{" | "["]]) {
+                    expect(
+                      extractBalancedJsonFragments(raw, {
+                        openers,
+                        recoverAtLineStart,
+                        strictJson: { source, opaqueSpans },
+                      }),
+                      JSON.stringify({ source, openers, recoverAtLineStart }),
+                    ).toEqual(
+                      closed && (!openers || opener === "{")
+                        ? [
+                            {
+                              json: after,
+                              startIndex: source.length - after.length,
+                              endIndex: source.length - 1,
+                            },
+                          ]
+                        : [],
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("distinguishes atomic framing from a source-preserving discovery mask", () => {
+    const source = '["a"]{}';
+    for (const recoverAtLineStart of [false, true]) {
+      expect(
+        extractBalancedJsonFragments(source, {
+          recoverAtLineStart,
           strictJson: {
             source,
             opaqueSpans: [
-              { startIndex: 1, endIndex: 1 },
-              { startIndex: stringEnd, endIndex: stringEnd },
+              { startIndex: 0, endIndex: 1 },
+              { startIndex: 2, endIndex: 6 },
             ],
           },
-        });
-      } finally {
-        Array.prototype.push = push;
-        Array.prototype.pop = pop;
-        JSON.parse = parse;
-        String.prototype.slice = slice;
+        }),
+      ).toEqual([]);
+      expect(
+        extractBalancedJsonFragments('  a"]{}', {
+          recoverAtLineStart,
+          strictJson: { source, opaqueSpans: [{ startIndex: 2, endIndex: 6 }] },
+        }),
+      ).toEqual([{ json: "{}", startIndex: 5, endIndex: 6 }]);
+    }
+  });
+
+  it("protects native-valid children and restores their entry quote context", () => {
+    for (const [opener, closer, after] of [
+      ["[", "]", "[1]"],
+      ["{", "}", '{"after":1}'],
+    ]) {
+      for (const newline of ["", "\n", "\r\n", "\r"]) {
+        for (const child of [
+          `[${newline}"x"${newline}]`,
+          `[${newline}${JSON.stringify(closer.repeat(2))}${newline}]`,
+          `{${newline}"x":${JSON.stringify(closer.repeat(2))}${newline}}`,
+        ]) {
+          const prefix = `warning: ${opener} broken `;
+          const quotes = Array.from(child.matchAll(/"/g), ({ index }) => prefix.length + index);
+          for (const maskedQuotes of [[], quotes.slice(0, 1), quotes]) {
+            for (const hiddenEnd of [false, true]) {
+              const opaqueSpans = [
+                ...maskedQuotes,
+                ...(hiddenEnd ? [prefix.length + child.length - 1] : []),
+              ].map((index) => ({ startIndex: index, endIndex: index }));
+              for (const closed of [false, true]) {
+                const source =
+                  prefix + child + ` "p ${closer} end" ${closed ? closer : ""} ${after}`;
+                const masked = source
+                  .split("")
+                  .map((char, index) =>
+                    opaqueSpans.some((span) => span.startIndex === index) ? " " : char,
+                  )
+                  .join("");
+                for (const raw of [source, masked]) {
+                  for (const recoverAtLineStart of [false, true]) {
+                    for (const openers of [undefined, [opener as "{" | "["]]) {
+                      expect(
+                        extractBalancedJsonFragments(raw, {
+                          openers,
+                          recoverAtLineStart,
+                          strictJson: { source, opaqueSpans },
+                        }),
+                        JSON.stringify({ source, opaqueSpans, openers, recoverAtLineStart }),
+                      ).toEqual(
+                        closed
+                          ? [
+                              {
+                                json: after,
+                                startIndex: source.length - after.length,
+                                endIndex: source.length - 1,
+                              },
+                            ]
+                          : [],
+                      );
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
-      expect(result).toEqual([
-        { json: parent, startIndex: 0, endIndex: parent.length - 1 },
-        { json: suffix, startIndex: parent.length + 1, endIndex: source.length - 1 },
-      ]);
-      expect(parsedUnits).toBeLessThanOrEqual(2 * source.length + 2 * (depth + 3));
-      expect(copiedUnits).toBeLessThanOrEqual(3 * source.length);
-      expect(pushes).toBeLessThanOrEqual(10 * source.length);
-      expect(pops).toBeLessThanOrEqual(4 * source.length);
+    }
+  });
+
+  it("retains hidden quote provenance without requiring a container endpoint", () => {
+    const after = '{"after":1}';
+    for (const opener of ["[", "{"]) {
+      for (const newline of ["\n", "\r\n", "\r"]) {
+        const source = `${opener}"text"${newline}${after}`;
+        const opaqueSpans = [{ startIndex: 3, endIndex: source.length - 1 }];
+        for (const discovery of [source, source.replaceAll('"', " ")]) {
+          for (const recoverAtLineStart of [false, true]) {
+            expect(
+              extractBalancedJsonFragments(discovery, {
+                recoverAtLineStart,
+                strictJson: { source, opaqueSpans },
+              }),
+            ).toEqual(
+              recoverAtLineStart
+                ? [{ json: after, startIndex: source.indexOf(after), endIndex: source.length - 1 }]
+                : [],
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it("uses discovery for candidate starts and original source for completion", () => {
+    const source = '[{}] {"next":1}';
+    for (const discovery of [source, source.replace("]", " ")]) {
+      for (const recoverAtLineStart of [false, true]) {
+        for (const opaqueSpans of [[], [{ startIndex: 3, endIndex: 3 }]]) {
+          const first = opaqueSpans.length ? "{}" : "[{}]";
+          expect(
+            extractBalancedJsonFragments(discovery, {
+              recoverAtLineStart,
+              strictJson: { source, opaqueSpans },
+            }),
+          ).toEqual(
+            [first, '{"next":1}'].map((json) => ({
+              json,
+              startIndex: source.indexOf(json),
+              endIndex: source.indexOf(json) + json.length - 1,
+            })),
+          );
+        }
+      }
+    }
+  });
+
+  it("expires a closed warning contribution without retiring crossing or unfinished lexical owners", () => {
+    const records = ['{"after":1}', "[2]"];
+    for (const [opener, crossing] of [
+      ["[", '{"]":1}'],
+      ["{", '["}",1]'],
+    ]) {
+      for (const newline of ["\n", "\r\n", "\r"]) {
+        for (const closeQuote of [false, true]) {
+          const prefix = `${opener}"${newline}${crossing}${closeQuote ? ' "' : ""} `;
+          const source = prefix + records.join("");
+          for (const discovery of [source, source.replace(newline, " ".repeat(newline.length))]) {
+            for (const openers of [undefined, ["{"] as const, ["["] as const]) {
+              expect(
+                extractBalancedJsonFragments(discovery, {
+                  recoverAtLineStart: true,
+                  openers,
+                  strictJson: { source },
+                }),
+              ).toEqual(
+                [crossing, ...(closeQuote ? records : [])]
+                  .filter((json) => !openers || openers.some((opener) => json.startsWith(opener)))
+                  .map((json) => ({
+                    json,
+                    startIndex: source.indexOf(json),
+                    endIndex: source.indexOf(json) + json.length - 1,
+                  })),
+              );
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("bounds original string work and actual deeply nested dangling-owner retirement", () => {
+    for (const depth of [256, 1024, 4096]) {
+      for (const kind of ["string", "dangling", "framed-dangling"]) {
+        const dangling = kind !== "string";
+        const framing = kind === "framed-dangling" ? '\u009d0;"\\[]\u0007' : "";
+        const parent = dangling
+          ? `warning: [${framing}${"{".repeat(depth)}]`
+          : `[${JSON.stringify("[".repeat(depth))},{}]`;
+        const suffix = '{"after":true}';
+        const source = parent + (dangling ? "\n" : " ") + suffix;
+        const stringEnd = parent.lastIndexOf('"');
+        const push = Array.prototype.push;
+        const pop = Array.prototype.pop;
+        const parse = JSON.parse;
+        const slice = String.prototype.slice;
+        let pushes = 0;
+        let pops = 0;
+        let parsedUnits = 0;
+        let copiedUnits = 0;
+        Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+          pushes += items.length;
+          return Reflect.apply(push, this, items);
+        };
+        Array.prototype.pop = function (this: unknown[]) {
+          pops++;
+          return Reflect.apply(pop, this, []);
+        };
+        JSON.parse = (text, reviver) => {
+          parsedUnits += String(text).length;
+          return parse(text, reviver);
+        };
+        String.prototype.slice = function (this: string, start, end) {
+          const result = Reflect.apply(slice, this, [start, end]);
+          copiedUnits += result.length;
+          return result;
+        };
+        let result: ReturnType<typeof extractBalancedJsonFragments>;
+        try {
+          result = extractBalancedJsonFragments(source, {
+            ...strictRecovery,
+            strictJson: {
+              source,
+              opaqueSpans: dangling
+                ? framing
+                  ? [{ startIndex: 10, endIndex: 9 + framing.length }]
+                  : []
+                : [
+                    { startIndex: 1, endIndex: 1 },
+                    { startIndex: stringEnd, endIndex: stringEnd },
+                  ],
+            },
+          });
+        } finally {
+          Array.prototype.push = push;
+          Array.prototype.pop = pop;
+          JSON.parse = parse;
+          String.prototype.slice = slice;
+        }
+        expect(result).toEqual([
+          ...(dangling ? [] : [{ json: parent, startIndex: 0, endIndex: parent.length - 1 }]),
+          { json: suffix, startIndex: parent.length + 1, endIndex: source.length - 1 },
+        ]);
+        expect(parsedUnits).toBeLessThanOrEqual(2 * source.length + 2 * (depth + 3));
+        expect(copiedUnits).toBeLessThanOrEqual(3 * source.length);
+        expect(pushes).toBeLessThanOrEqual(10 * source.length);
+        expect(pops).toBeLessThanOrEqual(4 * source.length);
+        if (dangling) expect(pops).toBeGreaterThanOrEqual(depth + 1);
+      }
     }
   });
 
