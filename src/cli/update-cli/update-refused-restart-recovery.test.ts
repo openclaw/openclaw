@@ -119,7 +119,8 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
 
   it.each([
     { name: "the shipped pnpm switch", notice: true },
-    { name: "a pruned previous entry its owner verified", service: "pruned", notice: true },
+    // Without a manifest nothing proves what the pruned entry was.
+    { name: "a pruned previous entry", service: "pruned" },
     // The package-step Doctor has no run id; its driver is found as an ancestor alone.
     { name: "a tarball candidate", candidate: "tarball" as const, ancestor: true, notice: true },
     {
@@ -197,10 +198,10 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
   });
 
   /** A real ledger row shaped like the shipped 2026.11.5 run after its refused restart. */
-  function refusedRun(fixture: Fixture, reason: string) {
+  function refusedRun(fixture: Fixture, reason: string, from = "2026.11.5") {
     const options = { env: fixture.env };
     const { runId } = ledger.createUpdateRun(
-      { trigger: "cli", before: { version: "2026.11.5" } },
+      { trigger: "cli", before: { version: from } },
       options,
     );
     ledger.finishUpdateRun(
@@ -213,7 +214,8 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
 
   it.each([
     { name: "a service still on the previous package", recovery: true },
-    { name: "a pruned previous entry its owner verified", service: "pruned", recovery: true },
+    { name: "a pruned previous entry", service: "pruned" },
+    { name: "a run that switched other versions", from: "2026.11.4" },
     { name: "another failure", reason: "doctor-failed" },
     { name: "a service already on this package", service: "current" },
     { name: "a service of another pnpm home", service: "foreign" },
@@ -227,7 +229,7 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     if (variant.otherProject) {
       fixture.keepPreviousActive();
     }
-    const run = refusedRun(fixture, variant.reason ?? "service-revalidation-failed");
+    const run = refusedRun(fixture, variant.reason ?? "service-revalidation-failed", variant.from);
     const params = {
       activeRoot: variant.root === "npm" ? fixture.paths.npm : fixture.entry,
       env: fixture.env,
@@ -245,7 +247,7 @@ describe.skipIf(process.platform === "win32")("refused pnpm Gateway restart reco
     expect(report.lines.at(-1) === RECOVERY).toBe(Boolean(variant.recovery));
     expect(report.markdown.includes("openclaw triage")).toBe(!variant.recovery);
     // `openclaw gateway status --deep` reads the latest run from the same ledger.
-    expect(await readRefusedRestartRecovery(params)).toBe(recovery);
+    expect(await readRefusedRestartRecovery({ ...params, stateEnv: fixture.env })).toBe(recovery);
   });
 
   it("names the commands for the profile the reader runs under", async () => {

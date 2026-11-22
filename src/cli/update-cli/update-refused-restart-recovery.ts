@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  resolveServiceEntrypoint,
-  summarizeGatewayServiceLayout,
-} from "../../daemon/service-layout.js";
+import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
-import { pathEntryExists } from "../../infra/path-existence.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { listActivePnpmIsolatedGlobalPackages } from "../../infra/update-global.js";
@@ -79,7 +75,7 @@ function parsePnpmPackageHome(root: string) {
 async function inspectPnpmSwitch(
   root: string,
   inspectService: InspectService,
-): Promise<{ skip: string } | { service: ServiceFacts }> {
+): Promise<{ skip: string } | { service: ServiceFacts; from: string; to: string }> {
   const realRoot = await fs.realpath(root).catch(() => undefined);
   const running = realRoot ? parsePnpmPackageHome(realRoot) : undefined;
   const version = realRoot ? await readPackageVersion(realRoot) : null;
@@ -88,17 +84,19 @@ async function inspectPnpmSwitch(
   }
   const service = await inspectService(realRoot);
   const previous = service?.packageRoot ? parsePnpmPackageHome(service.packageRoot) : undefined;
-  // A pruned entry no longer has a manifest; its path still places it in this home.
-  const present = service?.packageRoot ? await pathEntryExists(service.packageRoot) : false;
+  // A pruned previous entry has no manifest to prove what it was; those readers stay silent.
+  const previousVersion =
+    service?.packageRoot && (await readPackageName(service.packageRoot)) === "openclaw"
+      ? await readPackageVersion(service.packageRoot)
+      : null;
   if (
     !service?.packageRoot ||
     !previous ||
     previous.home !== running.home ||
     previous.layout !== running.layout ||
     service.packageRoot === realRoot ||
-    (present &&
-      ((await readPackageName(service.packageRoot)) !== "openclaw" ||
-        (await readPackageVersion(service.packageRoot)) === version))
+    !previousVersion ||
+    previousVersion === version
   ) {
     return {
       skip: `the service runs ${service?.packageRoot ?? "no readable package"}, not another version in ${running.home}`,
@@ -114,7 +112,7 @@ async function inspectPnpmSwitch(
       return { skip: `another pnpm global project still uses ${service.packageRoot}` };
     }
   }
-  return { service };
+  return { service, from: previousVersion, to: version };
 }
 
 /**
@@ -125,7 +123,7 @@ async function inspectPnpmSwitch(
 async function inspectRefusedRestartService(
   root: string,
   inspectService: InspectService,
-): Promise<{ skip: string } | { service: ServiceFacts }> {
+): Promise<{ skip: string } | { service: ServiceFacts; from: string; to: string }> {
   if (process.platform !== "linux" && process.platform !== "darwin") {
     return { skip: `the recovery is not verified on ${process.platform}` };
   }
@@ -221,14 +219,7 @@ async function inspectGatewayServiceFacts(
   if (!state.command) {
     return undefined;
   }
-  const layout = await summarizeGatewayServiceLayout(state.command);
-  // pnpm can prune the previous entry; its path still names it in the unit's command.
-  const entrypoint = resolveServiceEntrypoint(state.command);
-  const marker = `${path.sep}node_modules${path.sep}openclaw${path.sep}`;
-  const lexicalRoot = entrypoint?.includes(marker)
-    ? entrypoint.slice(0, entrypoint.lastIndexOf(marker) + marker.length - 1)
-    : undefined;
-  const packageRoot = layout?.packageRootReal ?? lexicalRoot;
+  const packageRoot = (await summarizeGatewayServiceLayout(state.command))?.packageRootReal;
   const verdict = await inspectManagedGatewayServiceBeforeUpdate({
     root,
     state,
@@ -294,7 +285,7 @@ export async function resolveShippedRestartNotice(params: {
  * foreign service; the live service read decides.
  */
 export async function resolveRefusedRestartRecovery(params: {
-  run: Pick<UpdateRunRecord, "status" | "reason">;
+  run: Pick<UpdateRunRecord, "status" | "reason" | "before" | "after">;
   activeRoot: string | null | undefined;
   env?: NodeJS.ProcessEnv;
   inspectService?: InspectService;
@@ -308,8 +299,12 @@ export async function resolveRefusedRestartRecovery(params: {
     activeRoot,
     params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, env)),
   );
-  // A Gateway someone has since brought back needs no reinstall.
-  return "skip" in service || service.service.running
+  // Only this run's own switch: it moved the install from the version the stopped service
+  // still runs to the active one. A Gateway someone has since brought back needs nothing.
+  return "skip" in service ||
+    service.service.running ||
+    run.before.version !== service.from ||
+    run.after.version !== service.to
     ? undefined
     : formatRefusedRestartRecovery(env);
 }
@@ -317,9 +312,12 @@ export async function resolveRefusedRestartRecovery(params: {
 /** The same decision for the latest recorded update run, for readers without a run at hand. */
 export async function readRefusedRestartRecovery(params: {
   activeRoot: string | null | undefined;
+  /** The state the ledger lives in; the service is read as the caller selected it. */
+  stateEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   inspectService?: InspectService;
 }): Promise<string | undefined> {
-  const [run] = await listUpdateRunsAsync({ limit: 1 }, params.env ? { env: params.env } : {});
-  return run ? resolveRefusedRestartRecovery({ run, ...params }) : undefined;
+  const { stateEnv, ...service } = params;
+  const [run] = await listUpdateRunsAsync({ limit: 1 }, stateEnv ? { env: stateEnv } : {});
+  return run ? resolveRefusedRestartRecovery({ run, ...service }) : undefined;
 }

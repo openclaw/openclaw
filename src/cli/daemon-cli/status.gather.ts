@@ -222,7 +222,7 @@ async function gatherDaemonStatusImpl(
       installationDrift && runtime?.status === "stopped"
         ? await import("../update-cli/update-refused-restart-recovery.js")
             .then(({ readRefusedRestartRecovery }) =>
-              readRefusedRestartRecovery({ activeRoot: activePackageRoot, env: stateEnv }),
+              readRefusedRestartRecovery({ activeRoot: activePackageRoot, stateEnv }),
             )
             .catch(() => undefined)
         : undefined;
