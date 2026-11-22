@@ -80,6 +80,12 @@ export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-prefli
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
 
+export function getOpenClawDatabaseReadinessFailure(
+  database: IndeterminateOpenClawDatabase,
+): unknown {
+  return indeterminateCauses.get(database);
+}
+
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
   options: OpenClawDatabaseReadinessOptions,
@@ -524,13 +530,18 @@ export async function preflightOpenClawDatabaseSchemas(
             options.preserveSourceArtifacts !== true &&
             scheduling?.canDefer(row),
         };
-        // Native read-only opens can change source SHM read marks. Explicit
-        // artifact preservation must use the WAL-aware private snapshot below.
-        if (
-          !schemaInspection &&
-          (getDatabaseEngineInput("agent") || options.preserveSourceArtifacts !== true)
-        ) {
-          schemaInspection = await inspectSchema(schemaInput, options.signal);
+        // Explicit artifact preservation reads a live WAL family through a read-only index
+        // and leaves every other family to the private snapshot below. A full copy of a
+        // store the serving Gateway keeps writing never stabilizes.
+        if (!schemaInspection) {
+          schemaInspection = await inspectSchema(
+            {
+              ...schemaInput,
+              preserveSourceArtifacts:
+                options.preserveSourceArtifacts === true && !getDatabaseEngineInput("agent"),
+            },
+            options.signal,
+          );
         }
         if (!schemaInspection) {
           // The parent retains cleanup ownership for the isolated snapshot worker.

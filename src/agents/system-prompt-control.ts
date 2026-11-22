@@ -24,35 +24,30 @@ export function buildOpenClawControlSection({
     setupIssue
       ? setupIssue
       : hasOpenClaw
-        ? "For the Gateway hosting this session, config writes, channels, plugins, agents, models/providers: ask `openclaw`."
+        ? "For this Gateway's config writes, channels, plugins, agents, or models/providers: use `openclaw`. Exact commands need no helper inference: `config set <path> <value>`, `config unset|get|schema <path>`, `config validate` (normal approval/write checks apply)."
         : hasGateway
-          ? `Config read: \`gateway\` (\`config.get|config.schema.lookup\`) only when those actions are exposed by its schema. Config writes need the \`openclaw\` tool.`
+          ? "Config read: `gateway` (`config.get|config.schema.lookup`) when exposed; config writes require `openclaw`."
           : "",
-    hasOpenClaw && !setupIssue
-      ? "For an exact config change, send `openclaw` a `message` such as `config set <path> <value>`, `config unset <path>`, `config get <path>`, `config schema <path>`, or `config validate`. These commands do not need helper inference; existing approval and config-write checks still apply."
-      : "",
-    "Config recovery: if broken config or an operationally unavailable setup tool blocks an explicitly requested local repair, use available file/exec tools within their existing permissions. Prefer validated `openclaw config` commands; if they cannot load the config, inspect the actual file, preserve a rollback copy, make the narrow repair, then validate and read back. Recovery must not override an approval decision, readonly config, containment, or disabled tools. Do not use this fallback to change access, approval, or ownership policies; those changes still require the authorized control path.",
+    "Config recovery: if broken config or an unavailable setup tool blocks an explicit local repair, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.",
     ...(!hasOpenClaw || setupIssue
       ? [
-          "`/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.",
+          "`/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.",
         ]
       : []),
     [
-      "For the Gateway hosting this session:",
-      "Use the built-in updater by default. For a source installation, use Git only if the operator explicitly requests an exact revision and the host authorizes maintenance for this caller. Shell access alone is not update authority.",
+      "Before updating this Gateway on an explicit owner request, identify the installation that is actually serving and consult its host or installation documentation. Use the built-in updater for standard installs. For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure. Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization. If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing. Shell access is not update authority. Change installation methods only on explicit operator request.",
       ...(restartCommandsEnabled
-        ? [
-            "In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile.",
-          ]
+        ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
       hasGateway
-        ? "On an explicit owner request or operator-scheduled maintenance, `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Report accepted or deferred work accurately; scheduling is not completion."
+        ? "On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion."
         : "",
-      "Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator.",
-      "The Gateway must retain a working restart path before it stops. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.",
-    ].join(" "),
+      "Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.",
+    ]
+      .filter(Boolean)
+      .join(" "),
     hasExec
-      ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration."
+      ? "Remote hosts: verify it is not this Gateway, then use exec/SSH under normal approvals (`openclaw` only targets local; do not block on local agent-ID migration)."
       : "",
     "",
   ];
@@ -69,9 +64,9 @@ export function buildExecApprovalPromptGuidance(params: {
     hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
     isKnownNativeApprovalPromptChannel(runtimeChannel);
   const policyGuidance =
-    "For task-authorized commands, make the execution request through the available tool and let its current policy decide whether approval is needed. Request exec approval only from an actual approval-pending result; never invent approval IDs or ask for a bare /approve.";
+    "Submit task-authorized commands via the tool and let policy decide approval; request approval only from an actual approval-pending result (never invent IDs or bare `/approve`).";
   if (usesNativeApprovalUi) {
-    return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
+    return `${policyGuidance} Approval-pending: native card/buttons first; plain \`/approve\` only if manual, copying exact \`Reply with:\`.`;
   }
-  return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
+  return `${policyGuidance} Approval-pending: send exact \`/approve\` from \`Reply with:\`; never ask for another code.`;
 }

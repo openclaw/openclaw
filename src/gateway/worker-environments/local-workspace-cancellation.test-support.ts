@@ -26,10 +26,13 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
+import { captureGatewayOperatorContinuation } from "../operator-run-recovery.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -203,7 +206,13 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
-  revoke: "operator" | "gateway" | "guest-involvement" | "prepare-release" | "prepare-cancel",
+  revoke:
+    | "operator"
+    | "gateway"
+    | "guest-involvement"
+    | "guest-role-involvement"
+    | "prepare-release"
+    | "prepare-cancel",
   testSignal?: AbortSignal,
 ) {
   const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
@@ -233,6 +242,7 @@ export async function proveStoppedSandboxAuthority(
     try {
       const guestInvolvement =
         revoke === "guest-involvement" ||
+        revoke === "guest-role-involvement" ||
         revoke === "prepare-release" ||
         revoke === "prepare-cancel";
       const guestScopes: GatewayOperatorRoleDefinition["scopes"] = [
@@ -285,18 +295,19 @@ export async function proveStoppedSandboxAuthority(
       const context = server.createContext();
       context.getRuntimeConfig = () => config;
       const source = new AbortController();
-      const captured = await auth.captureGatewayOperatorRunAuthority({
+      const captured = await auth.prepareGatewayOperatorRunAuthority({
         client: server.createOperatorClient({
           profileId: profile.id,
           scopes: guestInvolvement ? guestScopes : ["operator.write"],
         }),
         context,
-        sourceAuthority: {
+        invocationAuthority: {
           assertCurrent: () => source.signal.throwIfAborted(),
           signal: source.signal,
         },
       });
-      assert(captured?.authority.retain, "Expected retained operator authority");
+      assert(captured, "Expected admitted operator request");
+      assert(captured.authority.retain, "Expected retained operator authority");
       const releaseOperator = captured.authority.retain();
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -368,11 +379,7 @@ export async function proveStoppedSandboxAuthority(
           await finish(backend, accepted.finalizeToken);
           await expectSource(owner.worktree.path, "accepted guest edit\n");
 
-          await users.setCanonicalUserProfileRole(profile.id, "denied", {
-            onCommitted: roles.invalidateOperatorRolePolicy,
-          });
           expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
           await sandbox.fsBridge.writeFile({
             filePath: "source.txt",
             data: "admitted guest edit\n",
@@ -470,7 +477,14 @@ export async function proveStoppedSandboxAuthority(
               testSignal,
             );
             captured.authority.assertCurrent();
-            source.abort(new Error("operator source execution authority cancelled"));
+            if (revoke === "guest-role-involvement") {
+              await users.setCanonicalUserProfileRole(profile.id, "denied", {
+                onCommitted: roles.invalidateOperatorRolePolicy,
+              });
+              expect(captured.authority.assertCurrent).not.toThrow();
+            } else {
+              source.abort(new Error("operator source execution authority cancelled"));
+            }
             deliverReceipt();
             releaseResult.resolve();
             await expect(mutation).resolves.toBe(true);
@@ -479,23 +493,40 @@ export async function proveStoppedSandboxAuthority(
             expect(loadSessionEntry(scope)?.profileInvolvement?.profiles[profile.id]?.hidden).toBe(
               true,
             );
-            // A late receipt cannot revive the explicitly cancelled source.
             expect(controller.signal.aborted).toBe(false);
-            await expect(
-              sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
-            ).rejects.toMatchObject({
-              message: "admitted run authority is no longer active",
-              cause: expect.objectContaining({
-                message: expect.stringMatching(/operator|source execution authority/),
-              }),
-            });
-            expect(shell).not.toHaveBeenCalled();
-            for (const directory of [sandbox.workspaceDir, owner.worktree.path]) {
-              await expect(fs.stat(path.join(directory, "revoked.txt"))).rejects.toMatchObject({
-                code: "ENOENT",
+            if (revoke === "guest-role-involvement") {
+              await sandbox.fsBridge.writeFile({
+                filePath: "source.txt",
+                data: "finished guest edit\n",
               });
+              await expectSource(owner.worktree.path, "finished guest edit\n");
+              await expect(
+                captureGatewayOperatorContinuation({
+                  context,
+                  client: createSyntheticPluginRuntimeClient({
+                    operatorRunAuthority: captured.authority,
+                    scopes: [...captured.authority.scopes],
+                  }),
+                }).then((next) => next?.release()),
+              ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+            } else {
+              // A late receipt cannot revive explicitly cancelled source authority.
+              await expect(
+                sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
+              ).rejects.toMatchObject({
+                message: "admitted run authority is no longer active",
+                cause: expect.objectContaining({
+                  message: expect.stringMatching(/operator|source execution authority/),
+                }),
+              });
+              expect(shell).not.toHaveBeenCalled();
+              for (const directory of [sandbox.workspaceDir, owner.worktree.path]) {
+                await expect(fs.stat(path.join(directory, "revoked.txt"))).rejects.toMatchObject({
+                  code: "ENOENT",
+                });
+              }
+              await expectSource(owner.worktree.path, "admitted guest edit\n");
             }
-            await expectSource(owner.worktree.path, "admitted guest edit\n");
           } finally {
             closing = true;
             try {
@@ -528,7 +559,6 @@ export async function proveStoppedSandboxAuthority(
             onCommitted: roles.invalidateOperatorRolePolicy,
           });
           expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
           await finish(backend, pending.finalizeToken);
           await expectSource(owner.worktree.path, "revoked guest edit\n");
           await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");

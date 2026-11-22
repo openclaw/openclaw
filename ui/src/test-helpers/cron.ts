@@ -1,5 +1,5 @@
 import type { CronCompactJob, CronJob, CronJobsListResult, CronRunsResult } from "../api/types.ts";
-import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/state.ts";
+import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/editor-state.ts";
 
 const emptyPage = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
 

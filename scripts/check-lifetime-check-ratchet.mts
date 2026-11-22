@@ -22,7 +22,6 @@ export const LIFETIME_CHECK_CALLS = [
   "bindWebSocketRequestMutationAuthority",
   "captureGatewayRequestOperatorGuard",
   "retainGatewayRequestMutationAuthority",
-  "captureGatewayOperatorRunAuthority",
   "captureOperatorToolGatewayAuthority",
   "resolveSessionRuntimeAuthority",
   "captureHttpRequestAuthority",
@@ -32,14 +31,8 @@ export const LIFETIME_CHECK_CALLS = [
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
   "captureGatewayToolReceiptAssertion",
-  "captureAgentToolSourceExecutionGuard",
   "captureSourceInvocationGuard",
-  "createCliRunCurrentAssertion",
   "captureMediaGenerationAdmission",
-  "createAgentRuntimeAuthorityGuard",
-  "captureCronJobMessageAuthority",
-  "captureCronJobSourceAuthority",
-  "captureCronJobStandingGrantAuthority",
 ] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);
 // Authority wording only: "<owner|lock|generation> is no longer current" is a data or ownership fence.

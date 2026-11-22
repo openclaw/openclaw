@@ -23,7 +23,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -150,7 +150,7 @@ async function recoverRequesterCompletionCustody(params: {
         {
           operatorRunAuthority: authority?.authority,
           operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [ADMIN_SCOPE],
+          scopes: authority?.authority.scopes ?? [WRITE_SCOPE],
           assertCurrent,
         },
         async () => {

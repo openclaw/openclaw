@@ -674,7 +674,8 @@ describe("ManagedWorktreeService capacity", () => {
 
     const replacement = await service.create(params);
     expect(replacement.id).not.toBe(original.id);
-    expect(replacement.name).toBe("missing-owned-2");
+    expect(replacement.name).toMatch(/^missing-owned-[0-9a-f]{6}$/);
+    expect(replacement.name).not.toBe(original.name);
     expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
     expect(getRegistryWorktree(env, original.id)?.removedAt).toEqual(expect.any(Number));
     expect(

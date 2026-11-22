@@ -112,6 +112,14 @@ export function summarizeUpdateStepFailure(
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 
+export const UPDATE_RUN_REPAIRED_STEP = "finalize:repaired-run";
+
+/** Standalone repair finishes an installed version without staging or validation. */
+export function isUpdateRepairRun(run: Pick<UpdateRunRecord, "steps">): boolean {
+  const steps = new Set(run.steps.map(({ step }) => step));
+  return steps.has("repairing") && !steps.has("staging") && !steps.has("validating");
+}
+
 /** Operational captures and in-memory recovery fields are outside the public run schema. */
 export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
   const origin = { ...record.origin };

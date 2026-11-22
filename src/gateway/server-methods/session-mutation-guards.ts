@@ -137,6 +137,9 @@ export function readGatewayRequestMutationAuthority(
     assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
     assertCurrent: assertLifetimeCurrent,
     assertLifetimeCurrent,
+    ...(sessionMutationCommitGuard
+      ? { assertAdmittedInputCurrent: sessionMutationCommitGuard }
+      : {}),
   };
   bindRequestMutationAuthority(options, authority);
   return authority;
@@ -187,7 +190,6 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     return options;
   }
   const source = readGatewayRequestMutationAuthority(options);
-  const captured = captureRequestMutationOptions(options);
   bindRequestMutationAuthority(options, {
     ...source,
     questionCallerRead,
@@ -197,12 +199,7 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     },
     ...(assertSourceCurrent
       ? {
-          assertAdmittedInputCurrent: () => {
-            assertRequestAuthorityCurrent({
-              ...captured,
-              sessionMutationCommitGuard: assertSourceCurrent,
-            });
-          },
+          assertAdmittedInputCurrent: assertSourceCurrent,
         }
       : {}),
   });
@@ -318,11 +315,9 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   if (source.assertAdmittedInputCurrent) {
     const assertAdmittedInputCurrent = source.assertAdmittedInputCurrent;
     const assertTransferredHandlerCurrent = () => {
-      source.assertOperatorCurrent?.();
-      // An adapter may add an opaque host guard. Only the unchanged producer
-      // guard has the known tool-receipt/source split; retain any new guard in full.
+      // Retain an adapter's explicit host fence, not the submitting transport or permissions.
       if (transport.sessionMutationCommitGuard !== request.sessionMutationCommitGuard) {
-        assertRequestAuthorityCurrent(transport);
+        transport.sessionMutationCommitGuard?.();
       }
     };
     authority.assertAdmittedInputCurrent = () => {
@@ -485,10 +480,10 @@ export function withSessionMutationCommitGuard(
   if (!assertCommitAllowed && !assertExpectedProfile) {
     return authorization;
   }
-  // Committed input keeps its original host and session authority. A later
-  // account selection change cannot revoke custody already transferred to it.
+  // Accepted input keeps its target and explicit host lifetime, not the
+  // submitting request's permission or transport checks.
   const assertAdmittedInputCurrent = composeSessionSourceAssertion([
-    assertAdmittedSourceCurrent ?? assertCommitAllowed,
+    assertAdmittedSourceCurrent,
     authorization?.assertAdmittedInputCurrent ?? authorization?.assertCurrent,
   ]);
   const admitted = authorization?.admittedInputAuthority;
@@ -500,7 +495,7 @@ export function withSessionMutationCommitGuard(
   return {
     ...authorization,
     assertAdmittedSourceCurrent: composeSessionSourceAssertion([
-      assertAdmittedSourceCurrent ?? assertCommitAllowed,
+      assertAdmittedSourceCurrent,
       authorization?.assertAdmittedSourceCurrent,
     ]),
     ...(authorization?.prepareWorkerGrant
@@ -532,9 +527,9 @@ export function withSessionMutationCommitGuard(
     assertAdmittedInputCurrent,
     ...(admitted
       ? {
-          admittedInputAuthority: withSessionPendingInputAuthorityGuard(admitted, () =>
-            (assertAdmittedSourceCurrent ?? assertCommitAllowed)?.(),
-          ),
+          admittedInputAuthority: assertAdmittedSourceCurrent
+            ? withSessionPendingInputAuthorityGuard(admitted, assertAdmittedSourceCurrent)
+            : admitted,
         }
       : {}),
     ...(authorization?.withCurrent

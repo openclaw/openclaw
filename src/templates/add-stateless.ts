@@ -7,21 +7,14 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { deferWorkspaceBootstrap } from "../agents/workspace-preparation.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
 import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "../config/config.js";
-import type { ConfigWriteOptions } from "../config/io.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
-import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type {
-  TemplateInstallEvent,
-  TemplateInstallOutcome,
-} from "../shared/template-install-notice.js";
+import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
 import { addTemplateAgentToConfig } from "./add-agent-config.js";
@@ -30,13 +23,17 @@ import {
   configuredSourceIntegrity,
   workspaceIdentity,
 } from "./add-checkpoint.js";
-import {
-  prepareTemplateInitializationIntent,
-  type TemplateInitializationIntent,
-} from "./add-initialization-intent.js";
+import { prepareTemplateInitializationIntent } from "./add-initialization-intent.js";
+import { createTemplateInstallReceipts } from "./add-install-receipts.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
 import { sameCommittedAgent } from "./add-plan-helpers.js";
 import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
+import type {
+  ConfigCommit,
+  StatelessTemplateAddOptions,
+  StatelessTemplateAddResult,
+  TemplateConfiguredAgentCheckpoint,
+} from "./add-stateless-contract.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION } from "./add.js";
 import { seedTemplatePackageBootstrap } from "./bootstrap.js";
 import {
@@ -44,7 +41,6 @@ import {
   templateCronGatewayJobConfigRevision,
   templateCronGatewayJobMatchesRef,
   installTemplateCronJobsStateless,
-  type TemplateCronGateway,
   type PersistedTemplateCronRef,
 } from "./cron.js";
 import {
@@ -57,94 +53,15 @@ import {
   TemplatePackageInstallError,
   installTemplatePackages,
   rollbackStatelessTemplatePackages,
-  type TemplatePluginInstallConsent,
-  type TemplateSkillInstallConsent,
 } from "./packages.js";
-import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
-import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
 import { measureTemplateAddStage } from "./timings.js";
 import { TEMPLATE_OUTPUT_STABILITY, type TemplateAddPlan } from "./types.js";
 import { createTemplateWorkspaceFiles, type PersistedTemplateWorkspaceFile } from "./workspace.js";
 
-type ConfigCommit = (
-  transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
-) => Promise<void>;
-
-type TemplateConfiguredAgentCheckpoint = {
-  config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
-  workspaceIdentity: string;
-  /** Plan content normalized across verified source extraction roots. */
-  planDigest: string;
-  /** Manifest, profile, bootstrap and declared workspace source bytes. */
-  sourceIntegrity: string;
-};
-
-export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
-  /** Exact in-flight ordinary admission, not permission to merge an existing agent. */
-  admittedAgent?: {
-    config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
-    workspaceIdentity: string;
-    phase?: "admitted" | "configured";
-    preparing?: TemplateInitializationIntent;
-    planDigest?: string;
-    sourceIntegrity?: string;
-    assertCurrent: () => Promise<void>;
-    /**
-     * The caller created this admission and removes it when the Template's agent
-     * configuration was never committed: rethrow that failure instead of reporting a kept agent.
-     */
-    discardOnFailure?: true;
-  };
-  assertForwardCurrent?: () => void;
-  assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
-  getCurrentConfig?: () => OpenClawConfig;
-  config?: OpenClawConfig;
-  runtime?: RuntimeEnv;
-  consentPlanIntegrity?: string;
-  pluginConsent?: TemplatePluginInstallConsent;
-  skillConsent?: TemplateSkillInstallConsent;
-  reloadPlugins?: PluginInstallBatchReload;
-  runtimeBatch?: TemplatePluginRuntimeOptions["runtimeBatch"];
-  cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
-    Partial<Pick<TemplateCronGateway, "get" | "remove">>;
-  commitConfig?: ConfigCommit;
-  /** Save ordinary session state before publishing its new agent; returns exact owned cleanup. */
-  prepareAgentSession?: (config: OpenClawConfig) => Promise<() => Promise<void>>;
-  /** Write-ahead ownership through the canonical pending session. */
-  onAgentConfiguring?: (intent: TemplateInitializationIntent) => Promise<void>;
-  /** Persist verified configuration before runtime wait. Uncertain acknowledgement retains custody. */
-  onAgentConfigured?: (checkpoint: TemplateConfiguredAgentCheckpoint) => Promise<void>;
-  /** Confirm active runtime publication before transferring rollback custody. */
-  waitForAgentRuntime?: (retainedAgent?: {
-    agentId: string;
-    config: TemplateConfiguredAgentCheckpoint["config"];
-  }) => Promise<"applied" | "applied-restart-required">;
-  /** Instructions, canonical chat, and active runtime are ready; setup continues here. */
-  onAgentReady?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
-  /** Publish each actual installation outcome without a model recap. */
-  onSetupEvent?: (event: TemplateInstallEvent) => Promise<void>;
-  configWriteOptions?: ConfigWriteOptions;
-  rollbackNewAgent?: (plan: TemplateAddPlan, cronJobs: PersistedTemplateCronRef[]) => Promise<void>;
-};
-
-export type StatelessTemplateAddResult = {
-  schemaVersion: typeof TEMPLATE_ADD_RESULT_SCHEMA_VERSION;
-  stability: typeof TEMPLATE_OUTPUT_STABILITY;
-  dryRun: false;
-  mutationAllowed: true;
-  planIntegrity: string;
-  status: "complete" | "partial";
-  agentRetained?: true;
-  template: TemplateAddPlan["template"];
-  agent: TemplateAddPlan["agent"];
-  workspaceCreated: boolean;
-  configCommitted: boolean;
-  workspaceFiles: PersistedTemplateWorkspaceFile[];
-  packages: TemplatePackageReceipt[];
-  mcpServers: PersistedTemplateMcpServerRef[];
-  cronJobs: PersistedTemplateCronRef[];
-  error?: { code: string; message: string };
-};
+export type {
+  StatelessTemplateAddOptions,
+  StatelessTemplateAddResult,
+} from "./add-stateless-contract.js";
 
 function assertWorkspacePathUnchanged(workspace: string): void {
   const current = resolvePathViaExistingAncestorSync(workspace);
@@ -281,6 +198,7 @@ export async function applyTemplateAddPlanStateless(
     await options.admittedAgent?.assertCurrent();
     assertForwardCurrent("after-agent-commit");
   };
+  const receipts = createTemplateInstallReceipts(plan.agent.finalId, options, () => retained);
   let assertPluginRequirementsCurrent: (() => Promise<void>) | undefined;
   const stageOptions = (phase?: "after-agent-commit") => ({
     ...options,
@@ -291,14 +209,7 @@ export async function applyTemplateAddPlanStateless(
     },
     onSetupOutcome: async (outcome: TemplateInstallOutcome) => {
       assertForwardCurrent(phase);
-      await options.onSetupEvent?.({
-        ...outcome,
-        agentId: plan.agent.finalId,
-        sessionKey: resolveAgentMainSessionKey({
-          cfg: options.getCurrentConfig?.() ?? options.config,
-          agentId: plan.agent.finalId,
-        }),
-      });
+      await receipts.publish(outcome);
       assertForwardCurrent(phase);
     },
     onPluginRuntimeReady: (assertCurrent: () => Promise<void>) => {
@@ -709,7 +620,7 @@ export async function applyTemplateAddPlanStateless(
     if (bootstrap === "seeded") {
       bootstrapSeededAt = new Date(bootstrapNow).toISOString();
     }
-    return result("complete");
+    return await receipts.settle(result("complete"));
   } catch (error) {
     if (error instanceof TemplatePackageInstallError) {
       packages = error.installedPackages;
@@ -718,12 +629,16 @@ export async function applyTemplateAddPlanStateless(
       cronJobs = error.cronJobs;
       if (error.code === "cron_scratch_import_incomplete") {
         // A scratch conflict or lost write acknowledgement may contain user edits.
-        return result("partial", {
-          code: error.code,
-          message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
-        });
+        return await receipts.settle(
+          result("partial", {
+            code: error.code,
+            message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
+          }),
+        );
       }
     }
-    return await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed");
+    return await receipts.settle(
+      await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed"),
+    );
   }
 }

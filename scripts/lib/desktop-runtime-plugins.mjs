@@ -194,7 +194,11 @@ export function stampDesktopRuntimePlugins(packageRoot, plan) {
   fs.writeFileSync(file, `${JSON.stringify(build, null, 2)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves the module URL through symlinks (macOS /tmp is /private/tmp),
+// so compare the real path or a symlinked checkout silently does nothing.
+// Importers may pass a non-path argv[1] (for example `node --eval ... <url>`).
+const entry = process.argv[1];
+if (entry && fs.existsSync(entry) && fs.realpathSync(entry) === fileURLToPath(import.meta.url)) {
   const [operation, root, planFile] = process.argv.slice(2);
   if (operation === "plan") {
     console.log(JSON.stringify(planDesktopRuntimePlugins(root)));

@@ -24,6 +24,7 @@ import {
   prepareUserProfileCatalog,
   publishUserProfilesChange,
 } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import {
   linkEmail,
   setDisplayName,
@@ -34,15 +35,13 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
-  openclawIdTunnelRolePolicy,
+  setOpenClawIdMemberAccountLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
   hasCurrentGatewayOperatorAccess,
-  hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
 import {
@@ -57,7 +56,7 @@ import {
   resolveOperatorRolePolicyForProfile,
   resolveOperatorRoleSelection,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
@@ -72,16 +71,16 @@ const github = (accountId: number, login: string) =>
     identity: { accountId, login },
     authenticationAlias: { kind: "github-login", login },
   });
-type Source = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+type Source = NonNullable<Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>>;
 type Authority = Source["authority"];
-type CaptureInput = Parameters<typeof captureGatewayOperatorRunAuthority>[0];
+type CaptureInput = Parameters<typeof prepareGatewayOperatorRunAuthority>[0];
 const liveDependency = (controller: AbortController) => ({
   signal: controller.signal,
   assertCurrent: () => controller.signal.throwIfAborted(),
 });
 async function captureSource(input: CaptureInput) {
   return disposable(
-    expectDefined(await captureGatewayOperatorRunAuthority(input), "operator source"),
+    expectDefined(await prepareGatewayOperatorRunAuthority(input), "operator source"),
   );
 }
 function disposable<T extends { release(): void }>(resource: T) {
@@ -372,12 +371,12 @@ describe("operator role policy", () => {
         expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(originalKey);
         expectModel(narrowed, "b", true);
         expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
-        if (dependencyKind === "gateway resolver") {
-          expect(original.assertCurrent).toThrow("authority is no longer active");
-          expect(narrowed.assertCurrent).toThrow("authority is no longer active");
-        } else {
+        if (dependencyKind === "invocation") {
           expect(original.signal?.aborted).toBe(true);
           expect(narrowed.signal?.aborted).toBe(true);
+        } else {
+          expectCurrent(original);
+          expectCurrent(narrowed);
         }
         expectCurrent(independent);
       }),
@@ -388,7 +387,7 @@ describe("operator role policy", () => {
     { ended: "access", independent: false },
     { ended: "access", independent: true },
   ] as const)(
-    "retains request and selected access authority when $ended ends (independent: $independent)",
+    "keeps admitted access but honors request cancellation when $ended ends (independent: $independent)",
     ({ ended, independent }) =>
       inState(async () => {
         const { client, context } = roleFixture();
@@ -413,7 +412,7 @@ describe("operator role policy", () => {
         const otherSource = ended === "request" ? access : request;
         endedSource.abort(new Error(`${ended} source ended`));
         expect(otherSource.signal.aborted).toBe(false);
-        expectCurrent(captured.authority, independent ? undefined : "source ended");
+        expectCurrent(captured.authority, ended === "request" ? "source ended" : undefined);
       }),
   );
 
@@ -437,13 +436,13 @@ describe("operator role policy", () => {
       expect(() => fresh.authority.assertCurrent()).not.toThrow();
       expectCurrent(original.authority);
     }));
-  it("keeps admitted authority after a role downgrade while new admin requests are refused", () =>
+  it("keeps admitted authority on profile reassignment and refuses new admin requests", () =>
     inState(async () => {
-      const { profile, cfg, client: reader, capture } = roleFixture();
+      const { profile, cfg, client: reader, context } = roleFixture();
       setUserProfileRole(profile.id, "maintainer");
       const admin = identifiedClient(profile.id);
       admin.connect.scopes = ["operator.admin"];
-      using source = await capture();
+      using source = await captureSource({ client: admin, context });
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toBeUndefined();
 
       setUserProfileRole(profile.id, "guest");
@@ -451,7 +450,9 @@ describe("operator role policy", () => {
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
       expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
       expectCurrent(source.authority);
-      expect(source.authority.readCurrentRoleFacts?.().assignedRole).toBe("maintainer");
+      await expect(captureSource({ client: admin, context })).rejects.toThrow(
+        "Your operator role changed",
+      );
       const reconnected = identifiedClient(profile.id);
       reconnected.connect.scopes = ["operator.write"];
       expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();
@@ -687,60 +688,86 @@ describe("operator role policy", () => {
       expect(resolveGatewayOperatorRoleActor(undefined)).toBeUndefined();
       const ownerId = GATEWAY_OWNER_PROFILE_ID;
       expect(resolveGatewayOperatorRoleActor(identifiedClient(ownerId))).toBeUndefined();
+      expect(resolveOperatorRolePolicy(identifiedClient(ownerId), cfg)).toBeUndefined();
       expect(resolveOperatorRolePolicyForProfile(ownerId, cfg)).toBeUndefined();
       expect(resolveOperatorRolePolicyForAssignment(ownerId, "guest", cfg, null)).toBeUndefined();
     }));
 });
 
-it("leaves unassigned, assigned and missing profiles unrestricted with definitions alone", () => {
-  const cfg = roleConfig(false);
-  guestDefinition(cfg).accessPolicyPlugin = "unloaded-policy";
-  for (const profileId of [undefined, "unread-profile"]) {
-    expect(resolveOperatorRolePolicyForProfile(profileId, cfg)).toBeUndefined();
-    expect(resolveOperatorRolePolicyForAssignment(profileId, "guest", cfg, null)).toBeUndefined();
-    expect(
-      resolveOperatorRoleSelection(profileId, "guest", cfg, null).effectiveRole,
-    ).toBeUndefined();
-  }
-  expect(hasGatewayOperatorAccessPolicies(cfg)).toBe(false);
-  expect(
-    authorizeGatewaySessionCreation({ cfg, profileId: undefined, agentId: "private" }),
-  ).toBeUndefined();
-});
-
-it("keeps OpenClaw ID membership policy independent of named-role enforcement", () => {
-  for (const principal of [
-    { kind: "owner", peerKey: "iroh:owner" },
-    { kind: "member", peerKey: "iroh:operator", accountId: "operator", role: "operator" },
-    { kind: "member", peerKey: "iroh:viewer", accountId: "viewer", role: "viewer" },
-  ] satisfies OpenClawIdTunnelPrincipal[]) {
-    setOpenClawIdTunnelPrincipalLookup(() => principal);
+it("leaves nonmembers unchanged with an assigned role but no default", () =>
+  inState(async () => {
+    const cfg = roleConfig(false);
+    const profile = ensureProfileForEmail("catalog@example.test");
+    const catalog = await prepareUserProfileCatalog();
     try {
-      const client: GatewayClient = {
-        connect: gatewayConnect(["operator.read"]),
-        internal: { openclawIdPrincipal: principal },
-      };
-      for (const cfg of [{}, roleConfig(false), roleConfig()]) {
-        setRuntimeConfigSnapshot({
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              ...cfg.gateway?.roles,
-              definitions: {
-                ...cfg.gateway?.roles?.definitions,
-                ...MEMBER_ROLE_PRESETS,
-              },
-            },
-          },
-        });
+      expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toBeUndefined();
+      expect(
+        resolveOperatorRolePolicyForAssignment(profile.id, "guest", cfg, null),
+      ).toBeUndefined();
+      expect(resolveOperatorRoleSelection(profile.id, "guest", cfg, null)).toEqual({
+        roleSource: "default",
+      });
+      expect(resolveOperatorRolePolicyForAssignment(undefined, "guest", cfg, null)).toBeUndefined();
+      expect(
+        authorizeGatewaySessionCreation({ cfg, profileId: undefined, agentId: "private" }),
+      ).toBeUndefined();
+    } finally {
+      catalog.release();
+    }
+  }));
+
+it("uses the profile role for members and leaves owner devices uncapped", () =>
+  inState(async () => {
+    const cfg = roleConfig(false);
+    const profile = ensureProfileForEmail("member@example.test");
+    cfg.gateway!.openclawId = { enabled: true };
+    linkOpenClawIdUserProfile({ profileId: profile.id, accountId: "member", email: null }, {});
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === "member");
+    setUserProfileRole(profile.id, "guest");
+    const catalog = await prepareUserProfileCatalog();
+    try {
+      for (const principal of [
+        { kind: "owner", peerKey: "iroh:owner" },
+        { kind: "member", peerKey: "iroh:member", accountId: "member", role: "unrelated-label" },
+      ] satisfies OpenClawIdTunnelPrincipal[]) {
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        const client = identifiedClient(profile.id);
+        client.internal = { openclawIdPrincipal: principal };
         expect(resolveOperatorRolePolicy(client, cfg)).toEqual(
-          openclawIdTunnelRolePolicy(principal),
+          principal.kind === "owner" ? undefined : guestRole,
         );
       }
     } finally {
+      catalog.release();
       setOpenClawIdTunnelPrincipalLookup(undefined);
-      clearRuntimeConfigSnapshot();
+      setOpenClawIdMemberAccountLookup(undefined);
     }
-  }
-});
+  }));
+
+it("fails closed for members without a catalog without changing independent local authority", () =>
+  inState(async () => {
+    const cfg: OpenClawConfig = { gateway: { openclawId: { enabled: true } } };
+    const profile = ensureProfileForEmail("catalog-missing@example.test");
+    const catalog = await prepareUserProfileCatalog();
+    try {
+      const client = identifiedClient(profile.id);
+      client.internal = {
+        openclawIdPrincipal: {
+          kind: "member",
+          peerKey: "iroh:member",
+          accountId: "member",
+          role: "operator",
+        },
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => client.internal?.openclawIdPrincipal);
+      expect(resolveOperatorRolePolicy(client, cfg)?.scopes).toEqual([]);
+      expect(resolveOperatorRolePolicyForAssignment(profile.id, null, cfg, null)).toBeUndefined();
+      expect(
+        resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, null, cfg, null),
+      ).toBeUndefined();
+    } finally {
+      catalog.release();
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
+    }
+  }));

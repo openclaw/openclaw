@@ -12,13 +12,18 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { WRITE_SCOPE } from "./operator-scopes.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { prepareRestartStores } from "./session-restart-resume-discovery.js";
 
-it.each(["completed", "interrupted"] as const)(
-  "delivers a restored %s child's owed notice after its requester settled",
-  (state) =>
+it.each([
+  { state: "completed", requester: "profile" },
+  { state: "interrupted", requester: "profile" },
+  { state: "interrupted", requester: "unattributed" },
+] as const)(
+  "delivers a restored $state child's owed notice after its $requester requester settled",
+  ({ state, requester }) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const person = ensureGatewayOwnerProfile("Restart custody owner");
@@ -32,7 +37,9 @@ it.each(["completed", "interrupted"] as const)(
         sessionId: "settled-requester",
         lifecycleRevision: "original-revision",
         updatedAt: 1,
-        createdActor: { type: "human" as const, source: "profile" as const, id: person.id },
+        ...(requester === "profile"
+          ? { createdActor: { type: "human" as const, source: "profile" as const, id: person.id } }
+          : {}),
       };
       replaceSessionEntrySync({ ...target, sessionKey }, entry);
       const child = createSubagentRunRecord({
@@ -69,6 +76,7 @@ it.each(["completed", "interrupted"] as const)(
           expect(params.log.warn).not.toHaveBeenCalled();
         };
         const received: string[] = [];
+        let wokenAs: unknown;
         if (state === "interrupted") {
           const controller = createLifecycleControllerFixture(
             {
@@ -76,10 +84,11 @@ it.each(["completed", "interrupted"] as const)(
               runs: subagentRuns,
               realWorker: true,
               runSubagentAnnounceFlow: async (notice) => {
-                expect(
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
-                    ?.profileId,
-                ).toBe(person.id);
+                const client = getPluginRuntimeGatewayRequestScope()?.client;
+                wokenAs =
+                  requester === "profile"
+                    ? client?.internal?.operatorRunAuthority?.profileId
+                    : client?.connect.scopes;
                 if (notice.outcome?.status !== "error") {
                   throw new Error("Missing interrupted outcome");
                 }
@@ -110,6 +119,8 @@ it.each(["completed", "interrupted"] as const)(
           const premature = await settle();
           await recover();
           await settle();
+          // Without a recorded requester, the woken turn gets the System write baseline, never admin.
+          expect(wokenAs).toEqual(requester === "profile" ? person.id : [WRITE_SCOPE]);
           expect(received).toEqual([
             "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.",
           ]);
