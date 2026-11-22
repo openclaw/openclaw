@@ -155,6 +155,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   transferMs: number;
   hostWaitMs: number;
   hostWaitStartedAt?: number;
+  memoryWaitStartedAt?: number;
 };
 export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;

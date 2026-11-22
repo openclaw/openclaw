@@ -253,12 +253,9 @@ a project's `.claude/agents/` are not loaded.
   because a completion's requester cap is checked per OpenClaw tool call and a
   native call has no such check. `before_tool_call` sees these calls as
   `web_search`.
-- Each native call still passes `before_tool_call` and exec policy: ask
-  `on-miss` or `always` routes it through approval, and exec security `deny`,
-  or `allowlist` with ask `off`, refuses it. Under those two settings kept
-  native tools have no effect: `WebSearch` calls are refused, and `Agent` and
-  `Workflow` are refused before any descendant starts. With the default exec
-  policy on the Gateway host, `WebSearch` calls run without a prompt.
+- Each native call still passes `before_tool_call`. OpenClaw's exec policy and
+  approvals do not apply to Claude's own tools: a call that is available to the
+  run and passes `before_tool_call` is allowed without an approval prompt.
 - Descendants see the managed turn's tool list: the selected orchestration
   tools plus OpenClaw's policy-filtered tools, never Claude-native file or
   shell tools. Their OpenClaw tool calls pass the same grant and hooks as the
@@ -455,14 +452,15 @@ the process and resume the same conversation without rewriting its history.
 Changing prompt bytes can invalidate the cached prefix where they change.
 
 OpenClaw always launches Claude Code with its default permission mode.
-OpenClaw's permission responses and `PreToolUse` hook keep native tools under
-host control, including when user or enterprise settings would otherwise
-preapprove a call. Native requests pass through standard `before_tool_call`
-policy before exec policy and approval, with native tool names and file
-arguments projected into their OpenClaw equivalents. Per-agent and session
-restrictions still override broader global policy. OpenClaw-owned MCP tools
-remain authorized by the Gateway rather than receiving duplicate native
-approval. Other MCP tools stay host-permission controlled.
+OpenClaw's permission responses and `PreToolUse` hook check that a native tool
+is available to the run, including when user or enterprise settings would
+otherwise preapprove a call. Native requests pass through standard
+`before_tool_call` policy, with native tool names and file arguments projected
+into their OpenClaw equivalents. Per-agent and session restrictions on which
+tools a run keeps still apply. OpenClaw's exec policy and approvals do not
+gate Claude's own tools or third-party MCP tools Claude calls: a call that
+passes `before_tool_call` runs without an approval prompt. OpenClaw-owned MCP
+tools remain authorized by the Gateway.
 
 Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
 the canonical `ask_user` tool capability. Long option descriptions are shortened
@@ -472,50 +470,9 @@ constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user
 skips a valid question, Claude instead continues with its best judgment.
 
-When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
-native or extension tool requests that need approval to the session's
-channel: **Allow once** permits the single call, **Allow always** permits that
-tool name for the same warm live session while each subsequent turn's policy
-and available tools still allow it, and **Deny**, a timeout, an unreachable
-approval route, or a closed turn all deny the call. Grants stay in memory, end
-when that exact live session is replaced, and never apply to Bash. Policies
-that never prompt keep their existing behavior: `security: "deny"` rejects
-every request, and ask `off` with less than full security denies without asking.
-
-### Native Bash and the exec allowlist
-
-When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands
-against the agent's [exec allowlist](/tools/exec-approvals). For example:
-
-```bash
-openclaw approvals allowlist add --agent main /usr/local/bin/gog
-```
-
-OpenClaw reuses its exec shell evaluator and allows a call without prompting
-only when every command segment resolves to an explicitly allowlisted binary
-and can be fully classified and bound. Executables may be absolute paths or
-resolved through the CLI launch PATH with the agent's configured exec PATH
-prepends. Approved input pins the
-resolved executable paths. Successful matches update allowlist usage metadata.
-Bindable misses prompt with the first unmatched segment or classification
-reason. Commands the approval binding guard cannot bind, including pipelines,
-command substitutions, subshells, write redirections, and unparsable syntax,
-remain denied before a prompt. Environment-prefix overrides, shell expansions,
-and `eval`/`exec`/`source` wrappers do not auto-allow.
-
-`ask: "always"` still prompts for allowlisted commands. `security: "deny"`
-still denies, and `ask: "off"` keeps the behavior described above. **Allow
-always** remains unavailable for Bash, and truncated Bash approval descriptions
-still block execution.
-
-This is argument-level policy applied to the command Claude Code will run,
-not sandboxed execution by OpenClaw. Claude Code owns cwd, PATH, environment,
-and sandboxing. Use a [paired node](/nodes) or the embedded runtime with
-[sandboxing](/gateway/sandboxing) when sandboxed execution is required.
-
 ### Claude browser tools and 1Password sign-in
 
-Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it. Register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the Gateway host. Someone must be at that machine to approve credential use.
+Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it. Register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. OpenClaw's exec policy does not gate the browser tools; use a `before_tool_call` plugin to restrict them. The Chrome window, the extension, and any 1Password approval prompts live on the Gateway host. Someone must be at that machine to approve credential use.
 
 The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`. Positive fixed budgets disable adaptive thinking. Claude Code decides per model whether those budgets apply; models that only support adaptive thinking ignore them and use `--effort`. When fast mode is on, the backend also passes `--fast-mode on`; Claude Code ignores it for models without fast mode. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 
@@ -535,7 +492,7 @@ openclaw models auth paste-token --provider anthropic
 
 A native login alone is unidentified for saved-history recovery: OpenClaw sees no account identity for it, and `--method cli` saves no auth profile. A chat that only ever runs on it still recovers its saved history in a fresh Claude session. If another identified account ran the chat first, OpenClaw logs `cli session history refused across auth boundary: reason=auth-unknown` and the new session receives only the metadata notice about earlier messages. Native resume of the same Claude session is unaffected. See [History account boundaries](#history-account-boundaries).
 
-`auth-unknown` describes saved-history recovery, not a failed native login or a tool approval denial. Native tool approvals retain the originating turn and recheck its authority before allowing execution. A separate `approval-request-failed` exec denial means the approval decision could not be retrieved; inspect the Gateway's approval error rather than changing the history boundary.
+`auth-unknown` describes saved-history recovery, not a failed native login or a tool denial.
 
 Native login makes the Claude CLI route available; it does not supply an Anthropic HTTP API key. If an HTTP caller selects that login, OpenClaw refuses the request before sending its discovery marker and reports that native authentication belongs to the `claude-cli` runtime. Select that runtime or configure an API credential for HTTP access.
 

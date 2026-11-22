@@ -36,7 +36,8 @@ manual qualification can run all three majors. See the
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
 | Update admission, forward migrations and recovery | Supported                               | Exact captures and state/agent rollback; independent writes can prevent automatic recovery.                                                                                                                                    |
-| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. Stable PG → current is not applicable; [evidence and service/turn limits](#published-stable-upgrade-qualification). |
+| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
+| Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
 | Mixed engines                                     | Supported                               | All four state/agent pairs and independently selected plugin families; one shared PostgreSQL connection configuration.                                                                                                         |
 | Independent Gateways on one server                | Supported                               | Separate databases recommended; distinct namespaces in one database also tested. One live Gateway per store.                                                                                                                   |
@@ -54,7 +55,7 @@ manual qualification can run all three majors. See the
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
 | Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
 | Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
-| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
+| Native Windows package update with PG state       | Qualification pending                   | 2026.11.5 supports PostgreSQL state and agent stores. A published-package upgrade on Windows still needs qualification. [Evidence](#native-windows-qualification).                                                             |
 | Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
@@ -142,12 +143,10 @@ patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched se
 build used state **32** / agent **34**; this run does not qualify the later state
 33 / agent 35–36 migrations.
 
-**Package update with PostgreSQL state is not yet applicable.** No published
-release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
-inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
-the configuration but its bundled runtime selects SQLite for state and agent
-stores, with PostgreSQL enabled only for Workboard. Requalify published-release
-updates when a version selecting PostgreSQL state and agent stores ships.
+**Package update with PostgreSQL state still needs Windows qualification.**
+Published 2026.11.5 supports PostgreSQL state and agent stores. The earlier
+Windows service runs used development builds and do not establish package-update
+continuity from that release.
 
 The previous-main update and managed rollback attempts did not complete.
 Separate handoff-path and candidate-admission fixes landed in
@@ -840,16 +839,44 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
-`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
-imports into the server named by the DSN in that environment variable instead,
-for restore drills against a staging database; the restored configuration keeps
-the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+#### Run an isolated restore drill
+
+To rehearse a full archive restore while the source Gateway runs, give the
+restore CLI its own state directory and config path. The CLI needs offline
+ownership of its selected state directory even when the import uses a separate
+PostgreSQL database.
+
+1. [Provision a dedicated staging database and role](#provision-a-database-and-runtime-role)
+   with the extensions required by the captured stores. Export its DSN as
+   `STAGING_PG_DSN` using your secret manager. If the archived config's default
+   environment secret provider has an allowlist, it must include that name.
+2. From a shell with that variable set, use a trusted backup archive. Use a
+   temporary directory outside the source installation's state, config, and
+   agent directories. The example creates a fresh CLI directory and a separate
+   restore target under that temporary directory.
+
+   ```bash
+   archive=/path/to/trusted-backup.tar.gz
+   drill_dir="$(mktemp -d)"
+   mkdir -m 700 "$drill_dir/cli"
+
+   OPENCLAW_STATE_DIR="$drill_dir/cli" \
+     OPENCLAW_CONFIG_PATH="$drill_dir/cli/openclaw.json" \
+     openclaw backup restore "$archive" --target "$drill_dir/restored" \
+       --postgres-connection-env STAGING_PG_DSN
+   ```
+
+3. Check that restore reports success and inspect the staged files and restored
+   stores in the staging database. Keep the restored installation offline during
+   the drill. The DSN override applies only to the import, and the restored
+   config still points to the archived connection.
 
 ### Recover a retained agent store
 
@@ -945,6 +972,15 @@ To recover these scopes:
 
 ## Published-stable upgrade qualification
 
+[OpenClaw 2026.11.5](https://www.npmjs.com/package/openclaw/v/2026.11.5) ships
+PostgreSQL support for shared state and agent stores. The Linux published-driver
+CI cell installs that release against PostgreSQL 17, writes a session and
+transcript through the Gateway, and runs the installed updater with
+`--no-restart` against the candidate package. It checks both PostgreSQL schema
+versions and reads the same session and transcript from the candidate Gateway.
+The matched-backup rollback evidence below comes from the separate 2026.10.5
+SQLite upgrade.
+
 The qualification below used [OpenClaw 2026.10.5](https://www.npmjs.com/package/openclaw/v/2026.10.5).
 Its packaged configuration schema does not support `database.engine=postgres`,
 so a native 2026.10.5-PostgreSQL → current upgrade is **not applicable**. Users on
@@ -994,8 +1030,9 @@ The native-client support rows above retain their own qualification scope.
 
 Use `openclaw update` for supported update admission. The
 [published-stable qualification](#published-stable-upgrade-qualification) covers
-SQLite update, PostgreSQL adoption and matched-backup rollback, with foreground
-Gateway verification. Its service and live-turn limits still apply.
+SQLite update, PostgreSQL adoption and matched-backup rollback, and a separate
+PostgreSQL-to-PostgreSQL upgrade cell, with foreground Gateway verification.
+Its service and live-turn limits still apply.
 
 Before stopping the previous Gateway or changing data, it checks the target's declared engine and PostgreSQL
 family support against selected families and retained physical stores. Explicit
@@ -1070,7 +1107,15 @@ settings. The synchronous bridge has a 120-second deadline. If it expires, the
 process root terminates the whole I/O service, resetting every connection assigned
 to that service (roughly a quarter of the process's PostgreSQL connections) with
 an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
-deadline covers a wedged service or a black-holed network. Offline port and restore
+deadline covers a wedged service or a black-holed network. Schema admission and
+migration transactions (including update generation fingerprints), first-use search
+extension builds, and explicit search rebuilds use a one-hour statement timeout and
+a bridge deadline of one hour plus 30 seconds. Lock waits still stop after 60 seconds.
+The maintenance statement limit is transaction-local; nested rebuilds restore the
+caller's limit on success or rollback, and ordinary requests keep their runtime limits.
+This lets large stores finish maintenance that would otherwise fail on every retry
+at the runtime deadline. Work exceeding the maintenance budget still fails.
+Offline port and restore
 materialization use a direct asynchronous client with a one-hour statement timeout;
 those statements do not pass through the synchronous bridge.
 These are not per-operation config options.
@@ -1317,7 +1362,8 @@ the heartbeat reports lease loss as before.
 
 If another store remains unavailable, restart the Gateway through its service owner.
 
-The 120-second bridge deadline also has an unknown outcome and resets the whole
+An expired bridge deadline (120 seconds for runtime requests, one hour plus
+30 seconds for maintenance) also has an unknown outcome and resets the whole
 I/O service, including its other assigned connections. Check the recorded result
 through the owning feature after connectivity recovers; a lost reply does not
 prove that the write rolled back. Do not blindly repeat an operation that could

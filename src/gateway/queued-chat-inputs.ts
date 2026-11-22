@@ -95,6 +95,7 @@ export async function continueSessionQueuedInputs(
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
+        agentId: target.agentId,
         context,
         source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,

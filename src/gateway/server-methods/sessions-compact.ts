@@ -25,7 +25,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { hasPreparedGatewayDeviceAuthority } from "../device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -70,7 +70,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     }
     const requestedAgentId = requestedAgent.agentId;
     const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
-    let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     const assertRequestCurrent = () => {
       requestAuthority.assertCurrent();
       capturedOperator?.authority.assertCurrent();
@@ -84,7 +84,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       });
       const storePath = target.storePath;
       if (maxLines === undefined) {
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,

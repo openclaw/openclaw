@@ -1,4 +1,4 @@
-import type { FoldedItem, Turn, TurnOutcome } from "@muse-code/sdk";
+import type { FoldedItem, TurnOutcome } from "@muse-code/sdk";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -56,9 +56,7 @@ it.each([false, true])("finalizes only background reminder work (tool=%s)", asyn
       waitForApproval: async () => undefined,
     },
   };
-  const turn: Turn = {
-    turnId: "turn",
-    observedStart: true,
+  const turn: Parameters<typeof consumeTurn>[0] = {
     completed: completed.promise,
     async *deltas() {},
     async *items() {

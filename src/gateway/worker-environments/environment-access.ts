@@ -26,9 +26,25 @@ import {
   joinWorkerTunnelStops,
   type WorkerTunnelRequest,
   type WorkerTunnelStopReason,
+  type WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
+
+// Keep the persisted discriminated record named instead of expanding it in every service method.
+type WorkerEnvironmentProjection = WorkerEnvironmentRecord & {
+  startStatus?: WorkerEnvironmentStartStatus;
+  inference?: "worker";
+  preparation:
+    | WorkerEnvironmentRecord["preparation"]
+    | (NonNullable<WorkerEnvironmentRecord["preparation"]> & {
+        project: { label?: string; baseCommit: string };
+      });
+  error?: string;
+  desktopAvailable: boolean;
+  desktopApps: Array<"browser" | "terminal">;
+  tunnelStatus: WorkerTunnelStatus;
+};
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 // Allow one normal 30-second node command to settle, then one native close command.
@@ -193,7 +209,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     throw serviceError("invalid_state", "Worker environment has no desktop transport");
   };
 
-  const project = (record: WorkerEnvironmentRecord) => {
+  const project = (record: WorkerEnvironmentRecord): WorkerEnvironmentProjection => {
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&

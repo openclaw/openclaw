@@ -4,7 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import * as computerAvailability from "../agents/computer-use-node-capabilities.js";
 import "../agents/test-helpers/fast-bash-tools.js";
 import "../agents/test-helpers/fast-coding-tools.js";
@@ -76,7 +76,7 @@ it.for([
           ? mcp.prepareAdmission("portal-controller", "portal-readiness", {
               cfg,
               agentId: identity.agentId,
-              operatorAuthority: createAdmittedRunOperatorAuthority({
+              operatorAuthority: createTestOperatorAuthority({
                 profileId: "portal-controller",
                 scopes: ["operator.write"],
                 signal: authorityAbort.signal,

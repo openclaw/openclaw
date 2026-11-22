@@ -53,6 +53,8 @@ suite.define(() => {
         expect(await pickers.first().textContent()).not.toContain("API");
         expect(await pickers.first().getAttribute("aria-label")).not.toContain("API");
         expect(await pickers.first().locator(".picker-select__description").count()).toBe(0);
+        // Every picker lines up, the folded ones included.
+        await defaults.locator("[data-models-more-settings]").click();
         await defaults.scrollIntoViewIfNeeded();
         const boxes = await pickers.evaluateAll((elements) =>
           elements.map((element) => {

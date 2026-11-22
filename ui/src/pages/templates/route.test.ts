@@ -60,7 +60,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   };
 }
 
-function templatesConfig(enabled: boolean) {
+function templatesConfig(enabled?: boolean) {
   return { gateway: { controlUi: { experimental: { templates: enabled } } } };
 }
 
@@ -70,9 +70,10 @@ it("rejects a direct visit when Templates is known-disabled", async () => {
 });
 
 it.each([
+  ["/templates", undefined],
   ["/templates", true],
   ["/templates/workflow-operator", false],
-] as const)("gates cold %s until Labs=%s", async (pathname, enabled) => {
+] as const)("gates cold %s until Templates availability=%s", async (pathname, enabled) => {
   const fixture = await setup(pathname);
   expect(fixture.router.getState().matches[0]).toMatchObject({
     routeId: "templates",
@@ -101,8 +102,8 @@ it.each([
     hello: gatewayHelloForMethods(["templates.catalog.search"], ["operator.read"]),
   });
   await vi.waitFor(() => expect(loading()).toBeNull());
-  await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
-  if (!enabled) {
+  await vi.waitFor(() => expect(explore() !== null).toBe(enabled !== false));
+  if (enabled === false) {
     expect(view.container.textContent).toContain("Templates is turned off");
     expect(request).not.toHaveBeenCalled();
   }

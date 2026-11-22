@@ -14,6 +14,7 @@ export const STATEMENT_TYPES = [
   "RootReset",
   "NodeInviteCap",
   "NodeRedemption",
+  "ClawUnlink",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -256,6 +257,16 @@ export type RootResetBody = {
   issued_at: UnixSeconds;
 };
 
+/**
+ * Unlinking a claw (OCF-281): the claw's own Gateway, with the K_gw of the current binding, ends
+ * the claw's link to OpenClaw ID. Discovery retires the hostname for good and deletes the claw.
+ * `binding_seq` names the binding it ends, so the statement is refused for any other binding.
+ */
+export type ClawUnlinkBody = {
+  claw_id: string;
+  binding_seq: number;
+};
+
 /** A single-use node invitation, registered directly with its proof key. */
 export type NodeInviteCapBody = Pick<
   InviteCapBody,
@@ -304,6 +315,7 @@ export type StatementBodies = {
   RootReset: RootResetBody;
   NodeInviteCap: NodeInviteCapBody;
   NodeRedemption: NodeRedemptionBody;
+  ClawUnlink: ClawUnlinkBody;
 };
 
 /**

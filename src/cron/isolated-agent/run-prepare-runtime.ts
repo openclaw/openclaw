@@ -37,6 +37,7 @@ export type RunCronAgentTurnParams = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: CronLaneWaitCallback;
+  providerRunSlot?: import("../service/timer-execution-timeout.js").CronProviderRunSlot;
   sessionKey: string;
   agentId?: string;
   lane?: string;
