@@ -30,6 +30,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
+import { bindCommandOwnerAuthority } from "../../command-owner-authority.js";
 import { attachAmbientOverflowContext } from "./ambient-context.js";
 import {
   collectCurrentInboundContext,
@@ -156,7 +157,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
   }
   // Mixed or unverifiable people share no downstream sender authority. The
   // opaque admission aggregate records unknown identity at the run boundary.
-  return {
+  const collected = {
     ...source,
     senderId: undefined,
     senderName: undefined,
@@ -165,7 +166,14 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
     senderIsOwner: false,
     traceAuthorized: false,
     ownerNumbers: [],
+    requesterOrigin: source.requesterOrigin
+      ? { ...source.requesterOrigin, senderId: undefined, senderE164: undefined }
+      : undefined,
   };
+  // Spreading the source also copies its private owner grant. Replace it with
+  // a source-free denial so no requester identity or recovery reference survives.
+  bindCommandOwnerAuthority(collected, { isCurrent: () => false });
+  return collected;
 }
 
 /** Executes an already-selected claim. This adapter never chooses a successor. */
