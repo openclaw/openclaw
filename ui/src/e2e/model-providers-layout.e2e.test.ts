@@ -92,7 +92,7 @@ suite.define(() => {
           expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
           expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
           const bounds = await page
-            .locator("[data-models-connect], .model-providers__refresh-button")
+            .locator("[data-models-login-discover], .model-providers__refresh-button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
@@ -112,7 +112,7 @@ suite.define(() => {
               expect(overlaps).toBe(false);
             }
           }
-          const access = page.getByRole("heading", { name: "Provider access", exact: true });
+          const access = page.getByRole("heading", { name: "Providers", exact: true });
           const section = page.locator(".settings-section").filter({ has: access });
           const group = section.locator(":scope > .settings-group");
           expect((await access.boundingBox())!.x).toBe((await group.boundingBox())!.x);

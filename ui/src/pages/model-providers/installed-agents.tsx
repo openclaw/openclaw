@@ -274,10 +274,13 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     notify();
   }
 
+  /** An installed agent shows this provider on its own row, with its own status. */
+  function owns(providerId: string): boolean {
+    return Boolean(projection.read().agents?.some((agent) => agent.runtimeId === providerId));
+  }
+
   function filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
-    return cards.filter(
-      (card) => !projection.read().agents?.some((agent) => agent.runtimeId === card.id),
-    );
+    return cards.filter((card) => !owns(card.id));
   }
 
   function available(): boolean {
@@ -628,8 +631,11 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         const detected = createMemo(() =>
           (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
         );
-        const missing = createMemo(() =>
-          (displayedInventory().agents ?? []).filter((agent) => agent.installation === "missing"),
+        const missingNames = createMemo(() =>
+          (displayedInventory().agents ?? [])
+            .filter((agent) => agent.installation === "missing")
+            .map((agent) => agent.name)
+            .join(", "),
         );
         const outcome = createMemo(() => {
           const failure = displayedInventory().failure;
@@ -661,26 +667,22 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               {outcome()}
             </Errored>
             <Show when={view().agents !== null}>
+              {/* Only detected apps get rows; the supported list helps only when none were found. */}
               <For
                 each={detected()}
                 keyed={(agent) => agent.id}
                 fallback={
-                  <Show when={missing().length === 0}>
-                    <SettingsEmpty message={t("modelProviders.installedAgents.empty")} />
-                  </Show>
+                  <SettingsEmpty
+                    message={
+                      missingNames()
+                        ? t("modelProviders.installedAgents.notDetected", { names: missingNames() })
+                        : t("modelProviders.installedAgents.empty")
+                    }
+                  />
                 }
               >
                 {(agent) => <AgentRow agent={agent()} />}
               </For>
-              <Show when={missing().length > 0}>
-                <p class="model-providers__agents-missing" data-installed-agents-missing>
-                  {t("modelProviders.installedAgents.notDetected", {
-                    names: missing()
-                      .map((agent) => agent.name)
-                      .join(", "),
-                  })}
-                </p>
-              </Show>
             </Show>
           </InventorySection>
         );
@@ -724,6 +726,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     synchronize,
     subscribe,
     reset,
+    owns,
     filterProviders,
     available,
     render,

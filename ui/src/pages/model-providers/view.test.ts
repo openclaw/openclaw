@@ -219,7 +219,6 @@ describe("renderModelProviders", () => {
   it("surfaces a provider-usage failure on the provider list", () => {
     const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
-    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([
@@ -629,37 +628,35 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("9145");
   });
 
-  it("puts model recovery first when credentials expose no selectable models", () => {
-    const onConnectProvider = vi.fn();
+  it("leads a new user with the provider catalog and holds defaults until a model exists", () => {
+    const onCatalogConnect = vi.fn();
+    const openai = { id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] };
     const container = mount(
       props({
-        cards: [
-          card({
-            auth: { kind: "ok" },
-            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
-            modelCount: 0,
-            availableModelCount: 0,
-          }),
-        ],
+        cards: [],
         configuredModels: [],
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        modelRequired: true,
-        onConnectProvider,
+        thinkingOverridden: false,
+        fastModeOverridden: false,
+        decisionModels: [],
+        catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
+        onCatalogConnect,
       }),
     );
 
-    const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain(t("modelProviders.login.action"));
-    expect(text(readiness)).toContain("Model required");
+    const catalog = container.querySelector("[data-models-catalog]");
+    expect(text(catalog)).toContain(t("modelProviders.catalog.firstTitle"));
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    button(catalog!, "Add API key")?.click();
+    expect(onCatalogConnect).toHaveBeenCalledWith("openai");
+    // Connected: the catalog moves below as "Add a provider"; the provider in use offers another account.
+    mount(props({ catalogProviders: [openai] }), container);
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-    // Setup has one way to connect; the access section offers its own again once it ends.
-    expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
-
-    button(readiness!, "Add account")?.click();
-    expect(onConnectProvider).toHaveBeenCalledOnce();
-
-    mount(props(), container);
-    expect(container.querySelector("[data-model-readiness]")).toBeNull();
+    const later = container.querySelector("[data-models-catalog]");
+    expect(text(later)).toContain(t("modelProviders.catalog.title"));
+    expect(
+      text(later?.querySelector('[data-models-catalog-provider="openai"] button') ?? null),
+    ).toBe("Add account");
   });
 
   it.each([true])(

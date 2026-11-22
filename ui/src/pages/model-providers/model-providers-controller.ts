@@ -82,6 +82,7 @@ export function createModelProviders(
   let profilesVisible = false;
   let readAccess = false;
   let stopCatalog: (() => void) | undefined;
+  let catalogSearch: HTMLInputElement | undefined;
 
   /** Client the current data was loaded from; a new client means stale data. */
   let dataClient: GatewayBrowserClient | null = null;
@@ -247,10 +248,6 @@ export function createModelProviders(
       };
     },
     canStart: canMutate,
-    onDiscover: () => {
-      setMessage("connection", null);
-      discovery.open();
-    },
     onApiKey: (provider) => {
       state.addProviderId = provider;
       state.addProviderKey = "";
@@ -337,9 +334,11 @@ export function createModelProviders(
         return;
       }
       syncConfig();
-      if (pendingConnection && state.data && canMutate() && !core.loading) {
+      // A connect link lands on the page's provider catalog, ready to search.
+      if (pendingConnection && state.data && canMutate() && !core.loading && catalogSearch) {
         pendingConnection = false;
-        void login.open();
+        catalogSearch.scrollIntoView({ block: "center" });
+        catalogSearch.focus({ preventScroll: true });
       }
       if (pendingCredentialInvalidation && !loginBusy) {
         void refresh("replacement");
@@ -633,11 +632,9 @@ export function createModelProviders(
     };
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
-    const pageLogin = login.pageActions;
     const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
-      onConnectProvider: () => void login.open(),
       accountUsage:
         !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
           ? {
@@ -701,17 +698,20 @@ export function createModelProviders(
       ...configActions.addProviderActions,
       ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
       onCatalogRetry: () => retryCatalog(),
+      onDiscover: () => {
+        setMessage("connection", null);
+        discovery.open();
+      },
+      catalogSearchRef: (element: HTMLInputElement) => {
+        catalogSearch = element;
+      },
       ...login.providerActions,
     };
     return {
       props,
       cards,
       installedAgentsAvailable: installedAgents.available(),
-      scope: {
-        onConnect: pageLogin.onConnect,
-        connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
-      },
-      loginMessage: state.messages.connection ?? pageLogin.loginMessage,
+      loginMessage: state.messages.connection ?? login.pageActions.loginMessage,
       discovery: {
         agentLabel,
         credentialChoices:
