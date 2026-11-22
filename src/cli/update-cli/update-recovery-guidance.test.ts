@@ -215,7 +215,7 @@ it.each(["unsettled", "foreign"] as const)(
     });
     expect(report.lines.join("\n")).toContain(nextAction);
     expect(report.markdown).not.toContain("saved runtime verification failure no longer applies");
-    expect(nextAction).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
+    expect(nextAction).toContain("This update recorded possible data at risk (active-mutation)");
     if (unsettled) {
       expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
     } else {
@@ -299,13 +299,73 @@ it.each(["stopped", "unsettled", "starting"])(
     expect(action).toContain("recovery snapshots");
     if (state === "unsettled") {
       expect(action).toContain("PID 12345 unsettled.");
-      expect(action).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
-      expect(action).toContain("after the recorded processes have stopped");
-    } else if (state === "stopped") {
-      expect(action).toContain("Keep the Gateway stopped");
+      expect(action).toContain("This update recorded possible data at risk (active-mutation)");
+      expect(action).toContain("Once the recorded processes have stopped");
+    } else {
+      expect(action).toContain(
+        state === "starting" ? "The Gateway is running." : "The Gateway is stopped.",
+      );
     }
+    expect(action).not.toContain("Keep the Gateway stopped");
   },
 );
+
+// Each outcome renders what was observed when the failure was reported and one command.
+it.each([
+  {
+    observed: "running candidate",
+    result: { after: { version: "2026.11.6" } },
+    options: { serviceRunning: true, runningVersion: "2026.11.6" },
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is running OpenClaw 2026.11.6. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Nothing is needed now: the next `openclaw update`, including an automatic one, checks the state on disk against the installed version before it changes anything and resolves the mark if the state is consistent. To check now, run `openclaw update repair`.",
+  },
+  {
+    observed: "stopped candidate",
+    result: { after: { version: "2026.11.6" } },
+    options: { serviceRunning: false },
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
+  },
+  {
+    observed: "rolled-back package",
+    result: {
+      before: { version: "2026.11.5" },
+      after: { version: "2026.11.6" },
+      rollbackOutcome: { status: "succeeded", reason: "package restored" },
+    },
+    options: { serviceRunning: false },
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. The update was rolled back; OpenClaw 2026.11.5 is installed. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
+  },
+  {
+    observed: "failed rollback",
+    result: {
+      before: { version: "2026.11.5" },
+      after: { version: "2026.11.6" },
+      rollbackOutcome: { status: "failed", reason: "package restore failed" },
+    },
+    options: { serviceRunning: false },
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
+  },
+  {
+    observed: "unobserved Gateway",
+    result: {},
+    options: {},
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway was not observed after the failure. Keep the installed version and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
+  },
+] as const)("renders data-at-risk guidance for a $observed", ({ result, options, text }) => {
+  vi.mocked(isContainerEnvironment).mockReturnValue(false);
+  const action = guidance(
+    failure({
+      reason: "rollback-state-unverified",
+      ...result,
+      recovery: {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "rollback-state-unverified",
+      },
+    }),
+    options,
+  );
+  expect(action).toBe(text);
+});
 
 it("uses raw recovery facts for immediate guidance without replacing history", () => {
   const run = createRun();
@@ -419,7 +479,7 @@ it("describes successful-update cleanup as permanent migration-original retireme
     { env: { OPENCLAW_PROFILE: "work", OPENCLAW_STATE_DIR: "/fixture/state" } },
   );
   expect(action).toBe(
-    "After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with `openclaw --profile work update cleanup --dry-run` for state `/fixture/state`. Before applying cleanup, stop the Gateway first (`openclaw --profile work gateway stop`). Use the same profile, state, and config settings.",
+    "After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with `openclaw --profile work update cleanup --dry-run` for state `/fixture/state`. Before applying cleanup, stop the Gateway first (`openclaw --profile work gateway stop --force`). Use the same profile, state, and config settings.",
   );
 });
 

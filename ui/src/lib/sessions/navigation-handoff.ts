@@ -8,7 +8,6 @@ type SessionNavigationHandoffOwner = {
   };
 };
 
-const SESSION_NAVIGATION_HANDOFF_TTL_MS = 2_000;
 export const SESSION_NAVIGATION_INTENT_EVENT = "openclaw:session-navigation-intent";
 export type SessionNavigationIntent = {
   agentId?: string;
@@ -83,11 +82,6 @@ export function prepareSessionNavigationHandoff(
       : {}),
   };
   sessionNavigationHandoffs.set(owner, handoff);
-  globalThis.setTimeout(() => {
-    if (sessionNavigationHandoffs.get(owner) === handoff) {
-      sessionNavigationHandoffs.delete(owner);
-    }
-  }, SESSION_NAVIGATION_HANDOFF_TTL_MS);
 }
 
 export function consumeSessionNavigationHandoff(
@@ -101,6 +95,7 @@ export function consumeSessionNavigationHandoff(
     handoff.pathname !== pathname ||
     (expectedSessionKey !== undefined && handoff.sessionKey !== expectedSessionKey)
   ) {
+    sessionNavigationHandoffs.delete(owner);
     return undefined;
   }
   sessionNavigationHandoffs.delete(owner);

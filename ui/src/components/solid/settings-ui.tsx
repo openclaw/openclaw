@@ -107,21 +107,25 @@ export function SettingsPageHeader(props: {
   let heading!: HTMLHeadingElement;
   // Resolve once: actions may own a portal, which a second read would mount again.
   const actions = children(() => props.actions);
+  const subtitle = children(() => props.subtitle);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
       <section
         class={[
           "content-header content-header--settings",
-          { "content-header--stacked": props.stacked },
+          {
+            "content-header--stacked": props.stacked,
+            "content-header--intro": Boolean(subtitle()),
+          },
         ]}
       >
         <div>
           <h1 class="page-title" ref={(element) => (heading = element)}>
             {props.title}
           </h1>
-          <Show when={props.subtitle}>
-            <div class="page-subtitle">{props.subtitle}</div>
+          <Show when={subtitle()}>
+            <div class="page-subtitle">{subtitle()}</div>
           </Show>
         </div>
         <Show when={actions()}>

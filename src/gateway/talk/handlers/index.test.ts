@@ -23,7 +23,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -2922,7 +2922,7 @@ describe("role-required Talk session creation", () => {
         params,
         client: {
           connId: "conn-required",
-          connect: { scopes: ["operator.talk"] },
+          connect: gatewayConnect(["operator.talk"]),
           authenticatedUserProfile: { profileId: profile.id },
         },
         context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },

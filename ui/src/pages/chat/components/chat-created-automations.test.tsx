@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { CronJob } from "../../../api/types.ts";
 import type { AutomationCreationRow } from "../../../lib/chat/automation-creation-card.ts";
 import { createCronJob } from "../../../test-helpers/cron.ts";
@@ -94,7 +95,7 @@ it("hydrates a standalone row, reconciles its independent switch, and opens that
   );
 });
 
-it("groups identities under one clock and heading; unavailable jobs have no link or switch", async () => {
+it("keeps a removed job in the group without actions and reconciles later visibility changes", async () => {
   const alpha = createCronJob("a", "Alpha"),
     beta = createCronJob("b", "Beta");
   const jobs = new Map([alpha, beta].map((job) => [job.id, job]));
@@ -106,7 +107,11 @@ it("groups identities under one clock and heading; unavailable jobs have no link
           ? jobs.get(params.id)
           : undefined;
       if (!job) {
-        throw new Error("cron job not found");
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Job not found",
+          details: { code: "CRON_JOB_NOT_FOUND", jobId: alpha.id },
+        });
       }
       return job;
     },
@@ -125,12 +130,25 @@ it("groups identities under one clock and heading; unavailable jobs have no link
   await waitForSolid(() => {
     expect(card.getAllByRole("switch")).toHaveLength(1);
     expect(card.queryByRole("link", { name: /Alpha/ })).toBeNull();
-    expect(card.getByRole("status").textContent).toContain("unavailable");
+    expect(card.getByText("Removed", { exact: true })).toBeDefined();
+    expect(card.queryByRole("button")).toBeNull();
   });
   jobs.set(alpha.id, alpha);
-  card.getByRole("button", { name: "Retry" }).click();
+  card.invalidate();
   await waitForSolid(() => expect(card.getByRole("link", { name: /Alpha/ })).toBeDefined());
   expect(card.getAllByRole("switch")).toHaveLength(2);
+});
+
+it("offers Retry when reading the job fails temporarily", async () => {
+  const job = createCronJob("notes", "Weekly notes");
+  const card = mountPlan(
+    [createdSlot(job.id)],
+    vi.fn().mockRejectedValueOnce(new Error("Timed out")).mockResolvedValue(job),
+  );
+  const retry = await waitForSolid(() => card.getByRole("button", { name: "Retry" }));
+  expect(card.getByRole("status").textContent).toContain("Automation unavailable");
+  retry.click();
+  await waitForSolid(() => expect(card.getByRole("link", { name: /Weekly notes/ })).toBeDefined());
 });
 
 it("keeps the confirmed switch state while its reconciliation read is in flight", async () => {

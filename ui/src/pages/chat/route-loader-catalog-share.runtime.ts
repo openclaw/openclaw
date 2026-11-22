@@ -88,6 +88,11 @@ export async function loadResolvedCatalogShareRoute(
       (candidate) => candidate.shareRoute?.routeSegment === target.routeSegment,
     );
     const catalog = matchingCatalogs.length === 1 ? matchingCatalogs[0] : undefined;
+    if (catalog?.pending) {
+      return routeError(
+        "Shared catalog is still loading. Retry this route when the source refresh completes.",
+      );
+    }
     if (!catalog?.shareRoute) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }

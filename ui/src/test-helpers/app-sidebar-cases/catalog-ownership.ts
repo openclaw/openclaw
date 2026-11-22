@@ -103,6 +103,11 @@ describe("AppSidebar session catalog ownership", () => {
     await sidebar.updateComplete;
     await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
     await sidebar.updateComplete;
+    expect(
+      sidebar.sessionData.sessionCatalogs
+        .flatMap((catalog) => catalog.hosts)
+        .flatMap((host) => host.sessions),
+    ).toHaveLength(1);
     expect(dom.query(`[data-session-key="${ownKey}"]`)).not.toBeNull();
     expect(dom.query('[data-session-section="catalog:codex"]')).toBeNull();
     expect(header()).toBeNull();

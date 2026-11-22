@@ -206,11 +206,11 @@ suite.define(() => {
           .getByText("Waiting for the backend review.", { exact: true })
           .waitFor();
         const pendingStatus = activePane.locator(".chat-working-indicator");
-        await pendingStatus.getByText("Wait for subagents", { exact: true }).waitFor();
+        await pendingStatus.getByText("Waiting for subagents", { exact: true }).waitFor();
         expect(await pendingStatus.count()).toBe(1);
         await expect.poll(() => pendingStatus.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await pendingStatus.locator("openclaw-working-phrase").count()).toBe(0);
-        expect(await pendingStatus.textContent()).toContain("Wait for subagents");
+        expect(await pendingStatus.textContent()).toContain("Waiting for subagents");
         expect(await panel.isVisible()).toBe(true);
         expect(await activePane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         expect(await activePane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);

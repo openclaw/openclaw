@@ -209,7 +209,6 @@ describe("AppSidebar session catalog pagination", () => {
         catalogId: "codex",
         hostIds: ["gateway:local"],
         cursors: { "gateway:local": "page-2" },
-        profileRelation: { relationship: "owned", target: { type: "local-profile", id: ada.id } },
       });
       pending.resolve(laterPage);
       await settleCatalog(sidebar);

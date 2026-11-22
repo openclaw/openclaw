@@ -96,6 +96,8 @@ export const SessionCatalogSessionSchema = closedObject({
 });
 
 export const SessionCatalogHostSchema = closedObject({
+  /** Relationship actually applied by this host; absent on legacy fallback. */
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   hostId: NonEmptyString,
   label: NonEmptyString,
   kind: stringLiteralUnion(["gateway", "node"]),
@@ -110,8 +112,6 @@ export const SessionCatalogHostSchema = closedObject({
 });
 
 export const SessionCatalogSchema = closedObject({
-  /** The selection actually applied to this page, not a capability claim. */
-  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogDescriptorSchema.properties,
   shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),

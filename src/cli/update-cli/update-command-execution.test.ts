@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as candidateState from "../../infra/update-candidate-state.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -32,6 +33,7 @@ const {
   inspectOrStopService,
   mocks,
   packageCandidate,
+  readyCandidate,
   successfulUpdate,
 } = await import("./update-command-execution.test-support.js");
 
@@ -237,6 +239,76 @@ describe("mutable update execution", () => {
       expect(mocks.serviceStopped).toBe(false);
     });
   });
+
+  it.each([
+    { migrating: true, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: false, retained: false, owned: "none" },
+    { migrating: false, owner: true, retained: false, owned: "none" },
+    { migrating: true, owner: true, retained: true, owned: "none" },
+    { migrating: true, owner: true, retained: false, owned: "running" },
+    { migrating: true, owner: true, retained: false, owned: "stopped" },
+  ] as const)(
+    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained, owned service=$owned)",
+    async ({ migrating, owner, retained, owned }) => {
+      await withTestDir({ prefix: "migration-owner-" }, async (state) => {
+        // #202700: a Gateway this update does not stop keeps Doctor out of maintenance.
+        vi.stubEnv("OPENCLAW_STATE_DIR", state);
+        const external = path.join(state, "..", "archive-data", "openclaw-agent.sqlite");
+        const read = vi
+          .spyOn(candidateState, "readUpdateStateSchemaVersions")
+          .mockImplementation(async ({ onInventory }) => {
+            onInventory?.(
+              new Map([[external, { spellings: [external], registeredPaths: [external] }]]),
+            );
+            return [
+              {
+                path: path.join(state, "state", "openclaw.sqlite"),
+                userVersion: 15,
+                ...(retained ? { retainedAgentPaths: [external] } : {}),
+              },
+              { path: external, userVersion: migrating ? 18 : 19 },
+            ];
+          });
+        vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(
+          owner ? { pid: 4242, createdAt: "2026-11-21T00:00:00.000Z", port: 18789 } : undefined,
+        );
+        mocks.checkCandidate.mockResolvedValue({
+          ...readyCandidate([]),
+          candidateSchemaVersions: { state: 15, agent: 19 },
+        });
+        mocks.maybeStopService.mockResolvedValue(
+          owned !== "none"
+            ? { ...inspectOrStopService("inspect"), stopped: false, running: owned === "running" }
+            : {
+                stopped: false,
+                inspected: false,
+                serviceMutationAllowed: false,
+                serviceMutationSkipMessage: "service management skipped: non-default install",
+              },
+        );
+        mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
+        const params = executionParams("package");
+        params.opts.restart = params.shouldRestart = false;
+
+        const execution = await execute(params);
+
+        if (migrating && owner && !retained && owned !== "running") {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "database-migration-owner-live" },
+          });
+          expect(JSON.stringify(execution?.result)).toContain(
+            `${external} (schema 18 -> 19), which needs exclusive access to the state, but a Gateway (PID 4242)`,
+          );
+        } else {
+          expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
+        }
+        expect(read).toHaveBeenCalledWith(
+          expect.objectContaining({ includeRetainedAgentPaths: true }),
+        );
+      });
+    },
+  );
 
   it.each([false, true])(
     "keeps plugin availability advisory (incompatible=%s)",

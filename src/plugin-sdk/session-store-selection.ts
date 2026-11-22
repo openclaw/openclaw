@@ -83,6 +83,9 @@ export async function withSessionEntriesAsync<T>(
           ? filterSessionEntriesByProfile({ entries, profile: publicationIdentity?.profile })
           : entries;
       const selectionIdentity = relationIdentity;
+      if (relation && !selectionIdentity) {
+        throw new Error("Profile selection is unresolved on this source");
+      }
       const selected =
         relation && selectionIdentity
           ? published.filter(({ entry }) => {

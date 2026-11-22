@@ -115,6 +115,13 @@ export async function prepareOpenClawIdTunnelPrincipalLookup(): Promise<OpenClaw
   };
 }
 
+/** Null means the membership owner has not published its current facts. */
+export function readOpenClawIdTunnelPrincipal(
+  peerKey: string,
+): OpenClawIdTunnelPrincipal | undefined | null {
+  return lookup ? lookup(peerKey) : null;
+}
+
 /**
  * True while the membership authority still admits `principal` as it did at
  * admission: same kind and account. A removed device or

@@ -496,7 +496,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
-      ...(owner.sessionCatalogProfileRelation
+      ...(owner.sessionCatalogProfileRelation && catalog.capabilities.profileRelation
         ? { profileRelation: owner.sessionCatalogProfileRelation }
         : {}),
       hostIds: Object.keys(cursors),
@@ -654,4 +654,25 @@ export async function importSessionCatalog(
   }
   void owner.refreshSidebarSessions(params.agentId);
   return result;
+}
+
+/** A relation is sent only for catalogs whose descriptor negotiated the capability. */
+export function selectSessionCatalogProfileRelation(
+  catalogs: readonly SessionCatalog[],
+  { ownerId, involvingMe }: { ownerId: string | null; involvingMe: boolean },
+  selfId?: string,
+): SessionCatalogProfileRelation | undefined {
+  if (
+    !catalogs.some((catalog) => catalog.capabilities.profileRelation) ||
+    (!involvingMe && !ownerId)
+  ) {
+    return undefined;
+  }
+  return {
+    relationship: involvingMe ? "involving" : "owned",
+    target:
+      ownerId && !involvingMe && ownerId !== selfId
+        ? { type: "local-profile", id: ownerId }
+        : { type: "me" },
+  };
 }

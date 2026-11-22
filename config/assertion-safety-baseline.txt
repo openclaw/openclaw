@@ -246,7 +246,6 @@ extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
-extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
@@ -2006,7 +2005,6 @@ src/plugin-sdk/memory-host-core.ts	2
 src/plugin-sdk/migration-runtime.ts	1
 src/plugin-sdk/migration.ts	7
 src/plugin-sdk/plugin-test-api.ts	1
-src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	2
 src/plugin-sdk/provider-entry.ts	1
 src/plugin-sdk/provider-stream-shared.ts	4
@@ -2216,7 +2214,7 @@ src/templates/project-build.ts	3
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	1
-src/trajectory/export.ts	7
+src/trajectory/export.ts	6
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2

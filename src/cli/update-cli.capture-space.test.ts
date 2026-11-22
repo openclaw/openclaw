@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,13 +9,18 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as workerRuntime from "../infra/runtime-worker-url.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
+import * as postCoreCapability from "../infra/update-post-core-capability.js";
+import * as recoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import { VERSION } from "../version.js";
 import {
   getErrorOutput,
   getLogOutput,
   lastWriteJsonCall,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
+import * as mocks from "./update-cli-mocks.test-support.js";
+import * as modules from "./update-cli-modules.test-support.js";
 import { getUpdateRun, updateCommand } from "./update-cli-modules.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -130,4 +136,135 @@ await import(operation);`,
       });
     },
   );
+});
+
+describe("update with a failed original-state capture", () => {
+  const setup = createUpdateCliFixture();
+
+  it.each([
+    "SQLite file generation changed while reading",
+    "State schema inventory failed (output-limit)",
+  ])("continues a real update with a warning when the capture fails: %s", async (failure) => {
+    await setup.mockPackageInstallAtCaseDir();
+    const cause = `${failure}: /fixture/state/openclaw.sqlite`;
+    vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
+      new Error("Original update capture failed; evidence retained at /fixture/capture", {
+        cause: new Error(cause),
+      }),
+    );
+
+    let result: UpdateRunResult | undefined;
+    await updateCommand({
+      yes: true,
+      restart: false,
+      json: true,
+      onResult: (value) => {
+        result = value;
+      },
+    });
+
+    expect(result?.status).toBe("ok");
+    // The capture ran at activation, after the run was registered; its warning joins the run.
+    const warning = getUpdateRun(result!.runId!)?.steps.find(
+      (step) => step.step === "warning:original-state-capture:1",
+    )?.detail;
+    assert(warning);
+    expect(warning).toMatch(
+      /^NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable\. The update continues without a complete pre-update recovery copy\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
+    );
+    expect(warning).toContain(cause);
+    expect(warning).not.toContain("retry");
+    expect(lastWriteJsonCall()).toMatchObject({
+      run: {
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "warning:original-state-capture:1", detail: warning }),
+        ]),
+      },
+    });
+    expect(getErrorOutput()).toContain(`Warning: ${warning}`);
+  });
+});
+
+/** Run directories in the capture store; each one is a full copy of config and databases. */
+async function captures(): Promise<string[]> {
+  const store = resolveUpdateCaptureRoot(resolveStateDir());
+  const entries = await fs.readdir(store, { withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+function captureSteps(runId: string | undefined) {
+  expect(runId).toBeTruthy();
+  return (modules.getUpdateRun(runId!)?.steps ?? [])
+    .map((step) => step.step)
+    .filter((step) => step === "original-state-capture");
+}
+
+describe("original-state capture follows the first state change", () => {
+  const setup = createUpdateCliFixture();
+  const output = () => lastWriteJsonCall() as UpdateRunResult;
+
+  it("copies nothing when a package update is already current", async () => {
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    await setup.mockPackageInstallAtCaseDir(undefined, VERSION);
+    setup.primeNpmChannelTag("latest", VERSION);
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    expect(output()).toMatchObject({ status: "skipped", reason: "already-current" });
+    expect(await captures()).toEqual([]);
+    expect(captureSteps(output().runId)).toEqual([]);
+  });
+
+  it("copies nothing when an update is refused before it changes state", async () => {
+    await setup.mockPackageInstallAtCaseDir();
+    vi.mocked(modules.fetchNpmPackageTargetStatus).mockResolvedValue({
+      version: null,
+      nodeEngine: null,
+      error: "fixture registry unavailable",
+    });
+
+    await expect(modules.updateCommand({ yes: true, json: true })).rejects.toMatchObject({
+      code: 1,
+    });
+
+    expect(output()).toMatchObject({ status: "error", reason: "target-metadata-preflight" });
+    expect(await captures()).toEqual([]);
+  });
+
+  it("still copies the originals once before a real update activates", async () => {
+    await setup.mockPackageInstallAtCaseDir();
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    const result = output();
+    expect(result.status).toBe("ok");
+    expect(await captures()).toEqual([result.runId]);
+    const store = resolveUpdateCaptureRoot(resolveStateDir());
+    await expect(fs.stat(path.join(store, result.runId!, "manifest.json"))).resolves.toBeTruthy();
+    expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
+  });
+
+  it("copies the originals after this run prepares its package publication", async () => {
+    await setup.mockPackageInstallAtCaseDir();
+    // A delegated-post-core candidate gets a prepared publication journal before activation.
+    vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(true);
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    const result = output();
+    expect(getErrorOutput()).toContain("Package publication recovery:");
+    expect(result).not.toMatchObject({ reason: "update-recovery-pending" });
+    expect(await captures()).toEqual([result.runId]);
+    expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
+  });
+
+  it("copies nothing for a Gateway-started update, which carries its run id", async () => {
+    await setup.mockPackageInstallAtCaseDir();
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", randomUUID());
+
+    await modules.updateCommand({ yes: true, restart: false, json: true });
+
+    expect(output().status).toBe("ok");
+    expect(await captures()).toEqual([]);
+  });
 });

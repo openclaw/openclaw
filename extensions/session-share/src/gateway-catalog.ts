@@ -166,8 +166,8 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               },
               onHelloOk: (hello) => {
                 source.supportsProfileRelation = [
-                  "session-share.list-for-profile",
-                  "session-share.read-for-profile",
+                  "session-share.catalog.list",
+                  "session-share.catalog.read",
                 ].every((method) => hello?.features?.methods?.includes(method));
                 source.connected = true;
                 source.connectionVersion++;
@@ -217,31 +217,75 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
               const connectionVersion = source.connectionVersion;
               source.assertConfigured();
               assertCurrent(source, connectionVersion);
-              if (query.profileRelation && !source.supportsProfileRelation) {
-                return Object.assign(common, {
-                  sessions: [],
-                  error: {
-                    code: "FILTER_UNSUPPORTED",
-                    message:
-                      "This Gateway does not support relationship filters. Update the source or choose All owners.",
-                  },
-                });
+              let relation = source.supportsProfileRelation ? query.profileRelation : undefined;
+              let partial = Boolean(query.profileRelation && !relation);
+              let cursor = query.cursors?.[source.hostId];
+              if (cursor && query.profileRelation) {
+                const decoded = sessionCatalogPaging.decodeScopedCursor(
+                  cursor,
+                  query.profileRelation,
+                );
+                if (decoded?.startsWith("partial:")) {
+                  relation = undefined;
+                  partial = true;
+                  cursor = decoded.slice("partial:".length);
+                } else if (decoded?.startsWith("filtered:") && relation) {
+                  cursor = decoded.slice("filtered:".length);
+                } else {
+                  throw new Error("Invalid relationship page cursor. Refresh the catalog.");
+                }
               }
-              const raw = await source.client.request(
-                query.profileRelation ? "session-share.list-for-profile" : "session-share.list",
-                {
-                  ...(query.profileRelation ? { profileRelation: query.profileRelation } : {}),
-                  limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-                  ...(query.search ? { searchTerm: query.search } : {}),
-                  ...(query.cursors?.[source.hostId]
-                    ? { cursor: query.cursors[source.hostId] }
-                    : {}),
-                },
-              );
-              const page = parseSessionSharePage(raw, false, query.profileRelation);
+              const requestPage = () =>
+                source.client.request(
+                  source.supportsProfileRelation
+                    ? "session-share.catalog.list"
+                    : "session-share.list",
+                  {
+                    ...(relation ? { profileRelation: relation } : {}),
+                    limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
+                    ...(query.search ? { searchTerm: query.search } : {}),
+                    ...(cursor ? { cursor } : {}),
+                  },
+                );
+              let raw: unknown;
+              try {
+                raw = await requestPage();
+              } catch (error) {
+                if (
+                  !relation ||
+                  !(error instanceof Error) ||
+                  !("code" in error) ||
+                  error.code !== "FILTER_UNAVAILABLE"
+                ) {
+                  throw error;
+                }
+                relation = undefined;
+                partial = true;
+                cursor = undefined;
+                raw = await requestPage();
+              }
+              const page = parseSessionSharePage(raw, false, relation);
               assertCurrent(source, connectionVersion);
               query.signal?.throwIfAborted();
               return Object.assign(common, page, {
+                ...(page.nextCursor && query.profileRelation
+                  ? {
+                      nextCursor: sessionCatalogPaging.encodeScopedCursor(
+                        `${relation ? "filtered:" : "partial:"}${page.nextCursor}`,
+                        query.profileRelation,
+                      ),
+                    }
+                  : {}),
+                ...(relation ? { profileRelation: relation } : {}),
+                ...(partial
+                  ? {
+                      error: {
+                        code: "FILTER_PARTIAL",
+                        message:
+                          "This Gateway does not support relationship filtering. Showing authorized rows with client-side matching; update the source.",
+                      },
+                    }
+                  : {}),
                 sessions: page.sessions.map((session) =>
                   session.createdActor?.identity
                     ? Object.assign({}, session, {
@@ -262,9 +306,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                   message:
                     error instanceof SourceConfigurationChangedError
                       ? error.message
-                      : query.profileRelation
-                        ? "Cannot apply this relationship filter. Check the verified identity link on both Gateways, or choose All owners."
-                        : "Shared Gateway unavailable. Refresh the catalog.",
+                      : "Shared Gateway unavailable. Refresh the catalog.",
                 },
               });
             }
@@ -286,7 +328,7 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
       }
       try {
         const raw = await source.client.request(
-          request.profileRelation ? "session-share.read-for-profile" : "session-share.read",
+          source.supportsProfileRelation ? "session-share.catalog.read" : "session-share.read",
           {
             ...(request.profileRelation ? { profileRelation: request.profileRelation } : {}),
             threadId: request.threadId,

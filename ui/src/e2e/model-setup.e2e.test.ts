@@ -198,15 +198,17 @@ suite.define(() => {
           1,
         );
 
-        const providerMenuWidth = () =>
-          providerPicker
-            .locator('[role="menu"]')
-            .evaluate((menu) => Math.round(menu.getBoundingClientRect().width));
-        await expect.poll(providerMenuWidth).toBe(620);
+        const menuEdgeOffset = () =>
+          providerPicker.evaluate((picker) => {
+            const field = picker.getBoundingClientRect();
+            const menu = picker.querySelector('[role="menu"]')!.getBoundingClientRect();
+            return Math.max(Math.abs(menu.left - field.left), Math.abs(menu.right - field.right));
+          });
+        await expect.poll(menuEdgeOffset).toBeLessThanOrEqual(1);
 
         await page.setViewportSize({ height: 844, width: 390 });
         await providerPicker.scrollIntoViewIfNeeded();
-        await expect.poll(providerMenuWidth).toBe(358);
+        await expect.poll(menuEdgeOffset).toBeLessThanOrEqual(1);
 
         await page.setViewportSize({ height: 1000, width: 1440 });
         await page.keyboard.press("Escape");

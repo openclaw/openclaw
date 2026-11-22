@@ -158,13 +158,24 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       return {
         catalogs: catalogs.map((catalog) =>
           Object.assign({}, catalog, {
-            ...(profileRelation && catalog.capabilities.profileRelation
-              ? { profileRelation: request.profileRelation }
-              : {}),
             hosts: catalog.hosts.map((host) =>
               filterSessionCatalogHost(
                 requestEntries.projectHostSessions(
-                  host,
+                  {
+                    ...host,
+                    ...(host.profileRelation ? { profileRelation: request.profileRelation } : {}),
+                    ...(relationError &&
+                    catalog.capabilities.profileRelation &&
+                    (!host.error || host.error.code === "FILTER_PARTIAL")
+                      ? {
+                          error: {
+                            code: "FILTER_PARTIAL",
+                            message:
+                              "Relationship filtering requires a verified GitHub link. Showing authorized rows with client-side matching.",
+                          },
+                        }
+                      : {}),
+                  },
                   result.instancesByCatalog.get(catalog.id)!,
                   providerAudiences.get(catalog.id),
                 ),
@@ -331,9 +342,6 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                 };
                 let catalog: SessionCatalog;
                 try {
-                  if (provider.supportsProfileRelation && relationError) {
-                    throw relationError;
-                  }
                   const hosts = await progress.runProvider(onHost, (lifetime) => {
                     const providerParams = {
                       agentId: resolvedAgent.agentId,
