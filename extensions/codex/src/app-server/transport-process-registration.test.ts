@@ -112,6 +112,44 @@ describe.skipIf(process.platform === "win32")("Codex POSIX process registration"
     },
   );
 
+  describe.skipIf(process.platform !== "darwin")("unreadable parent process identity", () => {
+    it("clears a registration only when the child snapshot and signal probe confirm absence", async () => {
+      store.register("orphan", registration);
+      vi.mocked(readCodexAppServerProcessSnapshot)
+        .mockRejectedValueOnce(new ProcessInspectionError("permission"))
+        .mockResolvedValueOnce([observer]);
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("process is absent"), { code: "ESRCH" });
+      });
+
+      await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
+
+      expect(readCodexAppServerProcessSnapshot).toHaveBeenNthCalledWith(2, expect.any(Number), [
+        child.pid,
+      ]);
+      expect(kill).toHaveBeenCalledWith(child.pid, 0);
+      expect(store.lookup("orphan")).toBeUndefined();
+      expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    });
+
+    it("preserves a registration when the child remains visible despite its unreadable parent", async () => {
+      store.register("orphan", registration);
+      vi.mocked(readCodexAppServerProcessSnapshot)
+        .mockRejectedValueOnce(new ProcessInspectionError("permission"))
+        .mockResolvedValueOnce([observer, liveChild]);
+
+      await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
+        reason: "permission",
+      });
+
+      expect(readCodexAppServerProcessSnapshot).toHaveBeenNthCalledWith(2, expect.any(Number), [
+        child.pid,
+      ]);
+      expect(store.lookup("orphan")).toEqual(registration);
+      expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    });
+  });
+
   it.for(["state directory changed", "exited during inspection"])(
     "registers only a live child with its command: %s",
     async (mode, ctx) => {
