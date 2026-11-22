@@ -82,6 +82,7 @@ export async function continueSessionQueuedInputs(
       admitted = await restoreGatewayQueuedOperatorRecovery({
         context,
         source: retained.source,
+        startGrant: "operator.sessions.write",
         assertCurrent,
       });
       const { authority } = admitted;

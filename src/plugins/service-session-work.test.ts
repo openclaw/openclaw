@@ -42,7 +42,9 @@ vi.mock("../gateway/operator-invocation-authority.js", () => ({
   captureAmbientGatewayOperatorAuthority: async () => ({
     authority: {
       assertCurrent: state.assertCurrent,
-      ...(state.recoverable ? { recoverySnapshot: { source: "fixture" } } : {}),
+      ...(state.recoverable
+        ? { recoverySnapshot: { source: "fixture", scopes: ["operator.write"] } }
+        : {}),
     },
     release: state.release,
   }),

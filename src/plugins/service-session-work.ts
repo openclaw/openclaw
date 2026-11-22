@@ -20,6 +20,7 @@ import { SessionMutationAuthorizationChangedError } from "../gateway/session-mut
 import { requireSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { createCorePluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -272,6 +273,10 @@ export function createPluginServiceSessionWork(params: {
       try {
         restored = await restoreGatewayOperatorSource({
           snapshot: accepted.snapshot,
+          // Chat-origin work needs write; cron-origin work can carry only the automation grant.
+          startGrant: operatorScopeSatisfied("operator.sessions.write", accepted.snapshot.scopes)
+            ? "operator.sessions.write"
+            : "operator.cron",
           target: accepted.target,
           context: owner,
           assertCurrent: assertOwner,

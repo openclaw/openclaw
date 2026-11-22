@@ -108,6 +108,38 @@ function acceptedCaller(fixture: RecoveryFixture) {
 }
 
 describe("scheduled authenticated operator source", () => {
+  it("does not turn restorable read authority into a saved chat or automation start", () =>
+    withRecovery(
+      async ({ snapshot, context, target }) => {
+        const assertCurrent = () => {};
+        const source = { kind: "gateway", snapshot };
+        await expect(
+          restoreGatewayQueuedOperatorRecovery({
+            source,
+            context,
+            assertCurrent,
+            startGrant: "operator.sessions.write",
+          }),
+        ).rejects.toThrow("no longer allows sending messages");
+        await expect(
+          restoreGatewayOperatorSource({
+            snapshot,
+            context,
+            target,
+            assertCurrent,
+            startGrant: "operator.cron",
+          }),
+        ).rejects.toThrow("no longer allows running this automation");
+        const read = await restoreGatewayQueuedOperatorRecovery({ source, context, assertCurrent });
+        try {
+          expect(read.authority.scopes).toEqual(["operator.read"]);
+        } finally {
+          read.release();
+        }
+      },
+      { scopes: ["operator.read"], device: undefined },
+    ));
+
   it("refuses retained and recovered runs for an opaque role with no Gateway policy", () =>
     withRecovery(async (fixture) => {
       const principal: OpenClawIdTunnelPrincipal = {

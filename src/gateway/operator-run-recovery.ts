@@ -83,10 +83,13 @@ type PreparedOperatorRecoverySource = {
   revalidate: () => Promise<void>;
 };
 
+type SavedRequesterStartGrant = "operator.sessions.write" | "operator.cron";
+
 /** Explicit scheduled work retains its original authenticated grant and current policy checks. */
 async function restoreGatewayOperatorSnapshot(params: {
   context: GatewayRequestContext;
   assertCurrent: () => void;
+  startGrant?: SavedRequesterStartGrant;
   subscribeToClaim?: (revoke: () => void) => () => void;
   prepareSource: () => Promise<PreparedOperatorRecoverySource | undefined>;
 }): Promise<RestoredGatewayOperatorAuthority | undefined> {
@@ -422,6 +425,13 @@ async function restoreGatewayOperatorSnapshot(params: {
       },
     });
     authority.assertCurrent();
+    const grant = params.startGrant;
+    if (grant && !operatorScopeSatisfied(grant, authority.scopes)) {
+      const action = grant === "operator.cron" ? "running this automation" : "sending messages";
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
+      );
+    }
     const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
     if (!profile) {
       throw new Error("Restart recovery operator profile is unavailable.");
@@ -453,12 +463,14 @@ export async function restoreGatewayOperatorSource(params: {
   target?: { agentId: string; sessionKey: string };
   context: GatewayRequestContext;
   assertCurrent: () => void;
+  startGrant?: SavedRequesterStartGrant;
   prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
   const target = params.target ? { ...params.target } : undefined;
   const restored = await restoreGatewayOperatorSnapshot({
     context: params.context,
     assertCurrent: params.assertCurrent,
+    startGrant: params.startGrant,
     subscribeToClaim: target
       ? (revoke) =>
           onSessionIdentityMutation((mutation) => {
@@ -489,6 +501,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   source: unknown;
   context: GatewayRequestContext;
   assertCurrent: () => void;
+  startGrant?: SavedRequesterStartGrant;
 }): Promise<
   Pick<
     RestoredGatewayOperatorAuthority,
@@ -504,6 +517,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     const restored = await restoreGatewayOperatorSnapshot({
       context: params.context,
       assertCurrent: params.assertCurrent,
+      startGrant: params.startGrant,
       prepareSource: async () => ({
         snapshot: source.snapshot,
         revalidate: async () => params.assertCurrent(),

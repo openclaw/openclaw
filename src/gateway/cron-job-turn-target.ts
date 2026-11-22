@@ -64,6 +64,7 @@ export async function captureCronJobTurnTarget(params: {
     }
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
+      startGrant: "operator.cron",
       target: source.kind === "gateway" ? undefined : { agentId, sessionKey },
       context,
       assertCurrent: () => {

@@ -290,6 +290,7 @@ export async function runPluginCommandScheduledTurn(params: {
       // retain the native operator lease without inheriting a closed occurrence callback.
       restored = await restoreGatewayQueuedOperatorRecovery({
         source: schedule.operatorSource,
+        startGrant: "operator.cron",
         context,
         assertCurrent: () => {
           if (

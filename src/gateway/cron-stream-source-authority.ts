@@ -60,7 +60,12 @@ export async function prepareCronStreamSourceAuthority(params: {
       }
     };
     const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
-    restored = await restoreGatewayOperatorSource({ snapshot, context, assertCurrent });
+    restored = await restoreGatewayOperatorSource({
+      snapshot,
+      context,
+      assertCurrent,
+      startGrant: "operator.cron",
+    });
     // The recovery owner publishes profile, app-grant, credential and device revocation here.
     restored.authority.signal?.addEventListener("abort", onRevoked, { once: true });
     restored.authority.assertCurrent();
