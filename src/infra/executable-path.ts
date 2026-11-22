@@ -37,10 +37,20 @@ function resolveWindowsExecutableExtensions(
   env: NodeJS.ProcessEnv | undefined,
   includeExtensionless = true,
 ): string[] {
-  if (process.platform !== "win32" || path.extname(executable).length > 0) {
+  if (process.platform !== "win32") {
     return [""];
   }
   const extensions = [...resolveWindowsExecutableExtSet(env)];
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(executable));
+  // A dot in the name is not a suffix: Windows keeps probing PATHEXT when the
+  // name as written does not run, so `pip3.11` still means `pip3.11.cmd`. Only
+  // a name that already ends in an executable suffix needs no probe.
+  const suffixed =
+    ext.length > 0 &&
+    (extensions.includes(ext) || WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(ext));
+  if (suffixed) {
+    return [""];
+  }
   return includeExtensionless ? ["", ...extensions] : extensions;
 }
 
