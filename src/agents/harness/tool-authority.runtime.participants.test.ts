@@ -16,10 +16,10 @@ import {
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { captureActiveEmbeddedRunPersonalToolParticipants as captureParticipants } from "../embedded-agent-runner/run-state.js";
 import {
   attachActiveEmbeddedRun,
@@ -52,7 +52,7 @@ afterEach(() => {
 });
 
 function authority(profileId: string, retain?: AdmittedRunOperatorAuthority["retain"]) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId,
     retain,
     scopes: ["operator.read", "operator.write"],

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import type { MeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
-import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { generateOAuthState } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   addGoogleMeetArtifactOptions,
   addGoogleMeetOAuthOptions,

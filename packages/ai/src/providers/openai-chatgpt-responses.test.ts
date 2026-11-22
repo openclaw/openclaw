@@ -11,7 +11,8 @@ import {
   runWithAiTransportHost,
 } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
@@ -868,7 +869,12 @@ describe("ChatGPT Responses runtime transport ownership", () => {
     await once(server, "listening");
     vi.stubGlobal("WebSocket", WebSocket);
     const loopbackModel = createLoopbackModel(server);
-    const options = { apiKey: "opaque", sessionId, transport: "websocket-cached" as const };
+    const options = {
+      apiKey: "opaque",
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "websocket-cached" as const,
+    };
     const registry = createApiRegistry();
     registry.registerApiProvider({
       api: "openai-chatgpt-responses",
@@ -928,6 +934,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
         onPayload: (body) => {
           configureAiTransportHost({ resolveSecretSentinel: () => runtimeToken });
@@ -937,6 +944,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 
@@ -944,6 +952,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
       await streamOpenAICodexResponses(loopbackModel, context, {
         apiKey: "opaque",
         sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
         transport: "websocket-cached",
       }).result();
 

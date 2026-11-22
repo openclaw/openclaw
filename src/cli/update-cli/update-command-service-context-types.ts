@@ -180,4 +180,6 @@ export type UpdateServiceRestartParams = {
   onGatewayStartAttempted?: () => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
   expectedGatewayIdentity?: { version: string; buildId?: string };
+  /** A rollback refusal; restart failure advice must not offer the old version. */
+  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };

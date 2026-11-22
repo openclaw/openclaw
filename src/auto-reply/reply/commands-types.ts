@@ -85,7 +85,8 @@ export type HandleCommandsParams = {
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model. */
+  model: string | undefined;
   contextTokens: number;
   contextTokenProjection?: ModelContextTokenProjection;
   isGroup: boolean;

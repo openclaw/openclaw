@@ -122,6 +122,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
     recoveryResult?: SessionGitHubPublicationResult,
+    admittedRequester?: GitHubPublicationRequesterV2,
   ) => Promise<SessionGitHubPublicationResult>;
   recordRequestingRun: (requestId: string, runId: string) => void;
 }) {
@@ -155,6 +156,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           validateExecution,
           input.requester.assertInvocationCurrent,
           input.requester.signal,
+          undefined,
+          input.requester,
         );
       } catch (error) {
         if (!(error instanceof GitHubPublicationRecoveryPendingError)) {

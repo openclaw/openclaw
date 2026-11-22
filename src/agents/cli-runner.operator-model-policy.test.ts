@@ -3,10 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
@@ -99,14 +97,14 @@ describe("CLI operator model execution", () => {
     },
   );
 
-  it("cancels a removed logical model and rejects late output without revoking a surviving model", async () => {
+  it("keeps admitted CLI output and surviving models available after a logical model is removed", async () => {
     const cfg = {
       agents: { defaults: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } } },
     };
     let policy = prepareOperatorModelPolicy({ cfg, policy: {}, manifestPlugins: [] });
     const listeners = new Set<() => void>();
     const sourceAbort = new AbortController();
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
       signal: sourceAbort.signal,
@@ -143,7 +141,7 @@ describe("CLI operator model execution", () => {
     executePreparedCliRun.mockImplementationOnce(async (prepared) => {
       started.resolve(prepared.params.abortSignal);
       await complete.promise;
-      return { text: "removed model output" };
+      return { text: "admitted model output" };
     });
     executePreparedCliRun.mockResolvedValue({ text: "surviving model output" });
     const admission = prepareSystemAgentRunAdmission(
@@ -171,13 +169,11 @@ describe("CLI operator model execution", () => {
       for (const listener of listeners) {
         listener();
       }
-      expect(signal?.aborted).toBe(true);
+      expect(signal?.aborted).toBe(false);
       expect(sourceAbort.signal.aborted).toBe(false);
       expect(authority.assertCurrent).not.toThrow();
       complete.resolve();
-      expect(await outcome).toMatchObject({
-        message: expect.stringContaining("operator role cannot use this model"),
-      });
+      expect(await outcome).toMatchObject({ payloads: [{ text: "admitted model output" }] });
       expect(cleanup).toHaveBeenCalledOnce();
       expect(listeners.size).toBe(0);
 

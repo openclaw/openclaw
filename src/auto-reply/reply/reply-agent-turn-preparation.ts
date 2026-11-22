@@ -13,6 +13,10 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import {
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
@@ -26,12 +30,6 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
-import { prepareCommandOwnerAuthority } from "../command-auth.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../command-owner-authority.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -51,6 +49,7 @@ import {
 } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
+import { prepareFollowupRunOperatorAuthority } from "./queue/lifecycle.js";
 import {
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
@@ -60,6 +59,7 @@ import {
   admitReplyMaintenance,
   prepareReplySourceAdmission,
   prepareReplySystemPrincipalAuthority,
+  prepareReplyCommandOwnerAuthority,
 } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
@@ -162,6 +162,23 @@ export async function prepareReplyAgentTurn<TConfigured>(
         reason: resolveFollowupAbortSignal(params.queued)?.aborted ? "aborted" : "active-run",
       } as const;
     }
+    const sources = mailboxClaim?.sources ?? [params.queued];
+    const authoritySource = sources.find(
+      (source) => source.operatorAuthority === operatorAuthority,
+    );
+    for (const source of sources) {
+      const context = getInProcessGatewayRequestContext(params.defaults.resolveGatewayContext) ?? {
+        getRuntimeConfig:
+          source.readAdmissionConfig ?? (() => selectLiveRuntimeConfig(source.run.config)),
+        resolveGatewayContext:
+          params.defaults.resolveGatewayContext ??
+          getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
+      };
+      await prepareFollowupRunOperatorAuthority(source, context);
+    }
+    operatorAuthority = authoritySource?.operatorAuthority ?? params.queued.operatorAuthority;
+    params.queued.operatorAuthority = operatorAuthority;
+    assertOperatorCurrent();
     const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
     const initialStoredEntry = replySessionKey
       ? params.defaults.sessionStore?.[replySessionKey]
@@ -307,33 +324,14 @@ export async function prepareReplyAgentTurn<TConfigured>(
       });
       operatorAuthority = principalAuthority?.authority ?? operatorAuthority;
       assertAdmissionCurrent();
-      const origin = run.requesterOrigin;
-      if (
-        !principalAuthority &&
-        !params.providedReplyOperation &&
-        origin?.messageProvider &&
-        !origin.operatorProfileId &&
-        origin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
-        !run.internalEventExecution &&
-        !run.sessionEventOrigin
-      ) {
-        const owner = await prepareCommandOwnerAuthority(config, {
-          channel: origin.messageProvider,
-          accountId: origin.accountId ?? undefined,
-          senderId: origin.senderId ?? undefined,
-          senderE164: origin.senderE164 ?? undefined,
+      if (!principalAuthority && !params.providedReplyOperation) {
+        await prepareReplyCommandOwnerAuthority({
+          run,
+          config,
+          operation,
+          hasOperatorAuthority: operatorAuthority !== undefined,
+          assertCurrent: assertAdmissionCurrent,
         });
-        assertAdmissionCurrent();
-        run.senderIsOwner = owner.isCurrent(config);
-        run.traceAuthorized = run.senderIsOwner;
-        // Refresh configured policy only on the newly admitted execution's projection.
-        bindCommandOwnerAuthority(run, {
-          recoveryReference: owner.recoveryReference,
-          isCurrent: () => owner.isCurrent(readAdmissionConfig()),
-        });
-        if (run.senderIsOwner) {
-          captureCommandOwnerAssertion(run)?.();
-        }
       }
       const configured = await params.configure?.(config);
       assertAdmissionCurrent();

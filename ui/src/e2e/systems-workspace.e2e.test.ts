@@ -9,6 +9,8 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
+import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -89,6 +91,127 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each([
+    { id: "gateway", reorder: false },
+    { id: "node:studio", reorder: false },
+    { id: "node:studio", reorder: true },
+  ])(
+    "keeps keyboard focus on $id across a background device refresh (reorder: $reorder)",
+    async ({ id, reorder }) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          const machines = (online: boolean) => ({
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "node:studio",
+                type: "node",
+                label: "Studio Mac",
+                platform: "darwin",
+                status: online ? "available" : "unavailable",
+              },
+              ...(reorder
+                ? ["Workshop A", "Workshop B", "Workshop C"].map((label, index) => ({
+                    id: "node:workshop-" + index,
+                    type: "node",
+                    label,
+                    status: "available",
+                  }))
+                : []),
+            ],
+          });
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": machines(!reorder),
+          });
+          await page.goto(suite.server.baseUrl + "systems");
+          const list = page.locator(".systems-sidebar");
+          const node = list.getByRole("button", { name: /Studio Mac/ });
+          const target =
+            id === "gateway" ? list.getByRole("button", { name: /Gateway machine/ }) : node;
+          await target.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          expect(await target.evaluate((el) => el === document.activeElement)).toBe(true);
+          const original = await target.evaluateHandle((el) => el);
+          const order = () =>
+            list.locator(".systems-group .systems-machine__name").allTextContents();
+          if (reorder) {
+            expect((await order()).at(-1)).toBe("Studio Mac");
+          }
+          await gateway.setMethodResponse("environments.list", machines(reorder));
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+          await expect
+            .poll(() => node.getAttribute("data-status"))
+            .toBe(reorder ? "available" : "unavailable");
+          if (reorder) {
+            expect((await order())[0]).toBe("Studio Mac");
+          }
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path:
+                suite.artifactDir +
+                "/system-focus-" +
+                (id === "gateway" ? "host" : "node") +
+                ".png",
+              animations: "disabled",
+            });
+          }
+          expect(await original.evaluate((el) => el === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+          await expect.poll(() => target.getAttribute("aria-pressed")).toBe("true");
+        },
+      );
+    },
+  );
+  it("shows the full Actual desktop size on a phone", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0, {
+          "environments.list": {
+            environments: [
+              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+              {
+                id: "worker-one",
+                type: "worker",
+                label: "Cloud worker",
+                status: "available",
+                desktop: true,
+              },
+            ],
+          },
+          "desktop.observe": observe("sizing"),
+        });
+        await page.goto(new URL("systems", suite.server.baseUrl).href);
+        const picker = page.locator(".systems-mobile-picker");
+        await picker.waitFor();
+        await installScriptedRfbServer(page);
+        await picker.selectOption("worker-one");
+        expect((await gateway.waitForRequest("desktop.observe")).params).toMatchObject({
+          control: false,
+        });
+        await page.getByText("View only", { exact: true }).waitFor();
+        const sizing = page.getByRole("combobox", { name: "Desktop size" });
+        await sizing.selectOption("actual");
+        const remaining = await sizing.evaluate(async (select: HTMLSelectElement) => {
+          await document.fonts.ready;
+          const style = getComputedStyle(select);
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = style.font;
+          const label = context.measureText(select.selectedOptions[0]!.label).width;
+          return (
+            select.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight) -
+            label
+          );
+        });
+        expect(remaining, "selected label fits before the chevron").toBeGreaterThanOrEqual(0);
+      },
+    );
+  });
+
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",
     async (width) => {

@@ -13,6 +13,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type TemplateCatalogEntry = ClawHubTemplateCatalogEntry;
 export type TemplateCatalogDetail = ClawHubTemplateCatalogDetail;
+export type TemplateCatalogIntegration = TemplateCatalogDetail["contents"]["integrations"][number];
 export type TemplateCatalogSource = { packageName: string; version: string };
 
 export type TemplateAddApplyResult = {

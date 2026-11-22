@@ -154,7 +154,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
     "skill-workshop": {
       title: "Skill workshop",
-      subtitle: "Skills your agent learned, recent changes, and undo.",
+      subtitle: "Drafts, recent changes, and skills your agent learned.",
       docs: "https://docs.openclaw.ai/tools/skill-workshop",
     },
   }[active];

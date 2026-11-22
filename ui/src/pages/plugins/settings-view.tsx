@@ -92,6 +92,7 @@ export type DetailProps = SharedProps &
   Pick<PluginSettingsEditorModel, "pluginId" | "backHref" | "onBack"> & {
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
+    onConnectProvider?: () => void;
     onSelectPrompt?: (prompt: string) => void;
     promptBusy?: boolean;
     promptBlockedReason?: string | null;
@@ -245,6 +246,11 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
   const plugin = createMemo(() =>
     props.result?.plugins.find((entry) => entry.id === props.pluginId),
   );
+  const canConnectProvider = () =>
+    plugin()?.enabled &&
+    props.presentedEnabled?.(props.pluginId) !== false &&
+    !props.busy[pluginRowKey(props.pluginId)] &&
+    !props.installProgress;
   return (
     <>
       {!props.connected && !props.result ? (
@@ -280,6 +286,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
           <PluginNotices {...props} />
           <PluginSettingsEditor
             model={model()}
+            onConnectProvider={canConnectProvider() ? props.onConnectProvider : undefined}
             resolveCredential={props.resolveCredential}
             onAskSetting={props.onAskSetting}
             permissions={permissionSettings(
@@ -357,7 +364,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
-        registerRemovalHeading={props.registerRemovalHeading}
+        registerHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
         rail
         name={plugin().name}

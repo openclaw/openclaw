@@ -171,7 +171,7 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
   const container = mount(viewProps);
   const status = () => text(container.querySelector(".provider-row__status"));
   expect(status()).toBe("Ready");
-  expect(text(container.querySelector("[data-model-readiness]"))).toContain("No models available");
+  expect(text(container.querySelector("[data-model-readiness]"))).toContain("no usable models");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: undefined }] }, container);
   // Unverified credentials report nothing; the row's own meta line names them.
   expect(status()).toBe("");
@@ -367,14 +367,4 @@ it("counts a provider's only unavailable model in the singular", () => {
     container,
   );
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
-});
-
-it("hands the accent to an open API key form", () => {
-  const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
-  const viewProps = props({ cards: [editable], configuredModels: [], modelRequired: true });
-  const container = mount(viewProps);
-  const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
-  expect(connect().classList.contains("primary")).toBe(true);
-  mount({ ...viewProps, keyEditorProvider: "example" }, container);
-  expect(connect().classList.contains("primary")).toBe(false);
 });
