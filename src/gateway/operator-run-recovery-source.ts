@@ -6,7 +6,6 @@ import {
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -113,10 +112,8 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
   let device: AdmittedRunOperatorAuthority["device"];
   if (sourceDevice && tokenDevice) {
-    const publicKey = normalizeDevicePublicKeyBase64Url(sourceDevice.publicKey);
-    if (publicKey) {
-      device = { deviceId: sourceDevice.id, key: sha256Hex(publicKey) };
-    }
+    // The next start checks the accepted token generation, so a rotated token is refused.
+    device = tokenDevice;
   }
   const tokenlessIdentity =
     !ocid &&

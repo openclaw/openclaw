@@ -355,11 +355,13 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       }
     }
     if (device && live) {
+      // Token sources keep their accepted token generation; tokenless pairing keeps its key.
       if (
-        !paired ||
-        paired.deviceId !== device.deviceId ||
-        device.key !== publicKey ||
-        paired.tokens?.operator?.revokedAtMs
+        !isPairedDeviceTokenIdentityCurrent(paired ?? null, "operator", device, []) &&
+        (!paired ||
+          paired.deviceId !== device.deviceId ||
+          device.key !== publicKey ||
+          paired.tokens?.operator?.revokedAtMs)
       ) {
         refuse();
       }
@@ -510,7 +512,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       canonicalIdentity: identity ? { profileId } : null,
       openclawIdPrincipal: principal,
       device:
-        device && paired && publicKey ? { deviceId: device.deviceId, key: publicKey } : undefined,
+        live?.device ??
+        (device && paired && publicKey ? { deviceId: device.deviceId, key: publicKey } : undefined),
       deviceScopeCeiling: live?.deviceScopeCeiling,
       authPolicy: source,
       sharedGeneration: capturedSharedGeneration,
