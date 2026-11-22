@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { satisfies } from "semver";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { extractArchive } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
@@ -26,6 +27,9 @@ export async function preparePackage(params: {
   const releaseRoot = path.join(params.staging, "openclaw");
   const deadline = Date.now() + params.timeoutMs;
   const baseEnv = params.env ?? process.env;
+  const bun =
+    isBunRuntime(params.node) ||
+    (params.node === process.execPath && Boolean(process.versions.bun));
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     PATH: `${path.dirname(params.node)}${path.delimiter}${baseEnv.PATH ?? ""}`,
@@ -77,7 +81,8 @@ export async function preparePackage(params: {
     if (!version) {
       throw new Error("Prepared package has no package version.");
     }
-    if (manifest.engines?.node) {
+    // Bun is admitted by its SQLite capability contract in preflight, not engines.node.
+    if (!bun && manifest.engines?.node) {
       const runtime = await runCommandWithTimeout([params.node, "--version"], {
         baseEnv: env,
         timeoutMs: Math.max(1, deadline - Date.now()),
@@ -110,7 +115,16 @@ export async function preparePackage(params: {
     }
     await params.onStep?.("install");
     const result = await runCommandWithTimeout(
-      [params.npm, "install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"],
+      bun
+        ? [params.node, "install", "--production", "--trust"]
+        : [
+            params.npm,
+            "install",
+            "--omit=dev",
+            "--no-fund",
+            "--no-audit",
+            "--ignore-scripts=false",
+          ],
       {
         cwd: releaseRoot,
         baseEnv: env,
@@ -119,7 +133,9 @@ export async function preparePackage(params: {
       },
     );
     if (result.code !== 0 || result.killed || result.signal) {
-      throw new Error(result.stderr || result.stdout || `npm exited ${result.code}`);
+      throw new Error(
+        result.stderr || result.stdout || `${bun ? "bun" : "npm"} exited ${result.code}`,
+      );
     }
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };

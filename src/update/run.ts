@@ -7,6 +7,7 @@ import path from "node:path";
 import { assertGlobalUpdateOwner, UpdatePreMutationError } from "../cli/update-cli/shared.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
@@ -415,7 +416,10 @@ async function markForwarding(runningRoot: string, launcher: string, prefix: str
 }
 
 function npmBesideNode(node: string): string {
-  return path.join(path.dirname(node), process.platform === "win32" ? "npm.cmd" : "npm");
+  // Bun installations do not carry npm beside their executable; use the tool on PATH.
+  return isBunRuntime(node) || (node === process.execPath && process.versions.bun)
+    ? "npm"
+    : path.join(path.dirname(node), process.platform === "win32" ? "npm.cmd" : "npm");
 }
 
 /** The new code judges itself, at the path it will serve from. */

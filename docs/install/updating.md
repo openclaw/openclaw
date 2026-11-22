@@ -18,6 +18,9 @@ openclaw update status
 The next version is prepared beside the serving installation, not over it.
 Git installs build a detached worktree; package installs download and extract the
 package outside `node_modules`, then install its production dependencies.
+When OpenClaw runs under Bun, preparation uses Bun's production installer and
+keeps Bun for release checks and plugin maintenance. Bun is admitted through its
+WAL-reset-safe `node:sqlite` requirement, not the package's Node engine range.
 The new release checks its own configuration and plugin surfaces with
 `update check-release` and maintains plugins with `update plugins`.
 Targets that predate the release-update commands and launcher readiness contract

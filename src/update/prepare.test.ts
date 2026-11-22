@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
@@ -172,11 +173,12 @@ describe("release preparation", () => {
   });
 
   it.each([
-    { engine: ">=1", source: "tag" },
-    { engine: ">=999", source: "override" },
+    { engine: ">=1", source: "tag", runtime: "node" },
+    { engine: ">=999", source: "override", runtime: "node" },
+    { engine: ">=999", source: "tag", runtime: "bun" },
   ])(
-    "checks package Node $engine from the $source before installing production dependencies",
-    async ({ engine, source }) => {
+    "checks package $runtime with Node $engine from the $source before installing production dependencies",
+    async ({ engine, source, runtime }) => {
       const packedRoot = path.join(root, "packed", "package");
       await fs.mkdir(packedRoot, { recursive: true });
       await fs.writeFile(
@@ -192,9 +194,7 @@ describe("release preparation", () => {
       );
       const archive = path.join(root, "openclaw.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
-      const npm = await executable(
-        "npm",
-        `
+      const installScript = `
 const fs = require('node:fs'); const path = require('node:path');
 const args = process.argv.slice(2);
 if (process.env.OPENCLAW_UPDATE_IN_PROGRESS) process.exit(7);
@@ -203,15 +203,19 @@ if (args[0] === 'pack') {
   console.log(JSON.stringify([{filename:'openclaw.tgz',name:'openclaw',version:'2026.11.21'}]));
 } else {
   if (process.cwd().split(path.sep).includes('node_modules')) process.exit(8);
-  if (!args.includes('--ignore-scripts=false') || !args.includes('--omit=dev') || args.includes('-g')) process.exit(9);
+  if (${JSON.stringify(runtime)} === 'bun'
+    ? !args.includes('--production') || !args.includes('--trust')
+    : !args.includes('--ignore-scripts=false') || !args.includes('--omit=dev')) process.exit(9);
+  if (args.includes('-g')) process.exit(12);
   const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
   if ('devDependencies' in manifest || 'prepare' in manifest.scripts) process.exit(10);
   if (manifest.dependencies['fixture-runtime'] !== '2.0.0' || manifest.scripts.postinstall !== 'node production.mjs') process.exit(11);
   fs.writeFileSync(${JSON.stringify(path.join(root, "dependencies-installed"))}, 'yes');
   fs.writeFileSync('argv.json', JSON.stringify(args));
 }
-`,
-      );
+`;
+      const npm = await executable("npm", installScript);
+      const runner = runtime === "bun" ? await executable("bun", installScript) : node;
       if (source === "override") {
         vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", `file:${archive}`);
       }
@@ -233,10 +237,10 @@ if (args[0] === 'pack') {
         spec: "openclaw@2026.11.21",
         staging,
         npm,
-        node,
+        node: runner,
         timeoutMs: 10_000,
       });
-      if (engine === ">=999") {
+      if (engine === ">=999" && runtime === "node") {
         expect(result).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
@@ -250,7 +254,11 @@ if (args[0] === 'pack') {
       }
       expect(
         JSON.parse(await fs.readFile(path.join(result.releaseRoot, "argv.json"), "utf8")),
-      ).toEqual(["install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"]);
+      ).toEqual(
+        runtime === "bun"
+          ? ["install", "--production", "--trust"]
+          : ["install", "--omit=dev", "--no-fund", "--no-audit", "--ignore-scripts=false"],
+      );
       expect(result.releaseRoot).toBe(path.join(staging, "openclaw"));
       await expect(fs.stat(path.join(staging, "openclaw.tgz"))).rejects.toMatchObject({
         code: "ENOENT",
@@ -390,47 +398,55 @@ describe("package release conversion", () => {
     }
   });
 
-  it.each([true, false])("prepares a package with release support %s", async (releaseAware) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    const runningRoot = path.join(root, "global", "node_modules", "openclaw");
-    await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
-    await fs.writeFile(path.join(runningRoot, "package.json"), '{"type":"module"}');
-    await fs.copyFile(
-      new URL("../../release-launcher-forward.mjs", import.meta.url),
-      path.join(runningRoot, "release-launcher-forward.mjs"),
-    );
-    for (const entry of ["openclaw.mjs", "dist/index.js"]) {
-      const relative = entry === "openclaw.mjs" ? "./" : "../";
-      await fs.writeFile(
-        path.join(runningRoot, entry),
-        `import { forwardToReleaseLauncher } from '${relative}release-launcher-forward.mjs';
-if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) console.log('running');`,
+  it.each([
+    { releaseAware: true, runtime: "node" },
+    { releaseAware: false, runtime: "node" },
+    { releaseAware: true, runtime: "bun" },
+  ])(
+    "prepares a $runtime package with release support $releaseAware",
+    async ({ releaseAware, runtime }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      const runningRoot = path.join(root, "global", "node_modules", "openclaw");
+      await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
+      await fs.writeFile(path.join(runningRoot, "package.json"), '{"type":"module"}');
+      await fs.copyFile(
+        new URL("../../release-launcher-forward.mjs", import.meta.url),
+        path.join(runningRoot, "release-launcher-forward.mjs"),
       );
-    }
-    await fs.writeFile(path.join(runningRoot, "dist", "entry.js"), "console.log('running');");
-    const packedRoot = path.join(root, "packed", "package");
-    await fs.mkdir(packedRoot, { recursive: true });
-    await fs.mkdir(path.join(packedRoot, "dist"));
-    if (releaseAware) {
-      for (const name of ["check-release", "gateway-trial"]) {
-        await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
+      for (const entry of ["openclaw.mjs", "dist/index.js"]) {
+        const relative = entry === "openclaw.mjs" ? "./" : "../";
+        await fs.writeFile(
+          path.join(runningRoot, entry),
+          `import { forwardToReleaseLauncher } from '${relative}release-launcher-forward.mjs';
+if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) console.log('running');`,
+        );
       }
-    }
-    await fs.writeFile(
-      path.join(packedRoot, "package.json"),
-      '{"name":"openclaw","version":"2026.11.21","type":"module"}',
-    );
-    await fs.writeFile(
-      path.join(packedRoot, "openclaw.mjs"),
-      `console.log(JSON.stringify(process.argv[3] === 'check-release'
+      await fs.writeFile(path.join(runningRoot, "dist", "entry.js"), "console.log('running');");
+      const packedRoot = path.join(root, "packed", "package");
+      await fs.mkdir(packedRoot, { recursive: true });
+      await fs.mkdir(path.join(packedRoot, "dist"));
+      if (releaseAware) {
+        for (const name of ["check-release", "gateway-trial"]) {
+          await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
+        }
+      }
+      await fs.writeFile(
+        path.join(packedRoot, "package.json"),
+        '{"name":"openclaw","version":"2026.11.21","type":"module"}',
+      );
+      await fs.writeFile(
+        path.join(packedRoot, "openclaw.mjs"),
+        `import fs from 'node:fs';
+fs.appendFileSync(${JSON.stringify(path.join(root, "release-commands"))}, process.argv[3] + ':' + (process.env.FIXTURE_RUNTIME ?? 'node') + '\\n');
+console.log(JSON.stringify(process.argv[3] === 'check-release'
   ? {ok:true,surfaces:[]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
-    );
-    const archive = path.join(root, "candidate.tgz");
-    await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
-    await executable(
-      "npm",
-      `const fs = require('node:fs');
+      );
+      const archive = path.join(root, "candidate.tgz");
+      await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
+      await executable(
+        "npm",
+        `const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') console.log('11.0.0');
 else if (args[0] === 'view') console.log('{}');
@@ -438,65 +454,100 @@ else if (args[0] === 'pack') {
   fs.copyFileSync(${JSON.stringify(archive)}, 'candidate.tgz');
   console.log('[{"filename":"candidate.tgz"}]');
 }`,
-    );
-    vi.spyOn(targets, "resolveTarget").mockResolvedValue({
-      kind: "package",
-      version: "2026.11.21",
-      spec: archive,
-      engines: {},
-    });
-    const prefix = resolvePrefix();
-    // Native service publication has its own backup/reload proof. At its boundary the
-    // running link must already work, while the global package must not yet forward.
-    vi.spyOn(serviceConversion, "stageReleaseService").mockImplementation(async () => {
-      expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(await fs.realpath(runningRoot));
-      await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    });
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.21" } });
-      const outcome = await prepareUpdate({
-        runId: run.runId,
-        runningRoot,
-        runningVersion: "2026.11.21",
-        channel: "stable",
-        node,
-      });
-      if (!releaseAware) {
-        expect(outcome).toMatchObject({
-          status: "failed",
-          reason: "release-updates-unsupported",
-          message: expect.stringContaining("npm i -g"),
+      );
+      const runner =
+        runtime === "bun"
+          ? await executable(
+              "bun",
+              `const {spawnSync} = require('node:child_process');
+if (process.argv[2] !== 'install') {
+  const result = spawnSync(process.execPath, process.argv.slice(2), {
+    env: {...process.env, FIXTURE_RUNTIME: 'bun'}, stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}`,
+            )
+          : node;
+      if (runtime === "bun") {
+        vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+          status: "supported",
+          version: "1.4.5",
+          sqliteVersion: "3.51.3",
+          nodeSharedSqlite: false,
+          sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
         });
-        expect(await readTrial(prefix)).toBeNull();
-        expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
-        expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+      }
+      vi.spyOn(targets, "resolveTarget").mockResolvedValue({
+        kind: "package",
+        version: "2026.11.21",
+        spec: archive,
+        engines: {},
+      });
+      const prefix = resolvePrefix();
+      // Native service publication has its own backup/reload proof. At its boundary the
+      // running link must already work, while the global package must not yet forward.
+      vi.spyOn(serviceConversion, "stageReleaseService").mockImplementation(async () => {
+        expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(
+          await fs.realpath(runningRoot),
+        );
         await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
-        return;
-      }
-      expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
-      expect(await readTrial(prefix)).toMatchObject({
-        phase: "pending",
-        previous: runningRoot,
       });
-      const env = Object.fromEntries(
-        Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCLAW_")),
-      );
-      for (const entry of ["openclaw.mjs", "dist/index.js"]) {
-        const result = await exec(node, [path.join(runningRoot, entry), "--version"], { env });
-        expect(result.stdout.trim()).toBe("running");
+      try {
+        openOpenClawStateDatabase({ env: process.env });
+        const run = await createUpdateRunAsync({
+          trigger: "cli",
+          before: { version: "2026.11.21" },
+        });
+        const outcome = await prepareUpdate({
+          runId: run.runId,
+          runningRoot,
+          runningVersion: "2026.11.21",
+          channel: "stable",
+          node: runner,
+        });
+        if (!releaseAware) {
+          expect(outcome).toMatchObject({
+            status: "failed",
+            reason: "release-updates-unsupported",
+            message: expect.stringContaining("npm i -g"),
+          });
+          expect(await readTrial(prefix)).toBeNull();
+          expect(await listUpdateRunsAsync()).toMatchObject([
+            { runId: run.runId, status: "failed" },
+          ]);
+          expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+          await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject(
+            {
+              code: "ENOENT",
+            },
+          );
+          expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
+          return;
+        }
+        expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
+        expect(await fs.readFile(path.join(root, "release-commands"), "utf8")).toBe(
+          `check-release:${runtime}\nplugins:${runtime}\n`,
+        );
+        expect(await readTrial(prefix)).toMatchObject({
+          phase: "pending",
+          previous: runningRoot,
+        });
+        const env = Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => !key.startsWith("OPENCLAW_")),
+        );
+        for (const entry of ["openclaw.mjs", "dist/index.js"]) {
+          const result = await exec(node, [path.join(runningRoot, entry), "--version"], { env });
+          expect(result.stdout.trim()).toBe("running");
+        }
+        expect((await readTrial(prefix))?.phase).toBe("pending");
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
       }
-      expect((await readTrial(prefix))?.phase).toBe("pending");
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
+    },
+  );
 });
 
 describe("already-current update", () => {
@@ -597,6 +648,39 @@ describe("update preflight", () => {
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
   });
+
+  it.each(["supported", "unsupported"] as const)(
+    "checks Bun capabilities (%s), not the target's Node engine",
+    async (status) => {
+      const bun = path.join(bin, "bun");
+      vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+        status,
+        version: "1.4.5",
+        sqliteVersion: status === "supported" ? "3.51.3" : "3.50.0",
+        nodeSharedSqlite: false,
+        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      });
+      const result = await preflight({
+        kind: "package",
+        target: {
+          kind: "package",
+          spec: "openclaw@2026.11.21",
+          version: "2026.11.21",
+          engines: { node: ">=999" },
+        },
+        prefix: root,
+        stateDir: root,
+        node: bun,
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
+      });
+      expect(result).toMatchObject(
+        status === "supported" ? { ok: true } : { ok: false, reason: "bun-runtime-unsupported" },
+      );
+      if (!result.ok) {
+        expect(result.message).toContain("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.");
+      }
+    },
+  );
 
   it("uses an artifact target's engine metadata without querying it as a registry version", async () => {
     await executable(

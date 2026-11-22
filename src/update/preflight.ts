@@ -8,6 +8,8 @@ import {
   formatSchemaRefusalLines,
   hasSchemaRefusal,
 } from "../cli/update-cli/schema-preflight.js";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -183,19 +185,33 @@ export async function preflight(params: {
       }
     }
     const node = params.node ?? process.execPath;
-    const runtime = await runCommandWithTimeout([node, "--version"], {
-      env,
-      timeoutMs: 10_000,
-      killProcessTree: true,
-    });
-    if (
-      runtime.code !== 0 ||
-      (engine && !satisfies(runtime.stdout.trim(), engine, { includePrerelease: true }))
-    ) {
-      return refuse(
-        "node-engine-mismatch",
-        `The new release requires Node ${engine ?? "(unavailable)"}; the service uses ${runtime.stdout.trim() || node}. Upgrade the service's Node and retry.`,
-      );
+    if (isBunRuntime(node) || (node === process.execPath && process.versions.bun)) {
+      reason = "bun-runtime-unsupported";
+      const runtime = await resolveBunRuntimeInfo(node, env);
+      if (runtime.status === "probe-failed") {
+        throw runtime.error;
+      }
+      if (runtime.status !== "supported") {
+        return refuse(
+          reason,
+          runtime.sqliteSelectionError ?? "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.",
+        );
+      }
+    } else {
+      const runtime = await runCommandWithTimeout([node, "--version"], {
+        env,
+        timeoutMs: 10_000,
+        killProcessTree: true,
+      });
+      if (
+        runtime.code !== 0 ||
+        (engine && !satisfies(runtime.stdout.trim(), engine, { includePrerelease: true }))
+      ) {
+        return refuse(
+          "node-engine-mismatch",
+          `The new release requires Node ${engine ?? "(unavailable)"}; the service uses ${runtime.stdout.trim() || node}. Upgrade the service's Node and retry.`,
+        );
+      }
     }
     if (schemaVersions) {
       reason = "database-schema-preflight";
