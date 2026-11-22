@@ -179,3 +179,24 @@ it("does not read credential discriminators when only media projection is enable
   });
   expect(credentialReads).toBe(0);
 });
+
+it("keeps oversized and unparsed JSON text whole when unbounded without leaking credential pairs", () => {
+  const large = JSON.stringify({ rows: Array.from({ length: 4_000 }, (_, index) => index) });
+  const script = 'const rows = await read({ path: "inbox.json" }); return { rows: [rows';
+  expect(project(large)).toBe("[Oversized diagnostic JSON redacted]");
+  expect(project(script)).toBe("[Malformed diagnostic JSON redacted]");
+  expect(project(large, { unbounded: true })).toBe(large);
+  expect(project(script, { unbounded: true })).toBe(script);
+  expect(project('{"name":"password","value":"opaque-clipped-secret"', { unbounded: true })).toBe(
+    '{"name":"password","value":"<redacted>"',
+  );
+  expect(project('{"value":"opaque-reversed-secret","key":"api_key"', { unbounded: true })).toBe(
+    '{"value":"<redacted>","key":"api_key"',
+  );
+  expect(
+    project('{\\"name\\":\\"token\\",\\"value\\":\\"opaque-nested\\"', { unbounded: true }),
+  ).toBe('{\\"name\\":\\"token\\",\\"value\\":\\"<redacted>\\"');
+  expect(project('{"name":"region","value":"eu-west-1"', { unbounded: true })).toBe(
+    '{"name":"region","value":"eu-west-1"',
+  );
+});
