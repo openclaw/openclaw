@@ -10,12 +10,14 @@ import {
   type Admission,
   type SqliteDatabaseAdmissionCursor,
   type SqliteDatabaseAdmissions,
+  type SqliteDatabaseAdmissionLocation,
   type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   registry: new SqliteDatabaseAdmissionRegistry(),
+  descriptorPreparation: Promise.resolve(),
   connections: new WeakMap<DatabaseSync, Admission>(),
   openedIdentities: new WeakMap<DatabaseSync, string>(),
   unproven: new WeakSet<DatabaseSync>(),
@@ -95,6 +97,7 @@ export function exchangeSqliteDatabaseAdmission(
   target: string | Admission,
   create?: boolean,
   onlyChanged = false,
+  observedLocation?: SqliteDatabaseAdmissionLocation,
 ): void {
   const current = state.exchange.getStore();
   if (!current || state.exchanging) {
@@ -113,6 +116,7 @@ export function exchangeSqliteDatabaseAdmission(
         // Publications already name their generation; only opens request pathname discovery.
         typeof target === "string" ? target : undefined,
         create,
+        observedLocation,
       ),
     );
   } catch (error) {

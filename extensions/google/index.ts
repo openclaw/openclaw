@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { buildGoogleDecisionProvider } from "./decision-provider.js";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
   createGoogleImageGenerationProviderMetadata,
@@ -56,6 +57,7 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     api.registerProvider(buildGoogleGeminiCliProvider());
     api.registerProvider(buildGoogleProvider());
+    api.registerDecisionProvider(buildGoogleDecisionProvider());
     api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider({
       ...createGoogleImageGenerationProviderMetadata(),

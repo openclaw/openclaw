@@ -228,7 +228,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
       }
     });
     vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
+      buffer: Buffer.from(`OggS${"\0".repeat(22)}\x01\x13OpusHead`.padEnd(64, "\0")),
       contentType: "audio/ogg",
       kind: "audio",
     });
@@ -272,7 +272,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
 
   it("publishes the accepted receipt even when producer bookkeeping fails", async () => {
     vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
+      buffer: Buffer.from(`OggS${"\0".repeat(22)}\x01\x13OpusHead`.padEnd(64, "\0")),
       contentType: "audio/ogg",
       kind: "audio",
     });

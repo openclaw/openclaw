@@ -1,0 +1,2 @@
+# claude-cli history boundary covers the run's own message-tool mirror (a foreign run's mirror still breaks coverage); message-action test identity carries its run instance.
+31

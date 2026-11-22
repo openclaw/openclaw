@@ -1,2 +1,0 @@
-# Reach blank-quote fallback with a matching source message ID.
-1

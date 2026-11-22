@@ -255,12 +255,17 @@ export function LogsView(props: LogsProps) {
   let readerLeftEnd = false;
   let lastScrollTop = 0;
   let readerIntentTimer: ReturnType<typeof setTimeout> | undefined;
-  const extendReaderIntent = () => {
-    readerIntent = true;
+  const readerInputFrame = {};
+  const armReaderIdleTimer = () => {
     clearTimeout(readerIntentTimer);
     readerIntentTimer = setTimeout(() => {
       readerIntent = readerHoldsPointer;
     }, READER_INTENT_MS);
+  };
+  const extendReaderIntent = () => {
+    readerIntent = true;
+    cancelLayout(readerInputFrame);
+    armReaderIdleTimer();
   };
   const beginReaderScroll = () => {
     // Native offsets can precede/coalesce scroll events while an incoming batch renders.
@@ -270,7 +275,11 @@ export function LogsView(props: LogsProps) {
     readerScrollPending = true;
     virtualizer.cancelScroll();
     updateSizeAdjustment(virtualizer, true);
-    extendReaderIntent();
+    // Keep input intent through its first frame even if a busy task delays scrolling.
+    // Once the browser can apply the input, the normal idle window bounds it.
+    readerIntent = true;
+    clearTimeout(readerIntentTimer);
+    scheduleLayout(readerInputFrame, armReaderIdleTimer);
   };
   let stopPointerListeners: (() => void) | undefined;
   const holdPointer = () => {
@@ -322,6 +331,7 @@ export function LogsView(props: LogsProps) {
     const unmount = mountVirtualizer();
     return () => {
       cancelLayout(scrollRequest);
+      cancelLayout(readerInputFrame);
       stopPointerListeners?.();
       clearTimeout(readerIntentTimer);
       unmount();
@@ -614,7 +624,13 @@ export function LogsView(props: LogsProps) {
                 {/* Keep empty-result feedback live without announcing incoming log rows. */}
                 <div role="status">
                   <Show when={props.status.hasLoaded && rows().length === 0}>
-                    <SettingsEmpty message={t("gatewayLogs.empty")} />
+                    <SettingsEmpty
+                      message={t(
+                        props.entries.length > 0
+                          ? "gatewayLogs.filteredEmpty"
+                          : "gatewayLogs.empty",
+                      )}
+                    />
                   </Show>
                 </div>
                 <Show

@@ -1,4 +1,4 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
@@ -46,7 +46,12 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
+} from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -72,29 +77,12 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
+import { isToolUploadRequest } from "./tools-invoke-upload.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
-  isGatewayUploadRequest,
 } from "./upload-policy.js";
-
-/** New client bytes, not a request to deliver a file already owned by the Gateway. */
-function isToolUploadRequest(toolName: string, args: unknown): boolean {
-  if (!isRecord(args)) {
-    return false;
-  }
-  switch (toolName) {
-    case "file_write":
-      return typeof args.contentBase64 === "string";
-    case "workboard_attachment_add":
-      return true;
-    case "message":
-      return isGatewayUploadRequest("message.action", { params: args });
-    default:
-      return false;
-  }
-}
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -327,9 +315,12 @@ async function invokeGatewayToolWithSignal(
     return failure(400, "invalid_request", sessionTarget.error.message);
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
-  const authenticatedUserProfile = params.cfg.gateway?.roles
-    ? params.authenticatedUserProfile
-    : undefined;
+  const profile = params.authenticatedUserProfile;
+  const authenticatedUserProfile =
+    isNamedOperatorRoleEnforcementEnabled(params.cfg) ||
+    (profile && resolveOperatorRolePolicyForProfile(profile.profileId, params.cfg))
+      ? profile
+      : undefined;
   // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
@@ -348,7 +339,9 @@ async function invokeGatewayToolWithSignal(
         })
       ).entry;
   const profiles =
-    isGatewayAdmin(client) && !params.cfg.gateway?.roles
+    isGatewayAdmin(client) &&
+    !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+    resolveOperatorRolePolicy(client, params.cfg) === undefined
       ? undefined
       : await prepareSessionSharingProfiles(client);
   const prepareAuthorization = async (
@@ -361,7 +354,10 @@ async function invokeGatewayToolWithSignal(
   ) => {
     if (!profiles) {
       sessionChecks.push(() => {
-        if (getRuntimeConfig().gateway?.roles) {
+        if (
+          isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()) ||
+          resolveOperatorRolePolicy(client, getRuntimeConfig()) !== undefined
+        ) {
           throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });
@@ -501,6 +497,8 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
+  const sessionModel = resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId);
+  const authProfileId = sessionEntry?.authProfileOverride;
   const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
     knownCoreTool,
@@ -512,10 +510,7 @@ async function invokeGatewayToolWithSignal(
         sessionPermissionPolicy,
         preparedSessionWorkspaceDir: sessionWorkspace,
         agentId: selectedAgentId,
-        webSearchModelSelection: {
-          ...resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId),
-          authProfileId: sessionEntry?.authProfileOverride,
-        },
+        webSearchModelSelection: sessionModel && { ...sessionModel, authProfileId },
         messageProvider: params.messageChannel,
         accountId: params.accountId,
         agentTo: params.agentTo,

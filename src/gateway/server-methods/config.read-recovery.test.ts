@@ -8,7 +8,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
-import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import type { RespondFn } from "./types.js";

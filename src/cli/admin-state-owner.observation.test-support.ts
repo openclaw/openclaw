@@ -8,27 +8,12 @@ export async function writeAdminStateOwnerObservationPreload(root: string, owner
   await fs.writeFile(
     preloadPath,
     `const fs = require("node:fs");
-const { syncBuiltinESMExports } = require("node:module");
-const workerThreads = require("node:worker_threads");
-const { isMainThread, threadId } = workerThreads;
+const { isMainThread, threadId } = require("node:worker_threads");
 const native = require("node:sqlite");
 const memoryStatements = new WeakSet();
 const eventsPath = ${JSON.stringify(path.join(control, "sql-observation.jsonl"))};
 const ownerPath = ${JSON.stringify(ownerPath)};
 if (isMainThread) fs.writeFileSync(eventsPath, "");
-if (process.versions.bun) {
-  const OriginalWorker = workerThreads.Worker;
-  const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
-  // Nested CLI workers do not inherit the Vitest parent's preload spy.
-  workerThreads.Worker = class Worker extends OriginalWorker {
-    constructor(filename, options = {}) {
-      super(filename, {
-        ...options,
-        execArgv: [...(options.execArgv ?? process.execArgv), "--preload", preload],
-      });
-    }
-  };
-}
 const observe = (sql) => {
   const admin = /\\b(?:channel_pairing_\\w+|exec_approvals_config)\\b/iu.test(sql);
   const write = /^\\s*(?:insert|update|delete)\\b/iu.test(sql);
@@ -67,7 +52,6 @@ for (const method of ["get", "all", "run", "iterate"]) {
     }),
   });
 }
-syncBuiltinESMExports();
 if (isMainThread) process.on("exit", () => {
   const events = fs.readFileSync(eventsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
   fs.writeFileSync(${JSON.stringify(path.join(control, "sql-observation.json"))}, JSON.stringify({

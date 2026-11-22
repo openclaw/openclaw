@@ -1,4 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
+import { navigationFilledIconNames, navigationIconData } from "./icon-data-navigation.ts";
 import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
@@ -326,6 +327,15 @@ export const iconData = {
     ["path", { d: "M15 13v2" }],
     ["path", { d: "M9 13v2" }],
   ]),
+  // An agent head above lines of text: the instructions an agent works from.
+  botText: strokeIconData([
+    ["rect", { width: "14", height: "8.5", x: "5", y: "4.5", rx: "2.5" }],
+    ["path", { d: "M12 2v2.5" }],
+    ["path", { d: "M9.5 8.75h.01" }],
+    ["path", { d: "M14.5 8.75h.01" }],
+    ["path", { d: "M5 17.5h14" }],
+    ["path", { d: "M5 21.5h9" }],
+  ]),
   userPlus: strokeIconData([
     ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
     ["circle", { cx: "9", cy: "7", r: "4" }],
@@ -422,6 +432,35 @@ export const iconData = {
   loaderCircle: strokePathData("M21 12a9 9 0 1 1-6.219-8.56"),
   square: strokeIconData([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]]),
   play: strokeIconData([["polygon", { points: "6 3 20 12 6 21 6 3" }]]),
+  playRounded: strokePathData(
+    "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+  ),
+  pauseFilled: strokeIconData([
+    [
+      "rect",
+      {
+        x: "4.5",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1.5",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    ],
+    [
+      "rect",
+      {
+        x: "14.5",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1.5",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    ],
+  ]),
   pause: strokeIconData([
     ["rect", { x: "14", y: "4", width: "4", height: "16", rx: "1" }],
     ["rect", { x: "6", y: "4", width: "4", height: "16", rx: "1" }],
@@ -471,6 +510,24 @@ export const iconData = {
     ["circle", { cx: "15.5", cy: "7.5", r: "5.5" }],
   ]),
   flag: strokePathData("M5 22V4", "M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0"),
+  // Lucide rocket (ISC).
+  rocket: strokePathData(
+    "M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5",
+    "M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09",
+    "M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z",
+    "M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05",
+  ),
+  // Lucide drama (ISC).
+  drama: strokePathData(
+    "M10 11h.01",
+    "M14 6h.01",
+    "M18 6h.01",
+    "M6.5 13.1h.01",
+    "M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3",
+    "M17.4 9.9c-.8.8-2 .8-2.8 0",
+    "M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7",
+    "M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4",
+  ),
   lock: strokeIconData([
     ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2" }],
     ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
@@ -597,15 +654,62 @@ export const iconData = {
     ["circle", { cx: "16", cy: "16", r: "6" }],
   ]),
   listChecks: strokePathData("m3 17 2 2 4-4", "m3 7 2 2 4-4", "M13 6h8", "M13 12h8", "M13 18h8"),
+  // Lucide list-todo, heart-pulse, plane, scale, workflow, handshake and shapes (ISC).
+  listTodo: strokeIconData([
+    ["path", { d: "M13 5h8" }],
+    ["path", { d: "M13 12h8" }],
+    ["path", { d: "M13 19h8" }],
+    ["path", { d: "m3 17 2 2 4-4" }],
+    ["rect", { x: "3", y: "4", width: "6", height: "6", rx: "1" }],
+  ]),
+  heartPulse: strokePathData(
+    "M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5",
+    "M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27",
+  ),
+  plane: strokePathData(
+    "M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z",
+  ),
+  scale: strokePathData(
+    "M12 3v18",
+    "m19 8 3 8a5 5 0 0 1-6 0zV7",
+    "M3 7h1a17 17 0 0 0 8-2 17 17 0 0 0 8 2h1",
+    "m5 8 3 8a5 5 0 0 1-6 0zV7",
+    "M7 21h10",
+  ),
+  workflow: strokeIconData([
+    ["rect", { width: "8", height: "8", x: "3", y: "3", rx: "2" }],
+    ["path", { d: "M7 11v4a2 2 0 0 0 2 2h4" }],
+    ["rect", { width: "8", height: "8", x: "13", y: "13", rx: "2" }],
+  ]),
+  handshake: strokePathData(
+    "m11 17 2 2a1 1 0 1 0 3-3",
+    "m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4",
+    "m21 3 1 11h-2",
+    "M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3",
+    "M3 4h8",
+  ),
+  shapes: strokeIconData([
+    [
+      "path",
+      {
+        d: "M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z",
+      },
+    ],
+    ["rect", { x: "3", y: "14", width: "7", height: "7", rx: "1" }],
+    ["circle", { cx: "17.5", cy: "17.5", r: "3.5" }],
+  ]),
   moreHorizontal: strokeIconData([
     ["circle", { cx: "5", cy: "12", r: "1" }],
     ["circle", { cx: "12", cy: "12", r: "1" }],
     ["circle", { cx: "19", cy: "12", r: "1" }],
   ]),
   ...toolIconData,
+  ...navigationIconData,
 } as const satisfies Record<string, IconData>;
 
 export type IconName = keyof typeof iconData;
+
+export const filledIconNames: Partial<Record<IconName, IconName>> = navigationFilledIconNames;
 
 export function isIconName(name: string | undefined): name is IconName {
   return Object.hasOwn(iconData, name ?? "");

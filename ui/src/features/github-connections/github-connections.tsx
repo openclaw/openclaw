@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled } from "solid-js";
-import { pathForAgentPanel } from "../../app-route-paths.ts";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { SettingsDetailsRow } from "../../components/solid/settings-disclosure.tsx";
@@ -12,11 +11,15 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
+import { listSelectableAgents, resolveAgentConfig } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
-import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import {
+  createGitHubIdentityView,
+  type GitHubIdentityView,
+} from "../../lib/reactive/domain-github-identity.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
 import {
@@ -41,21 +44,155 @@ function access(snapshot: ApplicationGatewaySnapshot) {
   };
 }
 
+type SetupKey = "personal" | "system" | `agent:${string}`;
+type AgentRowAgent = { id: string; name?: string; identity?: { name?: string } };
+
+/** Status, who the connection acts as, and a short use: read at a glance at every width. */
+function meta(status: SolidJSX.Element, handle: string | undefined, use: string | undefined) {
+  return (
+    <span class="settings-row__meta">
+      {status}
+      {handle ? <span class="github-connection__login">@{handle}</span> : undefined}
+      {use ? <span>{use}</span> : undefined}
+    </span>
+  );
+}
+
+const CREDENTIAL_KIND_LABEL = {
+  native: "agentTools.githubKindNative",
+  "managed-pat": "agentTools.githubKindPat",
+  "managed-oauth": "agentTools.githubKindOAuth",
+  "app-installation": "agentTools.githubKindAppInstallation",
+} as const;
+
+/**
+ * One agent's GitHub account. The row owns an agent-scoped identity, so giving the agent
+ * its own account, changing it, or returning it to the shared account changes only this agent.
+ */
+function AgentGitHubRow(props: {
+  agent: AgentRowAgent;
+  register: (agentId: string, identity: GitHubIdentityView) => () => void;
+  setupOpen: boolean;
+  locked: boolean;
+  onOpenSetup: () => void;
+  onCloseSetup: () => void;
+}) {
+  const context = useApplication();
+  const identity = createGitHubIdentityView({
+    authorizationSucceeded: () => props.onCloseSetup(),
+    runExternalMutation: (task, options) =>
+      context.runtimeConfig.runExternalMutation(task, options),
+  });
+  onSettled(() => props.register(props.agent.id, identity));
+  const view = () => identity.read();
+  const name = () => props.agent.identity?.name ?? props.agent.name ?? props.agent.id;
+  const effective = () => view().status?.effective ?? null;
+  const ownAccount = () => view().status?.selected.configured === true;
+  const rowLocked = () =>
+    props.locked || !view().status || view().loading || view().busy || view().authorizationActive;
+  const use = () => {
+    if (!view().status) {
+      return undefined;
+    }
+    const identityFacts = effective();
+    return ownAccount()
+      ? identityFacts
+        ? t("githubConnections.ownAccountKind", {
+            kind: t(CREDENTIAL_KIND_LABEL[identityFacts.credentialKind]),
+          })
+        : t("githubConnections.ownAccount")
+      : t("githubConnections.usesShared");
+  };
+  const closeSetup = () => {
+    props.onCloseSetup();
+    identity.hidePatFallback();
+  };
+  return (
+    <div data-github-connection="agent" data-agent-id={props.agent.id}>
+      <SettingsRow
+        title={name()}
+        description={meta(
+          <GitHubHealth identity={effective()} request={view()} />,
+          effective()?.account?.login,
+          use(),
+        )}
+        control={
+          <Show
+            when={ownAccount()}
+            fallback={
+              <button
+                class="btn btn--sm"
+                disabled={rowLocked()}
+                aria-label={t("githubConnections.giveOwn", { agent: name() })}
+                onClick={() => props.onOpenSetup()}
+              >
+                {t("githubConnections.giveOwnShort")}
+              </button>
+            }
+          >
+            <button
+              class="btn btn--sm"
+              disabled={rowLocked()}
+              aria-label={t("githubConnections.changeAgent", { agent: name() })}
+              onClick={() => props.onOpenSetup()}
+            >
+              {t("githubConnections.changeShort")}
+            </button>
+            <button
+              class="btn btn--sm"
+              disabled={rowLocked()}
+              aria-label={t("githubConnections.useSharedFor", { agent: name() })}
+              onClick={() => {
+                props.onCloseSetup();
+                void identity.inherit();
+              }}
+            >
+              {t("agentTools.githubUseSystemNewRuns")}
+            </button>
+          </Show>
+        }
+      />
+      <Show when={props.setupOpen || view().authorizationActive}>
+        <div class="settings-subrows" data-github-setup>
+          <SettingsRow
+            title={t("githubConnections.agentSetupTitle", { agent: name() })}
+            description={t("githubConnections.agentSetupHint", { agent: name() })}
+          />
+          <GitHubConnectionSetup
+            identity={identity}
+            saveLabel={t("githubConnections.saveForAgent", { agent: name() })}
+          />
+          <Show when={!view().busy && !view().authorizationActive}>
+            <div class="settings-row settings-row--actions">
+              <div class="settings-row__control">
+                <button class="btn btn--sm" onClick={closeSetup}>
+                  {t("common.close")}
+                </button>
+              </div>
+            </div>
+          </Show>
+        </div>
+      </Show>
+      <GitHubConnectionError error={view().error} completion={view().completion} />
+    </div>
+  );
+}
+
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
 export function GitHubConnections() {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
-  const selection = projectAgentSelection(context.settingsAgentSelection);
-  const [purpose, setPurpose] = createSignal<"personal" | "system">("personal");
-  const [setupOpen, setSetupOpen] = createSignal(false);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
+  const [setupKey, setSetupKey] = createSignal<SetupKey | null>(null);
   let snapshot: ApplicationGatewaySnapshot | null = null;
   let clientRevision = 0;
   let canRead = false;
   let canAdmin = false;
   // Gateway snapshots may mutate in place; retain the previous profile transition fact.
   let observedProfileId: string | null = null;
-  const authorizationSucceeded = () => setSetupOpen(false);
+  const agentIdentities = new Map<string, GitHubIdentityView>();
+  const authorizationSucceeded = () => setSetupKey(null);
   const personal = createGitHubIdentityView({ authorizationSucceeded });
   const system = createGitHubIdentityView({
     authorizationSucceeded,
@@ -63,26 +200,46 @@ export function GitHubConnections() {
       context.runtimeConfig.runExternalMutation(task, options),
   });
 
+  const common = (current: ApplicationGatewaySnapshot) => ({
+    client: current.client,
+    connected: current.phase === "connected" && current.selfUser !== undefined,
+    permissionsReady: current.phase === "connected" && Boolean(current.hello),
+    clientRevision,
+  });
+  const syncAgentIdentity = (agentId: string, identity: GitHubIdentityView) => {
+    if (!snapshot) {
+      return;
+    }
+    identity.sync({
+      ...common(snapshot),
+      target: {
+        kind: "shared",
+        scope: "agent",
+        profileId: observedProfileId,
+        agentId,
+        config: currentConfigObject(context.runtimeConfig.state),
+      },
+      statusReadable: canAdmin,
+      authorizable: canAdmin,
+      configurable: canAdmin,
+    });
+    identity.ensureVerified();
+  };
   const syncIdentities = () => {
     if (!snapshot) {
       return;
     }
-    const common = {
-      client: snapshot.client,
-      connected: snapshot.phase === "connected" && snapshot.selfUser !== undefined,
-      permissionsReady: snapshot.phase === "connected" && Boolean(snapshot.hello),
-      clientRevision,
-    };
     personal.sync({
-      ...common,
+      ...common(snapshot),
       target: observedProfileId ? { kind: "personal", profileId: observedProfileId } : null,
       statusReadable: canRead && observedProfileId !== null,
       authorizable: canRead && observedProfileId !== null,
       configurable: false,
     });
+    // The shared account's status is read through an agent; any agent reports the same account.
     const agentId = context.settingsAgentSelection.state.selectedId;
     system.sync({
-      ...common,
+      ...common(snapshot),
       target: agentId
         ? {
             kind: "shared",
@@ -98,6 +255,16 @@ export function GitHubConnections() {
     });
     personal.ensureVerified();
     system.ensureVerified();
+    agentIdentities.forEach((identity, id) => syncAgentIdentity(id, identity));
+  };
+  const registerAgent = (agentId: string, identity: GitHubIdentityView) => {
+    agentIdentities.set(agentId, identity);
+    syncAgentIdentity(agentId, identity);
+    return () => {
+      if (agentIdentities.get(agentId) === identity) {
+        agentIdentities.delete(agentId);
+      }
+    };
   };
   const applySnapshot = (next: ApplicationGatewaySnapshot) => {
     const identityChanged =
@@ -131,8 +298,7 @@ export function GitHubConnections() {
     const readAccessLost = previousCanRead && !canRead;
     const adminAccessLost = previousCanAdmin && !canAdmin;
     if (identityChanged || readAccessLost || adminAccessLost) {
-      setSetupOpen(false);
-      setPurpose(observedProfileId ? "personal" : "system");
+      setSetupKey(null);
     }
     syncIdentities();
     if (canAdmin) {
@@ -155,8 +321,8 @@ export function GitHubConnections() {
     const personalState = personal.read();
     const systemState = system.read();
     const account = personalState.personal;
-    const agentId = selection.read().state.selectedId;
-    const agent = agents.read().agentsList?.agents?.find((entry) => entry.id === agentId);
+    const agentList = listSelectableAgents(agents.read().agentsList?.agents ?? []);
+    const config = currentConfigObject(runtimeConfig.read().state);
     const connected = account?.state === "connected";
     const reconnectRequired =
       account?.state === "unavailable" ||
@@ -164,15 +330,18 @@ export function GitHubConnections() {
       account?.refreshState === "failed";
     return {
       account,
-      agentId,
-      agent,
+      agentList,
+      // Config owns which agents carry their own account; without it the count is unknown.
+      sharedAgentCount: config
+        ? agentList.filter((agent) => !resolveAgentConfig(config, agent.id).entry?.tools?.github)
+            .length
+        : null,
       connected,
       reconnectRequired,
       profileId: observedProfileId,
       canRead,
       canAdmin,
       systemIdentity: systemState.status?.selected.identity ?? personalState.system,
-      effective: systemState.status?.effective ?? null,
       locked:
         current.phase !== "connected" ||
         current.selfUser === undefined ||
@@ -182,8 +351,6 @@ export function GitHubConnections() {
         systemState.authorizationActive ||
         personalState.busy ||
         systemState.busy,
-      showSetup:
-        setupOpen() || personalState.authorizationActive || systemState.authorizationActive,
       personalLabel: !observedProfileId
         ? t("githubConnections.signInRequired")
         : reconnectRequired
@@ -195,8 +362,7 @@ export function GitHubConnections() {
   });
   const personalView = personal.read;
   const systemView = system.read;
-  const active = () => (purpose() === "personal" ? personal : system);
-  const openSetup = (next: "personal" | "system") => {
+  const openSetup = (next: SetupKey) => {
     const currentAccess = access(context.gateway.snapshot);
     if (
       view().locked ||
@@ -206,22 +372,29 @@ export function GitHubConnections() {
     ) {
       return;
     }
-    setPurpose(next);
-    setSetupOpen(true);
+    if (setupKey() === "personal") {
+      personal.hidePatFallback();
+    } else if (setupKey() === "system") {
+      system.hidePatFallback();
+    }
+    setSetupKey(next);
+  };
+  const closeSetup = (key: SetupKey) => {
+    if (setupKey() === key) {
+      setSetupKey(null);
+    }
   };
   const verify = () => {
     void personal.verify();
     void system.verify();
-  };
-  const closeSetup = () => {
-    setSetupOpen(false);
-    active().hidePatFallback();
+    agentIdentities.forEach((identity) => void identity.verify());
   };
   /** The flow opens under the connection it changes, so nothing has to name its purpose. */
-  const setupFor = (target: "personal" | "system") =>
-    view().showSetup && purpose() === target ? (
+  const setupFor = (target: "personal" | "system") => {
+    const identity = target === "personal" ? personal : system;
+    return setupKey() === target || identity.read().authorizationActive ? (
       <div class="settings-subrows" data-github-setup>
-        <GitHubConnectionSetup identity={active()} />
+        <GitHubConnectionSetup identity={identity} />
         {!view().locked ? (
           <>
             {target === "personal" &&
@@ -235,7 +408,7 @@ export function GitHubConnections() {
                   <button
                     class="btn btn--sm danger"
                     onClick={() => {
-                      setSetupOpen(false);
+                      closeSetup("personal");
                       void personal.disconnect();
                     }}
                   >
@@ -245,7 +418,13 @@ export function GitHubConnections() {
               />
             ) : undefined}
             <div class="settings-row">
-              <span class="settings-row__desc">{t("githubConnections.purposeHint")}</span>
+              <span class="settings-row__desc">
+                {t(
+                  target === "personal"
+                    ? "githubConnections.personalSetupHint"
+                    : "githubConnections.systemSetupHint",
+                )}
+              </span>
               <div class="settings-row__control">
                 {target === "system" &&
                 view().canAdmin &&
@@ -254,7 +433,13 @@ export function GitHubConnections() {
                     {t("agentTools.githubUseNativeNewRuns")}
                   </button>
                 ) : undefined}
-                <button class="btn btn--sm" onClick={closeSetup}>
+                <button
+                  class="btn btn--sm"
+                  onClick={() => {
+                    closeSetup(target);
+                    identity.hidePatFallback();
+                  }}
+                >
                   {t("common.close")}
                 </button>
               </div>
@@ -263,21 +448,18 @@ export function GitHubConnections() {
         ) : undefined}
       </div>
     ) : undefined;
-  /** Status, who the connection acts as, and a short use: read at a glance at every width. */
-  const meta = (status: SolidJSX.Element, handle: string | undefined, use: string | undefined) => (
-    <span class="settings-row__meta">
-      {status}
-      {handle ? <span class="github-connection__login">@{handle}</span> : undefined}
-      {use ? <span>{use}</span> : undefined}
-    </span>
-  );
-  const agentTitle = () =>
-    t("githubConnections.agentFor", {
-      agent: view().agent?.identity?.name ?? view().agent?.name ?? view().agentId!,
-    });
+  };
+  const changeSystemLabel = () => {
+    const count = view().sharedAgentCount;
+    return count === null
+      ? t("githubConnections.changeShort")
+      : count === 1
+        ? t("githubConnections.changeSystemForOne")
+        : t("githubConnections.changeSystemForMany", { count: String(count) });
+  };
   return (
     <openclaw-github-connections>
-      <div id={PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
+      <div id={PROFILE_SETTINGS_TARGET_IDS.githubConnections} class="settings-stack">
         <SettingsSection
           title={t("githubConnections.title")}
           description={t("githubConnections.description")}
@@ -305,11 +487,10 @@ export function GitHubConnections() {
                   <strong>{t("githubConnections.system")}</strong>{" "}
                   {t("githubConnections.systemDescription")}
                 </p>
-                {view().canAdmin && view().agentId ? (
-                  <p>
-                    <strong>{agentTitle()}</strong> {t("githubConnections.agentDescription")}
-                  </p>
-                ) : undefined}
+                <p>
+                  <strong>{t("githubConnections.agentsTitle")}</strong>{" "}
+                  {t("githubConnections.agentsHelp")}
+                </p>
                 <p>
                   <strong>{t("githubConnections.usage")}</strong>{" "}
                   {t("githubConnections.usageDescription")}
@@ -361,6 +542,20 @@ export function GitHubConnections() {
             />
             {setupFor("personal")}
           </div>
+          <GitHubConnectionError
+            error={personalView().error}
+            completion={personalView().completion}
+            control={
+              <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
+                {t("common.retry")}
+              </button>
+            }
+          />
+        </SettingsSection>
+        <SettingsSection
+          title={t("githubConnections.agentsTitle")}
+          description={t("githubConnections.agentsDescription")}
+        >
           <div data-github-connection="system">
             <SettingsDetailsRow
               detailsLabel={t("githubConnections.details")}
@@ -382,7 +577,7 @@ export function GitHubConnections() {
                     aria-label={t("githubConnections.changeSystem")}
                     onClick={() => openSetup("system")}
                   >
-                    {t("githubConnections.changeShort")}
+                    {changeSystemLabel()}
                   </button>
                 ) : (
                   <SettingsValue value={t("githubConnections.adminManaged")} />
@@ -393,47 +588,29 @@ export function GitHubConnections() {
             </SettingsDetailsRow>
             {setupFor("system")}
           </div>
-          {view().canAdmin && view().agentId ? (
-            <div data-github-connection="agent">
-              <SettingsRow
-                title={agentTitle()}
-                description={meta(
-                  <GitHubHealth identity={view().effective} request={systemView()} />,
-                  view().effective?.account?.login,
-                  view().effective
-                    ? t(
-                        view().effective?.source === "agent-override"
-                          ? "githubConnections.agentOverride"
-                          : "githubConnections.system",
-                      )
-                    : undefined,
-                )}
-                control={
-                  <button
-                    class="btn btn--sm"
-                    aria-label={t("githubConnections.viewAgent")}
-                    onClick={() =>
-                      context.navigate("agents", {
-                        pathname: pathForAgentPanel(view().agentId!, "tools", context.basePath),
-                      })
-                    }
-                  >
-                    {t("githubConnections.viewShort")}
-                  </button>
-                }
-              />
-            </div>
-          ) : undefined}
           <GitHubConnectionError
-            error={personalView().error ?? systemView().error}
-            completion={personalView().completion}
-            secondaryCompletion={systemView().completion}
+            error={systemView().error}
+            completion={systemView().completion}
             control={
               <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
                 {t("common.retry")}
               </button>
             }
           />
+          <Show when={view().canAdmin}>
+            <For each={view().agentList} keyed={(agent) => agent.id}>
+              {(agent) => (
+                <AgentGitHubRow
+                  agent={agent()}
+                  register={registerAgent}
+                  locked={view().locked}
+                  setupOpen={setupKey() === `agent:${agent().id}`}
+                  onOpenSetup={() => openSetup(`agent:${agent().id}`)}
+                  onCloseSetup={() => closeSetup(`agent:${agent().id}`)}
+                />
+              )}
+            </For>
+          </Show>
         </SettingsSection>
       </div>
     </openclaw-github-connections>

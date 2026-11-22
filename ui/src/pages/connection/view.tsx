@@ -79,8 +79,6 @@ function SecretRow(props: ConnectionProps & { authMode: GatewayAuthMode | undefi
             value={props.secret}
             placeholder={t("connection.access.secretPlaceholder")}
             visible={props.showGatewaySecret}
-            showLabel={t("connection.access.showSecret")}
-            hideLabel={t("connection.access.hideSecret")}
             toggleLabel={t("connection.access.toggleSecretVisibility")}
             onInput={(next) => props.onSecretChange(next)}
             onToggle={() => props.onToggleGatewaySecretVisibility()}
@@ -228,7 +226,9 @@ function ConnectionActions(props: ConnectionProps & { connected: boolean }) {
         <span class="settings-row__desc" role="status">
           {props.dirty && !reloadRequired() ? t("connection.access.unsavedHint") : undefined}
         </span>
-        <Show when={!props.dirty || reloadRequired()}>
+        <Show
+          when={!props.dirty && !props.connected && Boolean(props.lastError) && !reloadRequired()}
+        >
           <span class="settings-row__desc">{t("connection.access.reconnectHint")}</span>
         </Show>
       </div>

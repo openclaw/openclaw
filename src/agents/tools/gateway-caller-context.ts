@@ -1,6 +1,9 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
+import {
+  inheritSessionEventToolPolicy,
+  narrowSessionEventSettings,
+} from "../../auto-reply/reply/session-event-policy.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -62,6 +65,8 @@ type GatewayToolCallerIdentity = {
   requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
+  /** The surface restates this caller session's own policy; follow-ups to that session skip it. */
+  sessionEventToolsAllowSessionScoped?: true;
   /** An object with no mode retains the producer's default permission posture. */
   sessionEventSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Follow-ups cannot add automatic delivery to a message-tool-only source. */
@@ -219,6 +224,7 @@ export function captureGatewayToolReceiptAssertion(
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    prepareSessionSourceStorageEffect: receipt.prepareSessionSourceStorageEffect?.bind(receipt),
     ...(prepareEffect
       ? {
           async prepareSessionSourceEffect() {
@@ -429,56 +435,29 @@ export function resolveGatewayPersonalToolParticipant(
   return undefined;
 }
 
-/** Capture the admitted run and worker owner, independently of optional audit collection. */
+/** Admission checked authority; a started tool call only honors Stop and the session-store write fences. */
 export function captureGatewayToolCallerAssertion(
-  boundMethod?: string,
+  _boundMethod?: string,
 ): ((method?: string) => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
   }
-  const isCurrent = caller.receiptAuthority;
   const signals = caller.approvalSignals ?? [];
-  const selection = caller.personalToolIdentityScoped
-    ? resolveGatewayToolOperatorSelection()
-    : undefined;
-  const assertMethod = (method?: string) => {
-    if (method?.startsWith("cron.") && caller.cronAuthorityCheck?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+  const assertNotStopped = () => {
+    for (const signal of signals) {
+      signal.throwIfAborted();
     }
   };
-  const assertCurrent = composeSessionSourceAssertion(
-    [
-      selection?.assertCurrent,
-      // Selection already checks its exact operator source in this synchronous guard.
-      selection?.operatorAuthority === caller.operatorAuthority
-        ? undefined
-        : caller.operatorAuthority?.assertCurrent,
-      composeSessionSourceAssertion(
-        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
-        (assertReceipt) => {
-          try {
-            if (!isCurrent || signals.some((signal) => signal.aborted)) {
-              throw new Error("agent tool caller authority is no longer active");
-            }
-            assertReceipt();
-          } catch {
-            throw new Error("agent tool caller authority is no longer active");
-          }
-        },
-      ),
-    ],
+  // Prepared writes still run the receipt's session fences; the synchronous call checks Stop only.
+  const fences = composeSessionSourceAssertion(
+    caller.receiptAuthority ? [captureGatewayToolReceiptAssertion(caller.receiptAuthority)] : [],
     (assertSources) => {
+      assertNotStopped();
       assertSources();
-      assertMethod(boundMethod);
     },
   );
-  return Object.assign((method = boundMethod) => {
-    assertCurrent();
-    if (method !== boundMethod) {
-      assertMethod(method);
-    }
-  }, assertCurrent);
+  return Object.assign(assertNotStopped, fences);
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
@@ -611,12 +590,7 @@ export async function withGatewayToolCallerIdentity<T>(
               identity.sessionEventSettings,
             )
           : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
-      sessionEventToolsAllow:
-        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
-          ? identity.sessionEventToolsAllow.filter((name) =>
-              inheritedOwner.sessionEventToolsAllow!.includes(name),
-            )
-          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
+      ...inheritSessionEventToolPolicy(identity, inheritedOwner),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspacePublicationRunId: inheritedValue("workspacePublicationRunId"),

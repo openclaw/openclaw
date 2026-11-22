@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -285,7 +285,7 @@ async function installProviderRedirect() {
       }
     };
     // Hold the retained post-commit boundary after the host event, count, and latch settle.
-    registerHooks({
+    nodeModule.registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
         if (url !== compactionUrl) {

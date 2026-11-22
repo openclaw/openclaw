@@ -32,7 +32,10 @@ export function subscribeFirstRunActivationCleared(
   };
 }
 
-type ActivationContext = Pick<ApplicationContext, "gateway" | "agentSelection">;
+/** The agent is the selection of the surface that started the activation. */
+type ActivationContext = Pick<ApplicationContext, "gateway"> & {
+  agentSelection: { state: { selectedId: string | null } };
+};
 
 export type FirstRunActivationReceipt = {
   version: 1;
@@ -136,7 +139,7 @@ export function readFirstRunActivationReceipt(
       (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
       (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
       (receipt.wizard !== undefined &&
-        (receipt.kind !== "provider-auth" ||
+        ((receipt.kind !== "provider-auth" && receipt.kind !== "provider-login") ||
           !receipt.wizard ||
           typeof receipt.wizard.sessionId !== "string" ||
           !receipt.wizard.sessionId ||
@@ -214,5 +217,16 @@ export function clearFirstRunActivationReceipt(expected?: FirstRunActivationRece
   const storage = getSafeLocalStorage();
   if (storage) {
     clearReceipt(storage, expected);
+  }
+}
+
+/** A cheap kind check before an owner validates the record against its connection. */
+export function hasFirstRunActivationReceipt(kind: string): boolean {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+    const receipt: { kind?: unknown } | null = raw ? JSON.parse(raw) : null;
+    return receipt?.kind === kind;
+  } catch {
+    return false;
   }
 }

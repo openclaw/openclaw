@@ -57,8 +57,12 @@ describe("Anthropic OAuth", () => {
     ["manual", "manual-code", null],
     ["timeout", "manual-code", null],
     ["empty", "", null],
-    ["wrong state", "manual-code#wrong", "OAuth state mismatch"],
-    ["empty state", "manual-code#", "Missing OAuth state"],
+    [
+      "wrong state",
+      "manual-code#wrong",
+      "This address belongs to a different sign-in attempt. Use the link from this sign-in.",
+    ],
+    ["empty state", "manual-code#", null],
     ["rejection", "", "manual entry failed"],
     ["no manual", "manual-code", null],
   ] as const)(
@@ -208,6 +212,9 @@ describe("Anthropic OAuth", () => {
     startOAuthLoopbackCallbackServer.mockResolvedValueOnce(
       callbackServer(async () => ({ type: "oauth_error", error: "access_denied" })),
     );
-    await expect(login()).rejects.toThrow("Anthropic OAuth error: access_denied");
+    await expect(login()).rejects.toMatchObject({
+      name: "ProviderAuthFailure",
+      reason: "consent_denied",
+    });
   });
 });

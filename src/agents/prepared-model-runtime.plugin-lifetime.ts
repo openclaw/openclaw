@@ -14,6 +14,7 @@ import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "../plugins/plugin-invocation-scope.js";
+import { withPluginRetentionOwner } from "../plugins/plugin-retention-diagnostics.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
@@ -37,6 +38,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
 import {
   registerPreparedPluginRetirement,
@@ -63,6 +65,12 @@ const runUnscoped = <T>(run: () => T): T => run();
 type Lifetime = ReturnType<typeof createLifetime> & {
   instances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
   deferredCapabilities?: ReadonlySet<PluginInstanceHandle>;
+};
+type PreparedCatalogBuildOwner = Pick<
+  PreparedModelRuntimeCatalogAccessParams,
+  "pluginGeneration"
+> & {
+  agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input">;
 };
 type PreparedPluginGenerationResources = Pick<
   PreparedModelRuntimePluginGeneration,
@@ -272,6 +280,30 @@ export function retainPreparedPluginGeneration(
   return async () => {
     await release();
   };
+}
+
+/**
+ * Shared catalog builds outlive their requesting turn: they hold the generation, not the turn's
+ * scope, and retention diagnostics name the agent's catalog discovery rather than that turn.
+ */
+export function runWithPreparedPluginGeneration<T>(
+  { pluginGeneration: generation, agentFacts }: PreparedCatalogBuildOwner,
+  build: () => Promise<T>,
+): Promise<T> {
+  const owner = { agentId: agentFacts.input.agentId, serviceId: "model-catalog-discovery" };
+  return pluginInvocationContext.exit(() =>
+    withPluginRetentionOwner(owner, async () => {
+      // Custody keeps the generation's resources without holding work on its plugins. Each
+      // plugin stays held only by its own running calls, so a plugin whose callback settled, or
+      // that the build never called, reloads while a slower lookup continues (#199521).
+      const release = ownPreparedPluginGeneration(generation).retain();
+      try {
+        return await build();
+      } finally {
+        await release();
+      }
+    }),
+  );
 }
 
 /** Each admitted lease owns callable authority independently of its parent's lifetime. */

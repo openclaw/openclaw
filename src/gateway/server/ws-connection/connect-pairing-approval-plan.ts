@@ -7,6 +7,7 @@ import {
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
+  hasEffectivePairedDeviceRole,
   listApprovedPairedDeviceRoles,
   type getPairedDevice,
 } from "../../../infra/device-pairing.js";
@@ -21,6 +22,7 @@ import {
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "../../openclaw-id/tunnel-principal.js";
+import { isPublicationTransportScope } from "../../publication-reader.js";
 import {
   resolvePairedAccessScopes,
   isControlUiOwnerBootstrapProfile,
@@ -70,6 +72,41 @@ function resolveOpenClawIdPairingScopes(
   return policy ? intersectOperatorScopes(requestedScopes, policy.scopes) : requestedScopes;
 }
 
+/**
+ * Opt-in (gateway.auth.trustedProxy.narrowToDeviceGrant): an approved CLI or TUI
+ * device behind the trusted proxy that asks for more than its paired grant
+ * connects within that grant instead of filing a scope-upgrade request. The
+ * hello reply reports the narrowed scopes, which is how a newly approved device
+ * learns its grant. Returns null when the lane does not apply or nothing fits.
+ */
+export function resolveTrustedProxyDeviceGrantScopes(params: {
+  state: AuthenticatedGatewayConnect;
+  hasBrowserOriginHeader: boolean;
+  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
+  devicePublicKey: string;
+  scopes: string[];
+}): string[] | null {
+  const { state, pairedDevice } = params;
+  if (
+    state.authMethod !== "trusted-proxy" ||
+    state.role !== "operator" ||
+    state.isBrowserOperatorUi ||
+    state.isWebchat ||
+    params.hasBrowserOriginHeader ||
+    pairedDevice?.publicKey !== params.devicePublicKey ||
+    !hasEffectivePairedDeviceRole(pairedDevice, "operator")
+  ) {
+    return null;
+  }
+  const grantedScopes = resolvePairedAccessScopes(pairedDevice);
+  // Reserved transport scopes require their own device-token admission.
+  if (grantedScopes.some(isPublicationTransportScope)) {
+    return null;
+  }
+  const scopes = intersectOperatorScopes(params.scopes, grantedScopes);
+  return scopes.length > 0 ? scopes : null;
+}
+
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */
 export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */
@@ -79,7 +116,7 @@ export type PairingApprovalPlan = {
   operatorApprovalKind: "trusted-proxy" | "remote-ingress" | null;
   trustedProxyUser: string | undefined;
   isSameKeyScopeUpgrade: boolean;
-  /** OpenClaw ID re-issue of an approved role's revoked token, within its approved scopes. */
+  /** OpenClaw ID re-issue bounded by current membership, or the owner's stored approval. */
   restoresApprovedAccess: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
@@ -208,7 +245,8 @@ export async function resolvePairingApprovalPlan(
   // OpenClaw ID sign-out revokes the browser's tokens but keeps its device approved
   // (OCF-495), so its next connect asks for an approved role without an active token.
   // Only the OpenClaw ID lane re-issues it: that lane would pair a fresh key for this
-  // principal anyway. Scopes beyond the approved row stay an owner decision below.
+  // principal anyway. A member's signed membership owns its current scope ceiling;
+  // other principals still need the stored approval for re-issue.
   const isSameKeyApprovedRoleReissue =
     openclawIdPairing &&
     reason === "role-upgrade" &&
@@ -235,11 +273,12 @@ export async function resolvePairingApprovalPlan(
   const restoresApprovedAccess =
     isSameKeyApprovedRoleReissue &&
     laneOperatorScopes !== null &&
-    roleScopesAllow({
-      role,
-      requestedScopes: laneOperatorScopes,
-      allowedScopes: resolvePairedAccessScopes(existingPairedDevice),
-    });
+    (openclawIdPrincipal?.kind === "member" ||
+      roleScopesAllow({
+        role,
+        requestedScopes: laneOperatorScopes,
+        allowedScopes: resolvePairedAccessScopes(existingPairedDevice),
+      }));
   const autoApproveOperatorScopes =
     isSameKeyApprovedRoleReissue && !restoresApprovedAccess ? null : laneOperatorScopes;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({

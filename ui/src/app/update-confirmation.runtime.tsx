@@ -176,7 +176,7 @@ export async function confirmAndStartUpdateRuntime(
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? t(disconnected ? "updates.dialog.disconnected" : "updates.dialog.installing")
+              ? t(disconnected ? "updates.dialog.reconnecting" : "updates.dialog.starting")
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,

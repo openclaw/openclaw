@@ -30,6 +30,7 @@ import {
   type StatementType,
 } from "../statements/types.js";
 import type { TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import { buildUnlinkVectors, type UnlinkPinVector } from "./unlink-vectors.js";
 
 /** Fixed clock for every vector, unix seconds (2026-10-30T00:00:00Z). */
 export const VECTOR_NOW = 1793318400;
@@ -41,7 +42,13 @@ export const VECTOR_CLAW_ID = "0123456789abcdef0123456789abcdef";
 export const VECTOR_HOST = "studio-k7x2q.crabd.me";
 
 /** Which verifier a vector exercises. */
-export type VectorVerifier = "owner" | "snapshot" | "redemption" | "reset" | "node_redemption";
+export type VectorVerifier =
+  | "owner"
+  | "snapshot"
+  | "redemption"
+  | "reset"
+  | "node_redemption"
+  | "unlink";
 
 /** One statement vector. */
 export type StatementVector = {
@@ -97,6 +104,7 @@ export type StatementVectors = {
   valid: StatementVector[];
   invalid: InvalidStatementVector[];
   pins: PinVector[];
+  unlink_pins: UnlinkPinVector[];
   node_invite: {
     secret_hex: string;
     proof_key_hex: string;
@@ -250,6 +258,47 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers["device-1"],
   );
+  const memberDeviceChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add_member_device",
+        account_id: "acct_bob",
+        peer_key: iroh("peer-1"),
+        device_pub: pub("device-5"),
+        label: "Bob phone",
+      },
+    },
+    signers["device-1"],
+  );
+  const guestInvite = await signStatement(
+    "InviteCap",
+    { ...invite.body, role: "guest" },
+    signers["device-2"],
+  );
+  const guestAdd = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add",
+        account_id: "acct_bob",
+        role: "guest",
+        peer_keys: [iroh("invitee")],
+        invite_id: invite.body.invite_id,
+      },
+    },
+    signers["device-1"],
+  );
+  const guestRoleChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: { op: "set_role", account_id: "acct_bob", role: "support_team-2" },
+    },
+    signers["device-1"],
+  );
   const revocation = await signStatement(
     "Revocation",
     {
@@ -281,6 +330,14 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers.gateway,
   );
+  const guestSnapshot = await signStatement(
+    "MembershipSnapshot",
+    {
+      ...snapshot.body,
+      members: [{ account_id: "acct_bob", role: "guest", peer_keys: [iroh("invitee")] }],
+    },
+    signers.gateway,
+  );
   const redemption = await signStatement(
     "InviteRedemption",
     {
@@ -290,6 +347,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       device_pub: pub("invitee"),
       peer_key: iroh("invitee"),
       proof: bytesToHex(await sha256(utf8("placeholder proof; see invites vectors"))),
+      label: "Bob browser",
       requested_at: VECTOR_ISSUED_AT,
     },
     signers.invitee,
@@ -347,6 +405,23 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       claw_id: VECTOR_CLAW_ID,
       seq: 4,
       target: { op: "remove_node", peer_key: iroh("node") },
+      issued_at: VECTOR_NOW,
+    },
+    signers["device-1"],
+  );
+
+  // An app approved as an owner device brings its node in the same decision.
+  const cert3 = await signStatement("OwnerDeviceCert", certBody("device-3"), signers["device-1"]);
+  const deviceNodeChange = await signStatement(
+    "MembershipChange",
+    {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 5,
+      target: {
+        op: "add_owner_device",
+        cert: cert3,
+        node: { peer_key: iroh("node"), label: "Mac Studio", description },
+      },
       issued_at: VECTOR_NOW,
     },
     signers["device-1"],
@@ -419,6 +494,13 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   const seenPin: ClawPin = { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 2 };
   // What a client stores after verifying binding 2: the pin also keeps that binding's K_gw.
   const keyedPin: ClawPin = { ...seenPin, k_gw: pub("gateway") };
+  const unlink = await buildUnlinkVectors({
+    clawId: VECTOR_CLAW_ID,
+    gateway: signers.gateway,
+    mallory: signers.mallory,
+    keyedPin,
+    seenPin,
+  });
   const evidence = (binding: SignedStatement<"ServerBinding">, rootKey = rootPub) => ({
     root_pub: rootKey,
     binding,
@@ -462,14 +544,21 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("root signs server binding seq 2 (new server key)", "owner", binding2),
       vector("owner device-2 signs invite", "owner", invite),
       vector("owner device-1 adds member", "owner", change),
+      vector("owner adds member device", "owner", memberDeviceChange),
+      vector("owner invites opaque guest role", "owner", guestInvite),
+      vector("owner approves exact guest role", "owner", guestAdd),
+      vector("owner changes opaque role", "owner", guestRoleChange),
+      vector("gateway mirrors opaque guest role", "snapshot", guestSnapshot),
       vector("owner device-2 revokes device-3", "owner", revocation),
       vector("gateway signs membership snapshot", "snapshot", snapshot),
       vector("invitee signs redemption request", "redemption", redemption),
       vector("gateway signs root reset to root-2", "reset", rootReset),
+      vector("gateway unlinks the claw at binding 2", "unlink", unlink.statement),
       vector("owner invites a node", "owner", nodeInvite),
       vector("node W signs redemption", "node_redemption", nodeRedemption),
       vector("owner approves node", "owner", nodeChange),
       vector("owner removes node", "owner", nodeRemoval),
+      vector("owner approves a device with its node", "owner", deviceNodeChange),
     ],
     invalid: [
       {
@@ -562,6 +651,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         statement: otherClawReset,
         expected_error: "wrong_claw",
       },
+      ...unlink.invalid,
     ],
     pins: [
       {
@@ -647,5 +737,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         expected: { ok: false, error: "root_mismatch" },
       },
     ],
+    unlink_pins: unlink.pins,
   };
 }

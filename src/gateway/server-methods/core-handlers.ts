@@ -167,6 +167,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
+  "tool-usage": () => import("./tool-usage.js").then((module) => module.toolUsageHandlers),
   "tools-catalog": () => import("./tools-catalog.js").then((module) => module.toolsCatalogHandlers),
   "tools-github": () => import("./tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>
@@ -179,7 +180,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./mcp-app-extensions.js").then((module) => module.mcpAppExtensionHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
-  update: () => import("./update.js").then((module) => module.updateHandlers),
+  update: () => import("./update-run.js").then((module) => module.routedUpdateHandlers),
   "update-handoff-sentinel": () =>
     import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),

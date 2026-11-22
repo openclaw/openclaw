@@ -1,4 +1,5 @@
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { readChatRunProgressEvents } from "./server-chat-progress-snapshot.js";
 import type { ChatRunPlanSnapshot, ChatRunState } from "./server-chat-state.js";
 
 export type InFlightRunSnapshot = {
@@ -25,7 +26,7 @@ export function projectInFlightRunSnapshot(params: {
   const run = params.chatRunState.runs.get(params.runId);
   const projected = params.chatRunState.resolveBuffer(params.runId);
   const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
+  const events = readChatRunProgressEvents(run?.progressSnapshot);
   return {
     runId: params.runId,
     text: projected.suppress ? "" : projected.text,

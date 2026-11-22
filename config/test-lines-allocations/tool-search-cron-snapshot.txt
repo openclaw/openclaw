@@ -1,2 +1,0 @@
-27
-# One cron/Code Mode regression counts snapshot scratch-array slots and preserves the returned outcome.

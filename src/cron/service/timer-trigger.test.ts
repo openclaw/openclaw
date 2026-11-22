@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
-import type { CronServiceDeps } from "./state.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
+import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 import { applyJobResult } from "./timer-outcomes.js";
 import { resolveTransientCronRetryDecision } from "./timer-trigger.js";
@@ -29,6 +31,7 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
   });
   state.store = { version: 1, jobs: [job] };
   const result = await executeJobCore(state, job);
+  const deferredNotifications: DeferredCronNotifications = [];
   applyJobResult(
     state,
     job,
@@ -43,11 +46,41 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
       startedAt,
       endedAt,
     },
-    { deferredNotifications: [] },
+    { deferredNotifications },
   );
+  return deferredNotifications;
 }
 
 describe("resolveTransientCronRetryDecision", () => {
+  it.each([false, true])(
+    "ends an invalid-target one-shot, alerting only through a route (alert route: %s)",
+    async (route) => {
+      const job = makeJob("at");
+      job.sessionTarget = "main";
+      job.failureAlert = route
+        ? { channel: "telegram", to: "synthetic-owner", cooldownMs: 60_000 }
+        : false;
+      job.state.lastFailureAlertAtMs = endedAt;
+      const notifications = await executeAndApply(job, {
+        runSessionEvent: (request) =>
+          runGatewayCronSessionEvent({ ...request, occurrence: TEST_SCHEDULED_OCCURRENCE }, () => ({
+            runtimeConfig: {},
+          })),
+      });
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.lastError).toBe("Automation has no valid session destination");
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(notifications).toHaveLength(route ? 1 : 0);
+      if (route) {
+        const notice = notifications[0];
+        expect(notice?.kind === "failure-alert" && notice.payload.text).toContain(
+          "invalid automation target",
+        );
+      }
+    },
+  );
+
   it.each(["at", "every"] as const)(
     "does not retry an incidental numeric command failure for %s jobs",
     async (scheduleKind) => {
@@ -82,6 +115,23 @@ describe("resolveTransientCronRetryDecision", () => {
       expect(job.state.lastErrorReason).toBe("overloaded");
       expect(job.enabled).toBe(true);
       expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    },
+  );
+
+  it.each([
+    { reason: "auth_permanent", consecutiveErrors: 1, expected: "permanent error" },
+    { reason: "server_error", consecutiveErrors: 4, expected: "max retries exhausted" },
+  ] as const)(
+    "does not retry $reason after $consecutiveErrors errors",
+    ({ reason, consecutiveErrors, expected }) => {
+      expect(
+        resolveTransientCronRetryDecision({
+          error: "The AI service is having trouble.",
+          errorClassification: { kind: "reason", reason },
+          executionStarted: true,
+          consecutiveErrors,
+        }),
+      ).toMatchObject({ retryable: false, reason: expected });
     },
   );
 

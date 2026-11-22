@@ -18,14 +18,16 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 const dnsGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
 // Delay external DNS preparation while preserving the real guard and HTTP transport.
 vi.mock("node:dns/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: async (...args: Parameters<typeof actual.lookup>) => {
       await dnsGate.prepare?.();
       return actual.lookup(...args);
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;

@@ -2,9 +2,12 @@
 // the captured incarnation against the fake committed rows, as the real owner's
 // publication-updated facts do, without SQLite or worker threads.
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 
-export type FakeSessionRow = Partial<SessionEntry> & { sessionId: string; updatedAt: number };
+export type FakeSessionRow = Partial<InternalSessionEntry> & {
+  sessionId: string;
+  updatedAt: number;
+};
 
 export const fakeSessionOwner = {
   rows: new Map<string, FakeSessionRow>(),
@@ -25,6 +28,7 @@ class FakeRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
 }
 
+// Like the real lease: an incarnation pin holds the lifecycle revision, not the transcript id.
 function assertGeneration(input: {
   sessionKey: string;
   sessionId: string | null;
@@ -32,7 +36,7 @@ function assertGeneration(input: {
 }) {
   const row = fakeSessionOwner.rows.get(input.sessionKey);
   if (
-    (row?.sessionId ?? null) !== input.sessionId ||
+    Boolean(row) !== (input.sessionId !== null) ||
     (row?.lifecycleRevision ?? null) !== input.lifecycleRevision
   ) {
     throw new FakeRevokedError("The original session generation no longer accepts this delivery.");
@@ -42,7 +46,7 @@ function assertGeneration(input: {
 /** Module factory for `config/sessions/session-delivery-generation.js`. */
 export const fakeSessionGenerationModule = {
   isSessionDeliveryGenerationRevokedError: (error: unknown) => error instanceof FakeRevokedError,
-  prepareSessionGenerationFacts: async (input: {
+  prepareLeaseFacts: async (input: {
     sessionKey: string;
     sessionId: string | null;
     lifecycleRevision: string | null;

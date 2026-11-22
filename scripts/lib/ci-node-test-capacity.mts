@@ -81,19 +81,27 @@ export function resolveSelectedNodeTestRunner(
         group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
         group.fallbackMaxWorkers === 2 &&
         group.minTotalMemoryBytes === 28 * 1024 ** 3;
+      const isQualifiedGatewayPair =
+        group.configs.length === 2 &&
+        group.configs.includes("test/vitest/vitest.gateway-core.config.ts") &&
+        group.configs.includes("test/vitest/vitest.gateway-client.config.ts") &&
+        group.includePatterns?.length === 2 &&
+        group.includePatterns.includes("src/gateway/mcp-app-extension-runtime.test.ts") &&
+        group.includePatterns.includes("src/gateway/client-callsites.guard.test.ts");
       return (
-        group.configs.length === 1 &&
-        (isQualifiedBoardStore ||
-          SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
-          (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
-            group.includePatterns?.length === 1 &&
-            group.includePatterns[0] ===
-              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts") ||
-          (group.includePatterns?.length === 1 &&
-            ((group.configs[0] === "test/vitest/vitest.gateway-core.config.ts" &&
-              group.includePatterns[0] === "src/gateway/mcp-app-extension-runtime.test.ts") ||
-              (group.configs[0] === "test/vitest/vitest.agents-core.config.ts" &&
-                group.includePatterns[0] === "src/agents/cli-runner.helpers.test.ts")))) &&
+        (isQualifiedGatewayPair ||
+          (group.configs.length === 1 &&
+            (isQualifiedBoardStore ||
+              SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
+              (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
+                group.includePatterns?.length === 1 &&
+                group.includePatterns[0] ===
+                  "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts") ||
+              (group.includePatterns?.length === 1 &&
+                ((group.configs[0] === "test/vitest/vitest.gateway-core.config.ts" &&
+                  group.includePatterns[0] === "src/gateway/mcp-app-extension-runtime.test.ts") ||
+                  (group.configs[0] === "test/vitest/vitest.agents-core.config.ts" &&
+                    group.includePatterns[0] === "src/agents/cli-runner.helpers.test.ts")))))) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
         (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
           (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
@@ -116,6 +124,43 @@ const BOAT_NODE_TEST_CAPACITY: Record<string, { runner: string; cpuBudget: numbe
   "blacksmith-16vcpu-ubuntu-2404": { runner: "boat-large", cpuBudget: 4 },
   "blacksmith-32vcpu-ubuntu-2404": { runner: "boat-xlarge", cpuBudget: 8 },
 };
+
+type BoatStartWindow = { limit: number; used: number; remaining: number };
+
+/** Spend included starts steadily, leaving room for overlapping runs and manual work. */
+export function resolveBoatNodeJobBudget(limits: {
+  canStart?: boolean;
+  starts?: { day?: BoatStartWindow; hour?: BoatStartWindow; minute?: BoatStartWindow };
+}) {
+  if (limits.canStart !== true) {
+    return 0;
+  }
+  const { day, hour, minute } = limits.starts ?? {};
+  if (
+    !day ||
+    !hour ||
+    !minute ||
+    ![day, hour, minute].every((window) =>
+      [window.limit, window.used, window.remaining].every(
+        (value) => Number.isSafeInteger(value) && value >= 0,
+      ),
+    )
+  ) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    Math.min(
+      20,
+      day.remaining,
+      Math.floor(day.limit * 0.8) - day.used,
+      hour.remaining,
+      Math.floor(Math.min(hour.limit, day.limit / 24) * 0.8) - hour.used,
+      minute.remaining,
+      Math.floor(minute.limit * 0.8) - minute.used,
+    ),
+  );
+}
 const BOAT_PREPARED_COMPILER_TEST_FILES = new Set([
   "test/scripts/run-vitest-bounded.test.ts",
   "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -154,7 +199,8 @@ export function resolveBoatNodeTestCapacity(
   return capacity;
 }
 
-const BOAT_HOSTED_PREPARED_WORKSPACE = "src/node-host/node-worker-prepared-workspace.test.ts";
+export const BOAT_HOSTED_PREPARED_WORKSPACE =
+  "src/node-host/node-worker-prepared-workspace.test.ts";
 
 function splitBoatHostedWorkspace<
   T extends Pick<NodeTestShard, "configs" | "includePatterns" | "env" | "timing_key"> & {

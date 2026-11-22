@@ -110,6 +110,18 @@ it("does not inspect or serialize disabled runtime output as sink levels change"
   }
 });
 
+it("keeps Template Add timings out of info logs while retaining debug diagnostics", async () => {
+  const { withTemplateAddTimings } = await import("../templates/timings.js");
+  for (const level of ["info", "trace"] as const) {
+    const file = fileLogging(level);
+    await withTemplateAddTimings("synthetic-add", async () => undefined);
+    await testApi.flushFileLogQueueForTests();
+    const records = fs.existsSync(file) ? await readRecords(file) : [];
+    expect(records).toHaveLength(level === "info" ? 0 : 2);
+    expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
+  }
+});
+
 it.each(["pretty", "compact", "json"] as const)(
   "keeps explicitly file-only diagnostics out of the %s console",
   async (consoleStyle) => {
@@ -151,6 +163,9 @@ describe("createSubsystemLogger().isEnabled", () => {
     const records = await readRecords(file);
     expect(records).toHaveLength(1);
     expect(records[0]._meta.logLevelName).toBe(level);
+    expect(records[0].message).toBe(
+      failurePhase === "bridge" ? "Code Mode bridge request failed" : "Code Mode execution failed",
+    );
   });
   it("records content-free Code Mode failure categories and correlation ids without a debug flag", async () => {
     const file = fileLogging("error");

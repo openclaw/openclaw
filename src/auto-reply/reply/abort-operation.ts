@@ -50,7 +50,8 @@ import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import { setAbortMemory } from "./abort-primitives.js";
 import { completeAbortRetirements } from "./abort-retirements.js";
-import type { FastAbortRequestParams, FastAbortResult, PreparedFastAbortRequest } from "./abort.js";
+import type { PreparedFastAbortRequest } from "./abort.js";
+import type { FastAbortRequestParams, FastAbortResult } from "./abort.types.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { resolveSessionConversationBindingContext } from "./session-conversation-binding.js";
 

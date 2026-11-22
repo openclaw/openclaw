@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
@@ -26,7 +26,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
     },
   );
   const before = structuredClone(params.sessionEntry);
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: profile.profileId,
     scopes: ["operator.write"],
     assertCurrent: options.assertCurrent ?? (() => {}),
@@ -83,6 +83,7 @@ it.each([
   ["caller", "fallback", true, false, true],
   ["caller", "primary", false, false, false],
   ["caller", "primary", true, true, false],
+  ["caller", "manual", false, false, true],
   ["unprofiled", "primary", false, false, true],
 ] as const)(
   "enforces %s policy for %s (reset=%s, empty=%s)",
@@ -95,7 +96,7 @@ it.each([
     const result = await run(source);
     if (applied) {
       expect(result).toMatchObject({ status: "applied", provider: "fixture", model });
-      expect(params.sessionEntry.modelOverride).toBeUndefined();
+      expect(params.sessionEntry.modelOverride).toBe(model === "manual" ? "manual" : undefined);
     } else {
       expect(result).toMatchObject({ status: "rejected", reason: "not-allowed" });
       expectUnchanged();

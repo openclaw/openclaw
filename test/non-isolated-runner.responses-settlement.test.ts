@@ -55,7 +55,7 @@ export default defineConfig({
     let child!: ChildProcess;
     const result = await runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
-      args: ["--worker-preset=runtime", ...args],
+      args,
       cwd: repoRoot,
       env,
       workerRun: workers,

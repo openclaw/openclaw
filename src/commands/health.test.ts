@@ -88,7 +88,7 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 
 // mock-isolation: Use the scenario's plugin list rather than the host plugin registry.
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigMock,
 }));
 
 const requireFirstRuntimeLog = () => String(runtime.log.mock.calls[0]?.[0]);

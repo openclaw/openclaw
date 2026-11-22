@@ -286,8 +286,8 @@ export async function explainToolAvailability(
     agentId,
     sessionKey,
     ...gates?.conversation,
-    modelProvider: model.provider,
-    modelId: model.model,
+    modelProvider: model?.provider,
+    modelId: model?.model,
     // Manifest tool-profile grants come from the process-stable plugin metadata.
     pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config }),
   });

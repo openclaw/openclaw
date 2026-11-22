@@ -3,9 +3,9 @@
 // dropping keys that have not been used for a long time. Nothing here keeps a history:
 // a removed key is simply no longer listed. Each listed key carries the seq at which it
 // was listed, so a revocation can tell whether it covers that listing.
-import type { IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import { fingerprint, type IrohEndpointKey, type KeyFingerprint } from "../keys.js";
 import type { UnixSeconds } from "../statements/types.js";
-import { nodeRemovalEvents, withoutNodes } from "./nodes.js";
+import { nodeRemovalEvents, ownerDeviceNodes, withoutNodes } from "./nodes.js";
 import type { AuthorityEvent, AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
 
 /** Default: owner devices not admitted for 90 days are dropped. */
@@ -94,14 +94,52 @@ export function approvalDescendants(state: AuthorityState, fp: KeyFingerprint): 
   return [...found];
 }
 
+/** The member peer key and every current device it approved, transitively. */
+export async function memberDeviceDescendants(
+  member: MemberRecord,
+  peer: IrohEndpointKey,
+): Promise<IrohEndpointKey[]> {
+  if (!member.peer_keys.includes(peer)) {
+    return [];
+  }
+  const fingerprints = new Map(
+    await Promise.all(
+      member.peer_keys.map(async (key) => {
+        const device = member.devices?.[key];
+        return [key, device ? await fingerprint(device.device_pub) : undefined] as const;
+      }),
+    ),
+  );
+  const found = new Set<IrohEndpointKey>([peer]);
+  const approvers = new Set([fingerprints.get(peer)]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const key of member.peer_keys) {
+      const approval = member.devices?.[key]?.approved_by;
+      if (
+        !found.has(key) &&
+        approval?.kind === "member_device" &&
+        approvers.has(approval.device_fp)
+      ) {
+        found.add(key);
+        approvers.add(fingerprints.get(key));
+        grew = true;
+      }
+    }
+  }
+  return [...found];
+}
+
 /**
  * Removes owner devices from the allowlist, with the invites they registered that are still
- * open; returns the new state and the devices' peer keys.
+ * open and the nodes bound to them; returns the new state, the devices' peer keys and the
+ * removed node keys.
  */
 export function withoutOwnerDevices(
   state: AuthorityState,
   fps: readonly KeyFingerprint[],
-): { state: AuthorityState; peers: IrohEndpointKey[] } {
+): { state: AuthorityState; peers: IrohEndpointKey[]; nodes: IrohEndpointKey[] } {
   const remove = new Set(fps);
   const peers = fps.flatMap((fp) => state.owner_devices[fp]?.cert.body.peer_keys ?? []);
   const owner_devices = Object.fromEntries(
@@ -123,7 +161,12 @@ export function withoutOwnerDevices(
         invite.status !== "open" || invite.created_by === "root" || !remove.has(invite.created_by),
     ),
   );
-  return { state: { ...state, owner_devices, invites, node_invites }, peers: [...new Set(peers)] };
+  const nodes = ownerDeviceNodes(state, remove);
+  return {
+    state: withoutNodes({ ...state, owner_devices, invites, node_invites }, nodes),
+    peers: [...new Set(peers)],
+    nodes,
+  };
 }
 
 /** Removes peer keys from every member (members themselves stay listed). */
@@ -151,6 +194,16 @@ export function withoutMemberBrowsers(
           ...member,
           peer_keys: kept.map((entry) => entry.key),
           listed_seq: kept.map((entry) => entry.seq),
+          ...(member.devices
+            ? {
+                devices: Object.fromEntries(
+                  kept.flatMap(({ key }) => {
+                    const device = member.devices?.[key];
+                    return device ? [[key, device]] : [];
+                  }),
+                ),
+              }
+            : {}),
           last_seen: Object.fromEntries(
             Object.entries(member.last_seen).filter(
               // SAFETY: last_seen is keyed by IrohEndpointKey; Object.entries widens keys to string.
@@ -235,10 +288,12 @@ export function dropInactive(
     return null;
   }
   const owners = withoutOwnerDevices(state, idleOwners);
+  // A dropped owner device takes its bound node with it.
+  const nodes = [...new Set([...idleNodes, ...owners.nodes])];
   return {
-    state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), idleNodes),
-    peers: [...new Set([...owners.peers, ...idleKeys, ...idleNodes])],
-    events: idleNodes.length ? nodeRemovalEvents(idleNodes) : [],
+    state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), nodes),
+    peers: [...new Set([...owners.peers, ...idleKeys, ...nodes])],
+    events: nodes.length ? nodeRemovalEvents(nodes) : [],
   };
 }
 

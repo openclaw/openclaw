@@ -1,12 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
@@ -15,7 +13,13 @@ import {
   patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import * as pendingInputs from "../../config/sessions/session-accessor.pending-inputs.js";
+import type { SessionPendingInputReceipt } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { listLiveSessionPendingInputs } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
+import { prepareSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionQueuedInputPage } from "../../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import {
@@ -25,18 +29,11 @@ import {
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
-import { prepareGatewayRecipientProfile } from "../expected-profile.js";
-import { createMentionInbox } from "../mention-inbox.js";
-import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import * as sharingTargetRead from "../session-sharing-target-read.js";
-import { dispatchInboundMessageMock, installGatewayTestHooks, testState } from "../test-helpers.js";
+import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { registerChatCollectedInputReplayCases } from "./chat-send-collected-input-replay.test-support.js";
 import { registerChatHistoryDeliveryCases } from "./chat-send-history-delivery.test-support.js";
@@ -45,7 +42,7 @@ import {
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
 import { createSessionMutationCatalog } from "./sessions-mutations.native-consent.test-support.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 const prepareProfileCatalog = useUserProfileCatalogForTest();
@@ -96,335 +93,6 @@ async function admitPending(fixture: FollowupFixture) {
 }
 
 describe("ordinary chat input admission", () => {
-  async function createMentionFixture(
-    options: { active?: boolean; preserveContent?: boolean; guest?: boolean } = {},
-  ) {
-    const createProfile = (name: string) => {
-      const profile = ensureProfileForEmail(`${name.toLowerCase()}@mentions.example.test`);
-      setDisplayName(profile.id, name);
-      return { profileId: profile.id, displayName: name, hasAvatar: false, updatedAt: 1 };
-    };
-    const alice = createProfile("Alice"),
-      bob = createProfile("Bob"),
-      carol = createProfile("Carol");
-    const fixture = await createBrowserFollowupFixture({
-      preserveContent: true,
-      ...options,
-      ...(options.guest
-        ? {
-            sessionKey: "agent:main:dashboard:guest-mentions",
-            createdActor: { type: "human", source: "profile", id: alice.profileId },
-          }
-        : {}),
-    });
-    fixture.client.authenticatedUserProfile = alice;
-    const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
-    const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
-    const profileCatalog = await prepareUserProfileCatalog();
-    for (const client of [fixture.client, bobClient, carolClient]) {
-      prepareGatewayRecipientProfile(client);
-    }
-    const mentionBroadcast = vi.fn();
-    const inbox = createMentionInbox({
-      scheduler: createTestGatewayScheduler(),
-      gatewayInstanceId: "chat-mention-commit-test",
-      getRuntimeConfig,
-      getClients: () => [fixture.client, bobClient, carolClient],
-      broadcastToConnIds: mentionBroadcast,
-    });
-    fixture.context.mentionInbox = inbox;
-    fixture.params.message = "@Bob could you review this?";
-    fixture.params.mentions = [{ profileId: bob.profileId, start: 0, end: 4 }];
-    const read = async (client: GatewayClient = bobClient) =>
-      (await readMentionInbox(inbox, client)).items;
-    const cleanup = () => inbox.dispose().then(fixture.cleanup).finally(profileCatalog.release);
-    return {
-      ...fixture,
-      bobClient,
-      carolClient,
-      inbox,
-      read,
-      mentionBroadcast,
-      cleanup,
-      [Symbol.asyncDispose]: cleanup,
-    };
-  }
-
-  async function createGuestMentionFixture() {
-    const fixture = await createMentionFixture({ active: false, guest: true });
-    // Mention authority tests do not own background model calls for session naming.
-    await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Guest mentions" }));
-    const cfg = getRuntimeConfig();
-    setRuntimeConfigSnapshot({
-      ...cfg,
-      gateway: {
-        ...cfg.gateway,
-        roles: {
-          default: "guest",
-          definitions: {
-            administrator: {
-              agents: "*",
-              scopes: ["operator.admin"],
-              sessions: { others: "write" },
-            },
-            disabled: { agents: [], scopes: [], sessions: { others: "none" } },
-            guest: {
-              agents: ["main"],
-              scopes: ["operator.sessions.read", "operator.sessions.write"],
-              sessions: { others: "none" },
-            },
-          },
-        },
-      },
-    });
-    fixture.client.connect = {
-      ...fixture.client.connect,
-      scopes: ["operator.sessions.read", "operator.sessions.write"],
-    };
-    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "administrator");
-    const request = async (method: string, params: Record<string, unknown>) => {
-      const respond = vi.fn<RespondFn>();
-      await handleGatewayRequest({
-        req: { type: "req", id: "guest-mention", method, params },
-        client: fixture.client,
-        context: fixture.context,
-        isWebchatConnect: () => true,
-        respond,
-      });
-      return respond;
-    };
-    return { ...fixture, request };
-  }
-
-  it("lets a session-only guest look up and send a mention through the dispatcher", async () => {
-    await using fixture = await createGuestMentionFixture();
-    const lookup = await fixture.request("users.mentionable", {
-      sessionKey: fixture.scope.sessionKey,
-      query: "Bob",
-    });
-    expect(lookup).toHaveBeenCalledWith(
-      true,
-      {
-        users: [
-          {
-            profileId: fixture.bobClient.authenticatedUserProfile.profileId,
-            displayName: "Bob",
-            avatarUrl: expect.stringContaining(
-              `/api/users/${fixture.bobClient.authenticatedUserProfile.profileId}/avatar`,
-            ),
-            online: true,
-          },
-        ],
-        truncated: false,
-      },
-      undefined,
-    );
-    expectStarted(await fixture.send(vi.fn(), {}));
-    await fixture.finishDispatch();
-    expect(await fixture.read()).toMatchObject([
-      {
-        senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
-        excerpt: fixture.params.message,
-      },
-    ]);
-  });
-
-  it("keeps session-only mention lookup and sending within current authority", async () => {
-    await using fixture = await createGuestMentionFixture();
-    const rejected = (response: RespondFn) => {
-      expect(response).toHaveBeenCalledOnce();
-      expect(response).toHaveBeenCalledWith(false, undefined, expect.anything());
-    };
-    for (const method of ["users.list", "presence.query", "cron.list"]) {
-      rejected(await fixture.request(method, {}));
-    }
-    rejected(await fixture.request("users.mentionable", { sessionKey: "unrelated" }));
-    rejected(await fixture.send(vi.fn(), {}, { ...fixture.params, sessionKey: "unrelated" }));
-    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "guest");
-    const unavailableRecipient = await fixture.send(vi.fn(), {});
-    expect(unavailableRecipient).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "One or more mentioned people are unavailable. Select the recipients again.",
-      }),
-    );
-    await expectUncommitted(fixture);
-    setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "administrator");
-    fixture.client.invalidated = true;
-    rejected(await fixture.request("users.mentionable", { sessionKey: fixture.scope.sessionKey }));
-    rejected(await fixture.send(vi.fn(), {}));
-    fixture.client.invalidated = false;
-    const prepareRead = sharingTargetRead.prepareSessionSharingRead;
-    for (const method of ["users.mentionable", "chat.send"] as const) {
-      const ready = createDeferred();
-      const release = createDeferred();
-      const held = vi
-        .spyOn(sharingTargetRead, "prepareSessionSharingRead")
-        .mockImplementationOnce(async (params) => {
-          const prepared = await prepareRead(params);
-          ready.resolve();
-          await release.promise;
-          return prepared;
-        });
-      const inFlight =
-        method === "users.mentionable"
-          ? fixture.request(method, { sessionKey: fixture.scope.sessionKey })
-          : fixture.send(vi.fn(), {});
-      try {
-        await Promise.race([
-          ready.promise,
-          inFlight.then(() => {
-            throw new Error(`${method} completed before the held preparation`);
-          }),
-        ]);
-        setUserProfileRole(fixture.client.authenticatedUserProfile!.profileId, "disabled");
-        release.resolve();
-        expect(await inFlight).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        await expectUncommitted(fixture);
-        expect(await fixture.read()).toEqual([]);
-      } finally {
-        release.resolve();
-        held.mockRestore();
-        await inFlight;
-        setUserProfileRole(fixture.client.authenticatedUserProfile!.profileId, "guest");
-      }
-    }
-  });
-
-  it("creates recipient-only mentions at original message commit, never at the queued ACK", async () => {
-    await using fixture = await createMentionFixture();
-    const atAck = vi.fn(() => ({
-      transcript: fixture.readTranscript(),
-      notifications: fixture.mentionBroadcast.mock.calls.length,
-    }));
-    const ack = await fixture.send(vi.fn<RespondFn>(() => void atAck()));
-    expectStarted(ack);
-    expect(atAck).toHaveReturnedWith({ transcript: fixture.activeTranscript, notifications: 0 });
-    const sql = observeHostDataSql();
-    try {
-      await fixture.finishDispatch();
-      await fixture.read();
-      const sqlArgs = sql.calls.flatMap((call) => call.mock.calls).flat();
-      expect(
-        sqlArgs.filter(
-          (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
-        ),
-      ).toEqual([]);
-      expect(
-        sql.queries.filter((query) =>
-          /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_nodes\b/i.test(query),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    const committed = fixture
-      .readTranscript()
-      .filter(isRecord)
-      .find(
-        (event) =>
-          isRecord(event.message) &&
-          event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
-      );
-    expect(committed).toBeDefined();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[
-        fixture.bobClient.authenticatedUserProfile.profileId
-      ],
-    ).toMatchObject({ hidden: false, lastMention: { sequence: expect.any(Number) } });
-    expect(await fixture.read()).toMatchObject([
-      {
-        messageId: committed?.id,
-        senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
-        excerpt: fixture.params.message,
-      },
-    ]);
-    expect(await fixture.read(fixture.client)).toEqual([]);
-    expect(await fixture.read(fixture.carolClient)).toEqual([]);
-    const id = (await fixture.read())[0]?.id;
-    expect(id).toBeDefined();
-    await dismissMentionInbox(fixture.inbox, fixture.bobClient, id ? [id] : []);
-    await fixture.send();
-    expect(await fixture.read()).toEqual([]);
-  });
-
-  it("includes an idle first commit in the Inbox before ACK without waiting for the agent", async () => {
-    await using fixture = await createMentionFixture({ active: false });
-    let atAck = 0;
-    const ack = await fixture.send(
-      vi.fn((ok) => {
-        if (ok) {
-          atAck = fixture.mentionBroadcast.mock.calls.filter(
-            ([event, , recipients]) => event === "mentions.changed" && recipients.has("bob-one"),
-          ).length;
-        }
-      }),
-    );
-    expectStarted(ack, { messageSeq: 2 });
-    expect(atAck).toBe(1);
-    await fixture.finishDispatch();
-    expect(await fixture.read()).toHaveLength(1);
-  });
-
-  it("does not notify when approval replaces the selected token", async () => {
-    await using fixture = await createMentionFixture({ preserveContent: false });
-    await fixture.send();
-    await fixture.finishDispatch();
-    const committed = fixture.readTranscript().at(-1);
-    expect(committed).toMatchObject({ message: { content: fixture.approvedContent } });
-    expect(committed).not.toHaveProperty("message.__openclaw.humanMentions");
-    expect(await fixture.read()).toEqual([]);
-  });
-
-  it.each(["retained", "expired"] as const)(
-    "rejects changed recipients with %s RAM identity while preserving the queued original",
-    async (identity) => {
-      await using fixture = await createMentionFixture();
-      await fixture.send();
-      if (identity === "expired") {
-        fixture.context.dedupe.clear();
-      }
-      fixture.params.mentions = [
-        { profileId: fixture.carolClient.authenticatedUserProfile.profileId, start: 0, end: 4 },
-      ];
-      const originalRead = sessionAccessor.readSessionSubmittedInput;
-      const comparisonSql: string[] = [];
-      const read = vi
-        .spyOn(sessionAccessor, "readSessionSubmittedInput")
-        .mockImplementation(async (...args) => {
-          const sql = observeHostDataSql();
-          try {
-            return await originalRead(...args);
-          } finally {
-            comparisonSql.push(...sql.queries);
-            sql.restore();
-          }
-        });
-      try {
-        const replay = await fixture.send();
-        expect(replay).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
-        );
-        expect(read).toHaveBeenCalledTimes(identity === "expired" ? 1 : 0);
-        expect(comparisonSql).toEqual([]);
-      } finally {
-        read.mockRestore();
-      }
-      await fixture.finishDispatch();
-      expect(await fixture.read()).toHaveLength(1);
-      expect(await fixture.read(fixture.carolClient)).toEqual([]);
-    },
-  );
-
   it("retains pending-input custody while retrying a transient post-ACK projection failure", async () => {
     await using fixture = await createBrowserFollowupFixture({ transientProjectionFailures: 1 });
     const ack = await fixture.send();
@@ -447,6 +115,85 @@ describe("ordinary chat input admission", () => {
       expect.objectContaining({ runId: fixture.params.idempotencyKey, state: "error" }),
       expect.anything(),
     );
+  });
+
+  it("records a failed staged input after a pre-ACK authority outage without replaying it", async () => {
+    await using fixture = await createBrowserFollowupFixture();
+    const resolved = await prepareSqliteScope(fixture.scope);
+    if (!resolved.path) {
+      throw new Error("Expected the durable pending-input database path");
+    }
+    let unavailable = false;
+    const outage = new GatewayOperatorAccessUnavailableError();
+    const binding = {
+      sessionMutationCommitGuard: () => {
+        if (unavailable) {
+          throw outage;
+        }
+      },
+    };
+    let receipt: SessionPendingInputReceipt | undefined;
+    const stage = pendingInputs.stageSessionPendingInput;
+    // Keep production admission, its source authority, and SQLite real. Only fail
+    // the next authority check after staging has returned its committed receipt.
+    using staging = vi.spyOn(pendingInputs, "stageSessionPendingInput");
+    staging.mockImplementationOnce(async (...args) => {
+      receipt = await stage(...args);
+      unavailable = true;
+      return receipt;
+    });
+    const rejected = await fixture.send(vi.fn(), binding);
+    expect(rejected).toHaveBeenCalledOnce();
+    expect(rejected).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ status: "error" }),
+      expect.objectContaining({ code: "UNAVAILABLE", message: outage.message }),
+      expect.anything(),
+    );
+    if (!receipt) {
+      throw new Error("Expected chat.send to stage the input before the authority outage");
+    }
+    await receipt.settled?.();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(await pending(fixture)).toMatchObject({
+      total: 1,
+      items: [
+        {
+          id: receipt.inputId,
+          state: "cancelled",
+          endCause: "failed",
+          runId: fixture.params.idempotencyKey,
+          message: { content: fixture.approvedContent },
+        },
+      ],
+    });
+    expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+    expect(
+      listLiveSessionPendingInputs(resolved.path, resolved.sessionKey, fixture.scope.sessionId),
+    ).toEqual([]);
+    expect(
+      await sessionAccessor.readSessionSubmittedInput(
+        fixture.scope,
+        `${fixture.params.idempotencyKey}:user`,
+        { includeSource: true },
+      ),
+    ).toMatchObject({ source: "pending", state: "cancelled", endCause: "failed" });
+    expect((await readSessionQueuedInputPage(fixture.scope)).rows).toEqual([]);
+    expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
+
+    unavailable = false;
+    const replay = await fixture.send(vi.fn(), binding);
+    expect(replay).toHaveBeenCalledOnce();
+    expect(replay).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: { reason: "chat-input-cancelled", endCause: "failed" },
+      }),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
   });
 
   it.each([
@@ -737,39 +484,22 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it.each(["cancellation", "lifecycle rotation", "session replacement", "session access"] as const)(
+  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
       const baseline = { provider: "openai", model: "previous-model" };
       await patchSessionEntryCore(fixture.scope, () => ({ lastSubmittedModel: baseline }));
-      if (change === "session access") {
-        setClientProfile(
-          fixture.client,
-          ensureProfileForEmail("pending-input-caller@example.test"),
-        );
-        fixture.client.connect.scopes = ["operator.read", "operator.write"];
-        await patchSessionEntryCore(fixture.scope, () => ({
-          createdActor: { type: "human", source: "profile", id: "another-profile" },
-          visibility: "shared",
-        }));
-      }
       fixture.beforeApprove.mockImplementation(() => {
         if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
           return;
         }
-        if (change === "session replacement" || change === "session access") {
-          const current = loadSessionEntry(fixture.scope);
-          if (!current) {
-            throw new Error("Expected the session to exist before input approval");
-          }
-          replaceSessionEntrySync(
-            fixture.scope,
-            change === "session replacement"
-              ? { sessionId: "successor-session", updatedAt: Date.now() }
-              : { ...current, visibility: "draft" },
-          );
+        if (change === "session replacement") {
+          replaceSessionEntrySync(fixture.scope, {
+            sessionId: "successor-session",
+            updatedAt: Date.now(),
+          });
           return;
         }
         const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
@@ -789,7 +519,7 @@ describe("ordinary chat input admission", () => {
         active.adapter.abortStopReason = "rpc";
         requestRpcSourceCancellation(active);
       });
-      const respond = await fixture.send(undefined, change === "session access" ? {} : undefined);
+      const respond = await fixture.send();
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -814,7 +544,7 @@ describe("ordinary chat input admission", () => {
     { restart: true, attachment: true },
     { restart: false, attachment: false },
   ])(
-    "acknowledges closed recorded input without dispatching again (%j)",
+    "rejects closed recorded input without dispatching again (%j)",
     async ({ restart, attachment }) => {
       await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
       const profile = ensureProfileForEmail("restart-input@example.test");
@@ -837,11 +567,14 @@ describe("ordinary chat input admission", () => {
         if (restart) {
           rotateAgentEventLifecycleGeneration();
         } else {
-          originalRecorder.finishPendingInput?.("cancelled");
+          originalRecorder.finishPendingInput?.("cancelled", "failed");
           await originalRecorder.waitForPendingInputSettlement?.();
         }
         await fixture.finishDispatch();
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+        const endCause = restart ? "reset" : "failed";
+        expect((await pending(fixture)).items).toEqual([
+          { ...original, state: "cancelled", endCause },
+        ]);
         expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
         fixture.context.dedupe.clear();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
@@ -851,12 +584,16 @@ describe("ordinary chat input admission", () => {
         dispatchInboundMessageMock.mockClear();
         const ack = await fixture.send();
         expect(ack).toHaveBeenCalledWith(
-          true,
-          { runId: fixture.params.idempotencyKey, status: "ok" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause },
+          }),
         );
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+        expect((await pending(fixture)).items).toEqual([
+          { ...original, state: "cancelled", endCause },
+        ]);
         if (restart) {
           expect(() => originalRecorder.withPendingInput?.(() => {})).toThrow("ownership ended");
         }
@@ -866,51 +603,6 @@ describe("ordinary chat input admission", () => {
       } finally {
         await fixture.finishDispatch();
       }
-    },
-  );
-
-  it.each(["sender", "payload", "cancelled"] as const)(
-    "never re-adopts recorded input when its %s changes",
-    async (change) => {
-      testState.agentsConfig = { entries: { main: { identity: { name: "Robo" } } } };
-      await using fixture = await createMentionFixture({ preserveContent: true });
-      // This case needs an agent-owned pending input to cancel before its original commit.
-      fixture.params.message += " Robo, please review too.";
-      const { recorder, original } = await admitPending(fixture);
-      if (change === "cancelled") {
-        recorder?.finishPendingInput?.("cancelled");
-      }
-      rotateAgentEventLifecycleGeneration();
-      await fixture.finishDispatch();
-      fixture.context.dedupe.clear();
-      dispatchInboundMessageMock.mockClear();
-      await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-      if (change === "sender") {
-        fixture.client.authenticatedUserProfile = fixture.bobClient.authenticatedUserProfile;
-      } else if (change === "payload") {
-        fixture.params.message += " Changed request.";
-      }
-      const response = await fixture.send();
-      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
-      if (change === "sender") {
-        expect(response).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: "One or more mentioned people are unavailable. Select the recipients again.",
-          }),
-        );
-      } else if (change === "payload") {
-        expect(response).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
-        );
-      }
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
-      expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
     },
   );
 

@@ -23,6 +23,14 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+Closing a natively authenticated Dashboard window unloads its page, stopping
+background reconnects after that window loses native authorization. Reopening a
+retained main window uses the same WebView storage and restores its trusted
+Dashboard route; saved drafts remain scoped to the same Gateway address and account.
+Minimizing a window or hiding it when switching experiences does not unload its
+page. A native-auth document replaced during a Gateway switch is also unloaded;
+the new Gateway still receives a separate document and its own authorization.
+
 If the Dashboard cannot load, it shows a recovery page with **Reload** and
 **Connection Settings…**. Choose **Navigate → Reload** or press **Cmd-R** while a
 Dashboard window is active to reload its current page. Gateway HTTP errors with

@@ -47,9 +47,9 @@ import {
 // agent tool has none.
 
 /** Default page size for agent search/lookup calls that omit limit. */
-export const AGENT_HIT_LIMIT = 10;
+const AGENT_HIT_LIMIT = 10;
 /** Default whole-response bound for an agent knowledge_record read. */
-export const AGENT_RECORD_MAX_CHARS = 12000;
+const AGENT_RECORD_MAX_CHARS = 12000;
 // Full snippets open 100 characters before the match; keep a little lead-in.
 const MATCH_OFFSET = 100,
   LEAD_IN = 40;
@@ -91,7 +91,7 @@ const present = <K extends string, V>(key: K, value: V | undefined | null) => {
   return (empty ? {} : { [key]: value }) as Partial<Record<K, V>>;
 };
 
-export function leanRecord(
+function leanRecord(
   output: RecordOutput,
   input: { maxChars?: number; includeEvidence?: boolean },
 ): LeanRecordOutput {
@@ -300,7 +300,7 @@ function leanHit(hit: FullHit, withSnippet: boolean): LeanHit {
   };
 }
 
-export const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => ({
+const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => ({
   hits: o.hits.map((h) => leanHit(h, true)),
   resultCount: o.resultCount,
   total: o.total,
@@ -311,7 +311,7 @@ export const leanSearch = (o: SearchOutput): Static<typeof LeanSearchOutput> => 
     : { index: { state: "unavailable" as const, message: o.index.message } }),
 });
 
-export const leanLookup = (o: LookupOutput): Static<typeof LeanLookupOutput> => ({
+const leanLookup = (o: LookupOutput): Static<typeof LeanLookupOutput> => ({
   outcome: o.outcome,
   hits: o.hits.map((h) => leanHit(h, false)),
   resultCount: o.resultCount,
@@ -345,7 +345,7 @@ function leanItem(item: Item): Static<typeof LeanChronicleItem> {
   };
 }
 
-export const leanChronicle = (o: ChronicleOutput): Static<typeof LeanChronicleOutput> => ({
+const leanChronicle = (o: ChronicleOutput): Static<typeof LeanChronicleOutput> => ({
   items: o.items.map(leanItem),
   total: o.total,
   ...paging(o.nextOffset, o.offset, o.snapshot),
@@ -353,9 +353,7 @@ export const leanChronicle = (o: ChronicleOutput): Static<typeof LeanChronicleOu
   ...(o.sources ? { sources: o.sources.map(temporalRow) } : {}),
 });
 
-export const leanLastSeen = (
-  o: Static<typeof LastSeenOutput>,
-): Static<typeof LeanLastSeenOutput> => ({
+const leanLastSeen = (o: Static<typeof LastSeenOutput>): Static<typeof LeanLastSeenOutput> => ({
   entity: o.entity,
   last: o.last ? leanItem(o.last) : null,
   // The message explains an empty answer; a found item speaks for itself.
@@ -371,7 +369,7 @@ type RecordsFull = {
   nextOffset: number | null;
   facets?: { kinds: Record<string, number>; origins: Record<string, number> };
 };
-export const leanRecords = (o: RecordsFull): Static<typeof LeanRecordsOutput> => ({
+const leanRecords = (o: RecordsFull): Static<typeof LeanRecordsOutput> => ({
   records: o.records.map((r) => summaryRow(r)),
   ...(o.endpoints ? { endpoints: o.endpoints.map(pageRow) } : {}),
   total: o.total,
@@ -384,7 +382,7 @@ const nonEmpty = <K extends string, T>(key: K, value: T[] | undefined) =>
   // SAFETY: the computed key is exactly K, present only with a non-empty array.
   (value?.length ? { [key]: value } : {}) as Partial<Record<K, T[]>>;
 
-export function leanOntology(o: OntologyOutput): Static<typeof LeanOntologyOutput> {
+function leanOntology(o: OntologyOutput): Static<typeof LeanOntologyOutput> {
   const definitions = o.view === "definitions";
   return {
     fingerprint: o.fingerprint,
@@ -431,7 +429,7 @@ type StatusFull = {
   issues: number;
   message?: string;
 };
-export const leanStatus = (o: StatusFull): Static<typeof LeanStatusOutput> => ({
+const leanStatus = (o: StatusFull): Static<typeof LeanStatusOutput> => ({
   vault: o.vault,
   agent: o.agent,
   store: o.store,
@@ -445,7 +443,7 @@ export const leanStatus = (o: StatusFull): Static<typeof LeanStatusOutput> => ({
 });
 
 // knowledge_verify
-export const leanVerify = (
+const leanVerify = (
   o: VerifyOutput,
   input: { offset?: number },
 ): Static<typeof LeanVerifyOutput> => ({
@@ -460,7 +458,7 @@ export const leanVerify = (
 
 // knowledge_evidence_read
 // Verification is always true on success (failures throw); the request names the record and file.
-export const leanEvidenceRead = (o: EvidenceReadOutput): Static<typeof LeanEvidenceReadOutput> => ({
+const leanEvidenceRead = (o: EvidenceReadOutput): Static<typeof LeanEvidenceReadOutput> => ({
   text: o.text,
   range: o.range,
   ...(o.nextCursor === null ? {} : { nextCursor: o.nextCursor }),
@@ -472,7 +470,7 @@ export const leanEvidenceRead = (o: EvidenceReadOutput): Static<typeof LeanEvide
  * The new revision and hash of what changed, the state only when not published,
  * and the ontology fingerprint the next write needs.
  */
-export function leanReceipt(r: Receipt, keepRequestId = false): LeanReceipt {
+function leanReceipt(r: Receipt, keepRequestId = false): LeanReceipt {
   const items = r.items;
   return {
     ...(keepRequestId ? { requestId: r.requestId } : {}),
@@ -494,13 +492,13 @@ export function leanReceipt(r: Receipt, keepRequestId = false): LeanReceipt {
   };
 }
 
-export const leanRemember = (o: RememberOutput): Static<typeof LeanRememberOutput> => ({
+const leanRemember = (o: RememberOutput): Static<typeof LeanRememberOutput> => ({
   items: o.items,
   receipt: o.receipt ? leanReceipt(o.receipt) : null,
 });
 
 // A changed source is reconciled against the prior batch's requestId, so it stays.
-export const leanSourceCheck = (
+const leanSourceCheck = (
   o: Static<typeof SourceCheckOutput>,
 ): Static<typeof LeanSourceCheckOutput> => ({
   state: o.state,
@@ -508,7 +506,7 @@ export const leanSourceCheck = (
   message: o.message,
 });
 
-export const leanReconcileEvidence = (o: Static<typeof ReconcileEvidenceOutput>) =>
+const leanReconcileEvidence = (o: Static<typeof ReconcileEvidenceOutput>) =>
   o.state === "preview" ? o : leanReceipt(o);
 
 type Connection = Awaited<

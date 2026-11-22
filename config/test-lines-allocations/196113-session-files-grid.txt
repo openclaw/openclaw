@@ -1,4 +1,0 @@
-# Session files grid/sort in the Files panel (PR #196113): browser E2E for grid tiles, Type/Date ordering and
-# reload persistence, rail tests for the merged list and display menu, and date/name ordering plus settings
-# normalization units.
-338

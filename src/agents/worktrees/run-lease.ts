@@ -19,7 +19,11 @@ import {
 } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
-import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
+import {
+  claimWorktreeRemovalRow,
+  recordRegistryWorktreeActivity,
+  releaseWorktreeRunLeaseRow,
+} from "./registry.js";
 import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -93,6 +97,7 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       }
       const options = { beforeRun: () => context.admission.assertCurrent() };
       await assertManagedWorktreeRemovalComplete(record, options);
+      await recordRegistryWorktreeActivity(context.environment, record, options.beforeRun);
       await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
@@ -129,6 +134,7 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
     try {
       const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
+        await recordRegistryWorktreeActivity(cleanup.context.environment, record);
         await unlockWorktree(record);
       }
     } catch (error) {
@@ -160,23 +166,23 @@ export async function resolveWorktreeForPath(params: {
   if (records.length === 0) {
     return undefined;
   }
-  const bases = new Map<string, string>();
-  for (const record of records) {
-    bases.set(record.id, await realpathOrResolve(record.path));
-  }
-  const seen = new Set<string>();
-  for (const candidate of params.candidatePaths) {
-    if (!candidate || seen.has(candidate)) {
+  // Paths are canonical at creation/migration; keep registry order for overlapping roots.
+  const bases = new Map(records.map((record, index) => [record.path, index] as const).toReversed());
+  for (const candidate of new Set(params.candidatePaths)) {
+    if (!candidate) {
       continue;
     }
-    seen.add(candidate);
-    const real = await realpathOrResolve(candidate);
-    for (const record of records) {
-      const base = bases.get(record.id);
-      if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
-        context.admission.assertCurrent();
-        return { context, record };
+    let first = records.length;
+    for (let current = await realpathOrResolve(candidate); ; current = path.dirname(current)) {
+      first = Math.min(first, bases.get(current) ?? records.length);
+      if (path.dirname(current) === current) {
+        break;
       }
+    }
+    const record = records[first];
+    if (record) {
+      context.admission.assertCurrent();
+      return { context, record };
     }
   }
   context.admission.assertCurrent();

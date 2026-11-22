@@ -134,6 +134,26 @@ handler receives a discriminated invocation context: `source` is
 surface. Tool policy, authenticated command handling, and Gateway scope checks
 remain owned by their existing execution paths.
 
+Operation count is not tool count: a custom UI can use many typed session
+actions without exposing them to the agent. Contracts have no operation-count,
+tool-count, or declared event-type cap. Operation and event IDs, schemas, bounded
+JSON payloads, and authorization checks still apply.
+
+OpenClaw logs advisory warnings when plugin registration or an embedded turn's
+tool preparation takes more than five seconds, and when a session's effective tool
+catalog exceeds 64 tools. These are diagnostic thresholds, not capacity limits.
+Catalog warnings are deduplicated by session and catalog; Code Mode and deferred
+discovery can expose fewer tool definitions to the model than the catalog holds.
+
+For session actions, thrown handler errors return `ok: false` with code
+`OPERATION_FAILED` and the error's message (or stringified thrown value), limited
+to 2,000 UTF-16 code units without splitting surrogate pairs. Blank messages use
+`Feature operation failed`. Validation failures retain `INVALID_INPUT` or
+`INVALID_OUTPUT`. `createFeatureClient.invoke` rejects with the returned message.
+Use caller-safe error messages: stacks, causes, and other error fields are not
+included. Tools and commands retain their existing error handling; the Gateway
+still masks uncaught errors from directly registered session actions.
+
 Use `createFeatureClient(contract, context.host)` inside a browser view:
 
 ```typescript
@@ -189,7 +209,24 @@ Its id must match the plugin manifest. Register contributions through
 | `registerAccessory`                     | Session header content.                                                                                                                 |
 | `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
-| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                        |
+
+The `run-failure-feedback` replacement occupies only the feedback action beside
+an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
+repeatCount }`; `runId` identifies the displayed failed run, not the currently
+running reply. The host preserves the original error details, copying, and
+recovery controls. No replacement, a disabled plugin, or a failed mount keeps
+the built-in **Report a bug** link available; `context.mountDefault(container)`
+can also delegate to that link.
+
+Plugins can render their own feedback actions and status receipts in this slot
+without appending a transcript message or starting a model turn. Rendering the
+slot does not establish reporting eligibility or authorize a report: keep
+classification, privacy checks, durable idempotency, delivery state, and any
+report submission in the plugin's backend. Changing the agent, session, or
+failed run retires the view and its host handles. Check `context.signal` before
+publishing an asynchronous result, and retain only verified report identifiers
+and links.
 
 Panels can supply an optional `icon` with a fixed host icon-registry name, such as
 `bookOpenText`, `barChart`, `activity`, or `terminal`:
@@ -264,6 +301,87 @@ the view's agent. Changing either part of that identity retires the old view's
 handles, including retained composer operations. Header and composer actions also
 retire when their pane stops being presented. A later return to that pane allows
 new actions; it does not revive handles from an earlier invocation.
+
+A composer action's `run` context also receives `composer`, bound to the pane
+that invoked it. `composer.draft` returns that pane's draft when read, and
+`composer.setDraft(text)` replaces it. Both throw once the action's `signal`
+aborts, so a retained handle never reads or edits the draft of a later session.
+Header and session actions receive no `composer`.
+
+```typescript
+host.ui.registerAction({
+  id: "shout",
+  label: "Uppercase draft",
+  placement: "composer",
+  run({ composer }) {
+    composer?.setDraft(composer.draft.toUpperCase());
+  },
+});
+```
+
+A composer action with a host icon-registry `icon` renders as a compact button in
+the composer toolbar, after the attachment menu, with `label` as its accessible
+name and tooltip. On mobile, open **+** and choose the plugin by name to see
+its icon actions. The menu shows the [plugin icon](/plugins/manifest/surfaces#plugin-icon)
+beside its name, or a plug if the artwork is unavailable. Composer actions
+without an icon keep the text button above
+the composer, as do icon actions beside a replacement composer. A composer
+action's `resolve` receives the pane's current `draft`, so an action that needs
+text can return `{ disabled: !draft.trim() }`; the host re-resolves as the user
+types.
+
+For work that produces a draft, such as rewriting, translating or shortening it,
+call `composer.startTask({ title })`. The host shows one card above the input
+that changes in place, so the composer never moves:
+
+- **Working:** the title, an elapsed clock, **Cancel**, and the steps you report
+  with `task.update({ steps, summary })`. The invoking action shows as pressed;
+  clicking it again cancels. Cancel, a chat switch, or the action retiring aborts
+  `task.signal`; stop your work when it aborts.
+- **Proposal:** `task.propose(text, { title })` shows the text with **Use** (Tab)
+  and **Dismiss** (Escape). Nothing changes and nothing is sent until the user
+  accepts. Accepting replaces the draft as one editor step, so undo, or the
+  receipt's **Undo**, restores the previous draft with its mentions. The promise
+  resolves `"accepted"` or `"dismissed"`. Pass `insert: true` to replace the draft
+  at once instead, with the same single undo step and **Undo** receipt; while
+  dictation or a pending goal locks the editor, the proposal waits for **Use**.
+  Pass `send: true` to insert and then send it as if the user pressed Enter, with
+  the same admission and follow-up queueing; when the composer cannot send yet,
+  the inserted draft stays unsent with its **Undo** receipt.
+- **Failure:** `task.fail(message)` shows the message with **Dismiss** and **Try
+  again**, which runs the action again.
+
+`composer.propose(text, { title })` offers a draft without a working phase. A
+replacement composer has no task card, so `startTask` throws and `propose`
+rejects there; fall back to `setDraft` or report the error.
+
+Work that outlives the card, such as a Gateway run, can show itself again when
+the user returns to the chat. Give the action an `attach` handler: the host
+calls it, with the same context as `run`, each time a built-in composer shows the
+chat. Start a task again there (pass `startedAt` to keep the clock) and follow
+the work, or return at once when there is none. Leaving the chat aborts the
+action's `signal` and retires the card; keep the work going then, and stop it
+only when the task's own signal aborts while `signal` has not, which is the user
+pressing **Cancel**.
+
+```typescript
+host.ui.registerAction({
+  id: "rewrite",
+  label: "Rewrite",
+  icon: "pencilSparkles",
+  placement: "composer",
+  async run({ composer }) {
+    if (!composer) return;
+    const task = composer.startTask({ title: "Rewriting your draft" });
+    try {
+      const text = await rewrite(composer.draft, task.signal, (steps) => task.update({ steps }));
+      await task.propose(text, { title: "Rewritten draft" });
+    } catch (error) {
+      if (!task.signal.aborted) task.fail(error instanceof Error ? error.message : String(error));
+    }
+  },
+});
+```
 
 Replacements can compose the built-in view by calling
 `context.mountDefault(container)`. A workspace replacement should use this

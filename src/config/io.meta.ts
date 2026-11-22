@@ -12,6 +12,7 @@ import { writeConfigMachineStateAsync } from "../state/config-machine-state-asyn
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { resolveConfigWriteTouchedVersion } from "./implicit-primary-era.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import { materializeSkillLibraryToolSplit } from "./skill-library-tool-split-migration.js";
@@ -110,7 +111,11 @@ export function stampConfigWriteMetadata(
     ...migrationStamped,
     meta: {
       ...migrationStamped.meta,
-      lastTouchedVersion: version,
+      lastTouchedVersion: resolveConfigWriteTouchedVersion(
+        migrationStamped,
+        previousConfig,
+        version,
+      ),
     },
   };
 }

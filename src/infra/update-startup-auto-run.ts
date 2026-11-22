@@ -89,6 +89,38 @@ export async function runAutoUpdateCommand(
       "skipped",
     );
   }
+  // Git installs prepare a release and restart into the launcher's trial; no handoff helper.
+  if (params.mode === "git" && params.root) {
+    const [{ prepareUpdate }, { scheduleGatewayRestart }] = await Promise.all([
+      import("../update/run.js"),
+      import("./restart.js"),
+    ]);
+    // prepareUpdate settles the run itself unless a trial is pending; later writes are no-ops.
+    const outcome = await prepareUpdate({
+      runId: params.runId,
+      runningRoot: params.root,
+      runningVersion: VERSION,
+      channel: params.channel,
+      ...(params.devTarget ? { sha: params.devTarget.upstreamSha } : {}),
+    });
+    if (outcome.status === "current") {
+      // Changed plugins load in a new process, as after a core update.
+      if (outcome.pluginsChanged) {
+        scheduleGatewayRestart({ reason: "update.auto" });
+      }
+      return failure(
+        "already-current",
+        `OpenClaw ${outcome.version} is already current.`,
+        "skipped",
+      );
+    }
+    if (outcome.status === "failed") {
+      return failure(outcome.reason, outcome.message);
+    }
+    await recordUpdateRunPhase(params.runId, "restarting");
+    scheduleGatewayRestart({ reason: "update.auto" });
+    return { status: "handoff" };
+  }
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
@@ -208,6 +240,11 @@ export async function runAutoUpdateCommand(
         reason: "managed-service-handoff-already-running",
       });
     }
+    await recordUpdateRunStep(params.runId, {
+      step: "managed-service update handoff",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
     return {
       status: "handoff",
       command: started.command,
@@ -220,23 +257,30 @@ export async function runAutoUpdateCommand(
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
-function candidateDoctorFailureSignature(run: UpdateRunRecord): string | undefined {
-  if (run.trigger !== "campaign" || run.status !== "failed" || !run.reason) {
+// A release that fails these checks rolls back; retrying the same release fails the same way.
+const ACTIVATION_CHECK_STEPS = new Set([
+  "openclaw doctor",
+  "post-update verification",
+  "activated-gateway-startup",
+]);
+
+function activationFailureSignature(run: UpdateRunRecord): string | undefined {
+  // A failed activation usually restores the previous release, which records `rolled-back`.
+  if (
+    run.trigger !== "campaign" ||
+    (run.status !== "failed" && run.status !== "rolled-back") ||
+    !run.reason
+  ) {
     return undefined;
   }
   const failed = run.steps.filter(
-    (step) =>
-      step.status === "failed" &&
-      (step.step === "candidate-doctor" || step.step === "candidate-doctor-lint"),
+    (step) => step.status === "failed" && ACTIVATION_CHECK_STEPS.has(step.step),
   );
   if (!failed.length) {
     return undefined;
   }
-  // Rehearsal directory identities and elapsed time change between identical failures.
-  const stable = (detail: string | undefined) =>
-    detail
-      ?.replace(/openclaw-update-canary-[A-Za-z0-9]+/gu, "openclaw-update-canary-[attempt]")
-      .replace(/\(\d+ms\)/gu, "(elapsed)");
+  // Elapsed time changes between identical failures.
+  const stable = (detail: string | undefined) => detail?.replace(/\(\d+ms\)/gu, "(elapsed)");
   return JSON.stringify([
     run.reason,
     failed
@@ -260,6 +304,11 @@ function candidateDoctorFailureSignature(run: UpdateRunRecord): string | undefin
       ]),
   ]);
 }
+
+const AUTOMATIC_RETRY_BASE_MS = 60 * 60 * 1000;
+const AUTOMATIC_RETRY_MAX_MS = 24 * AUTOMATIC_RETRY_BASE_MS;
+// After the hourly first retry the wait doubles: 2, 4, 8, 16, then the 24 h cap at six failures.
+const AUTOMATIC_FAILURE_HISTORY = 6;
 
 // The owner joins handoff readiness, never the helper's subsequent wait for Gateway exit.
 export async function runCampaignUpdate(params: {
@@ -288,43 +337,57 @@ export async function runCampaignUpdate(params: {
   if (campaignId === undefined || !isCurrent() || !params.canApply()) {
     return "failed";
   }
-  const recent = await listUpdateRunsAsync({ limit: 2, excludeReason: "dry-run" }).catch(
-    (error: unknown) => {
-      params.log.info(
-        "Warning: Automatic update retry history is unavailable; continuing update.",
-        {
-          error: formatErrorMessage(error),
-        },
-      );
-      return [];
-    },
-  );
+  const recent = await listUpdateRunsAsync({
+    limit: AUTOMATIC_FAILURE_HISTORY,
+    excludeReason: "dry-run",
+  }).catch((error: unknown) => {
+    params.log.info("Warning: Automatic update retry history is unavailable; continuing update.", {
+      error: formatErrorMessage(error),
+    });
+    return [];
+  });
   if (!isCurrent() || !params.canApply()) {
     return "failed";
   }
-  const signature = recent[0] && candidateDoctorFailureSignature(recent[0]);
-  // The existing terminal rows are the durable backoff fact. A new candidate or
-  // an intervening operator run breaks the pair without another state store.
-  if (
-    signature &&
-    recent.length === 2 &&
-    recent.every(
-      (run) =>
-        run.target.channel === params.channel &&
-        (params.mode === "git" ? run.target.sha : run.target.version) === params.version &&
-        candidateDoctorFailureSignature(run) === signature,
-    )
-  ) {
+  // The existing terminal rows are the durable backoff fact. A new candidate, a
+  // success, or an intervening operator run breaks the streak without another state store.
+  const failureClass = (run: UpdateRunRecord) =>
+    run.trigger === "campaign" &&
+    (run.status === "failed" || run.status === "rolled-back") &&
+    run.target.channel === params.channel &&
+    (params.mode === "git" ? run.target.sha : run.target.version) === params.version
+      ? (activationFailureSignature(run) ?? run.reason ?? undefined)
+      : undefined;
+  const headClass = recent[0] && failureClass(recent[0]);
+  const streakEnd = recent.findIndex((run) => !headClass || failureClass(run) !== headClass);
+  const streak = streakEnd === -1 ? recent.length : streakEnd;
+  if (streak >= 2 && activationFailureSignature(recent[0]!)) {
     const nextAction =
       "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry; a new candidate also resumes automatic updates.";
     params.log.info(
-      `Warning: Automatic updates paused after repeated candidate-doctor failure. ${nextAction}`,
+      `Warning: Automatic updates paused after repeated activation failure. ${nextAction}`,
       {
         version: params.version,
         reason: recent[0]?.reason,
-        runIds: recent.map((run) => run.runId),
+        runIds: recent.slice(0, 2).map((run) => run.runId),
         nextAction,
       },
+    );
+    return "failed";
+  }
+  // Other identical failures, such as a pre-mutation refusal, keep the hourly first
+  // retry, then double the wait up to the cap.
+  const retryAtMs =
+    streak >= 2
+      ? recent[0]!.updatedAtMs +
+        Math.min(AUTOMATIC_RETRY_BASE_MS * 2 ** (streak - 1), AUTOMATIC_RETRY_MAX_MS)
+      : 0;
+  if (Date.now() < retryAtMs) {
+    const nextAction =
+      "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry now.";
+    params.log.info(
+      `Automatic update deferred after ${streak} identical failures; next attempt after ${new Date(retryAtMs).toISOString()}.`,
+      { version: params.version, reason: recent[0]?.reason, retryAtMs, nextAction },
     );
     return "failed";
   }
@@ -376,11 +439,6 @@ export async function runCampaignUpdate(params: {
     });
     if (outcome.status === "handoff") {
       terminal = undefined;
-      await recordUpdateRunStep(runId, {
-        step: "managed-service update handoff",
-        status: "completed",
-        endedAtMs: Date.now(),
-      });
       if (!isCurrent()) {
         return "failed";
       }

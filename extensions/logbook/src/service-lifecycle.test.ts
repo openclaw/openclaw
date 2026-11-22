@@ -423,3 +423,90 @@ it("drains an admitted standup through the registered service stop", async () =>
     await context.scheduler.stop();
   }
 });
+
+it("pauses new captures without stopping queued analysis through registered controls", async () => {
+  const stateDir = realpathSync(tempDirs.make("logbook-capture-pause-"));
+  const captured = createCapturedPluginRegistration({ id: "logbook" });
+  captured.api.pluginConfig = {
+    captureEnabled: true,
+    captureIntervalSeconds: 5,
+    visionModel: "synthetic/vision",
+  };
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+  captured.api.registerService = (service) => services.push(service);
+  const handlers = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
+  captured.api.registerGatewayMethod = (name, handler) => handlers.set(name, handler);
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  captured.api.runtime.nodes.list = vi.fn(async () => ({
+    nodes: [{ nodeId: "synthetic-node", commands: ["screen.snapshot"] }],
+  }));
+  captured.api.runtime.nodes.invoke = vi.fn(async () => snapshot);
+  captured.api.runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+    return { text: observationText("10:01:00") };
+  });
+  captured.api.runtime.llm.complete = vi.fn(async () =>
+    completion(cardText("10:01:00", "Queued activity", "Analyzed while capture is paused")),
+  );
+  plugin.register({ ...captured.api, runtimeSource });
+  const service = services[0]!;
+  if (service.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
+  const clock = createGatewaySchedulerClock();
+  const context = {
+    config: {},
+    stateDir,
+    logger: quietLogger,
+    scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
+  };
+  const day = dayKeyFor(Date.now());
+  const startMs = new Date(`${day}T10:00:00`).getTime();
+  {
+    await using seed = await openStore(path.join(stateDir, "logbook"));
+    const frameId = await capture(seed, day, startMs, "synthetic queued frame");
+    await seed.createBatch({ day, startMs, endMs: startMs + 60_000, frameIds: [frameId] });
+  }
+  await service.start(context);
+  const call = async (name: string, params = {}) => {
+    const respond = vi.fn();
+    await handlers.get(name)!({ params, respond } as never);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    return respond.mock.calls[0]?.[1];
+  };
+  try {
+    expect(await call("logbook.capture.set", { paused: true })).toMatchObject({
+      capturePaused: true,
+    });
+    const wake = Promise.resolve(clock.advanceBy(60_000));
+    await entered.promise;
+    expect(await call("logbook.status")).toMatchObject({
+      capturePaused: true,
+      analysisRunning: true,
+    });
+    expect(captured.api.runtime.nodes.invoke).not.toHaveBeenCalled();
+    expect(
+      captured.api.runtime.mediaUnderstanding.extractStructuredWithModel,
+    ).toHaveBeenCalledOnce();
+    release.resolve();
+    await wake;
+    await vi.waitFor(async () =>
+      expect(await call("logbook.status")).toMatchObject({ lastBatch: { status: "done" } }),
+    );
+    expect(await call("logbook.timeline", { day })).toMatchObject({
+      cards: [{ title: "Queued activity" }],
+    });
+    expect(await call("logbook.capture.set", { paused: false })).toMatchObject({
+      capturePaused: false,
+    });
+    await clock.advanceBy(5_000);
+    await vi.waitFor(() => expect(captured.api.runtime.nodes.invoke).toHaveBeenCalledOnce());
+  } finally {
+    release.resolve();
+    context.scheduler.beginClose();
+    await service.stop?.(context);
+    await context.scheduler.stop();
+  }
+});

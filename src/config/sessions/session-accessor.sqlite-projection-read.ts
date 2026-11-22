@@ -28,6 +28,7 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import type {
@@ -146,13 +147,12 @@ export function selectActiveTranscriptIdentityRows(database: Pick<TranscriptRead
 }
 
 export function selectActiveTranscriptEventRows(database: Pick<TranscriptReadDatabase, "db">) {
+  // Partial statistics must not turn a bounded active tail into a payload scan and sort.
   return getActiveTranscriptKysely(database)
     .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    );
+    .crossJoin("transcript_events as event")
+    .whereRef("event.session_id", "=", "active.session_id")
+    .whereRef("event.seq", "=", "active.event_seq");
 }
 
 /** Missing upgrade-era facts retain native accounting without a reader backfill. */
@@ -577,4 +577,20 @@ export function readCurrentProjectionSnapshot<T>(
         operationLabel: "sessions.history.read",
         diagnosticContext: diagnostics,
       });
+}
+
+/** Borrow the caller's existing transaction without opening a store or scheduling reconciliation. */
+export function withBorrowedProjectionSnapshot<T>(
+  database: TranscriptReadDatabase,
+  resolved: CurrentTranscriptProjection["resolved"],
+  read: (projection: CurrentTranscriptProjection) => T,
+): T {
+  if (!database.db.isTransaction) {
+    throw new Error("Transcript projection lost its borrowed transaction");
+  }
+  const result = readCurrentProjectionSnapshot(database, resolved, read);
+  if (result.kind === "value") {
+    return result.value;
+  }
+  throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }

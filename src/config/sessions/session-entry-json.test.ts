@@ -96,12 +96,13 @@ describe("canonical session numeric metadata", () => {
   });
 
   it("keeps a graceful resume marker private and scoped to its current incarnation", () => {
-    const resumeAfterRestart = { queuedInputIds: ["accepted-before-shutdown"] };
+    const resumeAfterRestart = {};
     const entry = admitCanonicalSessionEntry({
       sessionId: "session",
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
       mainRestartRecovery: { cycleId: "upgrade", revision: 1, executionIdentity: "retired" },
       restartRecoveryOperatorSource: { snapshot: { obsolete: true } },
       pendingExecNotifications: { obsolete: {} },
@@ -111,14 +112,17 @@ describe("canonical session numeric metadata", () => {
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
       mainRestartRecovery: { cycleId: "upgrade" },
     });
     const publicEntry = projectPublicSessionEntry(entry);
     expect(publicEntry).not.toHaveProperty("resumeAfterRestart");
+    expect(publicEntry).not.toHaveProperty("lifecycleRestartScope");
     expect(publicEntry).not.toHaveProperty("mainRestartRecovery");
     expect(preserveGenerationPrivateFields(entry, { label: "Renamed" })).toMatchObject({
       label: "Renamed",
       resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
     });
     for (const next of [
       publicEntry,
@@ -136,6 +140,13 @@ describe("canonical session numeric metadata", () => {
         {},
       ).entry;
       expect(written.mainRestartRecovery).toBeUndefined();
+      expect(written.lifecycleRestartScope).toBe(
+        next.sessionId === entry.sessionId &&
+          next.lifecycleRevision === entry.lifecycleRevision &&
+          !("archivedAt" in next)
+          ? "token-a"
+          : undefined,
+      );
       expect(written.resumeAfterRestart).toEqual(
         next === publicEntry ? resumeAfterRestart : undefined,
       );
