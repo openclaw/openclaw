@@ -9,12 +9,15 @@ import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
 import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
+import { resolveMcpConnectSurface } from "./agent-bundle-mcp-operator-connect.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { startOperatorMcpOAuthLink } from "./mcp-oauth-link.js";
 import {
@@ -25,6 +28,7 @@ import {
   completeMcpOAuthAuthorization,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
+  readMcpOAuthCredentialsStatuses,
   resolveMcpOAuthAccessToken as resolveToken,
   startMcpOAuthAuthorization,
 } from "./mcp-oauth.js";
@@ -584,6 +588,48 @@ describe("MCP OAuth provider", () => {
     );
     await expect(resolveRemoteToken()).resolves.toBe("dynamic-access");
     expect(authMock).not.toHaveBeenCalled();
+  });
+
+  itWithHome("asks for sign-in again after the configured client changes", async () => {
+    seedMcpOAuthStoreForTest(REMOTE_IDENTITY.storeKey, {
+      clientInformation: { client_id: "old-app" },
+      tokens: makeTokens("old-access", "old-refresh"),
+      tokenExpiresAt: Date.now() + 3_600_000,
+    });
+    const server = (clientId: string) => ({
+      url: REMOTE_IDENTITY.serverUrl,
+      transport: "streamable-http" as const,
+      auth: "oauth" as const,
+      oauth: { clientId },
+    });
+    const connectTools = async (clientId: string) => {
+      const cfg: OpenClawConfig = { mcp: { servers: { "Remote Docs": server(clientId) } } };
+      const catalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
+      const surface = await resolveMcpConnectSurface(
+        fixtureRuntime(() => catalog, {}),
+        catalog,
+        {
+          cfg,
+          metadata: createEmptyPluginMetadataSnapshot(),
+          senderIsOwner: true,
+          chatType: "direct",
+          isTurnTainted: () => false,
+        },
+      );
+      return Object.keys(surface.catalog.servers);
+    };
+    // Same server name and URL keep the row; only the configured client changed.
+    await expect(
+      readMcpOAuthCredentialsStatus(REMOTE_IDENTITY, { clientId: "new-app" }),
+    ).resolves.toEqual({ state: "requires-authorization" });
+    await expect(
+      readMcpOAuthCredentialsStatuses([
+        { identity: REMOTE_IDENTITY, oauth: { clientId: "new-app" } },
+        { identity: REMOTE_IDENTITY, oauth: { clientId: "old-app" } },
+      ]),
+    ).resolves.toMatchObject([{ state: "requires-authorization" }, { state: "authorized" }]);
+    await expect(connectTools("new-app")).resolves.toEqual(["Remote Docs"]);
+    await expect(connectTools("old-app")).resolves.toEqual([]);
   });
 
   itWithHome("fails closed when a configured client secret was not resolved", async () => {

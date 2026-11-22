@@ -16,6 +16,7 @@ import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lea
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
+import { isMcpOAuthStoreBoundToClient } from "./mcp-oauth-status.js";
 import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
@@ -39,13 +40,17 @@ export class McpOAuthClientConfigError extends Error {
   }
 }
 
+/** The pre-registered client this config requires stored credentials to belong to, if any. */
+export function configuredMcpOAuthClientId(config: McpOAuthConfig | undefined): string | undefined {
+  return normalizeOptionalString(config?.clientId);
+}
+
 /** Whether stored credentials belong to the configured pre-registered client, if any. */
 export function isMcpOAuthStoreBoundToConfiguredClient(
   store: McpOAuthStore,
   config: McpOAuthConfig | undefined,
 ): boolean {
-  const clientId = normalizeOptionalString(config?.clientId);
-  return clientId === undefined || store.clientInformation?.client_id === clientId;
+  return isMcpOAuthStoreBoundToClient(store, configuredMcpOAuthClientId(config));
 }
 
 function resolveConfiguredClient(

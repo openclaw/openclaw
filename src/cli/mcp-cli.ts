@@ -260,6 +260,7 @@ async function collectMcpDoctorIssues(params: {
         if (asRecord(server.oauth)?.identity !== "per-requester") {
           const authStatus = await readMcpOAuthCredentialsStatus(
             operatorMcpOAuthIdentity(name, resolved.url),
+            resolved.oauth,
           );
           if (authStatus.state !== "authorized") {
             const state =
@@ -404,7 +405,7 @@ async function buildMcpStatusEntries(
           hasCodeVerifier: Boolean(store.codeVerifier),
           hasDiscoveryState: Boolean(store.discoveryState),
           hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity, store)),
+          ...(await readMcpOAuthCredentialsStatus(identity, resolved.oauth, store)),
         };
       } else {
         entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);

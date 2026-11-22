@@ -180,7 +180,10 @@ export async function createRequesterMcpConnect(params: {
   const identities = configured.map(({ serverName, resolved }) =>
     requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
   );
-  const statuses = await readMcpOAuthCredentialsStatuses(identities);
+  // Per-requester servers cannot use a pre-registered client, so no client binding applies.
+  const statuses = await readMcpOAuthCredentialsStatuses(
+    identities.map((identity) => ({ identity })),
+  );
   const servers = new Map<string, () => Promise<AgentToolResult<unknown>>>();
   const authorizedServerNames: string[] = [];
   for (const [index, { serverName, resolved }] of configured.entries()) {

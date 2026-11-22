@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOperatorMcpOAuthConnection } from "../plugins/mcp-auth-status.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { hasRegisteredOAuthRedirect, McpOAuthClientConfigError } from "./mcp-oauth-provider.js";
+import {
+  configuredMcpOAuthClientId,
+  hasRegisteredOAuthRedirect,
+  McpOAuthClientConfigError,
+} from "./mcp-oauth-provider.js";
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   completeOAuthCallback,
@@ -83,11 +87,14 @@ export async function startOperatorMcpOAuthLink(
     params.assertCurrent?.();
     // Saved tokens keep their original client registration. A client registered for another
     // callback cannot complete this redirect, so stop before publishing a doomed attempt.
+    // A pre-registered client never reuses a stored registration.
     const client = stored.clientInformation;
     const pinnedToOtherCallback =
       !pending &&
+      configuredMcpOAuthClientId(config.oauth) === undefined &&
       stored.tokens !== undefined &&
-      (await readMcpOAuthCredentialsStatus(identity, stored)).state !== "authorized" &&
+      (await readMcpOAuthCredentialsStatus(identity, config.oauth, stored)).state !==
+        "authorized" &&
       client !== undefined &&
       "redirect_uris" in client &&
       Array.isArray(client.redirect_uris) &&

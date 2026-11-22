@@ -21,6 +21,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
+  type McpOAuthStatusQuery,
 } from "./mcp-oauth-status.js";
 import { McpOAuthStoreCorruptionError } from "./mcp-oauth-store-error.js";
 import type { McpOAuthStore } from "./mcp-oauth-store.types.js";
@@ -230,7 +231,10 @@ export function readMcpOAuthStoreInDatabase(
 export const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
 
 export type McpOAuthReadOnlyOperations = {
-  "mcpOAuth.statuses": { input: readonly string[]; output: McpOAuthPrincipalStatus[] };
+  "mcpOAuth.statuses": {
+    input: readonly McpOAuthStatusQuery[];
+    output: McpOAuthPrincipalStatus[];
+  };
   "mcpOAuth.readOnly": { input: string; output: McpOAuthStore };
   "mcpOAuth.keys": { input: string; output: string[] };
   "mcpOAuth.pending": { input: string; output: string | undefined };
@@ -248,11 +252,12 @@ export function readMcpOAuthStoreIfPresentInDatabase(
 
 export function readMcpOAuthStatusesInDatabase(
   database: EngineConnection,
-  storeKeys: readonly string[],
+  queries: readonly McpOAuthStatusQuery[],
 ): McpOAuthPrincipalStatus[] {
   if (!tableExists(database, "mcp_oauth_stores")) {
-    return storeKeys.map(() => projectMcpOAuthCredentialsStatus({}));
+    return queries.map(() => projectMcpOAuthCredentialsStatus({}));
   }
+  const storeKeys = queries.map((query) => query.storeKey);
   const rows = executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<McpOAuthDatabase>(database)
@@ -262,8 +267,11 @@ export function readMcpOAuthStatusesInDatabase(
   ).rows;
   const rowsByKey = new Map(rows.map((row) => [row.store_key, row]));
   // Decode in caller order so a corrupt row reports the same first failing principal.
-  return storeKeys.map((storeKey) =>
-    projectMcpOAuthCredentialsStatus(storeFromRow(storeKey, rowsByKey.get(toUSVString(storeKey)))),
+  return queries.map(({ storeKey, clientId }) =>
+    projectMcpOAuthCredentialsStatus(
+      storeFromRow(storeKey, rowsByKey.get(toUSVString(storeKey))),
+      clientId,
+    ),
   );
 }
 

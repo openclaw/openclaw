@@ -158,7 +158,7 @@ export async function readPluginMcpAuthStatus(params: {
       // An operator override can reuse a name for a different service. Only the
       // exact plugin endpoint may present that connection's credential state.
       return configured && configured.url === url
-        ? [operatorMcpOAuthIdentity(name, configured.url)]
+        ? [{ identity: operatorMcpOAuthIdentity(name, configured.url), oauth: configured.oauth }]
         : [];
     },
   );
@@ -167,7 +167,7 @@ export async function readPluginMcpAuthStatus(params: {
   }
   const { readMcpOAuthCredentialsStatuses } = await import("../agents/mcp-oauth.js");
   const statuses = await readMcpOAuthCredentialsStatuses(identities);
-  return identities.map((identity, index) => ({
+  return identities.map(({ identity }, index) => ({
     serverName: identity.serverName,
     state: statuses[index]!.state,
   }));

@@ -16,6 +16,7 @@ import {
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
 import {
+  configuredMcpOAuthClientId,
   createMcpOAuthClientProvider,
   isMcpOAuthStoreBoundToConfiguredClient,
   McpOAuthClientConfigError,
@@ -349,20 +350,29 @@ export async function countMcpOAuthPrincipals(identity: McpOAuthIdentity): Promi
   );
 }
 
-/** Read one ordered requester set within a single current storage lifetime. */
+/** A principal's stored sign-in, checked against its server's OAuth config. */
+export type McpOAuthStatusTarget = { identity: McpOAuthIdentity; oauth?: McpOAuthConfig };
+
+/** Read one ordered principal set within a single current storage lifetime. */
 export async function readMcpOAuthCredentialsStatuses(
-  identities: readonly McpOAuthIdentity[],
+  targets: readonly McpOAuthStatusTarget[],
 ): Promise<McpOAuthPrincipalStatus[]> {
-  return readMcpOAuthStoreStatuses(identities.map((identity) => identity.storeKey));
+  return readMcpOAuthStoreStatuses(
+    targets.map(({ identity, oauth }) => {
+      const clientId = configuredMcpOAuthClientId(oauth);
+      return clientId ? { storeKey: identity.storeKey, clientId } : { storeKey: identity.storeKey };
+    }),
+  );
 }
 
 /** Reads stored OAuth credential presence without exposing values or creating state. */
 export async function readMcpOAuthCredentialsStatus(
   identity: McpOAuthIdentity,
+  oauth?: McpOAuthConfig,
   preparedStore?: McpOAuthStore,
 ): Promise<McpOAuthPrincipalStatus> {
   const store = preparedStore ?? (await readMcpOAuthStoreReadOnly(identity.storeKey));
-  return projectMcpOAuthCredentialsStatus(store);
+  return projectMcpOAuthCredentialsStatus(store, configuredMcpOAuthClientId(oauth));
 }
 
 async function runMcpOAuthAuthorizationAttempt(
