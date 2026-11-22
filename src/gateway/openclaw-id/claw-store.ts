@@ -122,7 +122,6 @@ export function assertSameClawIdentity(
   }
 }
 
-/** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */
 /** A claw record with no authority, binding or Discovery progress yet. */
 export function emptyRecord(clawId: string): StoredClaw {
   return {
@@ -140,6 +139,7 @@ export function emptyRecord(clawId: string): StoredClaw {
   };
 }
 
+/** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */
 export function assertStoredClawText(value: unknown, field: string): void {
   if (value !== null && (typeof value !== "string" || value.length > 256)) {
     throw new Error(`OpenClaw ID ${field} must be null or at most 256 characters`);

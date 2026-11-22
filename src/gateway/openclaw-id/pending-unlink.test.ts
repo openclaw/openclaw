@@ -34,11 +34,15 @@ async function setup(answers: Array<() => Response>) {
   const sender = createPendingUnlinkSender({
     // SAFETY: the sender reads only pending_unlinks.
     current: () => record as StoredClaw,
-    settle: async (_statement, outcome) => {
-      record =
-        outcome.kind === "confirmed"
-          ? {}
-          : { pending_unlinks: [{ ...record.pending_unlinks![0]!, refused: outcome.code }] };
+    settle: async (settled, outcome) => {
+      const kept = record.pending_unlinks!.flatMap((pending) =>
+        pending.statement.body.claw_id !== settled.body.claw_id
+          ? [pending]
+          : outcome.kind === "confirmed"
+            ? []
+            : [{ ...pending, refused: outcome.code }],
+      );
+      record = kept.length ? { pending_unlinks: kept } : {};
     },
     signer: async () => signer,
     log,
@@ -46,7 +50,16 @@ async function setup(answers: Array<() => Response>) {
     initialDelayMs: 1_000,
     random: () => 1,
   });
-  return { sender, fetchImpl, log, pending: () => record.pending_unlinks };
+  const enqueue = async () => {
+    const pending = record.pending_unlinks![0]!;
+    const queued = await signStatement(
+      "ClawUnlink",
+      { claw_id: "b".repeat(32), binding_seq: 1 },
+      signer,
+    );
+    record = { pending_unlinks: [...record.pending_unlinks!, { ...pending, statement: queued }] };
+  };
+  return { sender, fetchImpl, log, enqueue, pending: () => record.pending_unlinks };
 }
 
 it("keeps an unlink Discovery could not take and sends it again after the backoff", async () => {
@@ -58,6 +71,8 @@ it("keeps an unlink Discovery could not take and sends it again after the backof
   await sender.start();
   expect(fetchImpl).toHaveBeenCalledTimes(1);
   expect(pending()).toHaveLength(1);
+  await sender.start();
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(1_000);
   // Request signing uses WebCrypto, which settles outside the fake clock.
   await vi.waitFor(() => expect(pending()).toBeUndefined());
@@ -108,4 +123,24 @@ it("sends again when started after a stop that cut a send short", async () => {
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   expect(pending()).toBeUndefined();
   sender.stop();
+});
+
+it("flushes a newly queued unlink after an active pass without dropping it", async () => {
+  const held = Promise.withResolvers<Response>();
+  const { sender, fetchImpl, enqueue, pending } = await setup([
+    () => Response.json({ claw_id: "b".repeat(32), hostname: "h", unlinked_at: 1 }),
+  ]);
+  fetchImpl.mockImplementationOnce(() => held.promise);
+  const first = sender.start();
+  try {
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    await enqueue();
+    const flush = sender.flush();
+    held.resolve(Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }));
+    await Promise.all([first, flush]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pending()).toBeUndefined();
+  } finally {
+    sender.stop();
+  }
 });

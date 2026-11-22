@@ -56,8 +56,8 @@ export function createServiceUnlink<Removal>(deps: {
   // Unlinks committed here that Discovery has not confirmed (pending-unlink.ts), loaded on use.
   let sender: ReturnType<typeof createPendingUnlinkSender> | undefined;
 
-  // Sends pending unlinks now; resolves when that attempt ends.
-  const sendPending = async () => {
+  // Resumes lifecycle delivery or flushes a newly committed unlink.
+  const sendPending = async (mode: "resume" | "flush") => {
     const owner = await deps.getAuthority();
     if (!deps.enabled() || (!sender && !owner.current()?.pending_unlinks?.length)) {
       return;
@@ -73,14 +73,14 @@ export function createServiceUnlink<Removal>(deps: {
     }
     // A stop during the import leaves the sender idle.
     if (deps.enabled()) {
-      await sender.start();
+      await (mode === "flush" ? sender.flush() : sender.start());
     }
   };
 
   return {
     /** Sends pending unlinks at start; they carry their own Discovery URL. */
     resume: (): void => {
-      void sendPending().catch((error: unknown) =>
+      void sendPending("resume").catch((error: unknown) =>
         deps.log.warn(`openclaw-id: pending unlink failed: ${message(error)}`),
       );
     },
@@ -132,7 +132,7 @@ export function createServiceUnlink<Removal>(deps: {
           return undefined;
         }
       };
-      const sent = discoveryUrl ? attempt(sendPending) : Promise.resolve();
+      const sent = discoveryUrl ? attempt(() => sendPending("flush")) : Promise.resolve();
       const removal = await attempt(() => deps.applyEvents(result.events));
       await attempt(deps.restartRemoteAccess);
       await sent;

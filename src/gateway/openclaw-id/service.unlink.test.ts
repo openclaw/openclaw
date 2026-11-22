@@ -174,6 +174,55 @@ describe("unlink", () => {
     }
   });
 
+  it("returns the committed pending unlink after one deadline despite runtime resumption", async () => {
+    const { claw, service } = await clawWithMember();
+    const deadlines: AbortController[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      deadlines.push(controller);
+      return controller.signal;
+    });
+    const arrived = Promise.withResolvers<AbortController>();
+    const duplicate = Promise.withResolvers<"duplicate">();
+    let attempts = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (!url.pathname.endsWith(`/claws/${claw.clawId}/unlink`)) {
+        return new Response("", { status: 404 });
+      }
+      attempts += 1;
+      if (attempts > 1) {
+        duplicate.resolve("duplicate");
+      }
+      arrived.resolve(deadlines.at(-1)!);
+      const signal = init?.signal;
+      return await new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(new Error("request aborted", { cause: signal?.reason }));
+        if (signal?.aborted) {
+          abort();
+        } else {
+          signal?.addEventListener("abort", abort, { once: true });
+        }
+      });
+    });
+    const request = service.unlink.run("local_operator", claw.clawId);
+    try {
+      const deadline = await arrived.promise;
+      await service.reconcileRuntimePolicy();
+      deadline.abort(new DOMException("Discovery deadline", "TimeoutError"));
+      expect(await Promise.race([request, duplicate.promise])).toMatchObject({
+        ok: true,
+        discovery: "pending",
+      });
+      expect(attempts).toBe(1);
+      expect(claw.authority.current()?.pending_unlinks).toHaveLength(1);
+      expect(claw.authority.current()?.authority).toBeNull();
+    } finally {
+      await service.stop();
+      await request;
+    }
+  });
+
   it("treats Discovery's `unlinked` answer to a resend as done", async () => {
     const { claw, service } = await clawWithMember();
     discovery(() =>
