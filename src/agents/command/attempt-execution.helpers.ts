@@ -35,8 +35,8 @@ import {
   isClaudeToolResultBlockType,
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
-import { applyConfiguredClaudeCliPlacement } from "../cli-runner/configured-node-placement.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import { applyConfiguredClaudeCliPlacement } from "../cli-runner/prepare-claude.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 

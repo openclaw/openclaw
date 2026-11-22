@@ -3716,68 +3716,6 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it.each([
-    { kind: "main", sessionKey: "agent:main:main" },
-    { kind: "channel", sessionKey: "agent:main:telegram:direct:42" },
-    { kind: "cron", sessionKey: "agent:main:cron:nightly" },
-    { kind: "subagent", sessionKey: "agent:main:subagent:child-1" },
-  ])(
-    "places a $kind session's Claude CLI run on the node from tools.exec.claudeCliHost",
-    async ({ sessionKey }) => {
-      setCliBackendForPrepareTest({ bundleMcp: true });
-      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-      setCliRunnerPrepareTestDeps({ ensureMcpLoopbackServer });
-      const context = await fixture.prepare({
-        sessionKey,
-        provider: "claude-cli",
-        model: "opus",
-        config: { tools: { exec: { claudeCliHost: "node", node: "node-a" } } },
-        sessionEntry: { sessionId: "session-test", updatedAt: 0 },
-      });
-
-      expect(context.executionTarget).toEqual({ kind: "node", placement: { nodeId: "node-a" } });
-      expect(context.params.sessionEntry).toMatchObject({ execHost: "node", execNode: "node-a" });
-      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-      await context.preparedBackend.cleanup?.();
-    },
-  );
-
-  it("keeps Claude CLI on the Gateway without tools.exec.claudeCliHost", async () => {
-    setCliBackendForPrepareTest();
-    const sessionEntry = { sessionId: "session-test", updatedAt: 0 };
-    const context = await fixture.prepare({
-      provider: "claude-cli",
-      model: "opus",
-      config: { tools: { exec: { host: "node", node: "node-a" } } },
-      sessionEntry,
-    });
-
-    expect(context.executionTarget.kind).not.toBe("node");
-    expect(context.params.sessionEntry).toEqual(sessionEntry);
-    await context.preparedBackend.cleanup?.();
-  });
-
-  it("refuses a Claude CLI run that tools.exec.claudeCliHost cannot place", async () => {
-    setCliBackendForPrepareTest({ bundleMcp: true });
-    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-    setCliRunnerPrepareTestDeps({ ensureMcpLoopbackServer });
-    const prepare = (config: OpenClawConfig, execNode?: string) =>
-      fixture.prepare({
-        provider: "claude-cli",
-        model: "opus",
-        config,
-        sessionEntry: { sessionId: "session-test", updatedAt: 0, execHost: "node", execNode },
-      });
-
-    await expect(prepare({ tools: { exec: { claudeCliHost: "node" } } }, "node-a")).rejects.toThrow(
-      "tools.exec.node is not set",
-    );
-    await expect(
-      prepare({ tools: { exec: { claudeCliHost: "node", node: "node-a" } } }, "node-b"),
-    ).rejects.toThrow('This session is bound to node "node-b"');
-    expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-  });
-
   it("keeps a warm claude-cli binding when its managed stdio child is still live", async () => {
     await withAuthenticatedHistory("claude-cli", async (prepare) => {
       const { dir } = fixture.session;

@@ -11,8 +11,10 @@ import {
   sessionDeliveryRoute,
 } from "../utils/delivery-context.read.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import { applyConfiguredClaudeCliPlacement } from "./cli-runner/configured-node-placement.js";
-import { detectNodeClaudePlacement } from "./cli-runner/prepare-claude.js";
+import {
+  applyConfiguredClaudeCliPlacement,
+  detectNodeClaudePlacement,
+} from "./cli-runner/prepare-claude.js";
 import { selectAgentHarness } from "./harness/selection.js";
 import { agentHarnessExposesOpenClawTools } from "./harness/tool-surface.js";
 import {
