@@ -6,7 +6,7 @@
   min-height: 0;
   height: 100%;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .chat-workspace-mobile__rail {
@@ -26,8 +26,10 @@
   background: transparent;
 }
 
-.chat-workspace-mobile__search:focus-within {
-  border-color: var(--muted);
+.chat-workspace-mobile__search:has(input:focus-visible) {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
 }
 
 .chat-workspace-mobile__search > svg {
@@ -50,7 +52,7 @@
   box-shadow: none;
   color: var(--text);
   font: inherit;
-  font-size: 16px;
+  font-size: max(16px, calc(16px * var(--control-ui-text-scale, 1)));
 }
 
 .chat-workspace-mobile__search > input:focus-visible {
@@ -75,7 +77,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
   white-space: nowrap;
   cursor: default;
 }
@@ -194,7 +196,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   cursor: default;
 }
 
@@ -268,7 +270,7 @@
 .chat-workspace-mobile__name {
   display: flex;
   min-width: 0;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale, 1));
 }
 
 .chat-workspace-mobile__stem,
@@ -284,14 +286,14 @@
 
 .chat-workspace-mobile__directory {
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(16px * var(--control-ui-text-scale, 1));
 }
 
 .chat-workspace-mobile__meta {
   flex: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 

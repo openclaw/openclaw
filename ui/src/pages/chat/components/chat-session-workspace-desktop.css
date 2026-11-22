@@ -123,7 +123,7 @@
   width: 100%;
   text-align: start;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   border-radius: var(--radius-sm);
 }
 
@@ -249,14 +249,14 @@
   overflow: hidden;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   padding-block-start: 2px;
 }
 
 .workspace-desktop__notice {
   color: var(--muted);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .workspace-breadcrumb {

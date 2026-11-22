@@ -5,6 +5,7 @@ import "../../../styles/chat.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
+import { createWorkspace } from "./chat-session-workspace-rail.test-support.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 it.each([false, true])(
@@ -577,3 +578,44 @@ it.each([400, 820, 1280])(
     await waitForSolid(() => expect(rows().length).toBeGreaterThan(2));
   },
 );
+
+it("honors the text setting and shows keyboard focus in mobile Files search", async () => {
+  const { page, userEvent } = await import("vitest/browser");
+  await page.viewport(390, 844);
+  const root = document.documentElement;
+  const scale = root.style.getPropertyValue("--control-ui-text-scale");
+  onTestFinished(() =>
+    scale
+      ? root.style.setProperty("--control-ui-text-scale", scale)
+      : root.style.removeProperty("--control-ui-text-scale"),
+  );
+  root.style.setProperty("--control-ui-text-scale", "1.4");
+  const workspace = createWorkspace({
+    presentation: "mobile",
+    connected: true,
+    list: {
+      root: "/workspace",
+      files: [
+        { name: "chat.ts", path: "ui/src/ui/views/chat.ts", kind: "modified", missing: false },
+      ],
+      browser: { path: "", entries: [] },
+    },
+  });
+  const view = mountSolid(() => <SessionWorkspaceRail workspace={workspace} />);
+  onTestFinished(() => view.unmount());
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-workspace-mobile__name")).not.toBeNull(),
+  );
+  const input = view.getByRole("searchbox") as HTMLInputElement;
+  expect(
+    getComputedStyle(view.container.querySelector(".chat-workspace-mobile__name")!).fontSize,
+  ).toBe("19.6px");
+  expect(
+    getComputedStyle(view.container.querySelector(".chat-workspace-mobile__directory")!).fontSize,
+  ).toBe("16.8px");
+  await userEvent.keyboard("{Tab}");
+  expect(document.activeElement).toBe(input);
+  expect(getComputedStyle(input.closest("label")!).outlineStyle).toBe("solid");
+  root.style.setProperty("--control-ui-text-scale", "0.9");
+  expect(parseFloat(getComputedStyle(input).fontSize)).toBeGreaterThanOrEqual(16);
+});
