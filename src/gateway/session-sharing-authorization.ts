@@ -11,6 +11,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
+import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import {
   authenticatedProfileUnavailableError,
@@ -92,7 +93,16 @@ export type SessionMutationAuthorizationParams = {
 export function prepareSessionMutationAuthorizationRequest(
   request: SessionMutationAuthorizationParams,
 ) {
-  let params = { ...request };
+  const publicationAuthority = readParticipantPublicationAuthority(
+    request.method,
+    request.requestParams,
+  );
+  let params = {
+    ...request,
+    ...(publicationAuthority
+      ? { participantRunAuthority: publicationAuthority, participationRequired: undefined }
+      : {}),
+  };
   params.preparedProfiles?.readCurrent();
   if (params.method === "chat.send") {
     const normalized = resolveChatSendAuthorizationParams(

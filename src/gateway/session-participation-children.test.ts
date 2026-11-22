@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -11,22 +12,24 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeAgentTurnSession } from "./agent-turn/agent-turn-source-admission.js";
+import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { bindInProcessSessionRun } from "./in-process-session-run.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
+import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
 import { revokeSessionParticipation } from "./session-participation-lifetime.js";
 import { prepareSessionParticipationRun } from "./session-principal-run-authority.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-async function fixture() {
+async function fixture(tools = ["read", "write"]) {
   const cfg = rolePolicyConfig();
   const role = cfg.gateway!.roles!.definitions.invited!;
   role.sessions.maxInvitedAccess = "send";
-  role.sessions.invitedTools = ["read", "write"];
+  role.sessions.invitedTools = tools;
   role.scopes = ["operator.sessions.read"];
   setRuntimeConfigSnapshot(cfg);
   const client = roleClient("invited", "child-participant");
@@ -50,7 +53,7 @@ async function fixture() {
     profileId,
     sessionKey: source.sessionKey,
     permission: "guarded",
-    tools: ["read", "write"],
+    tools,
     source: {
       agentId: "main",
       sessionId: "root-id",
@@ -257,3 +260,73 @@ it.each(["captured", "unavailable"] as const)(
     );
   },
 );
+
+it("binds participant publication to the current native child without scope or owner-action grants", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const f = await fixture(["read", "github_publish"]);
+    const source = (await f.prepare())!;
+    using _ = { [Symbol.dispose]: source.release };
+    const client = {
+      ...f.client,
+      internal: { syntheticClient: true as const, operatorRunAuthority: source.authority },
+    };
+    const registry = createGatewayMethodRegistry([]);
+    const request = { ...f.child, idempotencyKey: "participant-publication" };
+    expect(
+      authorizeGatewayMethod("sessions.github.publish", client, request, registry, f.context).error,
+    ).not.toBeNull();
+    await withGatewayToolCallerIdentity(
+      { ...f.child, operatorAuthority: source.authority },
+      async () => {
+        const dispatch = authorizeGatewayMethod(
+          "sessions.github.publish",
+          client,
+          request,
+          registry,
+          f.context,
+        );
+        expect(dispatch).toEqual({ error: null, participationRequired: true });
+        withPluginRuntimeGatewayRequestScope(
+          { context: f.context, isWebchatConnect: () => false },
+          () => {
+            const routed = resolveInProcessGatewayDispatch("sessions.github.publish", request, {
+              forceSyntheticClient: true,
+              syntheticScopeMode: "minimum",
+            });
+            expect(routed.client.connect.scopes).toEqual(["operator.sessions.read"]);
+            expect(routed.client.internal?.operatorRunAuthority?.profileId).toBe(f.profileId);
+          },
+        );
+        const admitted = await resolveSessionMutationAuthorizationAsync({
+          client,
+          context: f.context,
+          method: "sessions.github.publish",
+          requestParams: request,
+          participationRequired: dispatch.participationRequired,
+        });
+        expect(admitted.error).toBeNull();
+        admitted.authorization?.assertCurrent();
+        admitted.authorization?.release?.();
+        expect(client.connect.scopes).toEqual(["operator.sessions.read"]);
+        for (const action of ["inspect", "merge", "close"]) {
+          expect(() =>
+            readParticipantPublicationAuthority("sessions.github.action", { ...request, action }),
+          ).toThrow("Participating GitHub");
+        }
+        for (const invalid of [
+          { ...request, sessionKey: f.source.sessionKey },
+          { ...request, agentId: "other" },
+          { ...request, publishingSessionKey: f.source.sessionKey },
+        ]) {
+          expect(() =>
+            readParticipantPublicationAuthority("sessions.github.publish", invalid),
+          ).toThrow("Participating GitHub");
+        }
+        setSessionMemberAccess(f.source, { identityId: f.profileId, access: "read" });
+        expect(() =>
+          readParticipantPublicationAuthority("sessions.github.publish", request),
+        ).toThrow();
+      },
+    );
+  });
+});

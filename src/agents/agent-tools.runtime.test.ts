@@ -118,7 +118,7 @@ describe("wrapToolWithAbortSignal", () => {
         ["github_publish", { action: "prepare_pr" }, true],
         ["github_publish", { workspacePath: "/task" }, true],
         ["github_publish", { action: "publish", workspacePath: "/task" }, true],
-        ["github_publish", { action: "publish" }, false],
+        ["github_publish", { action: "publish" }, true],
         ["github_publish", { action: "edit", workspacePath: "/task" }, false],
       ] as const) {
         const runAbort = new AbortController();

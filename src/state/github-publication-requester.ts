@@ -2,6 +2,37 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
 
+const publicationTargetSchema = z.strictObject({
+  agentId: z.string().min(1),
+  sessionKey: z.string().min(1),
+  sessionId: z.string().min(1),
+  lifecycleRevision: z.string().min(1).nullable(),
+});
+const participationSchema = z.strictObject({
+  ceiling: z.strictObject({
+    kind: z.literal("send"),
+    profileId: z.string().min(1).max(128),
+    sessionKey: z.string().min(1),
+    tools: z.array(z.string().min(1)).optional(),
+    permission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
+    execPolicy: z
+      .strictObject({
+        security: z.enum(["deny", "allowlist", "full"]),
+        ask: z.enum(["off", "on-miss", "always"]),
+        denyMisses: z.literal(true).optional(),
+      })
+      .optional(),
+    source: z.strictObject({
+      agentId: z.string().min(1),
+      sessionId: z.string().min(1),
+      lifecycleRevision: z.string().min(1).nullable(),
+      creatorProfileId: z.string().min(1),
+      root: z.string().min(1),
+    }),
+  }),
+  target: publicationTargetSchema,
+});
+
 const requesterSchema = z
   .strictObject({
     version: z.literal(1),
@@ -19,12 +50,9 @@ const requesterSchema = z
         aliasBindingIds: z.array(z.uuid()),
       })
       .nullable(),
-    origin: z
-      .strictObject({
-        agentId: z.string().min(1),
-        sessionKey: z.string().min(1),
-        sessionId: z.string().min(1),
-        lifecycleRevision: z.string().min(1).nullable(),
+    participation: participationSchema.optional(),
+    origin: publicationTargetSchema
+      .extend({
         runId: z.string().min(1).optional(),
       })
       .optional(),
@@ -39,12 +67,30 @@ const requesterSchema = z
     (value) =>
       !value.openclawIdPrincipal ||
       (value.actor.kind === "operator" && value.openclawIdPrincipal.kind !== "node"),
+  )
+  .refine(
+    (value) =>
+      !value.participation ||
+      (value.actor.kind === "operator" &&
+        value.actor.profileId === value.participation.ceiling.profileId &&
+        value.participation.target.agentId === value.participation.ceiling.source.agentId),
   );
 
 type RequesterData = z.infer<typeof requesterSchema>;
 export type GitHubPublicationOrigin = Readonly<NonNullable<RequesterData["origin"]>>;
+type ParticipationData = z.infer<typeof participationSchema>;
+export type GitHubPublicationParticipation = Readonly<{
+  ceiling: Readonly<
+    Omit<ParticipationData["ceiling"], "tools" | "source" | "execPolicy"> & {
+      tools?: readonly string[];
+      source: Readonly<ParticipationData["ceiling"]["source"]>;
+      execPolicy?: Readonly<NonNullable<ParticipationData["ceiling"]["execPolicy"]>>;
+    }
+  >;
+  target: Readonly<ParticipationData["target"]>;
+}>;
 export type GitHubPublicationRequesterSnapshot = Readonly<
-  Omit<RequesterData, "actor" | "scopes" | "grant" | "origin"> & {
+  Omit<RequesterData, "actor" | "scopes" | "grant" | "origin" | "participation"> & {
     actor: Readonly<RequesterData["actor"]>;
     scopes: readonly string[];
     grant: Readonly<
@@ -53,10 +99,29 @@ export type GitHubPublicationRequesterSnapshot = Readonly<
       }
     > | null;
     origin?: GitHubPublicationOrigin;
+    participation?: GitHubPublicationParticipation;
   }
 >;
 
 const MAX_REQUESTER_BYTES = 64 * 1024;
+
+export function immutableGitHubPublicationParticipation(
+  value: GitHubPublicationParticipation,
+): GitHubPublicationParticipation {
+  return Object.freeze({
+    ceiling: Object.freeze({
+      ...value.ceiling,
+      ...(value.ceiling.tools
+        ? { tools: Object.freeze([...new Set(value.ceiling.tools)].toSorted()) }
+        : {}),
+      ...(value.ceiling.execPolicy
+        ? { execPolicy: Object.freeze({ ...value.ceiling.execPolicy }) }
+        : {}),
+      source: Object.freeze({ ...value.ceiling.source }),
+    }),
+    target: Object.freeze({ ...value.target }),
+  });
+}
 
 /** Accepted task requests survive source deletion; a later run never changes their identity. */
 export function deriveGitHubPublicationTaskId(
@@ -115,6 +180,9 @@ function immutableRequester(
             ...(value.origin.runId ? { runId: value.origin.runId } : {}),
           }),
         }
+      : {}),
+    ...(value.participation
+      ? { participation: immutableGitHubPublicationParticipation(value.participation) }
       : {}),
   });
 }

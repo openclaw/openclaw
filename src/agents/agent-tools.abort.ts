@@ -100,8 +100,7 @@ function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
     tool.name === "sessions_yield" ||
     (tool.name === "plugins" && input?.action === "reloadAndResume") ||
     (tool.name === "github_publish" &&
-      (input?.action === "prepare_pr" ||
-        ((input?.action ?? "publish") === "publish" && typeof input?.workspacePath === "string")))
+      (input?.action === "prepare_pr" || (input?.action ?? "publish") === "publish"))
   );
 }
 

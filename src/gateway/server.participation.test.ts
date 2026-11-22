@@ -146,7 +146,7 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         .toBe(true);
       expect
         .soft(providerToolNames(providerRequests.at(-1)!))
-        .toEqual(["exec", "ls", "process", "read", "sessions_spawn"]);
+        .toEqual(["exec", "ls", "process", "read", "sessions_spawn", "skills_read"]);
       await expect
         .soft(
           invited.request(
@@ -295,7 +295,7 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         expect(toolOutputs).toEqual([expect.stringMatching(/(?:^|\n)participant-exec-proof$/u)]);
         expect
           .soft(providerToolNames(providerRequests.at(-1)!))
-          .toEqual(["exec", "ls", "process", "read", "sessions_spawn"]);
+          .toEqual(["exec", "ls", "process", "read", "sessions_spawn", "skills_read"]);
         providerReplies.reply = undefined;
         expect(await creatorTurn("creator-after-participation", creator)).toEqual(originalTools);
       } finally {
@@ -444,6 +444,71 @@ it("serializes the exact invited tool ceiling without leaking it into creator or
         toolSearch: true,
         exec: { host: "gateway", security: "full", ask: "off" },
       },
+    },
+  );
+});
+
+it("admits exact invited publication without adding session-write or owner actions", async ({
+  signal,
+}) => {
+  await withInvitedGuestGateway(
+    signal,
+    async ({ sender, invited, carol }) => {
+      const parent = await sender.request<{ key: string }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          label: "Participant publication",
+          visibility: "shared",
+        },
+        { signal },
+      );
+      const target = { agentId: "main", sessionKey: parent.key };
+      await sender.request(
+        "session.members.add",
+        { ...target, identityId: carol.id, access: "send" },
+        { signal },
+      );
+      const publish = () =>
+        invited.request(
+          "sessions.github.publish",
+          {
+            ...target,
+            idempotencyKey: "participant-publication-admission",
+          },
+          { signal },
+        );
+      const outcome = await publish().then(
+        () => "admitted",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      expect(outcome).not.toMatch(/missing scope|not authorized|session access denied|not found/iu);
+      expect(outcome).toMatch(/GitHub|publication|workspace/iu);
+      for (const action of ["inspect", "merge", "close"]) {
+        await expect(
+          invited.request(
+            "sessions.github.action",
+            {
+              ...target,
+              action,
+              expectedHeadCommit: "a".repeat(40),
+              ...(action === "merge" ? { mergeMethod: "squash" } : {}),
+            },
+            { signal },
+          ),
+        ).rejects.toThrow();
+      }
+      await sender.request(
+        "session.members.setAccess",
+        { ...target, identityId: carol.id, access: "read" },
+        { signal },
+      );
+      await expect(publish()).rejects.toThrow(/not found|participat|access|forbidden/iu);
+    },
+    {
+      maxInvitedAccess: "send",
+      invitedScopes: ["operator.sessions.read"],
+      invitedTools: ["github_publish"],
     },
   );
 });

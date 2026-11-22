@@ -44,6 +44,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
       "chat.abort",
       "session.typing",
       "sessions.patch",
+      "sessions.github.publish",
       "agent",
       "send",
       "chat.steerNow",
@@ -112,7 +113,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
             result.authorization?.release?.();
           }
           expect(allowed, `${scopes.join(",")}/${access}/${method}`).toBe(
-            scopes.length > 0 && access === "send" && methods.indexOf(method) < 4,
+            scopes.length > 0 && access === "send" && methods.indexOf(method) < 5,
           );
         }
       }

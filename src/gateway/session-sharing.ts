@@ -143,7 +143,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     members?: readonly string[],
   ) => {
     participation.signal?.throwIfAborted();
-    const participantTarget = resolveParticipantRunTarget(params.participantRunAuthority, target);
+    const participantTarget = resolveParticipantRunTarget(params, target);
     const error =
       (target && authorizesAgentRun && !participantTarget
         ? policy
@@ -155,7 +155,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         sessionKey: targetRef.sessionKey,
         target,
       });
-    if (participantTarget === "source") {
+    if (participantTarget && participantTarget !== "child") {
       return error;
     }
     const participating = participation.authorize({ targetRef, target, policy, error });

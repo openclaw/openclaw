@@ -99,6 +99,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-personal-pending.test.ts",
   "src/gateway/github-publication-private-session.test.ts",
   "src/gateway/github-publication-reconciliation.test.ts",
+  "src/gateway/github-publication-participation.test.ts",
   "src/gateway/github-publication-requester-aliases.test.ts",
   "src/gateway/github-publication-requester.members.test.ts",
   "src/gateway/github-publication-requester.test.ts",

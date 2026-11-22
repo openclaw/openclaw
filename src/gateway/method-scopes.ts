@@ -33,6 +33,7 @@ import {
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
 
 export {
   ADMIN_SCOPE,
@@ -379,7 +380,10 @@ export function requiresSessionParticipation(
   if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
     return false;
   }
-  if (["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)) {
+  if (
+    isParticipantPublicationMethod(method, params) ||
+    ["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)
+  ) {
     return true;
   }
   const patch = asOptionalRecord(params);

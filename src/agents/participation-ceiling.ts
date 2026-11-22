@@ -38,6 +38,7 @@ export const PARTICIPATION_TOOL_ALLOWLIST = Object.freeze([
   "exec",
   "process",
   "sessions_spawn",
+  "github_publish",
   "skills_search",
   "skills_read",
   "web_search",

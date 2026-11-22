@@ -1,0 +1,19 @@
+861
+# Shared-only participant publication: exact full-PR excess after the existing
+# 7,602 allocation lines and unchanged 400-line allowance (8,863 total growth).
+# Removed the participant personal-account/origin/receipt/confirmation suites
+# with that rejected scope. Reused the existing native handoff outcome table,
+# attribution/action cases, and child authority fixtures; eliminated duplicate
+# participant admission setup and parameterized accountless/linked and backend
+# cases rather than duplicating fixtures. The remaining proofs cover distinct
+# boundaries: original identity and immutable replay/revocation; child/task
+# source substitution; real registered shared publication and own metadata with
+# and without a linked personal connection; original-write workflow rejection
+# on local/repository backends; contributor-credit refusal; cancellation and
+# cleanup/resume; attribution creation/preservation. Review adds a queued second
+# participant refusal and extends existing cases through maintainer reuse so
+# original creation ownership survives updates (+52 net lines after shared
+# response-fixture consolidation). The same table now proves zero writes for
+# local descendants and repository checkpoints and permits the original owner
+# to publish those changes (+35 lines). No test assertions, timers,
+# file caps or global budget thresholds are weakened.

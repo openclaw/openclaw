@@ -11,6 +11,7 @@ import {
 } from "../../shared/session-method-scopes-base.js";
 import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
 import { authorizeParticipationExecApprovalMethod } from "../exec-approval-participation.js";
+import { readParticipantPublicationAuthority } from "../github-publication-participation.js";
 import { isInProcessSessionRun, readInProcessParticipationRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
@@ -170,8 +171,9 @@ export function authorizeGatewayMethod(
   if (!scopeAuth.allowed) {
     if (
       requiresSessionParticipation(method, scopes, params) &&
-      ((!client.internal?.syntheticClient &&
-        resolveAuthenticatedPersonalGatewayProfileId(client)) ||
+      (readParticipantPublicationAuthority(method, params) !== undefined ||
+        (!client.internal?.syntheticClient &&
+          resolveAuthenticatedPersonalGatewayProfileId(client)) ||
         (method === "chat.send" &&
           client.internal?.operatorRunAuthority !== undefined &&
           readQueuedParticipationProfile(params) ===

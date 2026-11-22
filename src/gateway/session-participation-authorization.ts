@@ -8,9 +8,11 @@ import {
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
+import { readParticipantPublicationAuthority } from "./github-publication-participation.js";
 import { requiresSessionParticipation } from "./method-scopes.js";
 import { readQueuedParticipationProfile } from "./queued-chat-input-admission.js";
 import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
 import { retainSessionParticipation } from "./session-participation-lifetime.js";
 import type {
   AuthorizedSessionMutationTarget,
@@ -82,6 +84,7 @@ export function createSessionParticipationAuthorization(
       }
       const profileId =
         personalProfileId ??
+        readParticipantPublicationAuthority(params.method, params.requestParams)?.profileId ??
         (params.method === "chat.send"
           ? readQueuedParticipationProfile(params.requestParams)
           : undefined) ??
@@ -90,7 +93,9 @@ export function createSessionParticipationAuthorization(
         !target?.entry.sessionId ||
         !profileId ||
         !access?.invitedAccessCeiling ||
-        !permitsMethod
+        !permitsMethod ||
+        (isParticipantPublicationMethod(params.method, params.requestParams) &&
+          !(policy?.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST).includes("github_publish"))
       ) {
         return { error: hiddenSessionNotFound(targetRef.sessionKey) };
       }

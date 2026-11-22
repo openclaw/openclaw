@@ -21,27 +21,15 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { isInProcessSessionRun, readInProcessParticipationRun } from "./in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
-import {
-  projectOperatorScopesForMethod,
-  resolveAgentRuntimeCronScope,
-  resolveLeastPrivilegeOperatorScopesForMethod,
-} from "./method-scopes.js";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
-import {
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  WRITE_SCOPE,
-  isOperatorScope,
-} from "./operator-scopes.js";
+import { WRITE_SCOPE } from "./operator-scopes.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -55,6 +43,7 @@ import type {
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveInProcessSyntheticScopes } from "./server-plugin-in-process-scopes.js";
 import { resolveSystemScopeCeiling } from "./server-plugin-in-process-system-ceiling.js";
 import {
   createSyntheticPluginRuntimeClient,
@@ -484,77 +473,17 @@ export function resolveInProcessGatewayDispatch(
     scopedSystemScopes && sourceScopes
       ? intersectOperatorScopes(sourceScopes, scopedSystemScopes)
       : (scopedSystemScopes ?? sourceScopes);
-  const registeredScope = context.getGatewayMethodRegistry?.().getScope(method);
-  const allowOwnSessionScope = context
-    .getGatewayMethodRegistry?.()
-    .getSessionAccess?.(method)?.allowOwnSessionScope;
-  const syntheticScopeMode = options?.syntheticScopeMode;
-  const cronScope = agentRuntimeIdentity && resolveAgentRuntimeCronScope(method);
-  // Scheduling retains the initiating grant for the saved continuation, not only
-  // permission to edit its job. Other scoped cron calls need just cron authority.
-  const cronScopes = cronScope
-    ? ((method === "cron.add" || method === "cron.update" ? operatorScopes : undefined) ?? [
-        cronScope,
-      ])
-    : undefined;
-  const requestedSyntheticScopes = (
-    (syntheticScopeMode === "minimum" ? cronScopes : undefined) ??
-    options?.syntheticScopes ??
-    (syntheticScopeMode === "exact"
-      ? (operatorScopes ?? scope?.client?.connect.scopes)
-      : undefined) ?? [WRITE_SCOPE]
-  ).map((requested) => {
-    const broad =
-      requested === SESSION_READ_SCOPE
-        ? READ_SCOPE
-        : requested === SESSION_WRITE_SCOPE
-          ? WRITE_SCOPE
-          : undefined;
-    return syntheticScopeMode === "minimum" &&
-      broad &&
-      operatorScopes &&
-      roleScopesAllow({ role: "operator", requestedScopes: [broad], allowedScopes: operatorScopes })
-      ? broad
-      : requested;
+  const syntheticScopes = resolveInProcessSyntheticScopes({
+    method,
+    params,
+    operatorScopes,
+    options,
+    registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
+    allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)
+      ?.allowOwnSessionScope,
+    clientScopes: scope?.client?.connect.scopes,
+    agentRuntime: Boolean(agentRuntimeIdentity),
   });
-  // Narrow by authority, not literal membership: write also authorizes reads
-  // and Talk, including tools called by a synthetic continuation.
-  const participantLaunch = Boolean(readInProcessParticipationRun(method, params)?.source);
-  const syntheticScopes = operatorScopes
-    ? syntheticScopeMode === "exact"
-      ? requestedSyntheticScopes.filter((requestedScope) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [requestedScope],
-            allowedScopes: operatorScopes,
-          }),
-        )
-      : projectOperatorScopesForMethod({
-          method,
-          requestParams: params,
-          requestedScopes: participantLaunch ? [READ_SCOPE] : requestedSyntheticScopes,
-          allowedScopes: operatorScopes,
-          ...(allowOwnSessionScope || isInProcessSessionRun(method, params)
-            ? {
-                sessionScope: participantLaunch ? SESSION_READ_SCOPE : SESSION_WRITE_SCOPE,
-              }
-            : {}),
-          ...(participantLaunch
-            ? { requiredScope: READ_SCOPE }
-            : isOperatorScope(registeredScope)
-              ? { requiredScope: registeredScope }
-              : {}),
-        })
-    : syntheticScopeMode === "exact"
-      ? requestedSyntheticScopes
-      : options?.syntheticScopes;
-  if (
-    syntheticScopeMode !== "exact" &&
-    operatorScopes?.includes(ADMIN_SCOPE) &&
-    !syntheticScopes?.includes(ADMIN_SCOPE)
-  ) {
-    syntheticScopes?.push(ADMIN_SCOPE);
-  }
   const hostApprovalRequestEligible =
     options?.allowHostPluginApprovalRequest === true &&
     isHostPluginApprovalMethod(method) &&

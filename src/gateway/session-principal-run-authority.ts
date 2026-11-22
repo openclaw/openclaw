@@ -12,6 +12,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
+import type { SessionMutationAuthorizationParams } from "./session-sharing-authorization.js";
 
 export async function prepareSessionParticipationRun(params: {
   context: GatewayRequestContext;
@@ -107,9 +109,13 @@ export async function prepareSessionPrincipalRunAuthority(
 
 /** Source admission permits the original return target and independently restricted child rows. */
 export function resolveParticipantRunTarget(
-  authority: AdmittedRunOperatorAuthority | undefined,
+  params: Pick<
+    SessionMutationAuthorizationParams,
+    "participantRunAuthority" | "method" | "requestParams"
+  >,
   target: import("./session-sharing-policy.js").SessionSharingTarget | null,
-): "source" | "child" | undefined {
+): "source" | "child" | "publication" | undefined {
+  const authority = params.participantRunAuthority;
   authority?.assertCurrent();
   const ceiling = authority?.participationCeiling;
   if (!ceiling?.source || !target || target.agentId !== ceiling.source.agentId) {
@@ -124,7 +130,9 @@ export function resolveParticipantRunTarget(
   const child = sessionParticipationCeiling(target.entry);
   if (child) {
     intersectParticipationCeilings(child, ceiling);
-    return "child";
+    return isParticipantPublicationMethod(params.method, params.requestParams)
+      ? "publication"
+      : "child";
   }
   return undefined;
 }
