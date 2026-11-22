@@ -97,7 +97,18 @@ export async function withRuntimeWorkerGeneration<T>(
     const unregister = registerSignalExitFinalizer(settleGeneration);
     try {
       outcome = {
-        value: await operation((resolve) => {
+        value: await operation((bound) => {
+          // A spawn can meet the resolver twice (captured, then at spawn time); a URL this
+          // generation already produced is final.
+          const produced = new Set<string>();
+          const resolve = (url: URL) => {
+            if (produced.has(url.href)) {
+              return url;
+            }
+            const resolved = bound(url);
+            produced.add(resolved.href);
+            return resolved;
+          };
           // Detached and pre-existing process owners spawn outside this scope.
           setProcessRuntimeWorkerResolver(resolve);
           current.generation = Object.freeze({

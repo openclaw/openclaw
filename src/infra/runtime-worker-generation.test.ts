@@ -15,6 +15,7 @@ import {
   withRuntimeWorkerGeneration,
   type RuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
+import { resolveProcessRuntimeWorkerFile } from "./runtime-worker-process-generation.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 afterEach(() => {
@@ -230,3 +231,21 @@ it("starts a process owner's worker from the retained runtime after activation r
     await writeProbe(installed, "installed");
     expect(await reply(startFromOwner())).toBe("installed");
   }));
+
+it("resolves a worker once when it was captured in scope and then spawned", async () => {
+  const resolve = vi.fn((url: URL) => new URL(`${url.href}.retained.mjs`));
+  await withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind(resolve);
+      const { moduleUrl } = captureRuntimeWorkerSource(new URL("file:///installed/worker.mjs"));
+      // The spawn-time process resolver sees the captured URL and leaves it final.
+      expect(resolveProcessRuntimeWorkerFile(moduleUrl)).toBe(moduleUrl);
+      expect(String(resolveProcessRuntimeWorkerFile("/installed/other.mjs"))).toBe(
+        "/installed/other.mjs.retained.mjs",
+      );
+    },
+    async () => {},
+  );
+  expect(resolve).toHaveBeenCalledTimes(2);
+  expect(resolveProcessRuntimeWorkerFile("/installed/other.mjs")).toBe("/installed/other.mjs");
+});
