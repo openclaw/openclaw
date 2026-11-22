@@ -426,6 +426,14 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
   ) {
     return undefined;
   }
+  // The row margin and the empty side of a message are layout, not prose.
+  // A multi-click can select an inter-turn newline. Leave single presses native for drags.
+  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group")) {
+    event.preventDefault();
+    thread.focus({ preventScroll: true });
+    thread.ownerDocument.getSelection()?.removeAllRanges();
+    return undefined;
+  }
   const bubble = target.closest(".chat-bubble");
   const view = thread.ownerDocument.defaultView;
   if (!bubble || !thread.contains(bubble) || !view) {
