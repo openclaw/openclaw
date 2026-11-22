@@ -550,7 +550,8 @@ suite.define(() => {
           await save();
           return audit.events.find((event) => event.action === "agent.run.finished");
         };
-        await expect.poll(terminalAuditRun).toBeDefined();
+        // Error terminals settle after a 15-second retry grace; allow persistence and runner headroom.
+        await expect.poll(terminalAuditRun, { timeout: 60_000 }).toBeDefined();
         const auditRun = (await terminalAuditRun())!;
         proof.stage = "inspect admitted agent identity";
         await save();
@@ -624,5 +625,5 @@ suite.define(() => {
         await save();
       },
     });
-  }, 240_000);
+  }, 360_000);
 });
