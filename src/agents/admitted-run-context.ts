@@ -566,13 +566,12 @@ export function prepareAgentRunAdmission(params: {
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
   }
-  const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
-    (sourceAssertion || assertOperatorCurrent) &&
+    sourceAssertion &&
     composeSessionSourceAssertion(
-      [sourceAssertion, assertOperatorCurrent],
+      [sourceAssertion],
       scopeOperatorAccessDecisions((assertSources: () => void) => {
         if (sourceFailure) {
           throw sourceFailure;

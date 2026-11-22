@@ -20,6 +20,9 @@ export async function stageReleaseService(params: {
   warn: (message: string) => void;
 }): Promise<void> {
   const service = resolveGatewayService();
+  if ((await service.hasInstalledDefinition?.({ env: params.env })) === false) {
+    return;
+  }
   const command = await service.readCommand(params.env, { requireEffective: true });
   if (!command || (await gatewayServiceCommandMatchesRoot(params.runningRoot, command)) !== true) {
     return;

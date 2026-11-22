@@ -6,7 +6,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { assertGlobalUpdateOwner, UpdatePreMutationError } from "../cli/update-cli/shared.js";
+import {
+  assertGlobalUpdateOwner,
+  assertMacosGitForUnownedCheckout,
+  UpdatePreMutationError,
+} from "../cli/update-cli/shared.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
@@ -16,6 +20,7 @@ import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-co
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
+import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
 import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
@@ -156,13 +161,22 @@ export async function prepareUpdate(params: {
       );
     }
     await assertUpdateRecoveryAdmission({ env });
-    const install = await detectInstall(params.runningRoot);
+    const missingGit = await describeUnavailableMacosSystemGit(runCommandWithTimeout, {
+      timeoutMs: Math.min(10_000, Math.max(1, deadline - Date.now())),
+    });
+    const install: InstallKind = missingGit
+      ? { kind: "package" }
+      : await detectInstall(params.runningRoot);
     try {
-      await assertGlobalUpdateOwner({
+      const ownership = {
         root: params.runningRoot,
         installKind: install.kind,
         timeoutMs: Math.max(1, deadline - Date.now()),
-      });
+      };
+      await assertGlobalUpdateOwner(ownership);
+      if (missingGit) {
+        await assertMacosGitForUnownedCheckout(ownership, { missingGit });
+      }
     } catch (error) {
       if (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError) {
         return await fail(error.reason, error.message);

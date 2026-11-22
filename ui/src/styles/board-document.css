@@ -17,16 +17,22 @@ openclaw-board-document {
   background: var(--bg);
 }
 
+openclaw-board-document > .board-document {
+  flex-direction: column;
+}
+
+/* Document dismissal stays outside the scrollport: a widget menu can occupy
+   the top corner on first paint or after scrolling a later card there. */
 .board-document__close {
-  position: absolute;
-  z-index: 4;
-  top: max(10px, env(safe-area-inset-top));
-  right: max(10px, env(safe-area-inset-right));
-  /* It floats over arbitrary board content, so it keeps a frosted ground. */
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(12px);
+  align-self: flex-end;
+  flex: none;
+  margin: max(4px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 4px;
+}
+
+@media (pointer: coarse) {
+  .board-document__close {
+    min-height: 44px;
+  }
 }
 
 .board-document__content {
@@ -35,10 +41,6 @@ openclaw-board-document {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.board-document__content .board-tabs {
-  padding-right: 38px;
 }
 
 .board-document__state {
