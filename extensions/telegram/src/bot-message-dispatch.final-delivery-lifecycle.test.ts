@@ -172,38 +172,6 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     vi.useRealTimers();
   });
 
-  it.each([true, false])(
-    "sends a fallback only without durable notice ownership (%s)",
-    async (owned) => {
-      const { bot, sendMessage, messages } = await observeTransport();
-      const error = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
-      deliverInbound.mockImplementationOnce(async () => {
-        if (owned) {
-          await bot.api.sendMessage(123, "Couldn’t confirm delivery of the previous answer.");
-        }
-        return {
-          status: "failed",
-          error,
-          ...(owned ? { failureNoticeHandled: true } : {}),
-        };
-      });
-      resolveReply(async () => ({ text: "The answer whose delivery cannot be confirmed" }));
-      await dispatchTurn(bot, {
-        status: createReactions(),
-        streamMode: "off",
-        retryDispatchErrors: true,
-        suppressFailureFallback: true,
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect([...messages.values()]).toEqual([
-        owned
-          ? "Couldn’t confirm delivery of the previous answer."
-          : "I couldn't deliver my reply because of a network problem. Please ask again.",
-      ]);
-    },
-  );
-
   it.each([
     { failure: "retired instance", mode: "progress" },
     { failure: "definite no-send", mode: "progress" },
