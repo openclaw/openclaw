@@ -218,7 +218,7 @@ clearing alongside navigation.
 ## Move an existing session
 
 Right-click one session in the sidebar or Sessions page, or open its chat-header
-actions. **Move to cloud…** opens the destination picker for a local session;
+actions. **Move to cloud…** appears for a local session only when you have a configured cloud profile you can use. It opens the destination picker;
 **Move session…** does the same for an active cloud or device session. Choose a
 configured cloud profile or eligible paired device. Active remote sessions can
 also move back to the **Gateway**. The conversation keeps its session identity.
