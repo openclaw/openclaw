@@ -68,7 +68,7 @@ export function resolveSessionModelRef(
   entry?: SessionModelEntry,
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
-): { provider: string; model: string } {
+): { provider: string; model: string } | undefined {
   return resolveSessionModelRefCore(cfg, entry, agentId, {
     allowPluginNormalization: options?.allowPluginNormalization,
   });
@@ -78,13 +78,13 @@ export function resolveSessionConfiguredDefault(
   cfg: OpenClawConfig,
   agentId?: string,
   options?: SessionModelResolutionOptions,
-): { provider: string; model: string } {
+): { provider: string; model: string } | undefined {
   const defaults = options?.configuredDefaultModelByAgent;
   const defaultKey =
     defaults &&
     `${agentId ? normalizeAgentId(agentId) : ""}\0${options?.allowPluginNormalization !== false}`;
   let resolved = defaultKey ? defaults?.get(defaultKey) : undefined;
-  if (!resolved) {
+  if (!defaultKey || !defaults?.has(defaultKey)) {
     resolved = resolveDefaultModelForAgent({
       cfg,
       agentId,
@@ -103,7 +103,7 @@ function resolveSessionModelRefCore(
   entry?: SessionModelEntry,
   agentId?: string,
   options?: SessionModelResolutionOptions,
-): { provider: string; model: string } {
+): { provider: string; model: string } | undefined {
   // Default snapshots are historical context, not a pin on the next turn.
   if (entry?.modelOverrideSource === "default") {
     return resolveSessionConfiguredDefault(cfg, agentId, options);
@@ -127,7 +127,7 @@ function resolveSessionModelRefCore(
   const resolved = resolveSessionConfiguredDefault(cfg, agentId, options);
 
   const persisted = resolvePersistedSelectedModelRef({
-    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+    defaultProvider: resolved?.provider ?? DEFAULT_PROVIDER,
     // Runtime fields record the previous run. Agent-scoped selection must use
     // current config or an explicit override; legacy callers without an agent
     // still use the persisted pair as their fallback selection context.
@@ -148,7 +148,7 @@ export function resolveSessionModelIdentityRef(
   agentId?: string,
   fallbackModelRef?: string,
   options?: SessionModelResolutionOptions,
-): { provider?: string; model: string } {
+): { provider?: string; model: string } | undefined {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel && runtimeProvider) {
@@ -179,5 +179,5 @@ export function resolveSessionModelIdentityRef(
     );
   }
   const resolved = resolveSessionModelRefCore(cfg, entry, agentId, options);
-  return { provider: resolved.provider, model: resolved.model };
+  return resolved && { provider: resolved.provider, model: resolved.model };
 }

@@ -10,13 +10,11 @@ import { dispatchChannelMessageAction } from "../src/channels/plugins/message-ac
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -71,29 +69,20 @@ function createOriginatingRun(
     requesterSenderId,
     toolContext,
   });
-  const runGuard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!runGuard) {
-    throw new Error("Expected originating run authority");
-  }
-  runGuard();
   return {
+    // Only the caller turn is rechecked after runtime admission.
+    assert: () => {
+      if (
+        !resolveMessageActionTurnCapability({
+          token: turnCapability,
+          agentId: "main",
+          runId: operationalRunInstance.runId,
+          sessionKey,
+        })
+      ) {
+        throw new Error("Message-read turn authority is no longer active");
+      }
+    },
     wrapTool: (tool: ReturnType<typeof createMessageTool>) =>
       wrapToolWithGatewayCallerIdentity(tool, {
         agentId: "main",
@@ -110,7 +99,6 @@ function createOriginatingRun(
       ...toolContext,
     },
     actionContext: { requesterAccountId, requesterSenderId, toolContext },
-    assert: runGuard,
     revoke: () =>
       mode.includes("claim")
         ? releaseAgentRunDelegatedAuthority(delegatedAuthority)

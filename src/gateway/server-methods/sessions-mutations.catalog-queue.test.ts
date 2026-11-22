@@ -93,7 +93,7 @@ afterEach(async () => {
 
 const patchContext = (
   load: GatewayRequestContext["loadGatewayModelCatalog"],
-  cfg: OpenClawConfig = {},
+  cfg: OpenClawConfig = { agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } } },
 ) => createSessionMutationContext(cfg, load);
 
 async function modelContext(state: OpenClawTestState, store: string) {
@@ -303,8 +303,9 @@ test(
     expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toContain(
       "catalog=1500ms",
     );
+    // The successor may wait in preflight or lifecycle admission before the catalog is released.
     expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toContain(
-      "lifecycleAdmission=1500ms",
+      "slow session patch 1500ms method=sessions.patch targets=1 fields=pinned",
     );
   }),
 );
@@ -328,10 +329,10 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
       await seedEntry(storedKey, "main", existing);
       await seedEntry(otherKey, "main", { sessionId: "other" });
       const { entered, catalog, load } = pausedCatalog();
-      const cfg: OpenClawConfig =
+      const cfg: OpenClawConfig | undefined =
         change === "alias"
           ? { session: { mainKey: "work" }, agents: { entries: { main: {} } } }
-          : {};
+          : undefined;
       const patch = patchRequest(patchContext(load, cfg));
       const response = vi.fn();
       const pending = patch(

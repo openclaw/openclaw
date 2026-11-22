@@ -10,7 +10,6 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -23,7 +22,11 @@ import {
   utteranceFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptSummarySnapshot } from "./store-types.js";
-import type { TranscriptsSummary } from "./summary.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 

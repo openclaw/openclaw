@@ -60,16 +60,14 @@ export function prepareLocalWorkspaceFingerprints(
     offsets.set(paths[index]!, HEADER_BYTES + index * FILE_BYTES);
   }
   const device = decoded?.readBigUInt64LE(1);
-  const reused = new Map<string, string>();
+  const reused = new Set<string>();
   const changed = new Map<string, { identity: string; reusable?: boolean }>();
   let allReusable = decoded !== undefined;
-  let observedReusable = 0;
 
   return {
     reuseFile(
       this: void,
       entryPath: string,
-      identity: string,
       stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
     ) {
       const offset = offsets.get(entryPath);
@@ -78,6 +76,8 @@ export function prepareLocalWorkspaceFingerprints(
         allReusable = false;
         return undefined;
       }
+      // Live non-racy stat fields must match the accepted tree's slot. Content
+      // reuse never skips either traversal or the owner's pending recovery gates.
       if (
         sourceDevice(stats.dev) === device &&
         stats.ino === decoded.readBigUInt64LE(offset) &&
@@ -85,7 +85,7 @@ export function prepareLocalWorkspaceFingerprints(
         previous.size === Number(stats.size) &&
         workspaceCtimeIsReusable(stats.ctimeNs, scanStartedAtMs)
       ) {
-        reused.set(entryPath, identity);
+        reused.add(entryPath);
         return previous;
       }
       allReusable = false;
@@ -93,14 +93,11 @@ export function prepareLocalWorkspaceFingerprints(
     },
     // A hashed read can establish eligibility after discovery's earlier timestamp.
     observe(this: void, entryPath: string, identity: string, reusable?: boolean) {
-      if (reused.get(entryPath) === identity) {
-        observedReusable++;
-      } else {
-        // A hashed read can report a newer identity than its initial lstat.
-        allReusable = false;
-        reused.delete(entryPath);
-        changed.set(entryPath, { identity, reusable });
-      }
+      // Reused nodes are already observed by reuseFile; only hashed reads need
+      // serialized identities, which may be newer than discovery's initial stat.
+      allReusable = false;
+      reused.delete(entryPath);
+      changed.set(entryPath, { identity, reusable });
     },
     encode(
       currentRecords: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
@@ -111,7 +108,7 @@ export function prepareLocalWorkspaceFingerprints(
         return null;
       }
       // Every file matched its exact non-racy slot; the stored blob is already the publication.
-      if (currentTreeRef === treeRef && allReusable && observedReusable === paths.length) {
+      if (currentTreeRef === treeRef && allReusable && reused.size === paths.length) {
         return storedBlob;
       }
       let currentPaths = paths;

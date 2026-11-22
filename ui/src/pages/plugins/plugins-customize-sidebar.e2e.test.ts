@@ -204,6 +204,11 @@ describeControlUiE2e("Customize sidebar plugins", () => {
     const { page, gateway } = await openShopify();
     const shortcut = customize(page).getByRole("link", { name: "Shopify AI Toolkit", exact: true });
     await shortcut.waitFor();
+    const unchanged = customize(page)
+      .getByRole("link", { name: "Knowledge", exact: true })
+      .locator("img");
+    await unchanged.waitFor({ state: "visible" });
+    const original = await unchanged.elementHandle();
 
     const shopifyWithArtwork = { ...shopifyPlugin, hasIcon: true };
     await gateway.setMethodResponse(
@@ -223,5 +228,7 @@ describeControlUiE2e("Customize sidebar plugins", () => {
     });
     await gateway.emitGatewayEvent("plugins.changed", { generation: 2 });
     await shortcut.locator("img").waitFor({ state: "visible", timeout: 5_000 });
+    // Shopify gained art, but Knowledge must never return to its loading tile.
+    expect(await unchanged.evaluate((image, previous) => image === previous, original)).toBe(true);
   });
 });

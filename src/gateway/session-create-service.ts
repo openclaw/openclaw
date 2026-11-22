@@ -1119,8 +1119,8 @@ async function createGatewaySessionInScope(
       agentId: target.agentId,
       entry: projectPublicSessionEntry(created.entry),
       resolved: {
-        modelProvider: selectedModel.provider,
-        model: selectedModel.model,
+        modelProvider: selectedModel?.provider,
+        model: selectedModel?.model,
       },
       resetExisting: false,
     };

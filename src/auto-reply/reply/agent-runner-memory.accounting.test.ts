@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as sessionEntryWriter from "../../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
@@ -47,7 +47,7 @@ function runAccounting(
 ) {
   const followupRun = createTestFollowupRun();
   if (assertCurrent) {
-    followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
+    followupRun.operatorAuthority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
       assertCurrent,

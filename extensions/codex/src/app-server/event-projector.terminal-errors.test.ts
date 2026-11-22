@@ -475,7 +475,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
-        data: { phase: "retrying", message: "Rate limited. The provider is retrying." },
+        data: {
+          phase: "retrying",
+          reason: "codex_retry",
+          message: "Rate limited. The provider is retrying.",
+        },
       }),
     );
   });

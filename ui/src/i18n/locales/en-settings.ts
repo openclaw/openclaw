@@ -1158,6 +1158,13 @@ const enSettings = {
     },
     limits: {
       title: "Plan limits",
+      oneAccount: "Limits for one account",
+      subscriptionLimits: "Subscription allowance left",
+      credits: "Credits",
+      detailsFor: "Account details: {account}",
+      notReported: "Not reported",
+      readFailed: "{error} · Refresh to try again.",
+      accountDetails: "Account details",
     },
     saving: "Saving…",
     requestFailed: "Couldn’t complete the request. Try again.",
@@ -1261,6 +1268,12 @@ const enSettings = {
     remove: {
       action: "Remove provider",
       title: "Remove {provider}?",
+      config:
+        "This deletes the Gateway settings for {key}, including its configured model list. Saved accounts and credentials managed outside OpenClaw may still make the provider available. Models downloaded on the provider’s server are not deleted.",
+      configNote: "Removed provider configuration for {key}.",
+      configChanged: "The configuration changed. Review the provider and confirm removal again.",
+      accessAction: "Remove saved access",
+      accessTitle: "Remove saved access to {provider}?",
       accounts:
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
@@ -1737,6 +1750,19 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    toolWorkflows: {
+      codeMode: "Code Mode",
+      codeModeDescription:
+        "Use compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the global default. Agent and per-model activation settings take precedence. Applies to future replies.",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to future replies; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
+      toolSearch: "Tool Search",
+      toolSearchDescription:
+        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls. Code Mode takes precedence when engaged; native harness tool surfaces remain independent. Applies to future replies.",
+    },
     adminRequired: en.configView.adminRequired,
     channelSettings: "Channel settings",
     categories: {

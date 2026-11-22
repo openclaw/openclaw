@@ -105,16 +105,12 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      // A revoked owner's result is still delivered, at the System baseline.
-      if (ownerState === "revoked") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          source: source.authority.source,
-          scopes: ["operator.write"],
-        });
-        retained?.assertCurrent();
-      }
+      // Admitted result custody keeps its original ceiling despite later policy revocation.
+      expect(retained).toMatchObject({
+        source: source.authority.source,
+        scopes: ["operator.write"],
+      });
+      retained?.assertCurrent();
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;

@@ -80,7 +80,7 @@ recommended bookkeeping, not another release gate.
 
 ## Shared release boundaries
 
-FRV must conclude **success** under pinned P's
+FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
 Kova grants; preserve each grant’s version, job, optional candidate SHA, and
@@ -96,8 +96,13 @@ identify the original failure. See the [attempt-binding correction in #201694](h
 and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
-in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
-A failed-job grant is not permission to skip the job or change C/Q. All other
+in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
+Commit authorized grants directly to Q’s `scripts/lib/release-validation-waivers.json`;
+no grant PR to `main`, no grant cherry-pick into C. Pin the new Q in a fresh
+request/admission, then reevaluate eligible raw successful/failed receipts under
+its grants. The ledger-only delta preserves workload identity; executable Q
+changes do not. Public Q branches are not private storage.
+A failed-job grant is not permission to skip the job or change C. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
@@ -121,7 +126,7 @@ blocker is a regression in shipped bytes or behavior, or an update/install/
 publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut for a flake.
-A deliberate tooling-code waiver requires FRV validation under the new pinned P,
+A deliberate grant requires FRV validation under the new pinned Q,
 not a publisher override. An unwaived flake that remains red blocks publication.
 Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
@@ -213,7 +218,7 @@ matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
-New test qualification defaults to **Q=C**. An explicit reviewed main-ancestor
+New test qualification defaults to **Q=C**. An explicit assessed qualification
 **Q** may instead be admitted through the candidate route while **C** retains
 source, package bytes, version, and baselines. Keep independently trusted **P**
 (admission, aggregate decision, verifier, and publisher) separate. A Q repair
@@ -243,8 +248,8 @@ invalidated proof. A manager's opportunity notification is not that approval.
 All release channels, including extended-stable, backport applicable release
 tooling and validation changes regardless of product-hotfix severity. Release
 process improvements normally land on both branches, except independent
-qualification-only repairs as described below.
-Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+qualification-only repairs and Q-only grant data as described below.
+Executable workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
 normally merge to `main` first, then get cherry-picked (`-x`) directly onto the
 canonical release branch for the next candidate or patch, without a backport PR.
 Urgent release-first repairs follow [the new-fix route](#backports-and-new-fixes).

@@ -442,7 +442,9 @@ describe("sessions.patch", () => {
       withSessionMutationState(async (state) => {
         const sessionKey = "agent:main:permission-update";
         const sessionId = "session-permission-update";
-        const cfg: OpenClawConfig = {};
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+        };
         const requestContext = context(cfg);
         const requestClient = client();
         requestClient.connect.scopes = ["operator.admin"];
@@ -536,7 +538,9 @@ describe("sessions.patch", () => {
             ...(index === 1 ? { contextWindow: "extended" } : {}),
           });
         }
-        const cfg: OpenClawConfig = {};
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+        };
         const requestContext = context(cfg);
         const catalog = pauseCatalog(state, requestContext);
         const handles = keys.map(() => ({

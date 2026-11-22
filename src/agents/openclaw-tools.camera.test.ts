@@ -9,15 +9,6 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 
 const { callGateway } = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway }));
-vi.mock("../media/media-services.js", () => ({
-  buildImageResizeSideGrid: vi.fn(() => [1600]),
-  getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
-  IMAGE_REDUCE_QUALITY_STEPS: [85],
-  isImageProcessorUnavailableError: vi.fn(() => false),
-  MAX_IMAGE_INPUT_PIXELS: 25_000_000,
-  readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-  resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
-}));
 
 const NODE_ID = "mac-1";
 const TINY_JPEG_BASE64 =

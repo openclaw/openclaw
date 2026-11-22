@@ -82,8 +82,8 @@ export async function reconcileRequesterTurnClaimForRun(params: {
         entry.requesterTurnRunId === requesterTurnRunId &&
         entry.expectsCompletionMessage === true,
     );
-  const entries = ownedEntries();
-  const acceptedEntry = entries.find((entry) => entry.runId === params.runId);
+  const owned = ownedEntries();
+  const acceptedEntry = owned.find((entry) => entry.runId === params.runId);
   if (!acceptedEntry) {
     return false;
   }
@@ -98,11 +98,12 @@ export async function reconcileRequesterTurnClaimForRun(params: {
   if (getActiveAgentRunDelegatedAuthority(params.requesterRunInstance)) {
     return true;
   }
+  const entries = subagentRuns.selectCompletionAuthorityBatch(owned, acceptedEntry);
   return subagentRuns.runWithCompletionBatchAuthority(entries, async () => {
     const custody = await captureOperatorToolGatewayContinuationContext();
     const assertCurrent = custody?.assertCurrent ?? captureGatewayToolCallerAssertion();
     try {
-      const current = ownedEntries();
+      const current = subagentRuns.selectCompletionAuthorityBatch(ownedEntries(), acceptedEntry);
       if (!current.includes(acceptedEntry)) {
         return false;
       }
@@ -120,7 +121,7 @@ export async function reconcileRequesterTurnClaimForRun(params: {
             })),
             assertCurrent: () => assertCurrent?.(),
           });
-        return custody ? custody.run(settle) : settle();
+        return custody ? custody.runWithRequester(settle, params.requesterAgentId) : settle();
       });
     } finally {
       custody?.release();

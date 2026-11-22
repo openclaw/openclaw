@@ -118,7 +118,7 @@ describe("AppSidebar delegated activity", () => {
     await settleLitElement(sidebar);
     expect(parent().querySelector(".session-glyph__ring")).toBeNull();
     expect(parent().querySelector('[data-session-attention="error"]')).toBeNull();
-    expect(parent().querySelector(".sidebar-child-session__status--failed")).toBeNull();
+    expect(parent().querySelector('[data-session-attention="error"]')).toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(
       sidebar.querySelector("[data-child-session-toggle], [data-show-more-children]"),

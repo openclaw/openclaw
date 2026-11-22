@@ -8,7 +8,7 @@ import {
   createNativeTypeScriptConfigReader,
   readNativeTypeScriptConfig,
 } from "../../scripts/lib/native-typescript-config.mts";
-import { createNodeEvalArgs } from "../../src/test-utils/node-process.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -207,34 +207,98 @@ it.each([
   );
 });
 
-it.each([
-  ["single-threaded", undefined],
-  ["parallel with stable type ordering", { stableTypeOrdering: true }],
-])(
-  "emits identical inferred declarations and maps across fresh %s compiler processes",
-  async (_mode, compilerOptions) => {
-    const root = tempRoot("determinism");
-    const fixture = createNativeFixture(root);
-    const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+// The build memory owner's frozen budget decides: only its uncapped default admits the
+// parallel pass, whose native memory the heap does not bound. Node heap flags do not.
+it("emits identical declarations in fresh processes and goes parallel only on the uncapped build heap", () => {
+  const root = tempRoot("determinism");
+  const fixture = createNativeFixture(root);
+  const observeThreading = process.platform !== "win32";
+  const configs = `${fixture.native}.configs.log`;
+  if (observeThreading) {
+    // Record each config the compiler is given, then run the real compiler.
+    fs.renameSync(fixture.native, `${fixture.native}.real`);
+    fs.writeFileSync(
+      fixture.native,
+      `#!/bin/sh\nprev=\nfor arg; do [ "$prev" = -p ] && { cat "$arg"; echo; } >> "$0.configs.log"; prev=$arg; done\nexec "$0.real" "$@"\n`,
+      { mode: 0o755 },
+    );
+  }
+  const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  fixture.write({
+    "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
+  });
+  for (const [index, name] of modules.entries()) {
+    const result =
+      index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
     fixture.write({
-      "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
-    });
-    for (const [index, name] of modules.entries()) {
-      const result =
-        index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
-      fixture.write({
-        [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
+      [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
         return ready ? ${result} : { kind: "unavailable" as const };
       }`,
-      });
+    });
+  }
+  const compile = (stableTypeOrdering: boolean, budgetMb: number | undefined, nodeOptions = "") => {
+    fs.rmSync(configs, { force: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
+    delete env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB;
+    if (budgetMb !== undefined) {
+      // build-all hands every build child its frozen heap budget in this variable.
+      env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB = String(budgetMb);
     }
-    const first = await fixture.compile({ compilerOptions });
-    const second = await fixture.compile({ compilerOptions });
-    expect(first.declarations.size).toBe(modules.length + 1);
-    expect(second.declarations).toEqual(first.declarations);
-    expect(second.inputs).toEqual(first.inputs);
-  },
-);
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      createNodeEvalArgs(
+        `import path from "node:path";
+        import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
+        const root = ${JSON.stringify(root)};
+        const emitted = await emitNativeDeclarations({
+          cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
+          roots: [path.join(root, "src/index.ts")],
+          compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
+        });
+        console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
+        { imports: [import.meta.resolve("tsx")] },
+      ),
+      { encoding: "utf8", timeout: 60_000, env },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const emitted = JSON.parse(result.stdout) as { declarations: unknown[]; inputs: string[] };
+    expect(emitted.declarations).toHaveLength(modules.length + 1);
+    if (observeThreading) {
+      const leaves = fs
+        .readFileSync(configs, "utf8")
+        .split("\n")
+        .filter((line) => line.includes('"emitDeclarationOnly":true'))
+        .map((line) => JSON.parse(line) as { compilerOptions: { singleThreaded?: boolean } });
+      expect(leaves).toHaveLength(1);
+      return { emitted, singleThreaded: leaves[0]?.compilerOptions.singleThreaded === true };
+    }
+    return { emitted };
+  };
+  const threaded = (singleThreaded: boolean) => (observeThreading ? { singleThreaded } : {});
+  const plain = compile(false, 12_288);
+  expect(plain).toMatchObject(threaded(true));
+  expect(compile(false, 12_288)).toEqual(plain);
+  const capped = compile(true, 7_424);
+  expect(capped).toMatchObject(threaded(true));
+  expect(compile(true, 7_424)).toEqual(capped);
+  // The planned budget decides, not a heap flag the planner did not rewrite or a bare run.
+  for (const [budgetMb, nodeOptions] of [
+    [7_424, "--max_old_space_size=12288"],
+    [12_287, ""],
+    [undefined, "--max-old-space-size=12288"],
+  ] as const) {
+    expect(compile(true, budgetMb, nodeOptions)).toMatchObject({
+      emitted: capped.emitted,
+      ...threaded(true),
+    });
+  }
+  const uncapped = compile(true, 12_288);
+  expect(uncapped).toMatchObject(threaded(false));
+  expect(compile(true, 12_288)).toEqual(uncapped);
+  // Either mode of the stable-ordering pass is byte-identical, so the choice is memory only.
+  expect(uncapped.emitted).toEqual(capped.emitted);
+});
 
 it("keeps optional SDK relative imports inside a checkout nested in a parent install", async () => {
   const ancestor = tempRoot("optional-imports");

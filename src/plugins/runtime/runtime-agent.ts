@@ -3,7 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   resolveEmbeddedCliBackendDispatchEligibility,
   resolveEmbeddedCliBackendDispatchEligibilityAsync,
@@ -231,7 +231,8 @@ export function createRuntimeAgent(
   config: PluginRuntime["config"] = createRuntimeConfig(),
 ): PluginRuntime["agent"] {
   const agentRuntime = {
-    defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
+    // Deprecated compatibility values; core never selects them.
+    defaults: { model: "gpt-6-astra", provider: DEFAULT_PROVIDER },
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,

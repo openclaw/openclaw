@@ -462,6 +462,12 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /**
+   * Memory slot owner opt-in: while this plugin owns `plugins.slots.memory`, every other
+   * enabled memory plugin loads as a passive backend it can open. Per-plugin
+   * `plugins.entries.<id>.memoryBackend: false` keeps one out.
+   */
+  memoryBackends?: boolean;
   /** Context engine registration IDs owned by this plugin before runtime loading. */
   contextEngineIds?: string[];
   /** How a reload of this plugin treats agent turns that are running when it starts. */

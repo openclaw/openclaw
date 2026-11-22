@@ -1,4 +1,8 @@
-import { validateAgentParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateAgentParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -10,7 +14,6 @@ import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -34,7 +37,9 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     (assertSource) => {
       assertSource();
       if (hasCurrentClientAuthority?.() === false) {
-        throw new Error("Gateway caller authority is no longer active.");
+        throw new SessionMutationAuthorizationChangedError(
+          errorShape(ErrorCodes.INVALID_REQUEST, "Gateway caller authority is no longer active."),
+        );
       }
     },
   );
@@ -45,15 +50,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       io.emitAcceptance([ok, payload, error], meta),
     )
   ) {
-    return;
-  }
-  const runtimeAuthority = createAgentRuntimeAuthorityGuard(
-    client,
-    context,
-    respond,
-    assertAdmissionCurrent,
-  );
-  if (!runtimeAuthority.ensureActive()) {
     return;
   }
   const request = params as AgentRunRequest;
@@ -68,7 +64,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   });
   try {
     await createAgentTurnService({ context, isWebchatConnect }).startTurn({
-      assertAdmissionCurrent: runtimeAuthority.commitGuard,
+      assertAdmissionCurrent,
       assertInputCommitAllowed: assertUploadAllowed,
       hasCurrentClientAuthority,
       preflight,
@@ -81,6 +77,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       respond(false, undefined, error.error);
       return;
     }
-    runtimeAuthority.handleClosedError(error);
+    throw error;
   }
 };

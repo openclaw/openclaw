@@ -454,6 +454,7 @@ export async function handleGatewayRequest(
           methodRegistry,
           expectedProfileBinding: profileBinding,
           hasCurrentClientAuthority,
+          admitted: true,
           assertInvocationCurrent: () => {
             runtimeAuthority?.assertCurrent();
             assertOperatorCurrent();
@@ -489,12 +490,7 @@ export async function handleGatewayRequest(
           requestMutationAuthority.assertCurrent,
         ]),
         profileBinding?.assertCurrent,
-        requestMutationAuthority.assertAdmittedInputCurrent
-          ? () => {
-              assertOperatorCurrent();
-              requestMutationAuthority.assertAdmittedInputCurrent?.();
-            }
-          : undefined,
+        requestMutationAuthority.assertAdmittedInputCurrent,
       );
       const respondAuthorized: GatewayRequestOptions["respond"] =
         authorization.sessionScope === "operator.sessions.read"

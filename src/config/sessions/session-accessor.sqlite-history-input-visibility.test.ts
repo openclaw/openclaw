@@ -157,3 +157,66 @@ it.each([false, true])(
     });
   },
 );
+
+it("selects a run input before decoding unrelated history", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const scope = {
+      agentId: "main",
+      sessionId: "indexed-run-input",
+      sessionKey: "agent:main:indexed-run-input",
+      storePath: database.path,
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const count = 1000;
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      ...Array.from({ length: count }, (_, index) => ({
+        type: "message",
+        id: `input-${index}`,
+        parentId: index === 0 ? null : `input-${index - 1}`,
+        message: {
+          role: "user",
+          content: `Input ${index}\0${"x".repeat(4096)}`,
+          idempotencyKey: `run-${index}:user`,
+        },
+      })),
+    ]);
+    await waitForSessionTranscriptProjection(scope);
+    database.db.exec("ANALYZE");
+    const nativeJson = new DatabaseSync(":memory:");
+    const extract = nativeJson.prepare("SELECT jsonb_extract(?, ?) AS value");
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    const target = { agentId: "main", path: database.path };
+    let decodedInputs = 0;
+    try {
+      retained.run(target, () => {
+        const opened = withScopedOpenClawAgentDatabaseReadOnly((reader) => reader, target);
+        if (!opened.found) {
+          throw new Error("Expected the seeded history reader");
+        }
+        requireNativeSqliteDatabase(opened.value.db).function(
+          "json_extract",
+          { deterministic: true },
+          (value, jsonPath) => {
+            if (jsonPath === "$.message.__openclaw.steerTargetRunId") {
+              decodedInputs += 1;
+            }
+            return extract.get(value, jsonPath)?.value ?? null;
+          },
+        );
+        const resolver = createReadonlySessionHistoryReader({
+          transcript: { ...scope, sessionFile: scope.sessionKey },
+          database: target,
+        }).subagentCoordination;
+        expect(resolver.isSubagentRunMessage(`run-${count - 1}`, count)).toBe(false);
+        expect(resolver.isSubagentRunMessage("missing-run", count)).toBe(false);
+        expect(decodedInputs).toBeLessThanOrEqual(4);
+      });
+    } finally {
+      retained.close();
+      nativeJson.close();
+    }
+  });
+});
