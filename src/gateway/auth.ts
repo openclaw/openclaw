@@ -81,7 +81,7 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface = "http" | "http-control-ui-read" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "http-control-ui-read" | "ws" | "ws-control-ui";
 
 type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
@@ -534,13 +534,14 @@ async function authorizeGatewayConnectCore(
   if (ingressAttribution?.kind === "openclaw-id-tunnel") {
     return await authorizeOpenClawIdTunnel(
       ingressAttribution.peerKey,
-      authSurface === "ws-control-ui",
+      authSurface === "ws-control-ui" || authSurface === "ws",
     );
   }
 
   if (
     authSurface === "http-control-ui-read" &&
     auth.allowTailscale &&
+    ingressAttribution?.kind === "tailscale-serve" &&
     !localDirect &&
     !explicitSharedSecretAuth
   ) {
@@ -556,6 +557,38 @@ async function authorizeGatewayConnectCore(
     });
     if (originResult) {
       return originResult;
+    }
+  }
+
+  const canAttemptTailscaleHeaderAuth =
+    allowTailscaleHeaderAuth &&
+    auth.allowTailscale &&
+    !localDirect &&
+    ingressAttribution?.kind === "tailscale-serve" &&
+    !explicitSharedSecretAuth;
+
+  if (canAttemptTailscaleHeaderAuth) {
+    const verifiedTailscaleUser = await ingressAttribution.verifyIdentity();
+    if (verifiedTailscaleUser) {
+      limiter?.reset(subject, rateLimitScope);
+      return {
+        ok: true,
+        method: "tailscale",
+        user: verifiedTailscaleUser.login,
+        tailscaleIdentity: verifiedTailscaleUser,
+      };
+    }
+    if (auth.mode === "trusted-proxy") {
+      // Managed Serve is a separate ingress. Never interpret missing Cloudflare
+      // headers as authorization, and rate-limit failed WhoIs attempts here.
+      const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
+      if (rateLimitResult) {
+        return rateLimitResult;
+      }
+      if (!params.deferRateLimitFailure) {
+        await limiter?.recordFailureAndDelay(subject, rateLimitScope);
+      }
+      return { ok: false, reason: "tailscale_user_missing" };
     }
   }
 
@@ -628,26 +661,6 @@ async function authorizeGatewayConnectCore(
       return originResult;
     }
     return { ok: true, method: "none" };
-  }
-
-  const canAttemptTailscaleHeaderAuth =
-    allowTailscaleHeaderAuth &&
-    auth.allowTailscale &&
-    !localDirect &&
-    ingressAttribution?.kind === "tailscale-serve" &&
-    !explicitSharedSecretAuth;
-
-  if (canAttemptTailscaleHeaderAuth) {
-    const verifiedTailscaleUser = await ingressAttribution.verifyIdentity();
-    if (verifiedTailscaleUser) {
-      limiter?.reset(subject, rateLimitScope);
-      return {
-        ok: true,
-        method: "tailscale",
-        user: verifiedTailscaleUser.login,
-        tailscaleIdentity: verifiedTailscaleUser,
-      };
-    }
   }
 
   const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
@@ -724,5 +737,15 @@ export async function authorizeWsControlUiGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "ws-control-ui",
+  });
+}
+
+/** Authorize a non-Control-UI WebSocket request without ambient Tailscale identity. */
+export async function authorizeWsGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws",
   });
 }

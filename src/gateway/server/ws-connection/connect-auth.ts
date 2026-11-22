@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   ConnectErrorDetailCodes,
   resolveAuthConnectErrorDetailCode,
@@ -150,6 +151,10 @@ async function authenticateGatewayConnectCore(
     resolvedAuth,
     connectAuth: connectParams.auth,
     hasDeviceIdentity: Boolean(device),
+    // Native companion UI uses the verified Serve surface, but retains its
+    // separate device pairing policy (the admission isControlUi flag stays unchanged).
+    isUiAuthSurface: isControlUi || isNativeAppUiClient(connectParams.client),
+    role,
     req: upgradeReq,
     trustedProxies,
     allowRealIpFallback,
