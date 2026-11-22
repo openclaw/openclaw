@@ -539,10 +539,7 @@ export async function invokeUpdateRun(
   },
   contextOverrides: Record<string, unknown> = {},
   authority: Partial<
-    Pick<
-      GatewayRequestHandlerOptions,
-      "sessionMutationCommitGuard" | "hasCurrentClientAuthority" | "client"
-    >
+    Pick<GatewayRequestHandlerOptions, "sessionMutationCommitGuard" | "signal" | "client">
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);
