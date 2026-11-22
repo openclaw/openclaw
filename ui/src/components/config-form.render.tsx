@@ -201,7 +201,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
                         ref={(handle) => (docsPopover = handle)}
                         id={`settings-section-help-popover-${props.section.id}`}
                         label={t("configForm.sectionHelp", { section: meta().label })}
-                        class="settings-section__help-popover"
+                        class="settings-section__help-popover config-section-help__popover"
                         anchor={trigger()}
                         placement="bottom-end"
                       >

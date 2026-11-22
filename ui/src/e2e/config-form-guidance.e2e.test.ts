@@ -18,6 +18,55 @@ const withPage = pageRunner(suite, settingsPageOptions);
 const { capture } = configProof("config-form-guidance");
 
 suite.define(() => {
+  it("keeps phone section help inside the gutters and above the settings it explains", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion: "reduce" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configSnapshot({}, "help-placement"),
+            "config.schema": configSchema(
+              objectSchema("", {
+                approvals: objectSchema("Approvals", {
+                  exec: objectSchema("Exec approval forwarding", {
+                    enabled: { type: "boolean" },
+                    mode: { type: "string" },
+                  }),
+                }),
+              }),
+              {
+                approvals: {
+                  label: "Approvals",
+                  help: "Choose where approval requests are delivered.",
+                  docsUrl: "https://docs.openclaw.ai/tools/exec-approvals",
+                },
+              },
+            ),
+          },
+        });
+        await page.goto(new URL("settings/security?section=approvals", suite.server.baseUrl).href);
+        const trigger = page.getByRole("button", { name: "Help for Approvals", exact: true });
+        await trigger.tap();
+        const panel = page.locator(".settings-section__help-popover:visible");
+        await panel.getByRole("link").waitFor();
+        const placement = await panel.evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { left: b.left, right: innerWidth - b.right, bottom: b.bottom };
+        });
+        expect(placement.left).toBeGreaterThanOrEqual(12);
+        expect(placement.right).toBeCloseTo(placement.left, 0);
+        const firstSetting = page
+          .locator("section.settings-section")
+          .filter({ has: trigger })
+          .locator(".settings-row")
+          .first();
+        expect(placement.bottom).toBeLessThanOrEqual((await firstSetting.boundingBox())!.y);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => trigger.evaluate((el) => document.activeElement === el)).toBe(true);
+      },
+    );
+  });
+
   it("renders every accepted branch of a transform input schema", async () => {
     await withPage(async ({ page }) => {
       const config = { meta: { groupPolicy: "allowlist" } };
