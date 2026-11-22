@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
@@ -27,6 +28,7 @@ import {
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { getUpdateRunForProgressAsync } from "./update-run-reader.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -301,3 +303,21 @@ it.each(["registry", "config preparation", "config recheck"])(
     }
   },
 );
+
+it("releases worker-held state readers before the helper waits on Doctor", async () => {
+  // The managed handoff helper outlives this check while Doctor and rollback take
+  // native exclusion; an idle retained WAL reader would hold their shared lock.
+  const run = create();
+  vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
+    await getUpdateRunForProgressAsync(run.runId, { env });
+  });
+  expect((await authorityFor()).isCurrent()).toBe(true);
+  const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+  try {
+    exclusive.exec(
+      "PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;",
+    );
+  } finally {
+    exclusive.close();
+  }
+});
