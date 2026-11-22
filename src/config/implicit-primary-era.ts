@@ -38,13 +38,17 @@ export function resolveConfigWriteTouchedVersion(
   version: string,
 ): string {
   // The previous file is raw JSON; only its recorded version string matters here.
-  const meta = isRecord(previousRaw) && isRecord(previousRaw.meta) ? previousRaw.meta : undefined;
+  if (!isRecord(previousRaw) || !hasAgentWithoutPrimary(cfg)) {
+    return version;
+  }
+  const meta = isRecord(previousRaw.meta) ? previousRaw.meta : undefined;
   const previous =
     typeof meta?.lastTouchedVersion === "string" ? meta.lastTouchedVersion : undefined;
-  // Only a recorded era version holds; a config without one starts on the current contract.
-  return previous !== undefined &&
-    isImplicitPrimaryEraConfig({ meta: { lastTouchedVersion: previous } }) &&
-    hasAgentWithoutPrimary(cfg)
-    ? previous
-    : version;
+  // An existing file without a version predates version stamping, so it is implicit-era too;
+  // stamp the era release so the next save still knows. A new file has no previous record.
+  const newerRelease = (compareOpenClawVersions(version, LAST_IMPLICIT_PRIMARY_RELEASE) ?? 1) > 0;
+  if (!newerRelease || !isImplicitPrimaryEraConfig({ meta: { lastTouchedVersion: previous } })) {
+    return version;
+  }
+  return previous ?? LAST_IMPLICIT_PRIMARY_RELEASE;
 }

@@ -69,6 +69,16 @@ describe("config write metadata stamping", () => {
     );
   });
 
+  it("keeps an unversioned existing config eligible for the implicit-model migration", () => {
+    const unrelated: OpenClawConfig = { gateway: { port: 18_880 } };
+    expect(stampConfigWriteMetadata(unrelated, "2026.11.7", {}).meta?.lastTouchedVersion).toBe(
+      "2026.11.6",
+    );
+    expect(stampConfigWriteMetadata(unrelated, "2026.11.7", null).meta?.lastTouchedVersion).toBe(
+      "2026.11.7",
+    );
+  });
+
   it("preserves a restriction containing wildcard, alias and selector refs", () => {
     const modelMap = {
       "openai/*": {},
