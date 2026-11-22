@@ -13,6 +13,7 @@ import {
 } from "../../agents/run-termination.js";
 import { isWorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { claimSystemEventTurn } from "../../infra/system-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -158,7 +159,7 @@ function resolveSessionEventReadmissionKind(
 }
 
 /** Wait before fresh authority, then return the next attempt's state if it may still run. */
-export async function prepareSessionEventReadmission(
+async function prepareSessionEventReadmission(
   readmission: SessionEventReadmission,
   signal: AbortSignal,
   facts: () => SessionEventReadmissionFacts,
@@ -311,7 +312,12 @@ export async function settleSessionEventAttempt(params: {
           : terminal,
     };
   }
-  if (options.preserveOccurrenceOnRejection && !facts.adopted && !facts.started) {
+  if (
+    (options.preserveOccurrenceOnRejection ||
+      (!signal.aborted && isOperatorAuthorityUnavailable(terminal.failure))) &&
+    !facts.adopted &&
+    !facts.started
+  ) {
     ownership.release();
   } else {
     ownership.cancel();

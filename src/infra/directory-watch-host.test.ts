@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +23,67 @@ afterEach(() => {
 });
 
 describe("directory watch host", () => {
+  it("forwards a stream burst in one worker message without losing ordered events or errors", async () => {
+    const requests: Array<{ id: number; path?: string }> = [];
+    const registered = Promise.withResolvers<void>();
+    const stdout = new PassThrough();
+    const child = Object.assign(new childProcess.ChildProcess(), {
+      stdout,
+      stdin: new Writable({
+        write(chunk, _encoding, done) {
+          requests.push(JSON.parse(String(chunk)));
+          if (requests.length === 2) {
+            registered.resolve();
+          }
+          done();
+        },
+      }),
+    });
+    vi.spyOn(childProcess, "spawn").mockReturnValueOnce(child);
+    syncBuiltinESMExports();
+    const channel = createDirectoryWatchChannel();
+    const send = channel.port.postMessage.bind(channel.port);
+    const messages: unknown[] = [];
+    const complete = Promise.withResolvers<void>();
+    channel.port.on("message", (message) => {
+      messages.push(message);
+      const replies = messages.flat();
+      if (replies.length === 4) {
+        complete.resolve();
+      }
+    });
+    try {
+      send({ id: 41, path: "first", recursive: false });
+      send({ id: 42, path: "second", recursive: false });
+      await registered.promise;
+      const [first, second] = requests;
+      stdout.write(
+        [
+          { id: first!.id, event: "change" },
+          { id: first!.id, event: "rename", filename: "skills" },
+          { id: second!.id, event: "change", filename: "profile" },
+          { id: first!.id },
+          { id: first!.id, event: "change", filename: "retired" },
+        ]
+          .map((reply) => JSON.stringify(reply))
+          .join("\n") + "\n",
+      );
+      await complete.promise;
+      expect(messages.flat()).toEqual([
+        { id: 41, event: "change", filename: undefined },
+        { id: 41, event: "rename", filename: "skills" },
+        { id: 42, event: "change", filename: "profile" },
+        { id: 41, error: new Error("Directory watch host lost the watch"), pathUnavailable: true },
+      ]);
+      expect(messages).toHaveLength(1);
+    } finally {
+      channel.close();
+      channel.port.close();
+      child.emit("exit", 0);
+      stdout.destroy();
+    }
+  });
+
   it("keeps observation recoverable when helper startup throws", async () => {
     vi.spyOn(childProcess, "spawn").mockImplementationOnce(() => {
       throw new Error("synthetic helper startup failure");

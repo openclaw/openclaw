@@ -491,7 +491,8 @@ beforeEach(() => {
   resolveStartupInstallStatusMock.mockReset();
   resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    // Package installs keep the handler these suites cover; Git installs use src/update/.
+    status: { root: "/tmp/openclaw", installKind: "package", packageManager: "pnpm" },
     installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
@@ -537,9 +538,11 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
-  authority: Pick<
-    GatewayRequestHandlerOptions,
-    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  authority: Partial<
+    Pick<
+      GatewayRequestHandlerOptions,
+      "sessionMutationCommitGuard" | "hasCurrentClientAuthority" | "client"
+    >
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);
@@ -587,8 +590,9 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
+// update.run reads the install status to route, then the package handler reads it again.
 export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -602,7 +606,7 @@ export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
 }
 
 export function mockGitInstallSurface(root: string) {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "git", packageManager: "pnpm" },
     installReceipt: null,

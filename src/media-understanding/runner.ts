@@ -22,6 +22,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
@@ -246,10 +247,9 @@ function resolveImageModelFromAgentDefaults(params: {
   if (refs.length === 0) {
     return [];
   }
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  }).provider;
+  const defaultProvider =
+    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })?.provider ??
+    DEFAULT_PROVIDER;
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
     const effectiveDefaultProvider = ref.includes("/")

@@ -179,7 +179,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-store.execution-identity.test.ts",
   "src/gateway/operator-approval-store.test.ts",
   "src/gateway/operator-approval-store.worker.test.ts",
-  "src/gateway/operator-role-member-subject.test.ts",
   "src/gateway/operator-run-authority.policy-recovery.test.ts",
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
@@ -675,6 +674,8 @@ export const gatewayMethodsTestInclude = [
 ];
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Real Gateway startup requires the host-owned shared-state broker.
+  "src/gateway/operator-admission.table.test.ts",
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
   "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
@@ -703,6 +704,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.chat-attachment-recovery.product.test.ts",
   "src/gateway/server.chat-membership-authority.product.test.ts",
   "src/gateway/server.chat-workspace-readiness.product.test.ts",
+  "src/gateway/session-restart-resume.visible-chat.product.test.ts",
   "src/gateway/session-restart-resume.workspace.test.ts",
   "src/gateway/server.chat-queued-followup-operator-authority.product.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",

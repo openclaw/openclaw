@@ -15,7 +15,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
@@ -368,7 +368,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       const release = createDeferred();
       const abort = new AbortController();
       let authorityCurrent = true;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "retry-operator",
         scopes: ["operator.write"],
         assertCurrent: () => {

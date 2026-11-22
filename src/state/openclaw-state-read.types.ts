@@ -47,6 +47,10 @@ import type {
   RegisteredStateReadCommand,
   RegisteredStateReadResult,
 } from "./openclaw-state-read-operation-registry.js";
+import type {
+  prepareOpenClawStateReadSnapshotSource,
+  StateReadSnapshotSource,
+} from "./openclaw-state-read-snapshot-source.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { RepositoryWorkspaceOwner } from "./session-repository-workspaces.types.js";
@@ -56,6 +60,15 @@ import type {
   UserChannelIdentitySelector,
   CachedGitHubIdentityBinding,
 } from "./user-profiles.types.js";
+
+export type OpenClawStateReadSnapshotScope = RetainedReadScope & {
+  readSource(): StateReadSnapshotSource | undefined;
+  prepareSource?: () => Promise<void>;
+  forkSource: Awaited<ReturnType<typeof prepareOpenClawStateReadSnapshotSource>>["forkSource"];
+  recoverRollbackJournal: () => void;
+  env: NodeJS.ProcessEnv;
+  callerSignal?: AbortSignal;
+};
 
 export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
   admissionTimeoutMs?: number;
@@ -221,6 +234,7 @@ export type OpenClawStateReadCommand =
       type: "sessionRows.sharedFacts";
       entries: readonly {
         acp?: AcpSessionReadInput;
+        worktreeId?: string;
         repositoryWorkspace?: RepositoryWorkspaceOwner & { workspaceId: string };
       }[];
     }

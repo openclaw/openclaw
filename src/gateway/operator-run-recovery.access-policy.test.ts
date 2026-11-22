@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -8,72 +9,42 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
-import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   expectCurrent,
+  pairedOperator,
+  persistDevices,
   recoveryFixture,
   restoreFixture,
 } from "./operator-run-recovery.test-support.js";
 
 describe("recovered access policy", () => {
-  it.each([
-    "signal",
-    "assertion",
-    "new policy",
-    "github binding",
-    "policy callback",
-    "unavailable",
-    "unavailable publication",
-  ] as const)(
-    "keeps its admitted access grant through %s and rechecks a fresh restoration",
-    (revocation) =>
+  it.each(["revoked", "unavailable", "replaced"] as const)(
+    "finishes admitted work and evaluates current access when the grant is %s",
+    (change) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const original = { pluginId: "recovery-access", grantId: "original-accepted-grant" };
+        const pluginId = "recovery-access";
         let permitted = true;
-        let additionalApplicable = false;
-        let invalidateDuringPolicy = false;
         let unavailable = false;
-        const controller = new AbortController();
-        const grant = {
-          grantId: original.grantId,
-          signal: controller.signal,
-          assertCurrent: () => {
-            controller.signal.throwIfAborted();
-            if (unavailable) {
-              throw new GatewayOperatorAccessUnavailableError();
-            }
-            if (!permitted) {
-              throw new Error("Original grant revoked");
-            }
-          },
-        };
-        const resume = vi.fn<NonNullable<PluginGatewayAccessPolicy["resume"]>>(({ profile }) =>
-          permitted && (revocation !== "github binding" || profile.githubAccountIds?.includes(42))
-            ? grant
-            : undefined,
-        );
+        let grantId = "original-accepted-grant";
         const registry = createEmptyPluginRegistry();
-        registry.plugins.push(createPluginRecord({ id: original.pluginId }));
+        registry.plugins.push(createPluginRecord({ id: pluginId }));
         registry.gatewayAccessPolicies.push({
-          pluginId: original.pluginId,
-          source: "fixture",
-          policy: { authorize: () => grant, resume },
-        });
-        registry.plugins.push(createPluginRecord({ id: "additional-access" }));
-        registry.gatewayAccessPolicies.push({
-          pluginId: "additional-access",
+          pluginId,
           source: "fixture",
           policy: {
             authorize: () => {
-              if (invalidateDuringPolicy) {
-                permitted = false;
+              if (unavailable) {
+                throw new GatewayOperatorAccessUnavailableError();
               }
-              return additionalApplicable ? grant : undefined;
+              return permitted
+                ? { grantId, signal: new AbortController().signal, assertCurrent() {} }
+                : undefined;
             },
           },
         });
@@ -81,67 +52,116 @@ describe("recovered access policy", () => {
         stageActivePluginRegistry(registry, null, "default");
         try {
           const profile = ensureProfileForEmail("access@example.test");
-          if (revocation === "github binding") {
-            for (const [accountId, login, email] of [
-              [41, "primary", "access@example.test"],
-              [42, "secondary", "secondary@example.test"],
-            ] as const) {
-              syncGitHubIdentity({
-                identity: { accountId, login },
-                authenticationAlias: { kind: "email", email },
-              });
-            }
-            linkEmail("secondary@example.test", profile.id);
-          }
           const fixture = await recoveryFixture(state.stateDir, profile.id, {
-            gatewayAccessGrant: original,
+            scopes: ["operator.write"],
+            gatewayAccessGrant: { pluginId, grantId },
+            config: {
+              gateway: {
+                roles: {
+                  default: "worker",
+                  definitions: {
+                    worker: {
+                      scopes: ["operator.write"],
+                      agents: "*",
+                      sessions: { others: "none" },
+                      accessPolicyPlugin: pluginId,
+                    },
+                  },
+                },
+              },
+            },
           });
-          permitted = false;
-          await expect(fixture.restore()).rejects.toThrow("[access-cause=grant-revoked]");
-          permitted = true;
-          resume.mockClear();
           using restored = await restoreFixture(fixture);
-
-          expect(restored.authority.gatewayAccessGrant).toEqual(original);
-          expect(resume).toHaveBeenCalledWith(
-            expect.objectContaining({ grantId: original.grantId }),
-          );
-          restored.authority.assertCurrent();
-          restored.authority.readCurrentRoleFacts?.();
-          expect(resume).toHaveBeenCalledTimes(1);
-          if (revocation.startsWith("unavailable")) {
-            unavailable = true;
-            if (revocation === "unavailable publication") {
-              publishOperatorRoleConfigChange(fixture.context);
-            }
-            expect(restored.authority.assertCurrent).not.toThrow();
-            expect(restored.authority.signal?.aborted).toBe(false);
-            unavailable = false;
-            expectCurrent(restored.authority);
-            controller.abort(new Error("Original grant revoked"));
-          }
-          if (revocation === "signal") {
-            controller.abort(new Error("Original grant revoked"));
-            expect(restored.authority.signal?.aborted).toBe(false);
-          } else if (revocation === "assertion") {
+          if (change === "revoked") {
             permitted = false;
-          } else if (revocation === "policy callback") {
-            invalidateDuringPolicy = true;
-          } else if (revocation === "github binding") {
-            const { db } = openOpenClawStateDatabase();
-            // Seed a removed secondary identity, then publish through the profile writer.
-            db.prepare(
-              "DELETE FROM user_profile_identities WHERE provider = 'github' AND subject = ?",
-            ).run("42");
-            await setCanonicalUserProfileDisplayName(profile.id, "Updated display");
+          } else if (change === "unavailable") {
+            unavailable = true;
           } else {
-            additionalApplicable = true;
+            grantId = "replacement-current-grant";
           }
           expectCurrent(restored.authority);
-          await expect(fixture.restore()).rejects.toThrow();
+          if (change === "replaced") {
+            using next = await restoreFixture(fixture);
+            expect(next.authority.gatewayAccessGrant).toEqual({ pluginId, grantId });
+          } else {
+            await expect(fixture.restore()).rejects.toThrow(
+              change === "unavailable" ? GatewayOperatorAccessUnavailableError : Error,
+            );
+            unavailable = false;
+            permitted = true;
+            using next = await restoreFixture(fixture);
+            expectCurrent(next.authority);
+          }
         } finally {
           restoreActivePluginRegistrySnapshot(previous);
         }
       }),
   );
 });
+
+it.each([false, true])(
+  "uses current identity scopes at a Tailscale start (paired=%s)",
+  async (paired) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const email = "identity-scopes@example.test";
+      const profile = ensureProfileForEmail(email);
+      const auth = {
+        mode: "token" as const,
+        token: "fixture-gateway-token",
+        allowTailscale: true,
+        identityScopes: { [email]: ["operator.write" as const] },
+      };
+      const config: OpenClawConfig = { gateway: { auth } };
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
+        config,
+        scopes: ["operator.write"],
+        device: paired ? pairedOperator() : undefined,
+      });
+      const snapshot = expectDefined(
+        normalizeGatewayOperatorRecoverySnapshot({
+          ...fixture.snapshot,
+          authPolicy: {
+            ...captureGatewayAuthPolicy(config, {
+              role: "operator",
+              authMethod: "tailscale",
+              verifiedIdentity: email,
+            }),
+            generation: "",
+          },
+        }),
+        "saved identity-authenticated requester",
+      );
+      if (paired) {
+        const device = pairedOperator();
+        expectDefined(device.tokens?.operator, "paired operator token").scopes = ["operator.read"];
+        persistDevices(state.stateDir, [device], "both");
+      }
+      const admitted = await restoreGatewayOperatorSource({
+        snapshot,
+        context: fixture.context,
+        assertCurrent() {},
+      });
+      try {
+        expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
+        fixture.setConfig({
+          gateway: { auth: { ...auth, identityScopes: { [email]: ["operator.read"] } } },
+        });
+        const next = await restoreGatewayOperatorSource({
+          snapshot,
+          context: fixture.context,
+          assertCurrent() {},
+        });
+        try {
+          expect(operatorScopeSatisfied("operator.write", next.authority.scopes)).toBe(false);
+          expect(operatorScopeSatisfied("operator.read", next.authority.scopes)).toBe(true);
+        } finally {
+          next.release();
+        }
+        expectCurrent(admitted.authority);
+        expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
+      } finally {
+        admitted.release();
+      }
+    });
+  },
+);

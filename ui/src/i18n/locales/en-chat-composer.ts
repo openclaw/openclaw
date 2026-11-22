@@ -9,6 +9,7 @@ const catalog = {
     },
     composer: {
       composerInput: "Chat composer",
+      workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",

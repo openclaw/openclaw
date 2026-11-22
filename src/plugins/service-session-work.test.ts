@@ -2,7 +2,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { readPluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { SessionAccessPreparationPendingError } from "../gateway/session-access-authority.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginServiceSessionWork } from "./service-session-work.js";
@@ -268,17 +272,30 @@ it("refuses a replaced conversation without entering work", async () => {
   await expect(service.run("job", work)).resolves.toMatchObject({ status: "unavailable" });
   expect(work).not.toHaveBeenCalled();
 });
-it("gives a retry hint only before the callback is entered", async () => {
-  const { service } = fixture();
-  await service.admit(input);
-  state.pending = true;
-  const work = vi.fn();
-  await expect(service.run("job", work)).resolves.toMatchObject({
-    status: "unavailable",
-    retryAfterMs: 5000,
-  });
-  expect(work).not.toHaveBeenCalled();
-});
+it.each(["session", "operator", "ingress"])(
+  "retries unavailable %s admission before entering work",
+  async (source) => {
+    const { service } = fixture();
+    await service.admit(input);
+    state.pending = source === "session";
+    state.restoreError =
+      source === "operator"
+        ? new GatewayOperatorAccessUnavailableError()
+        : source === "ingress"
+          ? new GatewayDispatchUnavailableError("chat.send", true)
+          : undefined;
+    const work = vi.fn();
+    await expect(service.run("job", work)).resolves.toMatchObject({
+      status: "unavailable",
+      retryAfterMs: 5000,
+    });
+    expect(work).not.toHaveBeenCalled();
+    state.pending = false;
+    state.restoreError = undefined;
+    await expect(service.run("job", work)).resolves.toMatchObject({ status: "completed" });
+    expect(work).toHaveBeenCalledOnce();
+  },
+);
 it("does not advertise replay after completed work encounters a refresh", async () => {
   const { service } = fixture();
   await service.admit(input);

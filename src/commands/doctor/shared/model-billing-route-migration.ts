@@ -16,7 +16,7 @@ import {
   resolveSubagentSpawnModelFallbacksOverride,
 } from "../../../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntimeAsync } from "../../../agents/auth-profiles/store-runtime.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { createModelAuthAvailabilityResolver } from "../../../agents/model-auth-availability.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -170,11 +170,9 @@ async function collectBillingRoutes(params: {
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     };
-    const defaultProvider = resolveConfiguredModelRef({
-      ...options,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    }).provider;
+    const defaultProvider =
+      resolveConfiguredModelRef({ ...options, defaultProvider: DEFAULT_PROVIDER })?.provider ??
+      DEFAULT_PROVIDER;
     const aliasIndex = buildModelAliasIndex({ ...options, defaultProvider });
     return {
       resolve: (raw: string) =>

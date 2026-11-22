@@ -382,13 +382,16 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBe(2);
       const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
-      expect(await installedCard.count()).toBe(0);
+      const featured = catalog.locator('[data-catalog-section="featured"]');
+      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+      expect(await featured.locator("h3").first().textContent()).toBe("Memory Plus");
+      expect(await installedCard.getByText("Installed", { exact: true }).isVisible()).toBe(true);
+      expect(await installedCard.getByRole("button").count()).toBe(0);
       const availableCard = catalog
         .locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`)
         .first();
       expect(await availableCard.getByRole("button", { name: /Install/iu }).count()).toBe(1);
       expect(await availableCard.getByText(/downloads/u).count()).toBe(0);
-      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
 
       await search.fill("memory");
       await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "memory" } });
@@ -647,8 +650,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       "Featured",
       "Trending",
     ]);
-    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(7);
-    expect(await sections.first().locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count()).toBe(0);
+    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(8);
+    expect(await sections.nth(1).getByRole("link", { name: "Memory Plus" }).count()).toBe(0);
     expect(await sections.first().getByRole("button", { name: "View all" }).count()).toBe(1);
     const matrixCard = explore.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
     await matrixCard.waitFor();
@@ -715,9 +718,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         categories: ["missing-category"],
       },
     }));
-    const featured = discoveryResult.items
-      .filter((plugin) => plugin.catalog.featured && !plugin.local.installed)
-      .slice(0, 2);
+    const featured = discoveryResult.items.filter((plugin) => plugin.catalog.featured).slice(0, 2);
     const other = {
       ...matrixDiscoveryPlugin,
       id: "ch_b3RoZXI",

@@ -67,7 +67,7 @@ const enSkillWorkshop = {
       createsSkill: "Creates a new skill",
       updatesSkill: "Changes the live skill",
       apply: "Apply",
-      applyNewTitle: "Create this skill. You can archive it later.",
+      applyNewTitle: "Create this skill.",
       applyUpdateTitle:
         "Replace the live skill with this draft. The current version is saved first, so you can undo.",
       discard: "Discard",
@@ -77,8 +77,8 @@ const enSkillWorkshop = {
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
       open: "Open draft",
+      preview: "Draft preview",
       savedFirst: "The current version is saved first, so you can undo.",
-      archiveLater: "You can archive it later.",
       proposedLabel: "Proposed",
       position: "{current} of {total}",
       chatHint:

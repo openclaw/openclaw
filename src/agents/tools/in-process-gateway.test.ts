@@ -12,10 +12,8 @@ import {
 } from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { chatRef } from "../../sessions/chat-ref.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -316,7 +314,7 @@ describe("trusted in-process Gateway session creation", () => {
     await expect(
       asCaller(
         {
-          operatorAuthority: createAdmittedRunOperatorAuthority({
+          operatorAuthority: createTestOperatorAuthority({
             profileId: "operator",
             scopes: ["operator.write"],
             assertCurrent: () => {},

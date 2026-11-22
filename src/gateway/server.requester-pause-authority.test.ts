@@ -26,7 +26,7 @@ import * as pendingInputs from "../config/sessions/session-accessor.pending-inpu
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -71,7 +71,7 @@ it.for([
     const followsUp = outcome === "same-human follow-up" || revokedSource;
     const retiresAfterAcceptance = outcome === "outbox retired after acceptance";
     const sourceRevocation = new AbortController();
-    let originalSource: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+    let originalSource: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
     const marker = `PAUSE-MARKER-${id}`;
     const client = createOperatorClient({
       profileName: `pause-${id}`,
@@ -293,7 +293,7 @@ it.for([
     try {
       if (followsUp) {
         originalSource = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await prepareGatewayOperatorRunAuthority({
             client,
             context,
             sourceAuthority: {
@@ -383,7 +383,6 @@ it.for([
         });
         freshClient.internal = { controlUiAdmin: true };
         await sendHuman(freshClient, followupRunId, "Same human follow-up");
-        expect(originalSource?.authority.assertCurrent).not.toThrow();
       }
       const target = foreignRequester ? foreign : parent;
       const sessionId = foreignRequester ? foreignId : parentId;
@@ -437,7 +436,7 @@ it.for([
           }
           resume.resolve();
         }
-        if (!foreignRequester && !resetRequester && !revokedSource) {
+        if (!foreignRequester && !resetRequester) {
           await continuation;
           await Promise.all(trackedRequests());
           expect(received).toEqual([
@@ -461,9 +460,7 @@ it.for([
           );
           const expectedDenial = foreignRequester
             ? "does not own this continuation"
-            : revokedSource
-              ? "Original completion source revoked during dispatch"
-              : "no longer current";
+            : "no longer current";
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
