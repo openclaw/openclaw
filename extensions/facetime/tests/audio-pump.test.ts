@@ -168,7 +168,14 @@ describe("FaceTime native audio bridge", () => {
       );
       expect(processes[0]?.kills).toEqual([]);
       expect(outputIndices).toHaveLength(action === "barge-in" ? 2 : 1);
-      expect(processes[outputIndices[0] ?? -1]?.kills).toEqual(["SIGKILL"]);
+      const retiredOutputIndex = outputIndices[0] ?? -1;
+      expect(spawn.mock.calls[retiredOutputIndex]?.[1]).toContain("|exec /bin/cat -u");
+      expect(processes[retiredOutputIndex]?.stdin.destroyed).toBe(true);
+      expect(processes[retiredOutputIndex]?.kills).toEqual(["SIGKILL"]);
+      if (action === "barge-in") {
+        const replacementOutputIndex = outputIndices[1] ?? -1;
+        expect(spawn.mock.calls[replacementOutputIndex]?.[1]).toContain("|exec /bin/cat -u");
+      }
       await vi.advanceTimersByTimeAsync(200);
       expect(onPlaybackDrained).not.toHaveBeenCalled();
       expect(onError).not.toHaveBeenCalled();
