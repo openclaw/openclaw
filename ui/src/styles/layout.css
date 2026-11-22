@@ -385,8 +385,8 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   }
 
   .macos-titlebar-controls__button svg {
-    width: 16px;
-    height: 16px;
+    width: var(--macos-titlebar-glyph-size, 16px);
+    height: var(--macos-titlebar-glyph-size, 16px);
   }
 
   .shell-chrome-controls {
@@ -468,6 +468,17 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
 .macos-titlebar-controls__button:disabled {
   opacity: 0.38;
+}
+
+.macos-titlebar-sidebar-toggle {
+  --macos-titlebar-glyph-size: 18px;
+  --icon-button-glyph: var(--macos-titlebar-glyph-size);
+}
+
+/* A full divider marks an open sidebar without a persistent selected pill. */
+.macos-titlebar-sidebar-toggle[aria-expanded="false"] .macos-titlebar-sidebar-divider {
+  transform: scaleY(0.55);
+  transform-origin: center;
 }
 
 .shell--mobile-nav .macos-titlebar-controls {
