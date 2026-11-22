@@ -428,7 +428,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(
     );
     applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
     if (!input.appendOnlyRuntimeContext) {
-      recordRuntimeContextProjection(attempt, removedRuntimeContext, converted);
+      recordRuntimeContextProjection(removedRuntimeContext, converted);
     }
     return converted;
   };

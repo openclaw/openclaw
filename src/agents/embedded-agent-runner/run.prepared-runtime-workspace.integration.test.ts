@@ -26,58 +26,60 @@ const providerPluginId = "scripted-anthropic";
 const siblingPluginId = "registration-rollback";
 const sessionId = "prepared-runtime-workspace";
 
-it("admits a second workspace turn through real prepared runtime after registration rollback", async () => {
-  await withOpenClawTestState({ label: "prepared-workspace-turns" }, async (state) => {
-    const bundled = state.path("bundled");
-    await fs.mkdir(bundled);
-    const registrations: string[] = [];
-    let activeTurn = 0;
-    const requests: Array<Pick<Context, "systemPrompt" | "messages">> = [];
-    const stream: StreamFn = (model, context) => {
-      requests.push({
-        systemPrompt: context.systemPrompt,
-        messages: structuredClone(context.messages),
-      });
-      const message = makeAgentAssistantMessage({
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: [{ type: "text", text: `SCRIPTED-${requests.length}` }],
-      });
-      return createQueuedAssistantStream((push) => {
-        push({ type: "done", reason: "stop", message });
-      });
-    };
-    const bridge = {
-      stream,
-      capture: (pluginId: string) => {
-        registrations.push(`${pluginId}:${activeTurn}`);
-        return activeTurn;
-      },
-    };
-    const bridgeKey = `__prepared_workspace_${path.basename(state.root)}`;
-    Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: bridge });
-    const network = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      throw new Error("Scripted prepared-runtime fixture must not perform network I/O");
-    });
-    try {
-      for (const pluginId of [providerPluginId, siblingPluginId]) {
-        const rootDir = path.join(bundled, pluginId);
-        await fs.mkdir(rootDir);
-        const fixture = createColdPluginFixture({
-          rootDir,
-          pluginId,
-          providerId: "anthropic",
-          manifest: {
-            channels: [],
-            channelConfigs: {},
-            providerAuthChoices: [],
-            providers: pluginId === providerPluginId ? ["anthropic"] : [],
-          },
+it.each([true, false])(
+  "admits real prepared turns after registration rollback (retained context: %s)",
+  async (retainedContext) => {
+    await withOpenClawTestState({ label: "prepared-workspace-turns" }, async (state) => {
+      const bundled = state.path("bundled");
+      await fs.mkdir(bundled);
+      const registrations: string[] = [];
+      let activeTurn = 0;
+      const requests: Array<Pick<Context, "systemPrompt" | "messages">> = [];
+      const stream: StreamFn = (model, context) => {
+        requests.push({
+          systemPrompt: context.systemPrompt,
+          messages: structuredClone(context.messages),
         });
-        await fs.writeFile(
-          fixture.runtimeSource,
-          `
+        const message = makeAgentAssistantMessage({
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "text", text: `SCRIPTED-${requests.length}` }],
+        });
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: "stop", message });
+        });
+      };
+      const bridge = {
+        stream,
+        capture: (pluginId: string) => {
+          registrations.push(`${pluginId}:${activeTurn}`);
+          return activeTurn;
+        },
+      };
+      const bridgeKey = `__prepared_workspace_${path.basename(state.root)}`;
+      Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: bridge });
+      const network = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        throw new Error("Scripted prepared-runtime fixture must not perform network I/O");
+      });
+      try {
+        for (const pluginId of [providerPluginId, siblingPluginId]) {
+          const rootDir = path.join(bundled, pluginId);
+          await fs.mkdir(rootDir);
+          const fixture = createColdPluginFixture({
+            rootDir,
+            pluginId,
+            providerId: "anthropic",
+            manifest: {
+              channels: [],
+              channelConfigs: {},
+              providerAuthChoices: [],
+              providers: pluginId === providerPluginId ? ["anthropic"] : [],
+            },
+          });
+          await fs.writeFile(
+            fixture.runtimeSource,
+            `
 module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
   const bridge = globalThis[${JSON.stringify(bridgeKey)}];
   api.lifecycle.registerRuntimeLifecycle({ id: "fixture", dispose() {} });
@@ -85,119 +87,135 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
   ${
     pluginId === siblingPluginId
       ? 'if (turn === 1) throw new Error("Synthetic registration rollback");'
-      : 'api.registerProvider({ id: "anthropic", label: "Scripted Anthropic", auth: [], wrapStreamFn: () => (model, context, options) => bridge.stream(model, context, options) });'
+      : `api.registerProvider({ id: "anthropic", label: "Scripted Anthropic", auth: [], ${retainedContext ? "" : "buildReplayPolicy: () => ({ appendOnlyRuntimeContext: false, inHistorySystemUpdates: false }),"} wrapStreamFn: () => (model, context, options) => bridge.stream(model, context, options) });`
   }
 } };
 `,
-        );
-      }
-      const config: OpenClawConfig = {
-        agents: {
-          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-          defaults: { workspace: state.workspaceDir, model: "anthropic/claude-opus-5" },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            anthropic: {
-              api: "anthropic-messages",
-              auth: "api-key",
-              apiKey: "synthetic-workspace-key",
-              baseUrl: "https://api.anthropic.com",
-              models: [completionModelDefinition({ id: "claude-opus-5", contextWindow: 200_000 })],
+          );
+        }
+        const config: OpenClawConfig = {
+          agents: {
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+            defaults: { workspace: state.workspaceDir, model: "anthropic/claude-opus-5" },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                auth: "api-key",
+                apiKey: "synthetic-workspace-key",
+                baseUrl: "https://api.anthropic.com",
+                models: [
+                  completionModelDefinition({ id: "claude-opus-5", contextWindow: 200_000 }),
+                ],
+              },
             },
           },
-        },
-        plugins: {
-          allow: [providerPluginId, siblingPluginId],
-          slots: { memory: "none" },
-          entries: {
-            [providerPluginId]: { enabled: true },
-            [siblingPluginId]: { enabled: true },
+          plugins: {
+            allow: [providerPluginId, siblingPluginId],
+            slots: { memory: "none" },
+            entries: {
+              [providerPluginId]: { enabled: true },
+              [siblingPluginId]: { enabled: true },
+            },
           },
-        },
-        skills: { load: { watch: false } },
-      };
-      await state.writeConfig(config);
-      await withEnvAsync(
-        { OPENCLAW_BUNDLED_PLUGINS_DIR: bundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined },
-        async () => {
-          await resetPreparedModelRuntimeSnapshotsForTest();
-          clearPluginMetadataLifecycleCaches();
-          setRuntimeConfigSnapshot(config);
-          try {
-            for (const [index, rule] of [
-              "Original workspace instruction.",
-              "Updated workspace instruction.",
-            ].entries()) {
-              activeTurn = index;
-              await fs.writeFile(
-                path.join(state.workspaceDir, "AGENTS.md"),
-                `## Workspace rule\n${rule}\n`,
-              );
-              const runId = `${sessionId}-${index}`;
-              const admission = prepareSystemAgentRunAdmission(
-                config,
-                runId,
-                "main",
-                "scripted-workspace",
-              );
-              try {
-                const result = await runEmbeddedAgent({
-                  preparedRunAdmission: admission,
+          skills: { load: { watch: false } },
+        };
+        await state.writeConfig(config);
+        await withEnvAsync(
+          { OPENCLAW_BUNDLED_PLUGINS_DIR: bundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined },
+          async () => {
+            await resetPreparedModelRuntimeSnapshotsForTest();
+            clearPluginMetadataLifecycleCaches();
+            setRuntimeConfigSnapshot(config);
+            try {
+              for (const [index, rule] of [
+                "Original workspace instruction.",
+                "Updated workspace instruction.",
+              ].entries()) {
+                activeTurn = index;
+                await fs.writeFile(
+                  path.join(state.workspaceDir, "AGENTS.md"),
+                  `## Workspace rule\n${rule}\n`,
+                );
+                const runId = `${sessionId}-${index}`;
+                const admission = prepareSystemAgentRunAdmission(
                   config,
                   runId,
-                  sessionId,
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                  sessionTarget: {
-                    agentId: "main",
+                  "main",
+                  "scripted-workspace",
+                );
+                try {
+                  const result = await runEmbeddedAgent({
+                    preparedRunAdmission: admission,
+                    config,
+                    runId,
                     sessionId,
-                    sessionKey: `agent:main:${sessionId}`,
-                    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-                  },
-                  provider: "anthropic",
-                  model: "claude-opus-5",
-                  prompt: `Reply for workspace turn ${index + 1}.`,
-                  disableTools: true,
-                  cleanupBundleMcpOnRunEnd: true,
-                  timeoutMs: 30_000,
-                });
-                expect(result.meta.error).toBeUndefined();
-              } finally {
-                admission.close();
+                    agentDir: state.agentDir(),
+                    workspaceDir: state.workspaceDir,
+                    sessionTarget: {
+                      agentId: "main",
+                      sessionId,
+                      sessionKey: `agent:main:${sessionId}`,
+                      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+                    },
+                    provider: "anthropic",
+                    model: "claude-opus-5",
+                    prompt: `Reply for workspace turn ${index + 1}.`,
+                    disableTools: true,
+                    cleanupBundleMcpOnRunEnd: true,
+                    timeoutMs: 30_000,
+                  });
+                  expect(result.meta.error).toBeUndefined();
+                } finally {
+                  admission.close();
+                }
               }
+              expect(network).not.toHaveBeenCalled();
+              expect(registrations).toContain(`${siblingPluginId}:0`);
+              expect(registrations).toContain(`${siblingPluginId}:1`);
+              expect(requests).toHaveLength(2);
+              for (const request of requests) {
+                const carriers = request.messages.filter(
+                  (message) => message.role === "user" && message.runtimeContextCarrier,
+                );
+                expect(carriers.length).toBeGreaterThan(0);
+                expect(
+                  carriers.every(
+                    (message) =>
+                      message.role === "user" &&
+                      message.runtimeContextCarrierRetained === retainedContext,
+                  ),
+                ).toBe(true);
+              }
+              expect(requests[0]?.systemPrompt).toContain("Original workspace instruction.");
+              expect(requests[1]?.systemPrompt).toBe(requests[0]?.systemPrompt);
+              expect(requests[1]?.systemPrompt).not.toContain("Updated workspace instruction.");
+              expect(
+                requests.map(({ messages }) =>
+                  messages
+                    .filter((message) =>
+                      extractTextFromChatContent(message.content)?.includes(
+                        "Updated workspace instruction.",
+                      ),
+                    )
+                    .map((message) => message.role),
+                ),
+              ).toEqual([[], ["user"]]);
+            } finally {
+              await resetPreparedModelRuntimeSnapshotsForTest();
+              resetPluginLoaderTestStateForTest();
+              cleanupPluginLoaderFixturesForTest();
+              clearPluginMetadataLifecycleCaches();
             }
-            expect(network).not.toHaveBeenCalled();
-            expect(registrations).toContain(`${siblingPluginId}:0`);
-            expect(registrations).toContain(`${siblingPluginId}:1`);
-            expect(requests).toHaveLength(2);
-            expect(requests[0]?.systemPrompt).toContain("Original workspace instruction.");
-            expect(requests[1]?.systemPrompt).toBe(requests[0]?.systemPrompt);
-            expect(requests[1]?.systemPrompt).not.toContain("Updated workspace instruction.");
-            expect(
-              requests.map(({ messages }) =>
-                messages
-                  .filter((message) =>
-                    extractTextFromChatContent(message.content)?.includes(
-                      "Updated workspace instruction.",
-                    ),
-                  )
-                  .map((message) => message.role),
-              ),
-            ).toEqual([[], ["user"]]);
-          } finally {
-            await resetPreparedModelRuntimeSnapshotsForTest();
-            resetPluginLoaderTestStateForTest();
-            cleanupPluginLoaderFixturesForTest();
-            clearPluginMetadataLifecycleCaches();
-          }
-        },
-      );
-    } finally {
-      network.mockRestore();
-      clearEmbeddedSessionPromptStates([sessionId]);
-      Reflect.deleteProperty(globalThis, bridgeKey);
-    }
-  });
-});
+          },
+        );
+      } finally {
+        network.mockRestore();
+        clearEmbeddedSessionPromptStates([sessionId]);
+        Reflect.deleteProperty(globalThis, bridgeKey);
+      }
+    });
+  },
+);

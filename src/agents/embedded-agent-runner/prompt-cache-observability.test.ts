@@ -4,6 +4,7 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
@@ -16,6 +17,7 @@ import {
   completePromptCacheObservation,
   declarePromptSystemPromptRebuild,
   recordAggregateTruncation,
+  recordRuntimeContextProjection,
 } from "./prompt-cache-observability.js";
 import {
   beginAnthropicObservation,
@@ -453,6 +455,48 @@ describe("prompt cache observability", () => {
     expect(detail).not.toContain("\n");
     expect(detail).not.toContain("private descriptor");
     expect(detail.length).toBeLessThan(500);
+  });
+
+  it("isolates removal baselines across affinities, retirement and eviction without retaining payloads", async () => {
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    const primary = { sessionId: scopedKey("removal-owner"), promptCacheKey: "primary" };
+    const identities = [
+      primary,
+      { ...primary, promptCacheKey: "secondary" },
+      { sessionId: scopedKey("other-removal-owner"), promptCacheKey: "primary" },
+    ];
+    const project = (text: string, removedAt: number) => {
+      const message = makeAgentUserMessage({ content: text, timestamp: 1 });
+      const messages = [message];
+      recordRuntimeContextProjection(
+        [makeAgentUserMessage({ content: "removed carrier", timestamp: removedAt })],
+        messages,
+      );
+      return { message, messages };
+    };
+    const observe = (identity: (typeof identities)[number], text: string, removedAt: number) =>
+      beginOpenAIObservation({ ...identity, messages: project(text, removedAt).messages });
+    for (const [index, identity] of identities.entries()) {
+      expect(observe(identity, "original", index).changes).toBeNull();
+    }
+    for (const [index, identity] of identities.entries()) {
+      expect(observe(identity, "original", index).changes).toBeNull();
+      expect(() => observe(identity, "unrelated edit", index)).toThrow("historyRewrite");
+    }
+    cleanupSessionResources(primary.sessionId);
+    expect(observe(primary, "reset baseline", 10).changes).toBeNull();
+    expect(() => observe(primary, "edit after reset", 10)).toThrow("historyRewrite");
+    for (let index = 0; index < 513; index++) {
+      beginOpenAIObservation({ sessionId: scopedKey(`removal-pressure-${index}`) });
+    }
+    expect(observe(primary, "evicted baseline", 20).changes).toBeNull();
+    expect(() => observe(primary, "edit after eviction", 20)).toThrow("historyRewrite");
+    const refs = (() => {
+      const { message, messages } = project("disposable request payload".repeat(1024), 30);
+      beginOpenAIObservation({ sessionId: scopedKey("removal-retention"), messages });
+      return [new WeakRef(message), new WeakRef(messages)];
+    })();
+    await expectCollected(...refs);
   });
 
   it("clears every retired session affinity while preserving other sessions until global cleanup", () => {

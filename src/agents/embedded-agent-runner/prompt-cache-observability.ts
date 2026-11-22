@@ -87,6 +87,10 @@ const toolFactSources = new WeakMap<
   readonly PromptCacheToolSnapshot[],
   Map<PromptCacheToolSnapshot, string>
 >();
+// Conversion precedes observation, including the first request. Weak keys carry only
+// removed-carrier identities to that exact request without retaining its payload.
+// Null records a conversion with no removals; absence cannot explain a history edit.
+const runtimeContextRemovals = new WeakMap<readonly Message[], readonly string[] | null>();
 const MAX_PROMPT_FACT_SOURCE_CHARS = 32_768;
 const MAX_TOOL_FACT_SOURCE_CHARS = 16_384;
 const trackers = new Map<string, PromptCacheTracker>();
@@ -322,6 +326,22 @@ export function beginPromptCacheObservation(
 ) {
   const key = buildTrackerKey(params);
   const previous = trackers.get(key);
+  const removedRuntimeContextKeys = runtimeContextRemovals.get(params.messages);
+  const runtimeContextCarrierPositions = params.messages.flatMap((message, index) =>
+    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+  );
+  if (
+    previous &&
+    removedRuntimeContextKeys !== undefined &&
+    (removedRuntimeContextKeys?.some(
+      (removedKey) => !previous.removedRuntimeContextKeys?.has(removedKey),
+    ) ||
+      previous.runtimeContextCarrierPositions.some(
+        (position, index) => runtimeContextCarrierPositions[index] !== position,
+      ))
+  ) {
+    (previous.declaredRewrites ??= new Set()).add("runtimeContextCarrier");
+  }
   const requestedAt = Date.now();
   const tools = sortPromptCacheToolsByName(params.tools);
   const descriptions = toolFactSources.get(params.tools);
@@ -454,10 +474,10 @@ export function beginPromptCacheObservation(
     history,
     historyBytes,
     // Projection facts follow this exact baseline through attempt teardown and eviction.
-    runtimeContextCarrierPositions: params.messages.flatMap((message, index) =>
-      message.role === "user" && message.runtimeContextCarrier ? [index] : [],
-    ),
-    removedRuntimeContextKeys: previous?.removedRuntimeContextKeys,
+    runtimeContextCarrierPositions,
+    removedRuntimeContextKeys: removedRuntimeContextKeys
+      ? new Set(removedRuntimeContextKeys)
+      : previous?.removedRuntimeContextKeys,
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
@@ -535,29 +555,15 @@ export function declarePromptHistoryRewrite(
   });
 }
 
-/** Transient carrier movement is declared against each retained request baseline. */
+/** Capture projection facts even before the first observation baseline exists. */
 export function recordRuntimeContextProjection(
-  params: PromptCacheIdentity,
   removed: readonly AgentMessage[] | undefined,
   converted: readonly Message[],
 ): void {
-  const keys = removed?.map((message, index) => `${index}:${message.timestamp}`);
-  const positions = converted.flatMap((message, index) =>
-    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+  runtimeContextRemovals.set(
+    converted,
+    removed?.map((message, index) => `${index}:${message.timestamp}`) ?? null,
   );
-  markSessionTrackers(params, (tracker) => {
-    if (
-      keys?.some((key) => !tracker.removedRuntimeContextKeys?.has(key)) ||
-      tracker.runtimeContextCarrierPositions.some(
-        (position, index) => positions[index] !== position,
-      )
-    ) {
-      (tracker.declaredRewrites ??= new Set()).add("runtimeContextCarrier");
-    }
-    if (keys) {
-      tracker.removedRuntimeContextKeys = new Set(keys);
-    }
-  });
 }
 
 export function declarePromptToolPin(params: PromptCacheIdentity): void {
