@@ -2064,8 +2064,10 @@
   cursor: grabbing;
 }
 
-.workboard-truncate-two {
+.workboard-truncate-two,
+.workboard-card:not(.workboard-card--list) .workboard-card__session-name {
   min-width: 0;
+  white-space: normal;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -2081,8 +2083,8 @@
   padding: 3px 7px;
   background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  line-height: calc(16px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -2098,7 +2100,7 @@
 .workboard-card__title h3 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 1.35;
 }
@@ -2139,8 +2141,8 @@
   gap: var(--workboard-card-inner-gap);
   min-width: 0;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .workboard-card__session-state {
@@ -2224,9 +2226,9 @@
 .workboard-card__updated {
   justify-self: start;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  line-height: 16px;
+  line-height: calc(16px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -2279,9 +2281,9 @@
   border-radius: 5px;
   background: color-mix(in srgb, var(--workboard-session-color) 12%, transparent);
   color: var(--workboard-session-color);
-  font-size: 11px;
+  font-size: calc(11px * var(--control-ui-text-scale));
   font-weight: 500;
-  line-height: 16px;
+  line-height: calc(16px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -2608,6 +2610,7 @@
 
 .workboard-card__priority {
   gap: 4px;
+  font-size: calc(0.72rem * var(--control-ui-text-scale));
   padding: 2px 0;
   border-radius: 0;
   background: transparent;
@@ -2722,7 +2725,7 @@
   flex: 1;
   margin: 0;
   min-width: 0;
-  font-size: 1.25rem;
+  font-size: calc(1.25rem * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -2803,7 +2806,8 @@
 .workboard-detail__tabs {
   display: flex;
   flex: none;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 0 20px;
   margin: -8px 0 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -2815,7 +2819,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
   cursor: var(--cursor-action);
 }
 
@@ -2875,9 +2879,13 @@
   background: transparent;
   box-shadow: none;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   font-weight: 500;
   cursor: var(--cursor-action);
+}
+
+.workboard-detail__property-control .agent-select__badge {
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .workboard-detail__property-trigger {
@@ -2963,7 +2971,7 @@
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
   cursor: var(--cursor-action);
 }
 
@@ -2973,19 +2981,19 @@
 }
 .workboard-detail__row {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: calc(64px * var(--control-ui-text-scale)) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-width: 0;
   min-height: 28px;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
 .workboard-detail__row > span,
 .workboard-detail__label-group > span {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
 }
 
 .workboard-detail__row strong {
@@ -2998,7 +3006,7 @@
 .workboard-detail__label-group {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: calc(64px * var(--control-ui-text-scale)) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
 }
@@ -3039,7 +3047,7 @@ workboard-inline-text {
 }
 
 .workboard-detail__text-trigger--notes {
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-ui-text-scale));
   line-height: 1.55;
   cursor: text;
   /* Same notes prose as .workboard-detail__description, in its editable state. */
@@ -3112,7 +3120,7 @@ workboard-inline-text {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   color: var(--muted-strong);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -3173,8 +3181,12 @@ workboard-inline-text {
 
 .workboard-detail .workboard-board-draft__automation > span {
   color: var(--text);
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--control-ui-text-scale));
   font-weight: 600;
+}
+
+.workboard-detail .workboard-board-draft__automation-copy {
+  font-size: calc(0.76rem * var(--control-ui-text-scale));
 }
 
 .workboard-detail .workboard-board-draft__automation {
@@ -3183,11 +3195,12 @@ workboard-inline-text {
 }
 
 .workboard-detail .workboard-board-draft__automation-copy small {
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--control-ui-text-scale));
 }
 
 .workboard-detail .workboard-board-draft__automation a {
   display: inline-flex;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   align-items: center;
   min-height: 30px;
   padding: 4px 10px;
@@ -3214,14 +3227,14 @@ workboard-inline-text {
 
 .workboard-detail__section h3 {
   margin: 0;
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--control-ui-text-scale));
   font-weight: 600;
   color: var(--text);
 }
 
 .workboard-detail__section p {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
@@ -3235,7 +3248,7 @@ workboard-inline-text {
   flex: 1 1 200px;
   gap: 8px;
   min-width: 0;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
 }
 
 .workboard-detail__session-state-icon {
@@ -3263,7 +3276,7 @@ workboard-inline-text {
 .workboard-detail__session-description {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--control-ui-text-scale));
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3294,7 +3307,7 @@ workboard-inline-text {
 .workboard-detail__session-help {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--control-ui-text-scale));
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -3312,7 +3325,7 @@ workboard-inline-text {
   box-shadow: none;
   color: var(--muted);
   font: inherit;
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--control-ui-text-scale));
   cursor: var(--cursor-action);
 }
 
@@ -3323,7 +3336,7 @@ workboard-inline-text {
 
 .workboard-detail__technical > h3 {
   margin: 0;
-  font-size: 0.84rem;
+  font-size: calc(0.84rem * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -3466,7 +3479,7 @@ workboard-inline-text {
   min-height: 30px;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
 }
 
 .workboard-detail textarea.settings-input.workboard-detail__note {
