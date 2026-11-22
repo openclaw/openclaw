@@ -77,6 +77,9 @@ suite.define(() => {
         .locator(".skill-requirement")
         .getByText("claude / codex / opencode", { exact: true })
         .waitFor();
+      const byline = dialog.locator(".skill-page__byline");
+      expect(await byline.getByText("Ready", { exact: true }).count()).toBe(0);
+      expect(await byline.getByText("Needs setup", { exact: true }).count()).toBe(missing ? 1 : 0);
       if (missing) {
         await installer.click();
         expect((await gateway.waitForRequest("skills.install")).params).toMatchObject({

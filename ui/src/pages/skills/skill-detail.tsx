@@ -152,7 +152,6 @@ export function InstalledSkillPage(props: {
   const rows = createMemo(() => requirementRows(props.skill, installOption()?.bins ?? []));
   const reasons = createMemo(() => computeSkillReasons(props.skill));
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
-  const available = () => isSkillAvailable(props.skill);
   const linkedOwner = () => {
     const link = props.skill.clawhub;
     return link?.status === "linked" && link.ownerHandle ? `@${link.ownerHandle}` : null;
@@ -198,11 +197,8 @@ export function InstalledSkillPage(props: {
       identity={
         <>
           <span>{linkedOwner() ?? props.skill.source}</span>
-          <Show when={!props.skill.disabled}>
-            <SettingsStatus
-              kind={available() ? "ok" : "warn"}
-              label={t(available() ? "skillsPage.tabs.ready" : "skillsPage.tabs.needsSetup")}
-            />
+          <Show when={!props.skill.disabled && !isSkillAvailable(props.skill)}>
+            <SettingsStatus kind="warn" label={t("skillsPage.tabs.needsSetup")} />
           </Show>
         </>
       }
