@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
+import {
+  participationAllowsTool,
+  type ParticipationCeiling,
+} from "../agents/participation-ceiling.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -90,7 +93,8 @@ it("restores every child turn from its original invitation, narrows current poli
     setRuntimeConfigSnapshot(f.cfg);
     const second = (await f.prepare())!;
     expect(second.authority.participationCeiling).toMatchObject({
-      tools: ["read"],
+      tools: f.ceiling.tools,
+      toolConstraints: [["read"]],
       permission: "read-only",
       source: f.ceiling.source,
     });
@@ -107,7 +111,8 @@ it("restores every child turn from its original invitation, narrows current poli
       access: "send",
     });
     const reinvited = (await f.prepare())!;
-    expect(reinvited.authority.participationCeiling?.tools).toEqual(["read"]);
+    expect(participationAllowsTool(reinvited.authority.participationCeiling!, "read")).toBe(true);
+    expect(participationAllowsTool(reinvited.authority.participationCeiling!, "write")).toBe(false);
     reinvited.release();
     const restart = (await prepareSessionSystemTurnAuthority({
       context: f.context,

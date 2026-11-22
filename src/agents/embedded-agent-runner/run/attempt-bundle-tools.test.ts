@@ -110,6 +110,38 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
+  it.each([
+    { tools: undefined, allowed: false },
+    { tools: [], allowed: false },
+    { tools: ["fixture__*"], allowed: true },
+    { tools: ["group:plugins"], allowed: true },
+    { tools: ["*"], allowed: true },
+  ])(
+    "starts MCP only when participant policy $tools can admit its tools",
+    async ({ tools, allowed }) => {
+      const input = createInput();
+      input.attempt.config = { mcp: { servers: { fixture: { command: "unused" } } } };
+      input.attempt.participationCeiling = {
+        kind: "send",
+        profileId: "participant",
+        sessionKey: "agent:main:participant",
+        tools,
+      };
+      input.preparedToolBase.runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+        config: input.attempt.config,
+        participationCeiling: input.attempt.participationCeiling,
+      });
+      const actual = await vi.importActual<typeof import("../effective-tool-policy.js")>(
+        "../effective-tool-policy.js",
+      );
+      mocks.applyFinalEffectiveToolPolicy.mockImplementation(actual.applyFinalEffectiveToolPolicy);
+      mockMcp([pluginTool("fixture__read", "bundle-mcp")]);
+      const result = await prepare(input);
+      expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(Number(allowed));
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(allowed ? ["fixture__read"] : []);
+    },
+  );
+
   it.each(["memory flush", "disabled tools", "raw", "model", "global denial"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {

@@ -4,7 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import { readGitHubPublicationToolSelection } from "../github-tool-identity-config.js";
-import { participationToolAllowlist, type ParticipationCeiling } from "../participation-ceiling.js";
+import {
+  participationToolConstraints,
+  type ParticipationCeiling,
+} from "../participation-ceiling.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { describeSessionToolDefinition } from "./session-tool-definition.js";
 
@@ -78,9 +81,9 @@ export function resolveSessionToolPolicyDigest(
       ...(participationCeiling
         ? [
             {
-              participation: [
-                ...new Set(participationToolAllowlist(participationCeiling)),
-              ].toSorted(),
+              participation: participationToolConstraints(participationCeiling).map((allow) =>
+                [...new Set(allow)].toSorted(),
+              ),
             },
           ]
         : []),

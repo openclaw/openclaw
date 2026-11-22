@@ -36,6 +36,8 @@ describe("persisted participation constraints", () => {
     null,
     { ...ceiling, permission: "owner" },
     { ...ceiling, tools: [false] },
+    { ...ceiling, toolConstraints: [false] },
+    { ...ceiling, toolConstraints: [["read"], [123]] },
     { ...ceiling, execPolicy: { security: "allowlist", ask: "invalid" } },
     { ...ceiling, profileId: "" },
     { ...ceiling, source: { ...ceiling.source, root: 123 } },
@@ -55,6 +57,10 @@ describe("persisted participation constraints", () => {
         ?.participationCeiling?.execPolicy,
     ).toEqual({ security: "allowlist", ask: "always" });
     expect(read(ceiling)?.participationCeiling?.source?.lifecycleRevision).toBeNull();
+    expect(
+      read({ ...ceiling, toolConstraints: [["group:fs"], []] })?.participationCeiling
+        ?.toolConstraints,
+    ).toEqual([["group:fs"], []]);
   });
 });
 

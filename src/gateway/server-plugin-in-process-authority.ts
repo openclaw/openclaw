@@ -19,6 +19,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { assertParticipationGatewayMethod } from "../security/dangerous-tools.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
@@ -336,6 +337,7 @@ export function resolveInProcessGatewayDispatch(
     caller?.operatorAuthority ??
     inheritedOperatorAuthority?.operatorRunAuthority ??
     scope?.client?.internal?.operatorRunAuthority;
+  assertParticipationGatewayMethod(method, operatorRunAuthority);
   // A registered settle cohort owns its wake after the spawning tool has finished.
   // Qualify that live owner before replacing the tool lifetime at admission.
   const assertSettleWakeCurrent =

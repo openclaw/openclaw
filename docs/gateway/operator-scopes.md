@@ -447,14 +447,50 @@ ceiling. Invited members may read that session's workspace at their granted
 level. The role's own unsandboxed sessions remain blocked; roles without this
 opt-in keep the existing sandbox requirement for all sessions.
 
-Set `sessions.invitedTools` alongside `maxInvitedAccess` to replace the participant
-tool ceiling with an explicit list of core tool names. Omission keeps these defaults:
-`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`, `skills_search`, `skills_read`, `web_search`,
-`web_fetch`, `tool_search`, `tool_describe`, and `dispatch_action`. An empty list
-permits no tools. Only these session-contained names are accepted; the result
-still intersects the agent's tool policy and every tool's own authorization checks.
-Cross-session controls, messaging, and Gateway/configuration tools are not eligible. Retained inputs also discard names outside this supported surface. Listing a tool does not make an unavailable or
-agent-denied tool available.
+Set `sessions.invitedTools` to replace the participant tool defaults, or
+`sessions.invitedAlsoAllow` to add to them. Both require `maxInvitedAccess` and
+`sessions.others: "invited"`. Configuring both fields is an error, even if either
+list is empty. With neither field set, the defaults are:
+`read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`,
+`sessions_yield`, `github_publish`, `skills_search`, `skills_read`, `web_search`,
+`web_fetch`, `tool_search`, `tool_describe`, `dispatch_action`, `view_image`, and
+`progress_card`. `invitedTools: []` permits no tools; `invitedAlsoAllow: []` keeps
+the defaults.
+
+For example, replace a role's participant tools with file reads and discovery:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedTools: ["read", "ls", "tool_search", "tool_describe", "dispatch_action"],
+  },
+}
+```
+
+Or keep the defaults and add browser access:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedAlsoAllow: ["browser"],
+  },
+}
+```
+
+Both lists use ordinary tool-policy names, groups, and wildcards. Core, plugin,
+and MCP tools are eligible when otherwise offered and authorized; there is no
+fixed upper allowlist. Agent tool policy and each tool's authorization checks
+still apply. Listing a tool does not make an unavailable or agent-denied tool
+available. The `openclaw` tool is always denied, and participants cannot mutate
+Gateway configuration, roles, or membership, or restart the Gateway, even with
+`"*"`. This includes installing, uninstalling, enabling, or disabling plugins,
+which change Gateway configuration. Plugin reload is also denied because it can
+approve new plugin capabilities. Tool policy belongs to the role, not the individual invitation. To give one
+person a different tool policy, duplicate the role and assign that person to it.
 
 Participant skill tools read only installed skills eligible for that agent, including
 text companions bounded to each skill directory. `invitedTools` can remove these
@@ -479,19 +515,21 @@ under the intersection of its stored ceiling and the current invitation. Missing
 child rows or envelopes never restore owner authority; the retained spawn record
 and private completion capability require the original child constraint.
 
-Use exact names, not groups or wildcards. Unknown names, plugin-owned tools
-(including `browser` and `memory_search`), and MCP tools are rejected. A plugin
-or MCP implementation with an allowed core name never gains access, including
-through Tool Search or exact-ID dispatch. Include the discovery tools when the
-participant needs deferred core tools. Review broader tools carefully: they can
-expose more of the agent's delegated authority.
+Include the discovery tools when the participant needs deferred tools. Explicitly
+allowing tools delegates the agent's or Gateway's capabilities intentionally.
+Existing role and scope checks use the admitted participant, not the session
+creator. Plugin JavaScript, MCP servers, desktop access, and channel credentials
+may use agent-owned or shared resources; the participant tool list does not
+sandbox them.
 
-The Gateway captures this ceiling on each accepted input and preserves it in
-queued input and restart recovery. Re-admission may narrow the captured list but
-never widens it; a wider role policy applies to newly submitted inputs. Participant
-turns require Gateway-local **OpenClaw** execution, not a native/CLI harness or
-remote worker. Allowing `exec` never disables the admitted permission ceiling, host approval
-requirements, sandbox policy, or file-tool containment.
+The Gateway captures the resolved tool list on each accepted input and preserves
+it across queueing and restart. Re-admission intersects the retained and current
+policies as independent restrictions: a tool must satisfy both, including when
+they contain groups or wildcards. A wider role policy applies to newly submitted
+inputs, not retained work. Participant turns require Gateway-local **OpenClaw**
+execution, not a native/CLI harness or remote worker. Allowing `exec` never disables
+the admitted permission ceiling, host approval requirements, sandbox policy, or
+file-tool containment.
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.

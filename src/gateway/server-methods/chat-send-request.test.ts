@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
+import { filterParticipationTools } from "../../agents/participation-ceiling.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import {
   attachChatSendParticipationCeiling,
@@ -74,7 +75,12 @@ it.each([
     const request = await normalizeValue();
     attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: accepted });
     attachChatSendParticipationCeiling(request, { ...participationCeiling, tools: current });
-    expect(request.participationCeiling?.tools).toEqual(expected);
+    expect(
+      filterParticipationTools(
+        ["read", "message"].map((name) => ({ name })),
+        request.participationCeiling,
+      ).map((tool) => tool.name),
+    ).toEqual(expected);
   },
 );
 it.each(["/stop", "/btw hello", "/model other/model", "/queue steer"])(

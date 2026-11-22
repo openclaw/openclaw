@@ -32,6 +32,10 @@ type GuestGatewayOptions = {
   invitedScopes?: OperatorScope[];
   maxInvitedAccess?: "read" | "suggest" | "send";
   invitedTools?: string[];
+  invitedAlsoAllow?: string[];
+  setupPlugins?: (
+    state: Awaited<ReturnType<typeof createOpenClawTestState>>,
+  ) => Promise<OpenClawConfig["plugins"]>;
   tools?: OpenClawConfig["tools"];
   onInvitedEvent?: (event: GatewayEvent) => void;
 };
@@ -149,6 +153,7 @@ async function startInvitedGuestGateway(
     "x-forwarded-proto": "https",
   });
   const origin = options.origin ?? "https://control.example.test";
+  const plugins = await options.setupPlugins?.(state);
   const gateway = await startGatewayWithClient({
     configPath: state.configPath,
     auth,
@@ -180,7 +185,7 @@ async function startInvitedGuestGateway(
           [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
         },
       },
-      plugins: { slots: { memory: "none" } },
+      plugins: plugins ?? { slots: { memory: "none" } },
       ...(options.approvalOwnership ? { session: { dmScope: "main" as const } } : {}),
       tools: options.tools ?? {
         profile: "minimal",
@@ -217,6 +222,7 @@ async function startInvitedGuestGateway(
                 others: options.others ?? "invited",
                 maxInvitedAccess: options.maxInvitedAccess,
                 invitedTools: options.invitedTools,
+                invitedAlsoAllow: options.invitedAlsoAllow,
               },
             },
             guest: {

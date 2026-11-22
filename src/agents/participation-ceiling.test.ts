@@ -19,7 +19,13 @@ import {
 import { resolveExecDefaults } from "./exec-defaults.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
-import type { ParticipationCeiling } from "./participation-ceiling.js";
+import {
+  DEFAULT_PARTICIPATION_TOOLS,
+  filterParticipationTools,
+  intersectParticipationCeilings,
+  resolveParticipationTools,
+  type ParticipationCeiling,
+} from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -193,19 +199,73 @@ it("never binds the participating device as approval reviewer", () => {
   ).toBe("owner-device");
 });
 
-it("rejects plugin collisions within the participating core tool projection", () => {
+it.each([
+  { policy: undefined, extra: [], replaced: false },
+  { policy: { invitedAlsoAllow: [] }, extra: [], replaced: false },
+  {
+    policy: {
+      invitedAlsoAllow: ["group:messaging", "knowledge_*", "mcp:fixture:*", "read", "openclaw"],
+    },
+    extra: ["group:messaging", "knowledge_*", "mcp:fixture:*", "openclaw"],
+    replaced: false,
+  },
+  { policy: { invitedTools: [] }, extra: [], replaced: true },
+  {
+    policy: { invitedTools: ["knowledge_*", "openclaw"] },
+    extra: ["knowledge_*", "openclaw"],
+    replaced: true,
+  },
+])("resolves participant replacement/addition $policy", ({ policy, extra, replaced }) => {
+  const tools = resolveParticipationTools(policy);
+  expect(tools).toEqual(replaced ? extra : [...DEFAULT_PARTICIPATION_TOOLS, ...extra]);
+  expect(filterParticipationTools([{ name: "openclaw" }], { ...ceiling, tools })).toEqual([]);
+});
+
+it.each([
+  [
+    ["group:fs", "knowledge_*"],
+    ["read", "knowledge_record"],
+  ],
+  [["fixture"], ["knowledge_record"]],
+  [["*"], ["read", "knowledge_record", "message"]],
+  [[], []],
+] as [string[], string[]][])("projects configured participant policy %j", (tools, expected) => {
   const capabilityProfile = resolveConversationCapabilityProfile({
     sessionKey: ceiling.sessionKey,
-    participationCeiling: { ...ceiling, tools: ["read", "web_fetch"] },
+    participationCeiling: { ...ceiling, tools },
   });
   expect(
     projectConversationToolNames({
       capabilityProfile,
-      toolNames: ["read", "web_fetch"],
-      toolMeta: () => ({ pluginId: "collision" }),
+      toolNames: ["read", "knowledge_record", "message", "openclaw"],
+      toolMeta: (tool) => (tool.name === "knowledge_record" ? { pluginId: "fixture" } : undefined),
       warn: () => undefined,
     }),
-  ).toEqual([]);
+  ).toEqual(expected);
+});
+
+it("retains both patterned restrictions through JSON recovery and later widening", () => {
+  const first = intersectParticipationCeilings(
+    { ...ceiling, tools: ["knowledge_*"] },
+    { ...ceiling, tools: ["*_record"] },
+  );
+  const serialized = JSON.stringify(first);
+  // SAFETY: this round-trip contains only the locally constructed ceiling above.
+  const retained = JSON.parse(serialized) as ParticipationCeiling;
+  const participationCeiling = intersectParticipationCeilings(retained, {
+    ...ceiling,
+    tools: ["*"],
+  });
+  expect(
+    projectConversationToolNames({
+      capabilityProfile: resolveConversationCapabilityProfile({
+        sessionKey: ceiling.sessionKey,
+        participationCeiling,
+      }),
+      toolNames: ["knowledge_record", "knowledge_remember", "other_record", "openclaw"],
+      warn: () => undefined,
+    }),
+  ).toEqual(["knowledge_record"]);
 });
 
 it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
@@ -266,67 +326,53 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
   }
 });
 
-it("narrows retained core tools without granting unsafe, plugin or MCP names", async () => {
-  const core = createStubTool("web_fetch");
-  const plugin = createStubTool("read");
-  const mcp = createStubTool("web_fetch");
-  setPluginToolMeta(plugin, { pluginId: "collision", optional: false });
+it("dispatches configured plugin and MCP tools but never openclaw, including exact IDs", async () => {
+  const plugin = createStubTool("knowledge_record");
+  const mcp = createStubTool("fixture__read");
+  const forbidden = createStubTool("openclaw");
+  setPluginToolMeta(plugin, { pluginId: "knowledge", optional: false });
   setPluginToolMeta(mcp, {
     pluginId: "bundle-mcp",
     optional: false,
     mcp: {
       serverName: "fixture",
       safeServerName: "fixture",
-      toolName: "web_fetch",
+      toolName: "read",
       operation: "tool",
     },
   });
-  const unsafe = [
-    "gateway",
-    "openclaw",
-    "automations",
-    "message",
-    "conversations_list",
-    "conversations_send",
-    "conversations_turn",
-    "sessions_send",
-    "sessions_list",
-    "secrets",
-    "plugins",
-    "nodes",
-    "computer",
-    "sessions_create",
-  ].map(createStubTool);
-  for (const tool of [core, plugin, mcp, ...unsafe]) {
+  for (const tool of [plugin, mcp, forbidden]) {
     tool.execute = vi.fn(async () => ({ content: [], details: {} }));
   }
   const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [core, plugin, mcp, ...unsafe] });
-  const coreId = catalogRef.current!.entries.find((entry) => entry.tool === core)!.id;
-  const deniedIds = catalogRef
-    .current!.entries.filter((entry) => entry.tool !== core)
-    .map((entry) => entry.id);
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: [plugin, mcp, forbidden] });
+  const entries = [...catalogRef.current!.entries];
   const runtime = new ToolSearchRuntime(
     {
       catalogRef,
       participationCeiling: {
         ...ceiling,
-        tools: ["read", "web_fetch", ...unsafe.map((tool) => tool.name)],
+        tools: ["knowledge", "fixture__*", "openclaw"],
       },
     },
     resolveToolSearchConfig(),
   );
-  expect(runtime.all().map((entry) => entry.name)).toEqual(["web_fetch"]);
-  await runtime.callExactId(coreId, {});
-  for (const id of deniedIds) {
-    await expect(runtime.callExactId(id, {})).rejects.toThrow();
+  expect(
+    runtime
+      .all()
+      .map((entry) => entry.name)
+      .toSorted(),
+  ).toEqual(["fixture__read", "knowledge_record"]);
+  for (const entry of entries) {
+    if (entry.name === "openclaw") {
+      await expect(runtime.callExactId(entry.id, {})).rejects.toThrow();
+    } else {
+      await runtime.callExactId(entry.id, {});
+    }
   }
-  expect(core.execute).toHaveBeenCalledOnce();
-  expect(plugin.execute).not.toHaveBeenCalled();
-  expect(mcp.execute).not.toHaveBeenCalled();
-  for (const tool of unsafe) {
-    expect(tool.execute).not.toHaveBeenCalled();
-  }
+  expect(plugin.execute).toHaveBeenCalledOnce();
+  expect(mcp.execute).toHaveBeenCalledOnce();
+  expect(forbidden.execute).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -410,7 +456,7 @@ it("discovers and reads eligible installed skills without widening participant f
   );
   await expect(runtime.call("read", { path: location })).rejects.toThrow(/root/);
   const narrowed = new ToolSearchRuntime(
-    { catalogRef, participationCeiling: { ...ceiling, tools: ["read"] } },
+    { catalogRef, participationCeiling: { ...ceiling, tools: ["ls"] } },
     resolveToolSearchConfig(),
   );
   for (const name of ["skills_read", "skills_search"]) {

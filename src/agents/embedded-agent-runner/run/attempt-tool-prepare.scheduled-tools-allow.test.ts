@@ -13,7 +13,7 @@ import {
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { rewrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { runWithAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
-import { PARTICIPATION_TOOL_ALLOWLIST } from "../../participation-ceiling.js";
+import { DEFAULT_PARTICIPATION_TOOLS } from "../../participation-ceiling.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -592,9 +592,9 @@ it("removes participation-excluded tools from construction and deferred dispatch
     "world__calendar_list",
   );
   expect(run.callable.length).toBeGreaterThan(0);
-  expect(run.callable.every((name) => PARTICIPATION_TOOL_ALLOWLIST.includes(name))).toBe(true);
+  expect(run.callable.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
   expect(run.listed).toEqual(run.callable);
-  expect(run.catalogNames.every((name) => PARTICIPATION_TOOL_ALLOWLIST.includes(name))).toBe(true);
+  expect(run.catalogNames.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
   expect(run.dispatched).toBeUndefined();
   const ordinary = await prepareTools(
     { runId: "ordinary", trigger: "user", senderIsOwner: true },
@@ -621,7 +621,7 @@ it.each(
       },
       { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } },
     );
-    expect(run.callable).toEqual(tools.filter((name) => name === "read").toSorted());
+    expect(run.callable).toEqual(tools.filter((name) => name !== "web_fetch").toSorted());
     expect(run.listed).toEqual(run.callable);
     expect(run.catalogNames).toEqual(run.callable);
   },

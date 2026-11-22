@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { PARTICIPATION_TOOL_ALLOWLIST } from "../agents/participation-ceiling.js";
+import { DEFAULT_PARTICIPATION_TOOLS } from "../agents/participation-ceiling.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -106,7 +106,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
                 kind: "send",
                 profileId,
                 sessionKey: scope.sessionKey,
-                tools: PARTICIPATION_TOOL_ALLOWLIST,
+                tools: DEFAULT_PARTICIPATION_TOOLS,
                 permission: "workspace",
               });
             }

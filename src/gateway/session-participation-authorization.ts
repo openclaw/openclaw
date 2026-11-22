@@ -4,7 +4,8 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  PARTICIPATION_TOOL_ALLOWLIST,
+  DEFAULT_PARTICIPATION_TOOLS,
+  participationAllowsTool,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
@@ -95,7 +96,15 @@ export function createSessionParticipationAuthorization(
         !access?.invitedAccessCeiling ||
         !permitsMethod ||
         (isParticipantPublicationMethod(params.method, params.requestParams) &&
-          !(policy?.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST).includes("github_publish"))
+          !participationAllowsTool(
+            {
+              kind: "send",
+              profileId,
+              sessionKey: target.canonicalKey,
+              tools: policy?.invitedTools,
+            },
+            "github_publish",
+          ))
       ) {
         return { error: hiddenSessionNotFound(targetRef.sessionKey) };
       }
@@ -111,7 +120,7 @@ export function createSessionParticipationAuthorization(
         kind: "send",
         profileId,
         sessionKey: target.canonicalKey,
-        tools: [...(policy?.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST)],
+        tools: [...(policy?.invitedTools ?? DEFAULT_PARTICIPATION_TOOLS)],
         permission: intersectSessionPermissionModes(
           policy?.invitedPermission ?? "workspace",
           target.entry.permissionMode ?? "full",

@@ -14,6 +14,7 @@ const participationSchema = z.strictObject({
     profileId: z.string().min(1).max(128),
     sessionKey: z.string().min(1),
     tools: z.array(z.string().min(1)).optional(),
+    toolConstraints: z.array(z.array(z.string().min(1))).optional(),
     permission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     execPolicy: z
       .strictObject({
@@ -81,8 +82,9 @@ export type GitHubPublicationOrigin = Readonly<NonNullable<RequesterData["origin
 type ParticipationData = z.infer<typeof participationSchema>;
 export type GitHubPublicationParticipation = Readonly<{
   ceiling: Readonly<
-    Omit<ParticipationData["ceiling"], "tools" | "source" | "execPolicy"> & {
+    Omit<ParticipationData["ceiling"], "tools" | "toolConstraints" | "source" | "execPolicy"> & {
       tools?: readonly string[];
+      toolConstraints?: readonly (readonly string[])[];
       source: Readonly<ParticipationData["ceiling"]["source"]>;
       execPolicy?: Readonly<NonNullable<ParticipationData["ceiling"]["execPolicy"]>>;
     }
@@ -113,6 +115,13 @@ export function immutableGitHubPublicationParticipation(
       ...value.ceiling,
       ...(value.ceiling.tools
         ? { tools: Object.freeze([...new Set(value.ceiling.tools)].toSorted()) }
+        : {}),
+      ...(value.ceiling.toolConstraints
+        ? {
+            toolConstraints: Object.freeze(
+              value.ceiling.toolConstraints.map((allow) => Object.freeze([...allow])),
+            ),
+          }
         : {}),
       ...(value.ceiling.execPolicy
         ? { execPolicy: Object.freeze({ ...value.ceiling.execPolicy }) }

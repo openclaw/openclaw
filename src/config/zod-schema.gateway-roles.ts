@@ -1,7 +1,6 @@
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { isParticipationToolAllowed } from "../agents/participation-ceiling.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -41,18 +40,8 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       others: z.enum(["none", "invited", "view", "suggest", "write"]),
       maxInvitedAccess: z.enum(["read", "suggest", "send"]).optional(),
       invitedPermission: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
-      invitedTools: z
-        .array(
-          z
-            .string()
-            .trim()
-            .refine(
-              isParticipationToolAllowed,
-              "Expected a session-contained participant tool; cross-session controls, plugin/MCP tools, groups, and wildcards are not supported",
-            ),
-        )
-        .transform(uniqueValues)
-        .optional(),
+      invitedTools: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
+      invitedAlsoAllow: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
     })
     .refine(
       (sessions) => sessions.invitedPermission === undefined || sessions.others === "invited",
@@ -73,6 +62,21 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       {
         message: "invitedTools requires sessions.maxInvitedAccess",
         path: ["invitedTools"],
+      },
+    )
+    .refine(
+      (sessions) =>
+        sessions.invitedAlsoAllow === undefined || sessions.maxInvitedAccess !== undefined,
+      {
+        message: "invitedAlsoAllow requires sessions.maxInvitedAccess",
+        path: ["invitedAlsoAllow"],
+      },
+    )
+    .refine(
+      (sessions) => sessions.invitedTools === undefined || sessions.invitedAlsoAllow === undefined,
+      {
+        message:
+          "sessions policy cannot set both invitedTools and invitedAlsoAllow in the same scope (merge invitedAlsoAllow into invitedTools, or remove invitedTools and use defaults + invitedAlsoAllow)",
       },
     ),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */

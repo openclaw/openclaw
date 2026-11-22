@@ -1,6 +1,7 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
-  PARTICIPATION_TOOL_ALLOWLIST,
+  participationAllowsTool,
+  resolveParticipationTools,
   type ParticipationCeiling,
 } from "../agents/participation-ceiling.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
@@ -147,8 +148,16 @@ export function assertPublicationParticipation(
         facts.target.entry.archivedAt !== undefined ||
         access.access !== "send" ||
         access.invitedAccessCeiling !== "send" ||
-        !ceiling.tools?.includes("github_publish") ||
-        !(role?.sessions.invitedTools ?? PARTICIPATION_TOOL_ALLOWLIST).includes("github_publish") ||
+        !ceiling.tools ||
+        !participationAllowsTool(ceiling, "github_publish") ||
+        !participationAllowsTool(
+          {
+            ...ceiling,
+            tools: resolveParticipationTools(role?.sessions),
+            toolConstraints: undefined,
+          },
+          "github_publish",
+        ) ||
         authorizeSessionAgentRun(
           { cfg: config, client, target: facts.target, invitedSession: true },
           { policy: role },

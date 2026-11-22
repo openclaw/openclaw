@@ -71,7 +71,7 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
-import { participationToolAllowlist } from "./participation-ceiling.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
@@ -618,21 +618,23 @@ export function* assembleOpenClawCodingTools(
       options?.config,
     );
   const handoff = capabilityProfile.policy.requesterPolicySource === "completion-handoff";
+  const turnTools = completeTurnTools(
+    messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
+  );
+  const participatingTools = new Set(
+    filterParticipationTools(turnTools, options?.participationCeiling, getPluginToolMeta),
+  );
   const {
     tools: authorizedTools,
     turnAuthorized,
     callableTools,
     exportedTools,
   } = resolveTurnToolSurface({
-    turnTools: completeTurnTools(
-      messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
-    ).filter(
+    turnTools: turnTools.filter(
       (tool) =>
         (tool.name !== "message" || options?.disableMessageTool !== true) &&
-        (!options?.participationCeiling ||
-          (options.swarmCollector && tool === swarmStructuredOutputTool) ||
-          (participationToolAllowlist(options.participationCeiling).includes(tool.name) &&
-            !getPluginToolMeta(tool))),
+        (participatingTools.has(tool) ||
+          (options?.swarmCollector && tool === swarmStructuredOutputTool)),
     ),
     // Participation narrows the provider schema as well as executable authority.
     sessionTools:

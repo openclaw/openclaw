@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { participationToolAllowlist } from "../agents/participation-ceiling.js";
+import { participationAllowsTool } from "../agents/participation-ceiling.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isParticipantPublicationMethod } from "./session-method-policy.js";
@@ -31,7 +31,7 @@ export function readParticipantPublicationAuthority(method: string, params: unkn
     (request.agentId !== undefined &&
       (typeof request.agentId !== "string" ||
         normalizeAgentId(request.agentId) !== normalizeAgentId(caller.agentId))) ||
-    !participationToolAllowlist(authority.participationCeiling).includes("github_publish")
+    !participationAllowsTool(authority.participationCeiling, "github_publish")
   ) {
     throw new Error(
       "Participating GitHub requests must stay in this conversation and cannot inspect, merge, close, or select another publisher.",

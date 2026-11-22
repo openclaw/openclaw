@@ -57,6 +57,11 @@ export function admitCanonicalSessionEntry(value: Record<string, unknown>): Sess
       !nonemptyString(ceiling.sessionKey) ||
       (ceiling.tools !== undefined &&
         (!Array.isArray(ceiling.tools) || !ceiling.tools.every(nonemptyString))) ||
+      (ceiling.toolConstraints !== undefined &&
+        (!Array.isArray(ceiling.toolConstraints) ||
+          !ceiling.toolConstraints.every(
+            (allow) => Array.isArray(allow) && allow.every(nonemptyString),
+          ))) ||
       (ceiling.permission !== undefined &&
         !["read-only", "guarded", "workspace", "full"].some(
           (permission) => permission === ceiling.permission,

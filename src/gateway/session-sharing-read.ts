@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveParticipationTools } from "../agents/participation-ceiling.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -184,7 +185,7 @@ export function prepareSessionSharing(
     accessForTarget,
     invitedAccessCeiling:
       policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined,
-    invitedTools: policy?.sessions.invitedTools,
+    invitedTools: resolveParticipationTools(policy?.sessions),
     invitedPermission: policy?.sessions.invitedPermission ?? "workspace",
     authorizeRun: (target: SessionSharingTarget, participation = false) =>
       authorizeSessionAgentRun(

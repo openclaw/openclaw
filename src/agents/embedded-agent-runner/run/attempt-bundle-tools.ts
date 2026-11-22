@@ -11,10 +11,15 @@ import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js"
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { participationAllowsTool, participationToolPolicy } from "../../participation-ceiling.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
-import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+  replaceWithEffectiveToolAllowlist,
+} from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import {
   withRuntimeToolSchemaQuarantine,
@@ -84,7 +89,6 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   phases.mark("attempt.bundle-tools.mcp-config");
   const auxiliaryToolsEnabled =
     toolsEnabled &&
-    !params.attempt.participationCeiling &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
@@ -97,6 +101,27 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
     clientTools = clientTools.filter((definition) => matchesRuntime(definition.function.name));
   }
+  if (clientTools && params.attempt.participationCeiling) {
+    clientTools = clientTools.filter((tool) =>
+      participationAllowsTool(params.attempt.participationCeiling!, tool.function.name),
+    );
+  }
+  const participationAllow =
+    params.attempt.participationCeiling &&
+    participationToolPolicy(params.attempt.participationCeiling).allow;
+  const bundleToolsAllow = participationAllow
+    ? attachToolAllowlistIntersection(
+        [...participationAllow],
+        [
+          ...readToolAllowlistIntersection(participationAllow)!,
+          ...(params.attempt.toolsAllow
+            ? (readToolAllowlistIntersection(params.attempt.toolsAllow) ?? [
+                params.attempt.toolsAllow,
+              ])
+            : []),
+        ],
+      )
+    : params.attempt.toolsAllow;
   const bundleMetadataSnapshot = params.setup.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
@@ -112,7 +137,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   };
   const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: auxiliaryToolsEnabled,
-    toolsAllow: params.attempt.toolsAllow,
+    toolsAllow: bundleToolsAllow,
     resolveConfiguredMcpNamespaces: () => {
       const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
       if (configuredNames.length === 0) {
@@ -175,7 +200,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     phases.mark("attempt.bundle-tools.lsp");
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,
-      toolsAllow: params.attempt.toolsAllow,
+      toolsAllow: bundleToolsAllow,
     });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({

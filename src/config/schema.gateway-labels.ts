@@ -85,6 +85,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.roles.definitions.*.sessions.maxInvitedAccess": "Maximum Invited Session Access",
   "gateway.roles.definitions.*.sessions.invitedPermission": "Invited Participant Permission",
   "gateway.roles.definitions.*.sessions.invitedTools": "Invited Participant Tools",
+  "gateway.roles.definitions.*.sessions.invitedAlsoAllow": "Additional Invited Participant Tools",
   "gateway.roles.definitions.*.sandbox": "Operator Role Sandbox Isolation",
   "gateway.roles.definitions.*.agents": "Operator Role Allowed Agents",
   "gateway.roles.definitions.*.modelPolicy": "Operator Role Model Policy",
