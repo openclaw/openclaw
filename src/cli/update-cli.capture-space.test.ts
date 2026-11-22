@@ -212,7 +212,7 @@ describe("original-state capture follows the first state change", () => {
         await setup.mockPackageInstallAtCaseDir(undefined, VERSION);
         setup.primeNpmChannelTag("latest", VERSION);
       } else {
-        vi.mocked(modules.updateGitCheckout).mockResolvedValueOnce(
+        vi.mocked(modules.updateGitRelease).mockResolvedValueOnce(
           currentGitCoreFixture(process.cwd(), VERSION).outcome,
         );
       }
