@@ -32,7 +32,7 @@ import {
 } from "./local-user-ingress.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createStartupGate } from "./server-startup-state.test-support.js";
-import { gatewayProfile } from "./server/client-fixtures.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -46,7 +46,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const { createSessionStoreDir, createArchiveWorktreeFixture, initializeRemoteBackedGitWorkspace } =
   setupGatewaySessionsWorktreeTestHarness();
 type Worktree = { id: string; path: string; branch: string };
-const defaultAdminClient = { connect: { scopes: ["operator.admin"] } } as never;
+const defaultAdminClient = { connect: gatewayConnect(["operator.admin"]) } as never;
 const createWorktree = (params: Partial<SessionsCreateParams>, client = defaultAdminClient) =>
   directSessionReq<{ key: string; sessionId: string; worktree: Worktree }>(
     "sessions.create",
@@ -281,7 +281,7 @@ test("archived deletion replies before snapshotting while fencing same-key succe
   // Creation revalidates admitted profile authority before allocating the worktree.
   const creatorProfileId = ensureProfileForEmail("delete-worktree-successor@example.test").id;
   const adminClient = {
-    connect: { scopes: ["operator.admin"] },
+    connect: gatewayConnect(["operator.admin"]),
     authenticatedUserProfile: gatewayProfile(creatorProfileId, "Delete Worktree Test"),
   } as never;
   attachGatewayLocalUserIngress(
