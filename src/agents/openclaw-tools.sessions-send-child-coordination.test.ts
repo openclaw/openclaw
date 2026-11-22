@@ -97,6 +97,9 @@ import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
+// Database-backed coordination needs more headroom on the hosted release runners.
+vi.setConfig({ testTimeout: 300_000 });
+
 let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function settleSessionWork() {
