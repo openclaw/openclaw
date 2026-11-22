@@ -2053,9 +2053,13 @@ button.chat-reply-attribution__target:disabled {
   .chat-thread
     .chat-group.assistant:not(.chat-group--forwarded)
     .chat-bubble:not(.chat-bubble--tool-shell)
-    :is(.chat-assistant-attachments, .chat-message-images, openclaw-chat-clawhub-card):not(
-      .chat-assistant-attachments *
-    ) {
+    :is(.chat-message-images, openclaw-chat-clawhub-card):not(.chat-assistant-attachments *),
+  .chat-thread
+    .chat-group.assistant:not(.chat-group--forwarded)
+    .chat-bubble:not(.chat-bubble--tool-shell)
+    .chat-assistant-attachments
+    > openclaw-chat-svg-attachment
+    > .chat-message-image-button {
     max-width: 90%;
   }
 
