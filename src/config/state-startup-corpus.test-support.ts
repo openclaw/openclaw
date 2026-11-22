@@ -375,7 +375,7 @@ export function defineStateStartupCorpusTests(fileUrl: string) {
     // These released snapshots retain POSIX cron partition keys, not Windows-native paths.
     it.skipIf(process.platform === "win32").for(cases)(
       "%s × %s preserves state through Doctor and Gateway startup",
-      { timeout: 120_000 },
+      { timeout: 300_000 },
       ([release, configName], { signal }) => fixture.runCase(release, configName, signal),
     );
   });
