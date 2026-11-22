@@ -188,9 +188,12 @@ export async function prepareFollowupRunOperatorAuthority(
         }
       },
     });
-    // A Gateway turn starts only with operator.write, queued or live (chat.send needs it).
-    // Channel senders chat without it, so their saved facts keep the admitted scopes.
-    if (!channelSender && !operatorScopeSatisfied("operator.write", restored.authority.scopes)) {
+    // A Gateway turn starts only with a write grant, queued or live (chat.send needs
+    // operator.write or own-session operator.sessions.write). Channel senders chat without one.
+    if (
+      !channelSender &&
+      !operatorScopeSatisfied("operator.sessions.write", restored.authority.scopes)
+    ) {
       restored.release();
       throw new GatewayOperatorRecoveryAuthorizationError(
         "Your operator role no longer allows sending messages; ask an administrator to restore access.",

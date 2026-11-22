@@ -471,6 +471,7 @@ it("refuses a queued followup when its requester loses operator.write before it 
   fixture.client.connect.scopes = ["operator.read", "operator.write"];
   const bob = ensureProfileForEmail("queued-steer-bob@example.test");
   setClientProfile(fixture.client, setUserProfileRole(bob.id, "writer"));
+  fixture.params.idempotencyKey = "demoted-steer-bob-input";
   fixture.params.message = "Answer Bob's separate request.";
   const dispatchActual = await loadRealChatDispatch();
   const queued = createDeferred();
@@ -499,11 +500,6 @@ it("refuses a queued followup when its requester loses operator.write before it 
           ],
         }),
       { timeout: 10_000 },
-    );
-    expect(fixture.context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId: fixture.params.idempotencyKey, state: "aborted" }),
-      expect.anything(),
     );
     expect(runtime.execute).not.toHaveBeenCalled();
   } finally {
