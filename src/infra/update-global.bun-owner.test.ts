@@ -70,18 +70,28 @@ function probeRunner(responses: Record<string, ReturnType<typeof commandResult>>
   };
 }
 
+function resolvePackageInstallSurface(root: string, runCommand: CommandRunner) {
+  return resolveUpdateInstallSurface({
+    root,
+    installKind: "package",
+    runCommand: (argv, options) =>
+      runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? 1000 }),
+  });
+}
+
 async function writePnpmIsolatedPackage(params: {
   globalRoot: string;
   installName: string;
   version: string;
   dependencies?: Record<string, string>;
-  nestedStore?: boolean;
+  /** The project's own virtual store: pnpm 12 nests it in node_modules, pnpm 11 does not. */
+  virtualStore?: "node_modules/.pnpm" | ".pnpm";
 }): Promise<string> {
   const installDir = path.join(params.globalRoot, params.installName);
-  const packageRoot = params.nestedStore
+  const packageRoot = params.virtualStore
     ? path.join(
         installDir,
-        "node_modules/.pnpm",
+        params.virtualStore,
         `openclaw@${params.version}`,
         "node_modules/openclaw",
       )
@@ -91,7 +101,8 @@ async function writePnpmIsolatedPackage(params: {
     writeGlobalPackageJson(packageRoot, params.version),
     writePnpmProject(installDir, { openclaw: params.version, ...params.dependencies }),
   ]);
-  if (params.nestedStore) {
+  if (params.virtualStore) {
+    await fs.mkdir(path.join(installDir, "node_modules"), { recursive: true });
     await fs.symlink(packageRoot, path.join(installDir, "node_modules/openclaw"), "dir");
   }
   await fs.symlink(installDir, path.join(params.globalRoot, `hash-${params.installName}`), "dir");
@@ -99,62 +110,64 @@ async function writePnpmIsolatedPackage(params: {
 }
 
 describe("pnpm isolated global install discovery", () => {
-  it("detects nested pnpm v11 installs", async () => {
-    const layoutVersion = 11;
-    const npmRoot = path.join(base, "npm/lib/node_modules");
-    const pnpmGlobalDir = path.join(base, "pnpm-home/global");
-    const pnpmGlobalRoot = path.join(pnpmGlobalDir, `v${layoutVersion}`);
-    const pkgRoot = await writePnpmIsolatedPackage({
-      globalRoot: pnpmGlobalRoot,
-      installName: "a1b2",
-      version: "2026.7.1",
-      nestedStore: true,
-    });
-    const hashLinkedPkgRoot = path.join(pnpmGlobalRoot, "hash-a1b2/node_modules/openclaw");
-    const pnpmHomeAlias = path.join(base, "pnpm-home-alias");
-    await fs.symlink(path.join(base, "pnpm-home"), pnpmHomeAlias, "dir");
-    const aliasedPkgRoot = path.join(
-      pnpmHomeAlias,
-      "global",
-      `v${layoutVersion}`,
-      "a1b2/node_modules/openclaw",
-    );
-    await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
+  // OpenClaw's updater installs into the project's own virtual store, so the package's
+  // real path names that store: `node_modules/.pnpm` under pnpm 12, `.pnpm` under pnpm 11.
+  it.each(["node_modules/.pnpm", ".pnpm"] as const)(
+    "detects a pnpm v11 install by its real path in the %s virtual store",
+    async (virtualStore) => {
+      const layoutVersion = 11;
+      const npmRoot = path.join(base, "npm/lib/node_modules");
+      const pnpmGlobalDir = path.join(base, "pnpm-home/global");
+      const pnpmGlobalRoot = path.join(pnpmGlobalDir, `v${layoutVersion}`);
+      const pkgRoot = await writePnpmIsolatedPackage({
+        globalRoot: pnpmGlobalRoot,
+        installName: "a1b2",
+        version: "2026.7.1",
+        virtualStore,
+      });
+      const hashLinkedPkgRoot = path.join(pnpmGlobalRoot, "hash-a1b2/node_modules/openclaw");
+      const pnpmHomeAlias = path.join(base, "pnpm-home-alias");
+      await fs.symlink(path.join(base, "pnpm-home"), pnpmHomeAlias, "dir");
+      const aliasedPkgRoot = path.join(
+        pnpmHomeAlias,
+        "global",
+        `v${layoutVersion}`,
+        "a1b2/node_modules/openclaw",
+      );
+      await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
 
-    const runCommand = vi.fn(
-      probeRunner({
-        "npm root -g": commandResult(`${npmRoot}\n`),
-        "pnpm root -g": commandResult(
-          `[WARN] Using --global skips the package manager check for this project\n${pnpmGlobalRoot}\n`,
-        ),
-      }),
-    );
+      const runCommand = vi.fn(
+        probeRunner({
+          "npm root -g": commandResult(`${npmRoot}\n`),
+          "pnpm root -g": commandResult(
+            `[WARN] Using --global skips the package manager check for this project\n${pnpmGlobalRoot}\n`,
+          ),
+        }),
+      );
 
-    await expect(
-      resolveUpdateInstallSurface({
+      await expect(resolvePackageInstallSurface(pkgRoot, runCommand)).resolves.toMatchObject({
+        kind: "global",
+        mode: "pnpm",
         root: pkgRoot,
-        installKind: "package",
-        runCommand: (argv, options) =>
-          runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? 1000 }),
-      }),
-    ).resolves.toMatchObject({ kind: "global", mode: "pnpm", root: pkgRoot });
-    await expect(
-      detectGlobalInstallManagerForRoot(runCommand, hashLinkedPkgRoot, 1000),
-    ).resolves.toBe("pnpm");
-    await expect(detectGlobalInstallManagerForRoot(runCommand, aliasedPkgRoot, 1000)).resolves.toBe(
-      "pnpm",
-    );
-    runCommand.mockClear();
-    const expectedTarget = pnpmTarget(pnpmGlobalRoot, hashLinkedPkgRoot);
-    await expect(
-      resolveTarget(runCommand, pkgRoot, { manager: "pnpm", honorPackageRoot: true }),
-    ).resolves.toEqual(expectedTarget);
-    expect(runCommand).not.toHaveBeenCalled();
-    await expect(resolveTarget(runCommand, undefined, { manager: "pnpm" })).resolves.toEqual(
-      expectedTarget,
-    );
-    expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["pnpm", "root", "-g"]]);
-  });
+      });
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, hashLinkedPkgRoot, 1000),
+      ).resolves.toBe("pnpm");
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, aliasedPkgRoot, 1000),
+      ).resolves.toBe("pnpm");
+      runCommand.mockClear();
+      const expectedTarget = pnpmTarget(pnpmGlobalRoot, hashLinkedPkgRoot);
+      await expect(
+        resolveTarget(runCommand, pkgRoot, { manager: "pnpm", honorPackageRoot: true }),
+      ).resolves.toEqual(expectedTarget);
+      expect(runCommand).not.toHaveBeenCalled();
+      await expect(resolveTarget(runCommand, undefined, { manager: "pnpm" })).resolves.toEqual(
+        expectedTarget,
+      );
+      expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["pnpm", "root", "-g"]]);
+    },
+  );
 
   it("prefers the invoking project when multiple installs are active", async () => {
     const pnpmGlobalRoot = path.join(base, "pnpm-home/global/v11");
@@ -186,7 +199,11 @@ describe("pnpm isolated global install discovery", () => {
     const activeInstallRoot = path.join(globalRoot, "active");
     const orphanInstallRoot = path.join(globalRoot, "orphan");
     const orphanPackageRoot = path.join(orphanInstallRoot, "node_modules/openclaw");
-    const sharedPackageRoot = path.join(base, "store/openclaw");
+    // `pnpm add -g` links each project to pnpm's shared global virtual store.
+    const sharedPackageRoot = path.join(
+      base,
+      "pnpm-home/store/v11/links/@/openclaw/2026.7.1/0f3c9a/node_modules/openclaw",
+    );
     await fs.mkdir(sharedPackageRoot, { recursive: true });
     await writeGlobalPackageJson(sharedPackageRoot, "2026.7.1");
     await Promise.all([
@@ -205,6 +222,13 @@ describe("pnpm isolated global install discovery", () => {
     await expect(
       detectGlobalInstallManagerForRoot(runCommand, sharedPackageRoot, 1000),
     ).resolves.toBeNull();
+    // Several projects can link the same store package, so its real path names no owner.
+    await expect(resolvePackageInstallSurface(sharedPackageRoot, runCommand)).resolves.toEqual({
+      kind: "package-root",
+      mode: "unknown",
+      root: sharedPackageRoot,
+      packageRoot: sharedPackageRoot,
+    });
     await expect(
       resolveTarget(runCommand, orphanPackageRoot, { manager: "pnpm", packageName: "openclaw" }),
     ).resolves.toEqual(pnpmTarget(globalRoot, orphanPackageRoot));
@@ -299,6 +323,42 @@ describe("pnpm isolated global install discovery", () => {
     });
     expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([[pnpmCommand, "root", "-g"]]);
   });
+
+  it.each([
+    // An application image installs its dependencies with a project-local store.
+    { layout: "app/.pnpm", project: "app" },
+    { layout: "app/node_modules/.pnpm", project: "app" },
+    // A pnpm v11 group that no active global link selects and no lockfile records.
+    {
+      layout: "pnpm-home/global/v11/stale-group/.pnpm",
+      project: "pnpm-home/global/v11/stale-group",
+    },
+  ])(
+    "keeps a package in an unowned $layout virtual store unmanaged",
+    async ({ layout, project }) => {
+      const packageRoot = path.join(base, layout, "openclaw@2026.7.1/node_modules/openclaw");
+      await fs.mkdir(packageRoot, { recursive: true });
+      await writeGlobalPackageJson(packageRoot, "2026.7.1");
+      await writePnpmProject(path.join(base, project), { openclaw: "2026.7.1" });
+      if (project === "app") {
+        await fs.writeFile(path.join(base, project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+      }
+      const runCommand = probeRunner({
+        "npm root -g": commandResult("", 1),
+        "pnpm root -g": commandResult(`${path.join(base, "pnpm-home/global/v11")}\n`),
+      });
+
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, packageRoot, 1000),
+      ).resolves.toBeNull();
+      await expect(resolvePackageInstallSurface(packageRoot, runCommand)).resolves.toEqual({
+        kind: "package-root",
+        mode: "unknown",
+        root: packageRoot,
+        packageRoot,
+      });
+    },
+  );
 });
 
 describe("custom Bun global installation ownership", () => {
