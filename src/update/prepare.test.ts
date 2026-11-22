@@ -4,13 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import { getUpdateRunAsync, getUpdateRunStatusAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { runReleaseUpdateCli } from "./cli.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
@@ -75,7 +77,7 @@ async function repository(failBuild = false, engine = ">=1") {
   await fs.writeFile(
     path.join(source, "build.cjs"),
     failBuild
-      ? "process.stderr.write('x'.repeat(10000) + 'fixture build failed'); process.exit(42);"
+      ? "process.stderr.write('\\x1b[33mwarning: build notice\\x1b[0m\\n'.repeat(400) + '\\x1b[31mfixture build failed\\x1b[0m\\n'); process.exit(42);"
       : "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/build-info.json', JSON.stringify({buildId:'fixture-build'}));",
   );
   await fs.writeFile(
@@ -144,6 +146,35 @@ describe("release preparation", () => {
     expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
       staging,
     );
+  });
+
+  it("stores and reports the actual build error after ANSI-colored warnings", async () => {
+    const { checkout } = await repository(true);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GIT_COMMIT", "");
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      await runReleaseUpdateCli({
+        json: false,
+        restart: false,
+        runningRoot: checkout,
+        storedChannel: "dev",
+        timeoutMs: 30_000,
+      });
+      const { lastRun } = await getUpdateRunStatusAsync();
+      expect(lastRun).toMatchObject({ status: "failed", reason: "build-failed" });
+      const detail = lastRun?.steps.find(({ step }) => step === "outcome")?.detail;
+      expect(detail).toContain("fixture build failed");
+      expect(detail).not.toContain("\x1b");
+      expect(detail?.length).toBeLessThanOrEqual(1024);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = undefined;
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("installs a package with lifecycle scripts enabled and without the migration marker", async () => {

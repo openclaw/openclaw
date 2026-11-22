@@ -83,10 +83,10 @@ async function startSignIn(
       },
     },
   );
-  // First-run setup lands here with the picker open; a reload reopens the same address.
+  // First-run setup lands here on the provider catalog; a reload reopens the same address.
+  // The provider's only way in is the browser sign-in, so Connect starts it directly.
   await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
-  await page.locator('[data-models-login-provider="example"]').click();
-  await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
+  await page.locator('[data-models-catalog-provider="example"] button').click();
   const login = await gateway.waitForRequest("models.authLogin");
   const params = login.params;
   assert(params && typeof params === "object" && "sessionId" in params);
@@ -163,7 +163,7 @@ suite.define(() => {
       await dialog.getByText("This sign-in session ended.", { exact: false }).waitFor();
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
       await page.reload();
-      await page.locator("[data-models-login-provider]").first().waitFor();
+      await page.locator("[data-models-catalog-provider]").first().waitFor();
       expect(await dialog.getByText("This sign-in session ended.").count()).toBe(0);
     });
   });
