@@ -8,10 +8,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { bindActiveOperatorTurnAuthority } from "../cron-creator-authority-context.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 /** Capture the original source before the built-in adapter creates a System client. */
 export function capturePresenceToolAuthority(options?: {
@@ -22,7 +19,6 @@ export function capturePresenceToolAuthority(options?: {
   assertCurrent?: () => void;
 }): () => void {
   const caller = getGatewayToolCallerIdentity();
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const inherited = readOperatorToolGatewayAuthority();
   const scope = getPluginRuntimeGatewayRequestScope();
   const operatorAuthority =
@@ -43,7 +39,6 @@ export function capturePresenceToolAuthority(options?: {
   const ownerRunId = options?.runId;
   return () => {
     options?.assertCurrent?.();
-    assertCallerCurrent?.();
     if (operatorAuthority) {
       assertAdmittedRunOperatorAuthority(operatorAuthority);
       operatorAuthority.assertCurrent();
@@ -63,7 +58,7 @@ export function capturePresenceToolAuthority(options?: {
     }
     // Owner and scheduler provenance require the same live admitted run; neither
     // tool availability nor an absent operator restriction establishes access.
-    if (delegatedAuthority && (assertCallerCurrent || options?.assertCurrent)) {
+    if (delegatedAuthority && (caller?.operationalRunInstance || options?.assertCurrent)) {
       if (
         ownerAuthority &&
         ownerRunId &&

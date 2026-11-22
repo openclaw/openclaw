@@ -190,6 +190,8 @@ const repositoryScriptEntries = [
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
   "scripts/lib/usage-bench-observer.mjs!",
+  // scripts/README.md invokes the trusted Usage route/open benchmark by path.
+  "scripts/bench-usage-open.ts!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
   // The event-load guide invokes the isolated Gateway wire fixture directly.
@@ -279,6 +281,7 @@ const repositoryScriptEntries = [
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
+  "scripts/perf/github-detail-retention.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
   "scripts/perf/workspace-snapshot-read-measure.ts!",
   "scripts/perf/workspace-git-main-thread-measure.mjs!",
@@ -420,6 +423,9 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  // git-release.sh runs this helper and preloads the launcher-kill hook by path.
+  "scripts/e2e/lib/upgrade-survivor/git-release.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/git-release-launcher-kill.mjs!",
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
@@ -447,6 +453,8 @@ const repositoryScriptEntries = [
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
+  // Published driver CI executes the PostgreSQL upgrade against its service database.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -508,6 +516,7 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   // Standalone Linux workload compares pinned boundary-reference initialization.
   "scripts/perf/boundary-reference-measure.mts!",
+  "scripts/perf/extension-boundary-compile-measure.mts!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -576,6 +585,8 @@ const repositoryScriptEntries = [
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // scripts/update-gateway.sh runs this source-update build by path.
+  "scripts/update-gateway-build.mts!",
   // The candidate binder invokes this trusted producer-identity verifier by path.
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
@@ -1219,6 +1230,9 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // Direct release-checkout and global-package boundary tests consume these helpers;
+    // the full-tree scan still audits their exports against those consumers.
+    "src/cli/update-cli/update-command-git.ts": ["exports"],
     // These in-module helpers are direct seams in compaction-floor.test.ts and
     // package-release-retention.test.ts. The full-tree scan verifies those consumers.
     "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],

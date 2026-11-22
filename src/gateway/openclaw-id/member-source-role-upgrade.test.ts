@@ -36,7 +36,7 @@ afterEach(() => {
   setOpenClawIdMemberAccountLookup(undefined);
 });
 
-it("imports null-assigned saved member work without widening its captured policy", async () => {
+it("imports null-assigned saved member work and admits it under current policy", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: "legacy" });
     const policy: GatewayOperatorRoleDefinition = {
@@ -223,8 +223,8 @@ it("imports null-assigned saved member work without widening its captured policy
       expect(cron.getJob("matching")?.state.lastRunStatus).toBe("ok");
       expect(fs.readFileSync(ran, "utf8")).toBe("matching");
       await cron.run("mismatched", "force");
-      expect(cron.getJob("mismatched")?.state.lastRunStatus).toBe("error");
-      expect(fs.readFileSync(ran, "utf8")).toBe("matching");
+      expect(cron.getJob("mismatched")?.state.lastRunStatus).toBe("ok");
+      expect(fs.readFileSync(ran, "utf8")).toBe("matchingmismatched");
       await canonicalMemberProfiles.setRole("legacy", "operator", true);
       expect(
         (await loadCronJobsStore(storePath)).jobs.find((job) => job.id === "mismatched")

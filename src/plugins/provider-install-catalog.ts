@@ -17,8 +17,8 @@ import {
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
-import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import {
+  isProviderAuthChoicePlatformSupported,
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";

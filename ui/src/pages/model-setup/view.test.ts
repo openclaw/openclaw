@@ -123,6 +123,42 @@ describe("renderModelSetup", () => {
     expect(text(row)).not.toContain(secret);
   });
 
+  it("uses the guided choice label as the sign-in action and preserves native overrides", () => {
+    const authOptions = [
+      {
+        id: "sample-browser",
+        kind: "oauth" as const,
+        label: "Sign in with Sample",
+        groupLabel: "Sample",
+        featured: true,
+      },
+      {
+        id: "sample-device",
+        kind: "device-code" as const,
+        label: "Sign in with a device code",
+        groupLabel: "Sample",
+        actionLabel: "Pair this Mac",
+        featured: true,
+      },
+    ];
+    const onStartAuth = vi.fn();
+    const container = mount(
+      props({
+        onStartAuth,
+        page: { phase: "ready", result: { ...detected, authOptions } },
+      }),
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-auth-choice="sample-browser"] button',
+    )!;
+    expect(text(button)).toBe("Sign in with Sample");
+    button.click();
+    expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
+    expect(text(container.querySelector('[data-auth-choice="sample-device"] button')!)).toBe(
+      "Set up & verify",
+    );
+  });
+
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
     const onStartPrepare = vi.fn();
     const container = mount(props({ onStartPrepare }));

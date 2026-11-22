@@ -15,6 +15,62 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
+  it("keeps an app update in the top-right toast across phases and reconnect", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const initial = createUpdateRunFixture();
+        const run = {
+          ...initial,
+          origin: { ...initial.origin, noticeSurface: "app" as const },
+          phase: "requested" as const,
+        } satisfies typeof initial;
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          methodResponses: { "update.status": { activeRun: run }, "update.runs.get": { run } },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const toast = page.locator(".app-toast-lane--top-right .app-toast");
+        await toast.getByText("Preparing OpenClaw update…").waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "update-toast-waiting.png"),
+          animations: "disabled",
+        });
+        const running = { ...run, phase: "staging", updatedAtMs: run.updatedAtMs + 1 } as const;
+        await gateway.setMethodResponse("update.runs.get", { run: running });
+        await gateway.emitGatewayEvent("update.run.changed", running);
+        await toast.getByText("Staging", { exact: true }).waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "update-toast-processing.png"),
+          animations: "disabled",
+        });
+        const failed = {
+          ...running,
+          phase: "finished",
+          status: "failed",
+          reason: "preflight-no-good-commit",
+          updatedAtMs: running.updatedAtMs + 1,
+        } as const;
+        await gateway.setMethodResponse("update.runs.get", { run: failed });
+        await gateway.setMethodResponse("update.status", { lastRun: failed });
+        await gateway.closeLatest();
+        await toast.getByText("OpenClaw update failed").waitFor();
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "update-toast-failed.png"),
+          animations: "disabled",
+        });
+        await page.clock.install();
+        await page.clock.fastForward(60_000);
+        await toast.getByText("OpenClaw update failed").waitFor();
+        await toast.getByRole("button", { name: "Dismiss" }).click();
+        await toast.waitFor({ state: "detached" });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await page.locator('openclaw-update-run-view [data-run-status="failed"]').waitFor();
+        expect(await toast.count()).toBe(0);
+      },
+    );
+  });
+
   it("keeps an unread update failure in the Inbox after the Gateway build changes", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },

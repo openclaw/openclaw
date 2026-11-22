@@ -149,16 +149,6 @@ jobs:
       - name: Build Mantis harness
         run: pnpm build
 
-      - name: Cache Mantis candidate pnpm store
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.local/share/pnpm/store
-            ~/.cache/pnpm
-          key: mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
-
       - name: Install Crabbox CLI
         env:
           OPENCLAW_STATE_DIR: ${{ runner.temp }}/openclaw-crabbox-setup

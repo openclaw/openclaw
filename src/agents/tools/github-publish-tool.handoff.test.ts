@@ -269,7 +269,7 @@ it.for([
         });
         let receipt: ReturnType<typeof events.enqueueSessionEventForHost> | undefined;
         const enqueueReal = events.enqueueSessionEventForHost;
-        let resumedCaller: { identity: unknown; error?: unknown } | undefined;
+        let resumedCallerError: unknown;
         const noticed = createDeferredCore();
         const released = createDeferredCore();
         if (outcome === "interrupted") {
@@ -316,13 +316,12 @@ it.for([
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
             ).toBeUndefined();
-            // Resume dispatch consults the ambient caller before its own run binds tools; the
-            // yielded turn's retired receipt and aborted signal must not be ambient here.
-            resumedCaller = { identity: getGatewayToolCallerIdentity() };
+            // The continuation may retain admitted policy, but never the yielded
+            // invocation's retired receipt or aborted signal.
             try {
               captureGatewayToolCallerAssertion()?.();
             } catch (error) {
-              resumedCaller.error = error;
+              resumedCallerError = error;
             }
             order.push("resume");
             resumed.resolve(text);
@@ -442,7 +441,7 @@ it.for([
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
-            expect(resumedCaller).toEqual({ identity: undefined });
+            expect(resumedCallerError).toBeUndefined();
             if (outcome === "prepared" || localPublication) {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,

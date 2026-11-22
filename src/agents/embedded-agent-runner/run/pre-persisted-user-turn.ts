@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPendingBackgroundResultMessage } from "../../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import {
   prepareForeignLiveSessionPendingInputEntries,
@@ -77,7 +78,11 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
     : undefined;
   // Operational notices do not complete the foreground user turn.
-  if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
+  if (
+    isPendingBackgroundResultMessage(message) ||
+    delivery?.kind === PLUGIN_NOTICE_KIND ||
+    delivery?.kind === MODEL_FALLBACK_NOTICE_KIND
+  ) {
     return true;
   }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {

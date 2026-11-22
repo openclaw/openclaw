@@ -273,15 +273,10 @@ on a different release.
     **Anthropic setup-token** during onboarding, or manage it later with
     [`openclaw models auth`](/cli/models#auth-profiles).
   </Accordion>
-  <Accordion title="OpenAI Code subscription (OAuth)">
-    Browser flow; paste `code#state`.
-
-    On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-6-astra` through the Codex runtime.
-
-  </Accordion>
-  <Accordion title="OpenAI Code subscription (device pairing)">
-    Browser pairing flow with a short-lived device code.
+  <Accordion title="OpenAI Codex login">
+    Shows a short-lived device code to enter in any browser. If OpenAI has
+    device-code login turned off, falls back to the browser flow; paste
+    `code#state` when prompted.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
     `openai/gpt-6-astra` through the Codex runtime.
@@ -300,13 +295,11 @@ on a different release.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
-    Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
-    recommended xAI path for most users. OpenClaw stores the resulting auth
-    profile for Grok models, Grok `web_search`, `x_search`, and `code_execution`.
-  </Accordion>
-  <Accordion title="xAI (Grok) device code">
-    Remote-friendly browser sign-in with a short code instead of a localhost
-    callback. Use this from SSH, Docker, or VPS hosts.
+    Device-code sign-in for eligible SuperGrok or X Premium accounts: enter a
+    short code in any browser, with no localhost callback, so it also works from
+    SSH, Docker, or VPS hosts. This is the recommended xAI path for most users.
+    OpenClaw stores the resulting auth profile for Grok models, Grok
+    `web_search`, `x_search`, and `code_execution`.
   </Accordion>
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider. Use this

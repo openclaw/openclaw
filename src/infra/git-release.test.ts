@@ -5,9 +5,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import * as gatewayOwner from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
@@ -15,7 +17,7 @@ import {
   gitReleaseSlot,
   resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
-  usesGitReleases,
+  prepareGitReleaseLayout,
 } from "./git-release-paths.js";
 import {
   createGitReleaseDirs,
@@ -24,7 +26,9 @@ import {
   waitForGitReleaseSuccessor,
 } from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
+import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -232,27 +236,66 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       });
     });
 
-    it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
-      const { prefix } = await setup();
-      const root = (await createGitReleaseDirs(prefix)).releaseRoot;
-      // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
-      await fs.cp(
-        fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
-        path.join(root, "extensions", "deepseek"),
-        { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
-      );
-      await publishGitRelease({ prefix, releaseRoot: root, trial: false });
+    it.each([false, true])(
+      "loads a bundled plugin contract from the selected release (under node_modules: %s) (#201874)",
+      async (underNodeModules) => {
+        const { prefix } = await setup();
+        const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+        const root = underNodeModules
+          ? path.join(path.dirname(releaseRoot), "lib", "node_modules", "openclaw")
+          : releaseRoot;
+        // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
+        await fs.cp(
+          fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
+          path.join(root, "extensions", "deepseek"),
+          { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
+        );
+        if (underNodeModules) {
+          const builtRoot = path.join(root, "dist", "extensions", "deepseek");
+          await fs.mkdir(builtRoot, { recursive: true });
+          // The root build emits public artifacts here, outside the plugin's source root.
+          await fs.writeFile(
+            path.join(builtRoot, "web-search-contract-api.js"),
+            'exports.createDeepSeekWebSearchProvider = () => ({ id: "built-deepseek" });\n',
+          );
+        }
+        await publishGitRelease({ prefix, releaseRoot: root, trial: false });
 
-      // The Gateway names its root by the release link, as the MCP web-search request does.
-      const contract = loadPluginPublicArtifactModuleSync<{
-        createDeepSeekWebSearchProvider: unknown;
-      }>({
-        pluginRoot: path.join(gitReleaseSlot(prefix), "extensions", "deepseek"),
-        artifactBasename: "web-search-contract-api.js",
-        origin: "bundled",
-      });
-      expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
-    });
+        // The Gateway names its root by the release link, as the MCP web-search request does.
+        const pluginRoot = path.join(gitReleaseSlot(prefix), "extensions", "deepseek");
+        if (underNodeModules) {
+          // A built Gateway runs on plain Node, without Vitest's tsx hook.
+          const loaderUrl = resolveRuntimeWorkerUrl(
+            pluginProcessRuntimeEntrypoints.publicSurfaceLoader,
+          ).href;
+          const result = spawnNodeEvalSync(
+            `
+            import { loadPluginPublicArtifactModuleSync } from ${JSON.stringify(loaderUrl)};
+            const contract = loadPluginPublicArtifactModuleSync({
+              pluginRoot: ${JSON.stringify(pluginRoot)},
+              artifactBasename: "web-search-contract-api.js",
+              origin: "bundled",
+            });
+            console.log(contract.createDeepSeekWebSearchProvider().id);
+          `,
+            { env: { ...process.env, NODE_OPTIONS: "" } },
+          );
+          expect(result.stderr).toBe("");
+          expect(result.status).toBe(0);
+          expect(result.stdout.trim()).toBe("built-deepseek");
+          return;
+        }
+        const contract = loadPluginPublicArtifactModuleSync<{
+          createDeepSeekWebSearchProvider: () => { id: string };
+        }>({
+          pluginRoot,
+          artifactBasename: "web-search-contract-api.js",
+          origin: "bundled",
+        });
+        expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
+        expect(contract.createDeepSeekWebSearchProvider().id).toBe("deepseek");
+      },
+    );
 
     it("keeps listing releases built under node_modules after the link moves out", async () => {
       const { prefix } = await setup();
@@ -273,6 +316,54 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         ]),
       );
     });
+
+    it.each([false, true])(
+      "rolls back a broken Windows trial from one task supervisor start (pending: %s)",
+      async (pending) => {
+        const { prefix } = await setup();
+        // The previous release's supervisor, as shipped before the launcher global: it restarts a
+        // crashed child up to three times and starts each child with process.argv[1].
+        const supervisorSource = `
+          const { spawnSync } = require("node:child_process");
+          if (process.argv.includes("--task-supervisor")) {
+            for (let attempt = 0; attempt < 4; attempt++) {
+              const child = spawnSync(process.execPath, [process.argv[1], "gateway", "--task-supervisor-child=70000"], { encoding: "utf8" });
+              process.stdout.write(child.stdout);
+              process.stderr.write(child.stderr);
+              if (child.status === 0) break;
+            }
+          } else {
+            console.log("old gateway");
+          }
+        `;
+        const good = await release(prefix, "1.0.0", supervisorSource);
+        await publishGitRelease({ prefix, releaseRoot: good, trial: true });
+        // pending: a --no-restart update leaves the link on the previous release.
+        await publishGitRelease({
+          prefix,
+          releaseRoot: await release(prefix, "2.0.0", 'throw new Error("boot");\n'),
+          trial: true,
+          pending,
+        });
+
+        // Task Scheduler does not restart a task whose action exits with an error, so one start of
+        // the task supervisor must try the release and switch back by itself.
+        const supervisor = spawnSync(
+          process.execPath,
+          [path.join(prefix, "openclaw-launcher.mjs"), "gateway", "--task-supervisor"],
+          { encoding: "utf8" },
+        );
+
+        // A pending release is selected without the two-start fallback, so its children only fail.
+        expect(supervisor.stderr).toContain(
+          pending ? "boot" : "failed to start twice; switched back",
+        );
+        if (!pending) {
+          expect(supervisor.stdout).toContain("old gateway");
+          expect(await fs.realpath(gitReleaseSlot(prefix))).toBe(await fs.realpath(good));
+        }
+      },
+    );
 
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
@@ -613,79 +704,59 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
     });
 
-    it("converts a checkout only when its service can be redirected to the launcher", async () => {
-      const servicePlan = await import("../cli/update-cli/update-command-service-plan.js");
-      const { gatewayServiceOwnsGitInstall } =
-        await import("../cli/update-cli/update-command-git.js");
+    it("runs a Windows checkout from releases behind an absolute junction link", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const checkout = await release(prefix, "1.0.0", "");
-      const service = (entry: string | null, sealed = false) =>
-        vi.spyOn(servicePlan, "readGatewayServiceStateForUpdate").mockResolvedValue({
-          installed: entry !== null,
-          loadState: { status: entry ? "loaded" : "not-loaded" },
-          running: entry !== null,
-          env: {},
-          command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
-          runtime: { status: entry ? "running" : "stopped", systemd: { managerUid: 1001 } },
-          ...(sealed
-            ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } }
-            : {}),
-        } as Awaited<ReturnType<typeof servicePlan.readGatewayServiceStateForUpdate>>);
       try {
-        const entry = path.join(checkout, "dist", "index.js");
-        // Run by hand: nothing would start through the release link.
-        service(null);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-        service(entry);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-        // A sealed definition keeps starting the checkout, so the switch would never serve.
-        service(entry, true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-        // --no-restart never rewrites the definition, so the next start would run the checkout.
-        service(entry);
-        expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(false);
-        await withMockedPlatform("darwin", async () => {
-          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-          // An interrupted conversion selected a trial without rebinding the loaded job.
-          await publishFixture(prefix, "1.0.0", "", false);
-          await publishFixture(prefix, "2.0.0", "", true);
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-          // A later independent update must not adopt the unserved trial as its fallback.
-          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
-          service(await writeGitReleaseLauncher(prefix), true);
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+        await withMockedWindowsPlatform(async () => {
+          const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+          await publishGitRelease({ prefix, releaseRoot: good, trial: false });
+          const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+          await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+          // A junction stores, and readlink reports, the absolute release path.
+          expect(readPackageReleaseSlotSync(gitReleaseSlot(prefix))?.target).toBe(bad);
         });
-        await withMockedPlatform("linux", async () => {
-          service(entry);
-          vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-          expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-        });
-        // Once the unit names the launcher, switches need no definition write.
-        await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
-        service(await writeGitReleaseLauncher(prefix), true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
-        expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(true);
+        startGateway(prefix);
+        startGateway(prefix);
+
+        expect(startGateway(prefix).stdout).toContain("old");
       } finally {
-        vi.restoreAllMocks();
         vi.unstubAllEnvs();
       }
     });
 
-    it("takes the in-place runner with a reason when the release link cannot be used", async () => {
+    it("finishes a link switch killed after the old link was removed", async () => {
+      const { prefix } = await setup();
+      await publishGitRelease({
+        prefix,
+        releaseRoot: await release(prefix, "1.0.0", 'console.log("old");\n'),
+        trial: false,
+      });
+      const next = await release(prefix, "2.0.0", 'console.log("new");\n');
+      // The Windows switch removes the old link, then renames the temporary one into place.
+      const slot = gitReleaseSlot(prefix);
+      await fs.symlink(
+        path.relative(prefix, next),
+        path.join(prefix, ".openclaw.release-link-1-1"),
+      );
+      await fs.unlink(slot);
+
+      expect(startGateway(prefix).stdout).toBe("new\n");
+      expect(await fs.realpath(slot)).toBe(await fs.realpath(next));
+    });
+
+    it("moves something other than a release link aside instead of refusing the update", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       try {
-        expect(usesGitReleases(false, true)).toBe(true);
-        // Something other than a release link sits at the package path.
+        expect(prepareGitReleaseLayout()).toBeUndefined();
         await fs.mkdir(gitReleaseSlot(prefix), { recursive: true });
-        const reasons: string[] = [];
-        expect(usesGitReleases(false, true, (reason) => reasons.push(reason))).toBe(false);
-        expect(reasons).toEqual([`${gitReleaseSlot(prefix)} is not a release link`]);
+        expect(prepareGitReleaseLayout()).toMatch(/was not a release link; it was moved to /u);
+        await expect(fs.lstat(gitReleaseSlot(prefix))).rejects.toThrow();
+        // A checkout installed there is a live installation: it stays where it is.
+        await fs.mkdir(path.join(gitReleaseSlot(prefix), ".git"), { recursive: true });
+        expect(prepareGitReleaseLayout()).toMatch(/is a Git checkout at the release link path/u);
+        expect((await fs.lstat(gitReleaseSlot(prefix))).isDirectory()).toBe(true);
       } finally {
         vi.unstubAllEnvs();
       }

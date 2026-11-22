@@ -168,31 +168,49 @@ const carrierMessage = (text: string) => ({
   runtimeContext: {},
 });
 
-it.each([
-  ["provider", convertProviderResponsesMessages],
-  ["transport", convertResponsesMessages],
-] as const)("%s keeps a steering carrier after the tool round it followed", (_name, convert) => {
-  const sent = [user("look up"), carrierMessage("turn facts"), ...toolRound("a")];
-  const first = convert(model, { messages: sent }, new Set(["openai"]));
-  const next = convert(
-    model,
-    {
-      messages: [...sent, carrierMessage("steering facts"), user("steering"), ...toolRound("b")],
-    },
-    new Set(["openai"]),
-  );
-  expect(next.slice(0, first.length)).toEqual(first);
-  expectTypes(next, [
-    "message",
-    "message",
-    "function_call",
-    "function_call_output",
-    "message",
-    "message",
-    "function_call",
-    "function_call_output",
-  ]);
-});
+it.each(
+  [
+    ["provider", convertProviderResponsesMessages] as const,
+    ["transport", convertResponsesMessages] as const,
+  ].flatMap(([name, convert]) =>
+    [false, true].map((promptUpdate) => ({ name, convert, promptUpdate })),
+  ),
+)(
+  "$name keeps a retained steering carrier after the tool round it followed (prompt update: $promptUpdate)",
+  ({ convert, promptUpdate }) => {
+    const sent = [
+      user("look up"),
+      { ...carrierMessage("turn facts"), runtimeContext: { retained: true } },
+      ...(promptUpdate ? [user("Tools changed")] : []),
+      ...toolRound("a"),
+    ];
+    const first = convert(model, { messages: sent }, new Set(["openai"]));
+    const next = convert(
+      model,
+      {
+        messages: [
+          ...sent,
+          { ...carrierMessage("steering facts"), runtimeContext: { retained: true } },
+          user("steering"),
+          ...toolRound("b"),
+        ],
+      },
+      new Set(["openai"]),
+    );
+    expect(next.slice(0, first.length)).toEqual(first);
+    expectTypes(next, [
+      "message",
+      "message",
+      ...(promptUpdate ? ["message"] : []),
+      "function_call",
+      "function_call_output",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output",
+    ]);
+  },
+);
 
 it.each([
   ["provider", convertProviderResponsesMessages],

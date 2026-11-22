@@ -45,7 +45,6 @@ export function assertAssistantMediaPolicyCurrent(
   selection: Parameters<typeof resolveAssistantMediaPolicy>[0],
   policy: NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>,
   hasAllowance: boolean,
-  requestAuth: AuthorizedControlUiReadRequest | undefined,
 ) {
   policy.assertCurrent?.();
   // Ordinary session activity changes the global access epoch without revoking media tickets.
@@ -64,7 +63,6 @@ export function assertAssistantMediaPolicyCurrent(
     current.remote ||= isCloudWorkerPlacementState(placement?.state);
   }
   if (
-    requestAuth?.hasCurrentClientAuthority?.() === false ||
     !current ||
     current.session?.sessionKey !== policy.session?.sessionKey ||
     current.session?.agentId !== policy.session?.agentId ||
@@ -164,11 +162,7 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
       const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(params.sessionKey);
       const source = captureSessionEntryMetadataRead(
         { sessionKey: canonicalKey, agentId: owner.agentId },
-        () => {
-          if (params.requestAuth?.hasCurrentClientAuthority?.() === false) {
-            throw new FsSafeError("path-mismatch", "Media access changed");
-          }
-        },
+        () => {},
       );
       if (source) {
         assertCurrent = source.assertCurrent;

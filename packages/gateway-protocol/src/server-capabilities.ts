@@ -55,4 +55,5 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
+  UPDATE_RUN_CONSENT_IDENTITY: "update-run-consent-identity-v1",
 } as const;

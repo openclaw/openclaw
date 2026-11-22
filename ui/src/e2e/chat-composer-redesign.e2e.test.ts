@@ -61,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
+            const setupAction = setupBanner.getByRole("button", { name: "Open Models" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {

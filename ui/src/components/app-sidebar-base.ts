@@ -35,6 +35,7 @@ export type AppSidebarProps = {
   activePluginTabId: string;
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
+  communityInviteAllowed: boolean;
   connectionStatus: GatewayStatus | null;
   gatewayStatus: GatewayStatusProps | null;
   connectionRecovery: boolean;
@@ -56,6 +57,7 @@ export type AppSidebarProps = {
   /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
   navigationCollapsedByChoice?: boolean;
   sidebarAgentsMode: "chip" | "roster";
+  newSessionInRail: boolean;
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
   themeMode: ThemeMode;
@@ -79,6 +81,7 @@ export const appSidebarProperties = {
   activePluginTabId: { default: "", attribute: false },
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
+  communityInviteAllowed: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
   gatewayStatus: { default: null, attribute: false },
   connectionRecovery: { default: false, attribute: false },
@@ -97,6 +100,7 @@ export const appSidebarProperties = {
   navigationCollapsed: { default: false, type: Boolean },
   navigationCollapsedByChoice: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
+  newSessionInRail: { default: false, attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
   themeMode: { default: "system", attribute: false },
@@ -127,6 +131,7 @@ export abstract class AppSidebarBase {
   declare activePluginTabId: AppSidebarProps["activePluginTabId"];
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
+  declare communityInviteAllowed: AppSidebarProps["communityInviteAllowed"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
   declare gatewayStatus: AppSidebarProps["gatewayStatus"];
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
@@ -145,6 +150,7 @@ export abstract class AppSidebarBase {
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
   declare navigationCollapsedByChoice: AppSidebarProps["navigationCollapsedByChoice"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
+  declare newSessionInRail: AppSidebarProps["newSessionInRail"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
   declare themeMode: AppSidebarProps["themeMode"];
