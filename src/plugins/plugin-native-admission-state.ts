@@ -136,6 +136,76 @@ export function releaseReplacedNamespaces(
   }
 }
 
+/**
+ * Namespace maps a generation adopts into a shared view, counted per owner. Two generations can
+ * adopt the same capture root, so the last owner releases it; otherwise disposing one fork would
+ * strip namespace resolution from a sibling that is still live.
+ */
+const adoptedNamespaces = new WeakMap<AdmissionState, Map<string, number>>();
+const adoptedOwners = new WeakMap<AdmissionState, Map<object, Set<string>>>();
+
+function adoptedNamespacesFor(state: AdmissionState) {
+  let adopted = adoptedNamespaces.get(state);
+  if (!adopted) {
+    adopted = new Map();
+    adoptedNamespaces.set(state, adopted);
+  }
+  return adopted;
+}
+
+/** A live generation claims the shared-view namespace maps it publishes before it can release them. */
+export function claimAdoptedNamespaceCustody(
+  state: AdmissionState,
+  owner: object,
+  namespaceIds: readonly string[],
+): () => void {
+  let owners = adoptedOwners.get(state);
+  if (!owners) {
+    owners = new Map();
+    adoptedOwners.set(state, owners);
+  }
+  const claimed = owners.get(owner) ?? new Set<string>();
+  owners.set(owner, claimed);
+  const adopted = adoptedNamespacesFor(state);
+  for (const id of namespaceIds) {
+    if (claimed.has(id)) {
+      continue;
+    }
+    claimed.add(id);
+    adopted.set(id, (adopted.get(id) ?? 0) + 1);
+  }
+  return () => releaseAdoptedNamespaceCustody(state, owner);
+}
+
+/**
+ * A retired generation releases the namespace maps it adopted. Maps a live receipt, file fact, or
+ * sibling generation still names stay, so a newer admission that shares the same capture root
+ * keeps resolving.
+ */
+export function releaseAdoptedNamespaceCustody(state: AdmissionState, owner: object): void {
+  const owners = adoptedOwners.get(state);
+  const claimed = owners?.get(owner);
+  if (!owners || !claimed) {
+    return;
+  }
+  owners.delete(owner);
+  const adopted = adoptedNamespacesFor(state);
+  for (const id of claimed) {
+    const remaining = (adopted.get(id) ?? 1) - 1;
+    if (remaining > 0) {
+      adopted.set(id, remaining);
+      continue;
+    }
+    adopted.delete(id);
+    const shared =
+      [...state.receipts.values()].some((receipt) => id in receipt.nativeNamespaces) ||
+      [...state.files.values()].some((file) => file.namespace === id);
+    if (!shared) {
+      state.namespaces.delete(id);
+    }
+  }
+}
+
 function resolveAdmissionViewKey(
   readOnly = isArtifactPreservingStateRead(),
   storage = resolvePluginSourceCaptureStorage(),

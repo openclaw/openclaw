@@ -109,3 +109,137 @@ it("keeps a recovered namespace resolvable after a newer receipt prunes the shar
     }
   });
 });
+
+it("drops a disposed recovery's namespaces from the shared map", async () => {
+  await withOpenClawTestState({ label: "native-recovery-dispose" }, async (state) => {
+    const root = state.path("plugin");
+    const capture = state.path("capture");
+    fs.mkdirSync(root);
+    fs.mkdirSync(capture);
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-recovery-dispose"}');
+    const native = path.join(root, "addon.so");
+    fs.writeFileSync(native, "native fixture");
+    const cache = createPluginCache();
+    try {
+      withPluginCache(cache, () => {
+        const admission = createPluginNativeAdmission(root, capture);
+        const materialized = admission.materialize(
+          native,
+          root,
+          path.join(capture, "addon.so"),
+          fs.statSync(native, { bigint: true }),
+        )!;
+        const bytes = fs.readFileSync(native);
+        materialized.record({
+          contentHash: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        });
+        const receipt = { signature: "dispose", sourceDigest: "a".repeat(64) };
+        const recovery = admission.captureRecovery(receipt, {});
+        const recovered = createPluginNativeAdmission(root, capture, undefined, recovery);
+        expect(nativeAdmissionStateFor().namespaces.size).toBeGreaterThan(0);
+        expect(recovered.isRetainedReference(path.join(capture, "addon.so"))).toBe(true);
+
+        // Retiring the generation releases its recovery custody.
+        recovery.dispose();
+
+        expect(nativeAdmissionStateFor().namespaces.size).toBe(0);
+      });
+    } finally {
+      await retirePluginCache(cache);
+    }
+  });
+});
+
+it("keeps a sibling generation's namespaces when one recovery is disposed", async () => {
+  await withOpenClawTestState({ label: "native-recovery-sibling" }, async (state) => {
+    const root = state.path("plugin");
+    const capture = state.path("capture");
+    fs.mkdirSync(root);
+    fs.mkdirSync(capture);
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-recovery-sibling"}');
+    const native = path.join(root, "addon.so");
+    fs.writeFileSync(native, "native fixture");
+    const cache = createPluginCache();
+    try {
+      withPluginCache(cache, () => {
+        const admission = createPluginNativeAdmission(root, capture);
+        const materialized = admission.materialize(
+          native,
+          root,
+          path.join(capture, "addon.so"),
+          fs.statSync(native, { bigint: true }),
+        )!;
+        const bytes = fs.readFileSync(native);
+        materialized.record({
+          contentHash: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        });
+        const receipt = { signature: "sibling", sourceDigest: "a".repeat(64) };
+        // Two generations share the same capture root, as a fork and its parent do.
+        const first = admission.captureRecovery(receipt, {});
+        const second = first.fork();
+        createPluginNativeAdmission(root, capture, undefined, first);
+        createPluginNativeAdmission(root, capture, undefined, second);
+        const shared = nativeAdmissionStateFor().namespaces.size;
+        expect(shared).toBeGreaterThan(0);
+
+        first.dispose();
+
+        // The live sibling still resolves its native files through the shared map.
+        expect(nativeAdmissionStateFor().namespaces.size).toBe(shared);
+
+        second.dispose();
+
+        expect(nativeAdmissionStateFor().namespaces.size).toBe(0);
+      });
+    } finally {
+      await retirePluginCache(cache);
+    }
+  });
+});
+
+it("does not grow the shared map across repeated generation rebuilds", async () => {
+  await withOpenClawTestState({ label: "native-recovery-rebuild" }, async (state) => {
+    const root = state.path("plugin");
+    const capture = state.path("capture");
+    fs.mkdirSync(root);
+    fs.mkdirSync(capture);
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-recovery-rebuild"}');
+    const native = path.join(root, "addon.so");
+    fs.writeFileSync(native, "native fixture");
+    const cache = createPluginCache();
+    try {
+      withPluginCache(cache, () => {
+        const admission = createPluginNativeAdmission(root, capture);
+        const materialized = admission.materialize(
+          native,
+          root,
+          path.join(capture, "addon.so"),
+          fs.statSync(native, { bigint: true }),
+        )!;
+        const bytes = fs.readFileSync(native);
+        materialized.record({
+          contentHash: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        });
+        let bounded: number | undefined;
+        // Each rebuild retains one generation and retires it again; the map must not grow.
+        for (let round = 0; round < 5; round += 1) {
+          const recovery = admission.captureRecovery(
+            { signature: `rebuild-${round}`, sourceDigest: "a".repeat(64) },
+            {},
+          );
+          createPluginNativeAdmission(root, capture, undefined, recovery);
+          bounded ??= nativeAdmissionStateFor().namespaces.size;
+          expect(nativeAdmissionStateFor().namespaces.size).toBe(bounded);
+          recovery.dispose();
+          expect(nativeAdmissionStateFor().namespaces.size).toBe(0);
+        }
+        expect(bounded).toBeGreaterThan(0);
+      });
+    } finally {
+      await retirePluginCache(cache);
+    }
+  });
+});

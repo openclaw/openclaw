@@ -6,6 +6,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
+  claimAdoptedNamespaceCustody,
   nativeAdmissionStateFor,
   queuePluginNativeAdmissionPublication,
   releaseReplacedNamespaces,
@@ -165,6 +166,9 @@ function createNativeRecovery(
       for (const fact of references.values()) {
         retainNativePath(state, fact.capturedPath);
       }
+      // A retired generation must also retire the shared-view namespace maps it adopted, or every
+      // rebuild leaves a full member map reachable for the life of the process.
+      pins.push(claimAdoptedNamespaceCustody(state, recovery, [...namespaces.keys()]));
     },
     dispose() {
       for (const root of release()) {
