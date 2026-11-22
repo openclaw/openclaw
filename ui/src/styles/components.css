@@ -2423,7 +2423,7 @@ openclaw-tooltip:last-child > .refresh-button,
   border-bottom: none;
 }
 
-.data-table-checkbox-col {
+.data-table .data-table-checkbox-col {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);

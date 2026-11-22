@@ -37,12 +37,12 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
+function createDataCatalogInventory(revision = 1) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    catalogId: `data-catalog-${suffix(index)}`,
+    catalogId: `installed-data-catalog-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
-    packageName: `@synthetic/data-plugin-${suffix(index)}`,
+    packageName: `@synthetic/installed-data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
     origin: "global",
     kind: ["tool"],
@@ -51,6 +51,7 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
     state: "enabled",
     removable: true,
   }));
+  // Browsing hides installed plugins; keep discovery separate from the Settings inventory.
   const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
     id: `data-catalog-${suffix(index)}`,
     catalog: {
@@ -63,19 +64,15 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: index === uninstalledIndex ? undefined : plugin.id,
-      present: index !== uninstalledIndex,
-      installed: index !== uninstalledIndex,
-      enabled: index !== uninstalledIndex,
-      state: index === uninstalledIndex ? "not-installed" : "enabled",
-      action: index === uninstalledIndex ? "install" : "manage",
+      present: false,
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      action: "install",
     },
   }));
   return {
-    plugins:
-      uninstalledIndex === undefined
-        ? plugins
-        : plugins.filter((_plugin, index) => index !== uninstalledIndex),
+    plugins,
     entries,
   };
 }
@@ -96,11 +93,8 @@ function catalogPage(
   };
 }
 
-function createDataCatalogFixture(
-  revision = 1,
-  uninstalledIndex?: number,
-): InteractionFixtureOverrides {
-  const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
+function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
+  const { plugins, entries } = createDataCatalogInventory(revision);
   const groups: ToolsCatalogResult["groups"] = Array.from(
     { length: toolGroupCount },
     (_, groupIndex) => ({
@@ -979,7 +973,6 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     explicitOnly: true,
     route: pathForRoute("plugins"),
     expected: "Catalog search works before installed inventory permits installation.",
-    fixtureOverrides: () => createDataCatalogFixture(1, 900),
     prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
     run: async (page) => {
       const search = page.getByRole("searchbox", { name: "Search plugins" });
@@ -1014,7 +1007,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         inventoryLoadingVisible,
         inventoryReadyAtMs: await page.evaluate(() => performance.now()),
         matchingPlugins: 100,
-        installedPlugins: inventorySize - 1,
+        installedPlugins: inventorySize,
       };
     },
   },

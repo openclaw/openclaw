@@ -205,6 +205,13 @@ export type UpdateGatewayReadinessParams = {
   }>;
 };
 
+export function hasRunningGatewayService(health: GatewayRestartSnapshot): boolean {
+  return (
+    health.runtime.status === "running" &&
+    (process.platform === "win32" || health.runtime.pid !== undefined)
+  );
+}
+
 export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
   if (health.waitOutcome === "still-starting") {
     return true;
@@ -363,11 +370,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       const readyz = http.readyz === 200;
       // HTTP does not change the restart owner's observed process/build identity.
-      if (
-        params.requireRunningService &&
-        (health.runtime.status !== "running" ||
-          (process.platform !== "win32" && health.runtime.pid === undefined))
-      ) {
+      if (params.requireRunningService && !hasRunningGatewayService(health)) {
         health.healthy = false;
       }
       if (!(http.coreReady ?? readyz) || remainingMs() === 0) {

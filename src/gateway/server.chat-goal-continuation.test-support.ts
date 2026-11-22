@@ -11,9 +11,11 @@ import {
 } from "../agents/bash-tools.exec-notify.js";
 import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
-import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
-import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -21,6 +23,11 @@ import { createSessionGoal, updateSessionGoalStatus } from "../config/sessions/g
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { runOutsideOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import type { RespondFn } from "./server-methods/types.js";
 
 export function registerGoalAutomaticContinuationCases(
@@ -235,17 +242,28 @@ export function registerGoalAutomaticContinuationCases(
     Object.assign(process, { notifyOnExitEmptySuccess: true });
     const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
     const caller = { agentId, sessionKey, requesterOrigin };
-    await withGatewayToolCallerIdentity(
-      silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-      () => prepareExecExitNotification(process, false, false),
+    const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+    // This Telegram exec is independent of the UI request executing the held model.
+    await runOutsideOperatorToolGatewayAuthority(() =>
+      withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () =>
+          withoutGatewayToolCallerIdentity(async () => {
+            await withGatewayToolCallerIdentity(
+              silent ? { ...caller, sessionEventDelivery: false as const } : caller,
+              () => prepareExecExitNotification(process, false, false),
+            );
+            addSession(process);
+            try {
+              markExited(process, 0, null, "completed");
+              await maybeNotifyOnExit(process, "completed", false);
+            } finally {
+              deleteSession(id);
+            }
+          }),
+        { inheritRequestScope: false },
+      ),
     );
-    addSession(process);
-    try {
-      markExited(process, 0, null, "completed");
-      await maybeNotifyOnExit(process, "completed", false);
-    } finally {
-      deleteSession(id);
-    }
   };
   it.each([
     { name: "owner", senderId: "456", silent: false, owner: true },
@@ -278,14 +296,14 @@ export function registerGoalAutomaticContinuationCases(
       expect.stringContaining("Advance"),
       expect.stringContaining("Advance"),
     ]);
-    // Successors keep only the requester's live owner check and the completion's delivery policy.
+    // Successors readmit the requester's owner authority and retain the delivery policy.
     const expected = { owner: testCase.owner, delivery: testCase.silent ? false : undefined };
     expect(seen.slice(1).map(({ owner, delivery }) => ({ owner, delivery }))).toEqual(
       Array.from({ length: 3 }, () => expected),
     );
   });
 
-  it("stops an owner's Goal successor before execution once ownership is revoked", async () => {
+  it("downgrades an owner's Goal successor once ownership is revoked", async () => {
     let restore = withOwnerPolicy();
     const owners: Array<boolean | undefined> = [];
     runEmbeddedAgent.mockImplementation(async (params) => {
@@ -293,27 +311,32 @@ export function registerGoalAutomaticContinuationCases(
       if (owners.length === 1) {
         await completeRequesterExec("456");
       } else if (owners.length === 3) {
-        // Revoked after the first successor ran; the next one must not execute.
+        // The next successor re-admits as a nonowner instead of losing the Goal turn.
         restore();
         restore = withOwnerPolicy(true);
+      } else if (owners.length === 4) {
+        expect(params.prompt).toContain("Advance");
+        await setGoalStatus("complete");
       }
       return result(params.sessionId);
     });
     try {
-      await start("Continue while the owner remains configured");
+      await start("Continue after the configured owner is removed");
       await expectDrained();
     } finally {
       restore();
     }
-    expect(owners.slice(1)).toEqual([true, true]);
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+    expect(owners.slice(1)).toEqual([true, true, false]);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      status: "complete",
+      continuationTurns: 2,
+    });
   });
 
-  it("refuses an admitted owner Goal successor's tool effect once ownership is revoked", async () => {
+  it("lets an admitted owner Goal successor's tool effect finish after ownership is revoked", async () => {
     let restore = withOwnerPolicy();
     const effects: string[] = [];
-    let refusal: unknown;
     runEmbeddedAgent.mockImplementation(async (params) => {
       const calls = runEmbeddedAgent.mock.calls.length;
       if (calls === 1) {
@@ -336,11 +359,8 @@ export function registerGoalAutomaticContinuationCases(
         ownerEffect("while owner");
         restore();
         restore = withOwnerPolicy(true);
-        try {
-          ownerEffect("after revocation");
-        } catch (error) {
-          refusal = error;
-        }
+        ownerEffect("after revocation");
+        await setGoalStatus("complete");
       }
       return result(params.sessionId);
     });
@@ -350,9 +370,7 @@ export function registerGoalAutomaticContinuationCases(
     } finally {
       restore();
     }
-    expect(effects).toEqual(["while owner"]);
-    // Refused at the admitted run's tool gate because the requester is no longer an owner.
-    expect(refusal).toMatchObject({ cause: expect.any(CommandOwnerRevokedError) });
+    expect(effects).toEqual(["while owner", "after revocation"]);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
   });
 

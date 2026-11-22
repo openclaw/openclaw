@@ -729,6 +729,51 @@ it.each([1, 5])("bounds publication retries after %s late writes", async (writes
   );
 });
 
+it.each(["records only", "records and config", "unchanged"] as const)(
+  "runs the original-state copy before plugin records publish, never without a change (%s)",
+  async (shape) => {
+    await withOpenClawTestState({ label: "updater-plugin-copy-first" }, async (state) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const prepared = await prepareUpdate(state, config);
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      const records = { next: { source: "archive" as const } };
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        ...(shape === "unchanged"
+          ? {}
+          : { changes: ["Installed fixture next."], installRecords: records }),
+        // A config delta takes the combined writer, which commits the index first.
+        ...(shape === "records and config"
+          ? {
+              config: { ...cfg, plugins: { ...cfg.plugins, entries: { next: { enabled: true } } } },
+              configChanges: ["Enabled fixture next."],
+            }
+          : {}),
+      }));
+      // What a copy taken at this moment would hold: the index as it was before publication.
+      const indexAtCopy: unknown[] = [];
+      await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configChanged: false,
+        configWriteOptions: preparedWrite.writeOptions,
+        beforeRecordPublication: async () => {
+          indexAtCopy.push(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          );
+        },
+      });
+      expect(indexAtCopy.slice(0, 1)).toEqual(shape === "unchanged" ? [] : [{}]);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(shape === "unchanged" ? {} : records);
+      if (shape === "records and config") {
+        const saved = (await readConfigFileSnapshot()).sourceConfig;
+        expect(saved.plugins?.entries?.next?.enabled).toBe(true);
+      }
+    });
+  },
+);
+
 it("prints each skipped plugin and its reason after the update counts", async () => {
   await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {
     const prepared = await prepareUpdate(state, { plugins: { enabled: false } });

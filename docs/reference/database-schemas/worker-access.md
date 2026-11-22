@@ -50,6 +50,12 @@ recorders remain non-enumerable symbol properties, consumed before serialization
 
 ## Rules for code changes
 
+Shared-state read producers hand over commands that remain unchanged until completion.
+Fresh selectors and registry-owned immutable topology need no transport copy or
+immutability scan. A producer borrowing mutable arrays, records, or configuration
+captures them before handing the command to the reader; native worker messaging
+still serializes the command. Capture before lazy snapshot preparation can yield.
+
 - Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, justified primitives. Write transactions synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
 - Database access: worker threads (read-only worker scope, SQLite writer broker), never Gateway main thread; main thread only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access = legacy: never add more; migrate what you touch.
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
@@ -294,7 +300,7 @@ before caller SQL. A lost active transaction or uncertain statement outcome stil
 fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
-shared-state reads before their callback, and standalone feature-schema ensures
+shared-state reads and writes before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
@@ -305,6 +311,11 @@ the retry deadline. Cancellation and earlier transport failures remain distinct.
 Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.
+First-use fragment creation checks the committed catalog under the writer lock
+when admitted facts say the fragment is absent. A peer-created fragment must
+pass schema-seal validation before adoption. During migrations or publication
+gaps, schema helpers inspect the transaction's catalog instead of treating
+unavailable facts as an absent table, column, or primary key.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

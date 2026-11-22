@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataAccessibilityText,
+} from "./blocks-fallback.js";
+import {
   isSlackInvalidBlocksError,
   isSlackInvalidBlocksResponse,
   isSlackNativeResponseUrlRejection,

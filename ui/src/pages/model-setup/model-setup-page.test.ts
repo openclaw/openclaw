@@ -378,6 +378,7 @@ describe("ModelSetupPage catalog icons", () => {
             return { ok: false as const, reason: "error" as const, error: String(error) };
           }
         }),
+        subscribe: () => () => {},
       } as unknown as ApplicationContext["runtimeConfig"],
     } as ApplicationContext;
     const { page } = await mountSettings(context, client, {
@@ -466,9 +467,10 @@ describe("Model setup account connections", () => {
   const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
   const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
-        "Waiting for " + labelFor(operation) + "…",
-      ),
+      expect(
+        page.querySelector(":is(.wizard-sign-in, .wizard-sign-in--paste) [role=status]")
+          ?.textContent,
+      ).toBe("Waiting for " + labelFor(operation) + "…"),
     );
 
   async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
@@ -582,33 +584,36 @@ describe("Model setup account connections", () => {
       await startSignIn(page, operation);
       await waitForSignIn(page, operation);
       const modal = page.querySelector("openclaw-modal-dialog")!;
-      expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
-        labelFor(operation) + " is open in a new tab.",
-      );
       expect(
         modal
           .querySelector(".wizard-sign-in__badge [data-provider-icon]")
           ?.getAttribute("data-provider-icon"),
       ).toBe("meta");
       if (failed) {
+        expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
+          labelFor(operation) + " is open in a new tab.",
+        );
         expect(modal.textContent).not.toContain(guidance);
         expect(modal.textContent).not.toContain(url);
       } else {
+        // The pasted-address field is visible at once; the callback below never touches it.
+        expect(modalTitle(modal)).toBe(labelFor(operation));
+        expect(modal.querySelector('input[name="wizard-text"]')).not.toBeNull();
         expect(verificationRuns).toBe(0);
       }
       finish.resolve();
       if (failed) {
-        const expectedError = [diagnostic, guidance, authorization].join("\n\n");
+        // A failed sign-in shows only its error, never the earlier sign-in notes.
         await waitForFast(() =>
           expect(modal.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
-            expectedError,
+            diagnostic,
           ),
         );
         expect(modalTitle(modal)).toBe(labelFor(operation));
         expect(modal.querySelector(".wizard-sign-in")).toBeNull();
         const alert = modal.querySelector("[role=alert]")!;
-        expect(alert.textContent).toContain(guidance);
-        expect(alert.textContent).toContain(url);
+        expect(alert.textContent).not.toContain(guidance);
+        expect(alert.textContent).not.toContain(authorization);
         expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
         expect(modal.querySelector("details")).toBeNull();
         expect(reads).toBe(4);
@@ -624,7 +629,7 @@ describe("Model setup account connections", () => {
         expect(verificationRuns).toBe(operation === "connect" ? 0 : 1);
         expect(page.textContent).not.toContain("Approve this account in your browser.");
         expect(page.textContent).not.toContain(url);
-        expect(setupButton.textContent?.trim()).toBe("Set up & verify");
+        expect(setupButton.textContent?.trim()).toBe("Setup-only account");
         if (operation === "connect") {
           expect(request).toHaveBeenCalledWith(
             "models.authLogin",

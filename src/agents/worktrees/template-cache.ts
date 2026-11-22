@@ -308,6 +308,11 @@ export async function prepareWorktreeTemplate(params: {
   ) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
+  setWorktreePreparationTemplate(undefined, {
+    refreshRejectReason: undefined,
+    validationFailure: undefined,
+    refreshErrorClass: undefined,
+  });
   const { validate } = params;
   const retainCommits = params.refresh !== undefined;
   let built = false;
@@ -414,12 +419,20 @@ export async function prepareWorktreeTemplate(params: {
           // no reader until it succeeds keeps fast readers behind that validation.
           let valid = hasReaders;
           try {
-            valid ||=
-              (await worktreePathExists(existing.path)) &&
-              (!validate ||
-                (await timeWorktreePreparationPhase("templateValidate", () =>
-                  validate(existing, options),
-                )));
+            if (!valid) {
+              const exists = await worktreePathExists(existing.path);
+              valid =
+                exists &&
+                (!validate ||
+                  (await timeWorktreePreparationPhase("templateValidate", () =>
+                    validate(existing, options),
+                  )));
+              if (!valid) {
+                setWorktreePreparationTemplate(undefined, {
+                  refreshRejectReason: exists ? "validation-failed" : "template-missing",
+                });
+              }
+            }
           } catch (error) {
             if (hasWorktreeUnknownOutcome(error)) {
               retained = await retainWorktreeTemplate(
