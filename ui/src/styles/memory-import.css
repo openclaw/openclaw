@@ -120,11 +120,9 @@
 }
 
 .memory-import__files code {
-  overflow: hidden;
   color: var(--text);
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .memory-import__file-status {
@@ -149,6 +147,7 @@
   gap: 8px;
   background: color-mix(in srgb, var(--ok) 9%, transparent);
   color: var(--ok);
+  overflow-wrap: anywhere;
 }
 
 .memory-import__result.memory-import__result--incomplete {
@@ -177,9 +176,16 @@
 .memory-import__result-path,
 .memory-import__result-artifact {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px;
   align-items: baseline;
+}
+
+.memory-import__result-path {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.memory-import__result-artifact {
+  grid-template-columns: subgrid;
 }
 
 .memory-import__result-path code,
@@ -187,12 +193,8 @@
 .memory-import__result-issues code {
   display: block;
   min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
   color: inherit;
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .memory-import__result-issues {
@@ -205,7 +207,12 @@
 
 .memory-import__result-issues li {
   display: grid;
-  gap: 1px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 4px;
+}
+
+.memory-import__result-issues li > * {
+  grid-column: 1 / -1;
 }
 
 .memory-import__result-issues strong,

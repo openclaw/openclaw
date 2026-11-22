@@ -35,6 +35,74 @@ const plan: MigrationsMemoryPlanResult = {
 };
 
 suite.define(() => {
+  it("shows the complete filename when reviewing an import and reading its report on a phone", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        const relativePath =
+          "release-readiness/customer-support-handoff/documentation_review_for_the_responsive_release_checklist_approved.md";
+        const reportDir =
+          "/studio/operator-state/migration-reports/claude/release-readiness-2026-11-22T05-17-00.000Z";
+        const item = {
+          id: "memory:claude-auto:studio:" + relativePath,
+          status: "planned" as const,
+          source: "/studio/memory/" + relativePath,
+          details: { collectionId: "studio", collectionLabel: "Studio", relativePath },
+        };
+        const provider = {
+          providerId: "claude",
+          label: "Claude",
+          found: true,
+          source: "/studio/memory",
+          target: "/workspace/studio",
+          planFingerprint: "a".repeat(64),
+          summary: { ...summary, total: 1, planned: 1 },
+          items: [item],
+        };
+        await installMockGateway(page, {
+          methodResponses: {
+            "migrations.memory.plan": {
+              agentId: "main",
+              workspace: provider.target,
+              providers: [provider],
+            },
+            "migrations.memory.apply": {
+              providerId: provider.providerId,
+              source: provider.source,
+              target: provider.target,
+              reportDir,
+              summary: { ...summary, total: 1, migrated: 1 },
+              items: [{ ...item, status: "migrated" }],
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "memory-import");
+        const section = page.locator('[data-provider-id="claude"]');
+        // A title attribute can contain the whole path while the actual touch UI cuts it off.
+        const lastCharacterFits = (el: Element) => {
+          const text = el.firstChild!;
+          const range = document.createRange();
+          range.setStart(text, text.textContent!.length - 1);
+          range.setEnd(text, text.textContent!.length);
+          const suffix = range.getBoundingClientRect();
+          return [el, el.closest(".settings-group")!].every((container) => {
+            const box = container.getBoundingClientRect();
+            return suffix.left >= box.left - 1 && suffix.right <= box.right + 1;
+          });
+        };
+        const file = section.locator(".memory-import__files code");
+        await file.waitFor();
+        expect.soft(await file.evaluate(lastCharacterFits)).toBe(true);
+        await section.getByRole("button", { name: "Import selected" }).tap();
+        await page.locator('[data-test-id="memory-import-confirm"]').press("Enter");
+        const report = section.locator(".memory-import__result-path code");
+        await report.waitFor();
+        expect(await report.textContent()).toBe(reportDir);
+        expect(await report.evaluate(lastCharacterFits)).toBe(true);
+      },
+    );
+  });
+
   it("does not claim a provider was not found when its memory scan failed", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
