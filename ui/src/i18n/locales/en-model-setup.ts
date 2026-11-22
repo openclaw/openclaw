@@ -50,13 +50,6 @@ const enModelSetup = {
       retry: "Retry test",
       testingButton: "Testing…",
     },
-    nativeDiscovery: {
-      title: "Find existing sessions",
-      body: "Show sessions from installed agents on the computer running OpenClaw in OpenClaw. This doesn’t import or copy them.",
-      enable: "Show existing sessions",
-      decline:
-        "Leave unchecked to keep these sessions hidden when you add an account. Existing installations aren’t changed.",
-    },
     nativeModels: {
       title: "Use an installed agent",
       body: "Choose a model from an installed agent. It keeps its own sign-in and tools. Use saves your choice without running the setup test.",
