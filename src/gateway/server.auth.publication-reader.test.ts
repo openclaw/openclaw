@@ -10,15 +10,15 @@ import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { readRuntimeConfig, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import {
-  prepareGatewayPublicationReaderV1,
-  type GatewayPublicationReaderV1,
-} from "../plugin-sdk/gateway-runtime.js";
+import { prepareGatewayPublicationReaderV1 } from "../plugin-sdk/gateway-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { PUBLICATION_READ_SCOPE, PUBLICATION_STEER_SCOPE } from "./operator-scopes.js";
-import { prepareGatewayPublicationTransportV1 } from "./publication-reader.js";
+import {
+  prepareGatewayPublicationTransportV1,
+  type GatewayPublicationReaderV1,
+} from "./publication-reader.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,

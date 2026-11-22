@@ -1,9 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import type {
-  ControlUiAction,
-  ControlUiDraftProposal,
-  ControlUiSession,
-} from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
 import type { ComposerTasks } from "../lib/chat/composer-tasks.runtime.ts";
@@ -168,7 +164,7 @@ export async function runControlUiPluginAction(
             tasks.push(task);
             return task;
           },
-          propose: async (text: string, proposal: ControlUiDraftProposal) => {
+          propose: async (text: string, proposal: Parameters<ComposerTasks["offer"]>[1]) => {
             checkComposer();
             return owner.offer(text, proposal, signal);
           },
