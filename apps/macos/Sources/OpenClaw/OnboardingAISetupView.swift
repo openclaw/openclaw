@@ -162,7 +162,7 @@ struct OnboardingAISetupView: View {
                         .font(.callout.weight(.semibold))
                     Text(self.model.waitingForPendingActivationDeadline
                         ? "OpenClaw will check again before changing any inference settings."
-                        : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
+                        : "Checking installed AI tools, saved sign-ins, API keys, and local models on the Gateway.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

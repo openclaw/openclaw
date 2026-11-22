@@ -44,7 +44,6 @@ const enModelSetup = {
     candidates: {
       title: "Available models",
       recommended: "Recommended",
-      credentialsReady: "Account ready",
       detected: "Detected",
       testAndUse: "Test & use",
       retry: "Retry test",

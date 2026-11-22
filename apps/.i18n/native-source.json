@@ -2166,7 +2166,7 @@
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bfee61a8bc05bad6","source":"All"},
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8154cd7674c08ac5","source":"Online"},
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c7150f26c257b807","source":"Ready"},
-    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.04478f22b9587b68","source":"Checking CLI logins, saved API keys, and local model servers on the Gateway."},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.40593678d6ca90a0","source":"Checking installed AI tools, saved sign-ins, API keys, and local models on the Gateway."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.b0374b5c64906998","source":"Connect a provider below with an API key or token, then check again."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.162f4aa3a201e496","source":"Couldn’t check this Gateway for AI access"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.e37f458ea45e4b23","source":"Couldn’t check this Gateway for AI accounts"},

@@ -1092,7 +1092,6 @@ const startupEnglish = {
     candidates: {
       title: {},
       recommended: {},
-      credentialsReady: {},
       signInNeeded: "Sign-in needed",
       detected: {},
       testAndUse: {},

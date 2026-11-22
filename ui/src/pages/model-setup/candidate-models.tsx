@@ -16,16 +16,13 @@ function candidateStatus(candidate: Candidate): string {
   if (candidate.modelTarget === "utility") {
     return t("modelSetup.utility.role");
   }
-  const status = candidate.kind.startsWith("saved-auth:")
-    ? "detected"
-    : candidate.recommended
-      ? "recommended"
-      : candidate.credentials === undefined
-        ? "detected"
-        : candidate.credentials
-          ? "credentialsReady"
-          : "signInNeeded";
-  return t(`modelSetup.candidates.${status}`);
+  // Discovery sees executables, files, and environment keys, never a login or plan;
+  // the row detail names that evidence, and only the setup test proves a reply.
+  return t(
+    candidate.recommended && !candidate.kind.startsWith("saved-auth:")
+      ? "modelSetup.candidates.recommended"
+      : "modelSetup.candidates.detected",
+  );
 }
 
 export function CandidateRows(
