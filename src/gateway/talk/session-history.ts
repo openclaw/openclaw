@@ -1,7 +1,4 @@
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session-read.js";
-import { resolveDueVoiceSessionReset } from "../../talk/voice-session-reset.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
@@ -14,7 +11,6 @@ const REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES = 8_000;
 export async function readTalkRealtimeInitialItems(
   target: PreparedTalkSessionTarget,
   assertCurrent: () => void,
-  cfg: OpenClawConfig,
 ): Promise<TalkHistoryItem[]> {
   assertCurrent();
   const sessionTarget = {
@@ -22,10 +18,6 @@ export async function readTalkRealtimeInitialItems(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  // A due call previews the same messages the reset keeps; only its first consult writes the
-  // boundary, so the Gateway's prepared target stays unchanged during talk.client.create.
-  const entry = await readSessionEntryReadOnlyInWorker(sessionTarget);
-  const resetReason = await resolveDueVoiceSessionReset({ ...sessionTarget, cfg, entry });
   const sessionId = await resolveClientVoiceAgentSessionId(sessionTarget);
   if (!sessionId) {
     return [];
@@ -41,7 +33,6 @@ export async function readTalkRealtimeInitialItems(
         REALTIME_VOICE_CONTEXT_MAX_ITEMS,
         REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
         "model-context",
-        resetReason,
       );
       assertCurrent();
       const items = preview.filter(

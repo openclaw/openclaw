@@ -183,11 +183,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     assertTargetCurrent();
     if (resolution.provider.createBrowserSession) {
       await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
-      const initialItems = await readTalkRealtimeInitialItems(
-        target,
-        assertTargetCurrent,
-        runtimeConfig,
-      );
+      const initialItems = await readTalkRealtimeInitialItems(target, assertTargetCurrent);
       assertTargetCurrent();
       const controlSource =
         providerCapabilities?.handlesAgentConsult === true ? "delegation" : "transcript";

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -35,7 +36,7 @@ import {
   collectRealtimeVoiceAgentConsultVisibleText,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
-import { resolveDueVoiceSessionReset } from "./voice-session-reset.js";
+import { rollOverStaleConsultSession } from "./voice-session-reset.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
@@ -200,88 +201,9 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
-/**
- * Voice turns honor the configured session reset like typed turns: a stale session rolls over
- * in place (same session id, reset boundary in its transcript) instead of replaying old context.
- */
-async function rollOverStaleConsultSession(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-  cwd: string;
-  entry: SessionEntry | undefined;
-  logger: Pick<RuntimeLogger, "warn">;
-  abortSignal?: AbortSignal;
-  assertSourceCurrent?: () => void;
-}): Promise<boolean> {
-  const { agentId, sessionKey, storePath, entry } = params;
-  const reason = await resolveDueVoiceSessionReset(params);
-  if (!reason || !entry) {
-    return false;
-  }
-  const [
-    { resetSessionEntryLifecycle },
-    { createSessionWorkStartChangedError, resolveSessionWorkStartError },
-    { normalizeStoreSessionKey },
-    { clearRotatedSessionMetadata },
-    { clearCommittedSessionResetRuntimeState },
-  ] = await Promise.all([
-    import("../config/sessions/session-accessor.lifecycle.js"),
-    import("../config/sessions/lifecycle.js"),
-    import("../config/sessions/store-entry.js"),
-    import("../agents/session-reset-metadata.js"),
-    import("../auto-reply/reply/session-reset-cleanup.js"),
-  ]);
-  const now = Date.now();
-  await resetSessionEntryLifecycle({
-    agentId,
-    storePath,
-    target: { canonicalKey: normalizeStoreSessionKey(sessionKey), storeKeys: [sessionKey] },
-    // A consult cancelled, or whose caller lost its authority, while preparing must not reset the
-    // session; this is the reset's point of effect, ahead of the run's own authority checks.
-    commitGuard: () => {
-      params.abortSignal?.throwIfAborted();
-      params.assertSourceCurrent?.();
-    },
-    resetBoundary: {
-      context: "preserve-tail",
-      reason,
-      cwd: params.cwd,
-    },
-    buildNextEntry: ({ currentEntry }) => {
-      if (
-        !currentEntry ||
-        currentEntry.sessionId !== entry.sessionId ||
-        currentEntry.lifecycleRevision !== entry.lifecycleRevision ||
-        resolveSessionWorkStartError(sessionKey, currentEntry)
-      ) {
-        throw createSessionWorkStartChangedError(sessionKey);
-      }
-      return {
-        ...clearRotatedSessionMetadata(currentEntry),
-        lifecycleRevision: randomUUID(),
-        agentHarnessId: undefined,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-        updatedAt: now,
-      };
-    },
-  });
-  clearCommittedSessionResetRuntimeState({
-    previousSessionEntry: entry,
-    agentId,
-    sessionKey,
-    storePath,
-    // Automatic voice rollover clears old context, not unanswered user requests.
-    preserveControllerInputs: true,
-    onError: (error) =>
-      params.logger.warn(`[talk] failed to clear session reset runtime state: ${String(error)}`),
-  });
-  return true;
-}
-
 export async function consultRealtimeVoiceAgent(params: {
+  /** The Gateway caller's authority; a voice reset checks the session's Access program with it. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
@@ -442,6 +364,8 @@ export async function consultRealtimeVoiceAgent(params: {
     logger: params.logger,
     abortSignal: params.abortSignal,
     assertSourceCurrent: params.assertSourceCurrent,
+    operatorAuthority: params.operatorAuthority,
+    messageProvider: params.messageProvider,
   });
   if (sessionReset) {
     await params.onSessionReset?.();
@@ -541,6 +465,8 @@ export async function consultRealtimeVoiceAgent(params: {
         if (shouldFork) {
           const { forkSessionEntryFromParent } =
             await import("../auto-reply/reply/session-fork.js");
+          // An existing session counts this request as activity; only a current caller may.
+          params.assertSourceCurrent?.();
           const forked = await forkSessionEntryFromParent({
             storePath,
             parentSessionKey: requesterSessionKey,
@@ -588,7 +514,9 @@ export async function consultRealtimeVoiceAgent(params: {
           },
           prepare: (entry) => {
             if (entry.sessionId?.trim()) {
-              // A spoken request is user interaction for idle reset, whichever voice surface sent it.
+              // A spoken request is user interaction for idle reset, whichever voice surface sent it;
+              // a caller that lost its authority must not extend the session's activity.
+              params.assertSourceCurrent?.();
               return { ...deliveryFields, updatedAt: now, lastInteractionAt: now };
             }
             return {

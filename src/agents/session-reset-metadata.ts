@@ -18,6 +18,12 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     sessionDiffBaselineCapture: undefined,
     lastInteractionAt: undefined,
     pendingTranscriptRepair: undefined,
+    // Grants and intents belong to the ended conversation, as in typed rollover's retained state.
+    nativeRuntimeConsent: undefined,
+    elevatedLevel: undefined,
+    goal: undefined,
+    pendingWorktree: undefined,
+    pendingProjectGitUrl: undefined,
   };
   clearAllCliSessions(next);
   return next;

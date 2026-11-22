@@ -105,7 +105,19 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
-  let historicalItems = Promise.resolve(params.initialItems);
+  let historicalItems: Promise<typeof params.initialItems> | undefined = Promise.resolve(
+    params.initialItems,
+  );
+  // A failed post-reset read must not stick to the call: the next consult reads again.
+  const readHistory = (assertCurrent: () => void) => {
+    const read = readTalkRealtimeInitialItems(params.sessionTarget, assertCurrent);
+    read.catch(() => {
+      if (historicalItems === read) {
+        historicalItems = undefined;
+      }
+    });
+    return read;
+  };
   const authority: TalkAgentConsultAuthority = {
     ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
     operatorAuthority:
@@ -232,14 +244,11 @@ export function createTalkClientAgentConsultRunner(params: {
           args: parsedArgs,
           transcript: params.initialItems,
           onSessionReset: async () => {
-            historicalItems = readTalkRealtimeInitialItems(
-              params.sessionTarget,
-              assertConsultCurrent,
-              getConfig(),
-            );
+            historicalItems = readHistory(assertConsultCurrent);
             await historicalItems;
           },
-          getTranscript: () => historicalItems,
+          getTranscript: () => (historicalItems ??= readHistory(assertConsultCurrent)),
+          operatorAuthority: authority.operatorAuthority,
           assertSourceCurrent: () => {
             assertConsultCurrent();
             params.runAuthority?.assertCurrent();

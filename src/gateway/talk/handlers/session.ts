@@ -327,11 +327,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           });
           replacement?.assertCurrent(target);
         };
-        const initialItems = await readTalkRealtimeInitialItems(
-          target,
-          assertEnsuredTargetCurrent,
-          runtimeConfig,
-        );
+        const initialItems = await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent);
         assertEnsuredTargetCurrent();
         const model =
           normalizeOptionalString(providerConfig.model) ?? resolution.provider.defaultModel;

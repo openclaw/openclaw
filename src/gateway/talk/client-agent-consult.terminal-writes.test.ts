@@ -96,3 +96,31 @@ it.each([false, true])("drains writes; abort revokes authority (%s)", async (abo
     await run.catch(() => undefined);
   }
 });
+
+it("stops quoting call-start history once a consult rolls the session over", async () => {
+  const daily: OpenClawConfig = { ...config, session: { reset: { mode: "daily", atHour: 4 } } };
+  const sessionTarget = await prepareTalkSessionTarget(daily, "agent:main:talk-daily");
+  const scope = { ...sessionTarget, sessionKey: sessionTarget.canonicalKey };
+  const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60_000;
+  await replaceSessionEntry(scope, {
+    sessionId: "talk-daily",
+    lifecycleRevision: "day-one",
+    sessionStartedAt: twoDaysAgo,
+    updatedAt: twoDaysAgo,
+    lastInteractionAt: twoDaysAgo,
+  });
+  const prompts: string[] = [];
+  core.mockImplementation(async (params) => {
+    prompts.push(params.prompt);
+    await runs.resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
+    return { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
+  });
+  const initialItems = [{ role: "assistant" as const, text: "yesterday's topic" }];
+  const runner = createConsultRunner({ config: daily, sessionTarget, initialItems });
+  // The first consult triggers the daily reset; the next consult on the same call follows it.
+  for (const prompt of ["first", "second"]) {
+    await expect(runner.runPrompt({ prompt })).resolves.toEqual({ text: "Answer" });
+  }
+  expect(prompts.map((prompt) => prompt.includes("yesterday's topic"))).toEqual([false, false]);
+  expect(loadSessionEntry(scope)?.lifecycleRevision).not.toBe("day-one");
+});
