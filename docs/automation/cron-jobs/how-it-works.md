@@ -104,8 +104,7 @@ On confirmation the agent:
 
 The job is created **enabled**, not disabled-pending-approval, and that is a
 deliberate safety choice. The scheduler supervises enabled jobs: a failing one
-raises a failure notification and is auto-disabled after repeated errors, with
-the reason recorded and the owner notified. Nothing supervises a disabled job.
+stays scheduled, records the error, and notifies its owner. Nothing supervises a disabled job.
 A job left disabled waiting for a confirmation that never arrives is invisible
 to every guard, hidden from the default `automations list`, and will never fire
 or explain itself — a silent non-outcome, which is a worse failure than a job

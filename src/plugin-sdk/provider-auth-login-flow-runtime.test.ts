@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 import {
-  buildProviderLoginChoicesReply,
   cancelProviderLoginFlow,
   createProviderLoginFlowRegistry,
   decideProviderLoginSessionAdoption,
@@ -15,6 +16,11 @@ import {
 const resolveChoice = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-login-options.js").resolveProviderChannelLoginChoice>(),
 );
+const runLoginFlow = vi.hoisted(() =>
+  vi.fn<(opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>>(),
+);
+// mock-isolation: the core login flow writes config and auth stores; these tests observe only its options.
+vi.mock("../commands/models/auth.js", () => ({ runModelsAuthLoginFlowCore: runLoginFlow }));
 vi.mock("../plugins/provider-login-options.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-login-options.js")>()),
   resolveProviderChannelLoginChoice: resolveChoice,
@@ -36,24 +42,13 @@ const loginParams = {
   config: {},
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   sendMessage: vi.fn(async (_message: string) => {}),
-  unsupportedPromptMessage: "Open Control UI to enter credentials.",
 };
-const loginResult = {
+const loginResult: ModelsAuthLoginFlowResult = {
   providerId: "acme-cloud",
   methodId: "device-code",
   authRefresh: "refreshed",
   profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
 };
-
-type LoginOptions = Parameters<typeof runProviderChannelLoginFlow>[0];
-function runLogin(options: Omit<LoginOptions, keyof typeof loginParams> & Partial<LoginOptions>) {
-  return runProviderChannelLoginFlow({ ...loginParams, ...options });
-}
-const unavailable = (options: Parameters<typeof runLogin>[0]) =>
-  expect(runLogin(options)).rejects.toThrow("no longer available");
-const pluginConfig = (enabled: boolean): OpenClawConfig => ({
-  plugins: { entries: { acme: { enabled } } },
-});
 
 describe("provider channel login runtime", () => {
   beforeEach(() => {
@@ -113,84 +108,6 @@ describe("provider channel login runtime", () => {
     },
   );
 
-  it.each(["entry", "write", "url", "device-code"] as const)(
-    "rejects a disabled provider at the retained %s checkpoint",
-    async (checkpoint) => {
-      const config = pluginConfig(true);
-      let currentConfig = config;
-      resolveChoice.mockImplementation((_input, params) =>
-        params?.config?.plugins?.entries?.acme?.enabled === false
-          ? { status: "unsupported", choices: [] }
-          : { status: "resolved", choice },
-      );
-      const persist = vi.fn();
-      const sendDeviceCode = vi.fn();
-      const runLoginFlow = vi.fn(async (opts: ModelsAuthLoginFlowOptions) => {
-        await Promise.resolve();
-        currentConfig = pluginConfig(false);
-        if (checkpoint === "write") {
-          opts.assertCurrent?.();
-          persist();
-        } else if (checkpoint === "url") {
-          await opts.openUrl?.("https://example.com/login");
-        } else {
-          await opts.prompter.deviceCode?.({ title: "Sign in", code: "ABCD-EFGH" });
-        }
-        return loginResult;
-      });
-      if (checkpoint === "entry") {
-        currentConfig = pluginConfig(false);
-      }
-      await unavailable({ config, readConfig: () => currentConfig, runLoginFlow, sendDeviceCode });
-      if (checkpoint === "entry") {
-        expect(runLoginFlow).not.toHaveBeenCalled();
-      }
-      expect(persist).not.toHaveBeenCalled();
-      expect(loginParams.sendMessage).not.toHaveBeenCalled();
-      expect(sendDeviceCode).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["before", "after"] as const)(
-    "honors caller revocation %s credential persistence",
-    async (timing) => {
-      const config: OpenClawConfig = { commands: { ownerAllowFrom: ["owner"] } };
-      let currentConfig = config;
-      const revoke = () => {
-        currentConfig = { commands: { ownerAllowFrom: ["replacement"] } };
-      };
-      const persist = vi.fn();
-      const result = runLogin({
-        config,
-        readConfig: () => currentConfig,
-        runLoginFlow: async (opts) => {
-          await Promise.resolve();
-          if (timing === "before") {
-            revoke();
-          }
-          opts.assertCurrent?.();
-          persist();
-          if (timing === "after") {
-            revoke();
-          }
-          return loginResult;
-        },
-        assertCurrent: (current) => {
-          if (!current.commands?.ownerAllowFrom?.includes("owner")) {
-            throw new Error("Caller no longer owns this login.");
-          }
-        },
-      });
-      if (timing === "before") {
-        await expect(result).rejects.toThrow("Caller no longer owns this login");
-        expect(persist).not.toHaveBeenCalled();
-      } else {
-        expect((await result).profiles).toEqual(loginResult.profiles);
-        expect(loginParams.sendMessage).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it("preserves a personal account selected after login started", () => {
     expect(
       decideProviderLoginSessionAdoption({
@@ -208,21 +125,8 @@ describe("provider channel login runtime", () => {
     ).toEqual({ status: "rejected" });
   });
 
-  it.each(["pluginId", "providerId", "methodId"] as const)(
-    "rejects a stale %s before the provider can start",
-    async (field) => {
-      resolveChoice.mockReturnValue({
-        status: "resolved",
-        choice: { ...choice, [field]: "replacement" },
-      });
-      const runLoginFlow = vi.fn();
-      await unavailable({ runLoginFlow });
-      expect(runLoginFlow).not.toHaveBeenCalled();
-    },
-  );
-
   it("passes the selected owner and forbids chat credential input", async () => {
-    const runLoginFlow = async (opts: ModelsAuthLoginFlowOptions) => {
+    runLoginFlow.mockImplementationOnce(async (opts) => {
       expect(opts).toMatchObject({
         ownerPluginId: "acme",
         provider: "acme-cloud",
@@ -230,20 +134,32 @@ describe("provider channel login runtime", () => {
         credentialOnly: true,
       });
       await opts.prompter.text({ message: "Enter your API key" });
-    };
-    await expect(runLogin({ runLoginFlow })).rejects.toThrow("Open Control UI");
-    expect(loginParams.sendMessage).toHaveBeenCalledExactlyOnceWith(
-      "Open Control UI to enter credentials.",
+      return loginResult;
+    });
+    await expect(runProviderChannelLoginFlow(loginParams)).rejects.toThrow(
+      "Open Models in the OpenClaw app",
     );
+    // The failure renderer owns the one message; the prompter sends none.
+    expect(loginParams.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps every provider button and its text fallback bound to the same command", () => {
+  it("keeps every provider button and its text fallback bound to the same command", async () => {
     const providers = Array.from({ length: 12 }, (_, index) => ({
       pluginId: `plugin-${index}`,
       providerId: `provider-${index}`,
       label: `Provider ${index}`,
     }));
-    const reply = buildProviderLoginChoicesReply({ status: "providers", providers });
+    resolveChoice.mockReturnValue({ status: "providers", providers });
+    const prepared = await prepareProviderChannelLogin({
+      commandText: "/login",
+      commandAuthorized: true,
+      senderIsOwner: true,
+      isPrivateChat: true,
+      config: { commands: { ownerAllowFrom: ["owner"] } },
+      agentId: "main",
+      refreshAuth: async () => {},
+    });
+    const reply = prepared?.status === "reply" ? prepared.reply : expect.unreachable();
     const buttons = reply.presentation?.blocks.flatMap((block) =>
       block.type === "buttons" ? block.buttons : [],
     );

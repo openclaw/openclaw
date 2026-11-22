@@ -66,7 +66,10 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     run.steps.some((step) => step.step === name && step.status === status);
 
   const cut = process.env.OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT;
-  assert(["live-gateway", "owed-plugin-retry"].includes(cut), "unknown live Gateway cut");
+  assert(
+    ["live-gateway", "owed-plugin-retry", "data-at-risk"].includes(cut),
+    "unknown live Gateway cut",
+  );
   const evidence = {
     status: "running",
     runDirectory: path.basename(artifacts),
@@ -74,7 +77,9 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     scope:
       cut === "owed-plugin-retry"
         ? "installed-owed-plugin-retry-live-gateway"
-        : "installed-killed-update-live-gateway",
+        : cut === "data-at-risk"
+          ? "installed-data-at-risk-mark-live-gateway"
+          : "installed-killed-update-live-gateway",
     commands: [],
   };
   write(summary, evidence);
@@ -110,7 +115,9 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       status: result.status,
     });
     write(summary, evidence);
-    assert.equal(result.status, expected, `${name}: exit ${result.status}`);
+    if (expected !== null) {
+      assert.equal(result.status, expected, `${name}: exit ${result.status}`);
+    }
     return result;
   };
 
@@ -458,8 +465,168 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     }
   };
 
+  /**
+   * A failed post-activation schema read marks a run `rollback-state-unverified`. Write
+   * that mark onto a real killed update in the row shape the published 2026.10.33 and
+   * 2026.11.5 updaters persist: the failed `state-schema-verification` step, the
+   * `finalize:data-at-risk` fact, and a recovery object without the named risk. The run
+   * stays as the killed updater left it, so its own recovery still finishes it.
+   */
+  const recordDataAtRiskMark = (runId) => {
+    const db = new DatabaseSync(stateDatabase);
+    try {
+      const row = db
+        .prepare("SELECT steps_json, verification_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      const now = Date.now();
+      const steps = [
+        ...JSON.parse(row.steps_json),
+        {
+          step: "state-schema-verification",
+          status: "failed",
+          exitCode: 1,
+          endedAtMs: now,
+          stderrTail: "Fixture: SQLite source changed during the preserved copy",
+        },
+        {
+          step: "finalize:data-at-risk",
+          status: "completed",
+          failureFacts: [{ check: "update-recovery", code: "rollback-state-unverified" }],
+        },
+      ];
+      const verification = {
+        ...JSON.parse(row.verification_json),
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      };
+      db.prepare(
+        "UPDATE update_runs SET updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
+      ).run(now, JSON.stringify(steps), JSON.stringify(verification), runId);
+    } finally {
+      db.close();
+    }
+  };
+  const repairMarked = async (name, marked) => {
+    const before = new Set(runs().map((row) => row.run_id));
+    const result = await run(name, ["update", "repair", "--yes"], null);
+    // Repair can first settle an earlier killed run as its own ledger row, so pick the
+    // run that did the repair work rather than the first new row.
+    const created = runs().filter((row) => !before.has(row.run_id));
+    const repairRun =
+      created.find((row) => row.steps.some(({ step }) => step.startsWith("finalize:"))) ??
+      created.find((row) => !hasStep(row, "reconcile:settle")) ??
+      created[0];
+    const output = `${result.stdout}\n${result.stderr}`;
+    evidence.dataAtRisk[name] = {
+      markedRunId: marked.runId,
+      exit: result.status,
+      createdRunIds: created.map((row) => row.run_id),
+      repairRunId: repairRun?.run_id,
+      repairStatus: repairRun?.status,
+      steps: repairRun?.steps.map(({ step, status }) => `${step}:${status}`),
+    };
+    write(summary, evidence);
+    return { result, repairRun, output };
+  };
+
+  /** A recorded data-at-risk mark is checked against state on disk before anything acts on it. */
+  const verifyRecordedDataAtRisk = async (servingPid) => {
+    evidence.dataAtRisk = {};
+    // A false mark on an update killed after it stopped the Gateway: the next plain
+    // update checks it, resolves it in one line, finishes that update and installs its own
+    // version, with no repair first. (A Gateway serving through a mark is the Git
+    // release-mode cell's already-current case.)
+    const marked = await killUpdate("marked-update", 1, servingPid);
+    recordDataAtRiskMark(marked.runId);
+    const nextTarget = path.join(artifacts, "after-mark-update.tgz");
+    packFirstHopUpdateFixture(tarball, nextTarget, 2);
+    const nextVersion = packedVersion(nextTarget);
+    const before = new Set(runs().map((row) => row.run_id));
+    const next = await run(
+      "after-mark-update",
+      ["update", "--tag", `file:${nextTarget}`, "--yes", "--json"],
+      null,
+    );
+    const nextRun = runs().find((row) => !before.has(row.run_id) && hasStep(row, "requested"));
+    evidence.dataAtRisk["after-mark-update"] = {
+      markedRunId: marked.runId,
+      exit: next.status,
+      runId: nextRun?.run_id,
+      steps: nextRun?.steps.map(({ step, status }) => `${step}:${status}`),
+    };
+    write(summary, evidence);
+    assert.equal(next.status, 0, "after-mark-update: exit");
+    assert.match(
+      next.stderr,
+      /recorded data at risk \(rollback-state-unverified\); verification found the state schemas match installed OpenClaw .+ so that mark is resolved\./u,
+    );
+    assert(
+      runs().some((row) => hasStep(row, `finalize:data-at-risk-verified:${marked.runId}`)),
+      "after-mark-update: an update run must record the verification",
+    );
+    const nextPid = await assertServing("after-mark-update", nextVersion, servingPid);
+    fs.unlinkSync(nextTarget);
+
+    // A false mark on an update that stopped the Gateway: repair verifies it, then starts
+    // and verifies the Gateway.
+    const stopped = await killUpdate("stopped-marked-update", 3, nextPid);
+    recordDataAtRiskMark(stopped.runId);
+    const resolved = await repairMarked("marked-repair", stopped);
+    assert.equal(resolved.result.status, 0, "marked-repair: exit");
+    assert.match(
+      resolved.output,
+      /recorded data at risk \(rollback-state-unverified\); verification found the state schemas match installed OpenClaw .+ so that mark is resolved\./u,
+    );
+    assert.doesNotMatch(resolved.output, /Gateway remains stopped|Keep the Gateway stopped/u);
+    assert(
+      hasStep(resolved.repairRun, `finalize:data-at-risk-verified:${stopped.runId}`),
+      "marked-repair: the repair run must record the verification",
+    );
+    const resolvedPid = await assertServing("marked-repair", stopped.version, nextPid);
+    evidence.dataAtRisk.gatewayPids = [servingPid, nextPid, resolvedPid];
+    write(summary, evidence);
+
+    // A real inconsistency: the marked update's database rollback moved migrated state
+    // aside and stopped, so the shared database may be only partly restored.
+    const inconsistent = await killUpdate("inconsistent-update", 5, resolvedPid);
+    recordDataAtRiskMark(inconsistent.runId);
+    const leftover = `${stateDatabase}.migrated-${inconsistent.runId}`;
+    fs.copyFileSync(stateDatabase, leftover);
+    const refused = await repairMarked("inconsistent-repair", inconsistent);
+    assert.notEqual(refused.result.status, 0, "inconsistent-repair: exit");
+    assert.match(
+      refused.output,
+      /recorded data at risk \(rollback-state-unverified\)\. The Gateway is stopped\./u,
+    );
+    assert.match(
+      refused.output,
+      /Run `?openclaw triage`? for an agent with the recorded facts, or by hand: /u,
+    );
+    assert(
+      refused.output.includes(leftover),
+      "inconsistent-repair: the finding names the leftover",
+    );
+    await assertStopped("inconsistent-repair", resolvedPid);
+    assert(fs.existsSync(leftover), "refused repair must leave the leftover as it was");
+    // Once the leftover is resolved, the same repair proceeds.
+    fs.unlinkSync(leftover);
+    const restored = await repairMarked("restored-repair", inconsistent);
+    assert.equal(restored.result.status, 0, "restored-repair: exit");
+    assert.match(restored.output, /so that mark is resolved\./u);
+    await assertServing("restored-repair", inconsistent.version, resolvedPid);
+  };
+
   const baselineVersion = installedVersion();
   const firstPid = await assertServing("baseline", baselineVersion);
+  if (cut === "data-at-risk") {
+    await verifyRecordedDataAtRisk(firstPid);
+    evidence.status = "passed";
+    delete evidence.current;
+    write(summary, evidence);
+    console.log(
+      "[installed-recovery-gateway] PASS: repair verified recorded data risk before acting on it",
+    );
+    return;
+  }
   if (cut === "owed-plugin-retry") {
     await retryOwedPluginConvergence(firstPid);
     evidence.status = "passed";

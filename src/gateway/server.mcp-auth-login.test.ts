@@ -139,7 +139,8 @@ describe("registered mcp.authLogin", () => {
       expect((await login(client, sessionId)).ok).toBe(true);
       expect(await terminal(sessionId, client)).toMatchObject({
         status: "error",
-        error: expect.stringContaining("secure Gateway address"),
+        error: expect.stringContaining("HTTPS address"),
+        reason: "secure_origin_unavailable",
       });
       expect(requests).toHaveLength(before);
     } finally {
@@ -227,7 +228,8 @@ describe("registered mcp.authLogin", () => {
     expect((await callback(started.state)).status).toBe(410);
     expect(await terminal(started.sessionId)).toMatchObject({
       status: "error",
-      error: "This sign-in attempt expired. Close this dialog and start sign-in again.",
+      error: "Sign-in timed out.",
+      reason: "timed_out",
     });
     expectPendingCleared(await store());
   });
@@ -429,7 +431,6 @@ describe("registered mcp.authLogin", () => {
     const started = await begin();
     const pending = await store();
     const requestCount = requests.length;
-    let settled = false;
     try {
       expect((await callback(started.state, "code=%20")).status).toBe(400);
       expect(await store()).toEqual(pending);
@@ -449,19 +450,15 @@ describe("registered mcp.authLogin", () => {
           )
         ).status,
       ).toBe(400);
-      const result = await terminal(started.sessionId);
-      settled = true;
-      expect(result).toMatchObject({
-        status: "error",
-        error: "The provider did not approve sign-in. Close this dialog and try again.",
+      // A denial keeps the attempt open so the user can go back and allow access.
+      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
+        ok: true,
+        payload: { status: "running" },
       });
-      expect(JSON.stringify(result)).not.toMatch(/private-denial-detail|private\.example/);
       expect(await store()).toEqual(before);
     } finally {
-      if (!settled) {
-        await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
-        await terminal(started.sessionId);
-      }
+      await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
+      await terminal(started.sessionId);
     }
   });
 

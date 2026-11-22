@@ -1,5 +1,4 @@
 // Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
-import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -12,8 +11,13 @@ import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
+import {
+  providerAuthFailureFromOAuthError,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
+import { parseOAuthAuthorizationInput } from "./provider-oauth-runtime.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
@@ -144,45 +148,31 @@ export function buildOAuthCallbackOriginResolver(
 }
 
 /**
- * Generates a high-entropy OAuth state token for local callback validation.
+ * @deprecated Use `generateOAuthState` from `openclaw/plugin-sdk/provider-oauth-runtime`.
+ * Kept because published ClawHub plugins import it here (4 at 2026-11-21); the state is opaque.
  */
-function generateHexOAuthState(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-export { generateHexOAuthState as generateOAuthState };
+export { generateOAuthState } from "./provider-oauth-runtime.js";
 
 /**
- * Parses a pasted OAuth redirect URL into callback code/state fields.
+ * @deprecated Use `parseOAuthAuthorizationInput` from `openclaw/plugin-sdk/provider-oauth-runtime`.
+ * Kept because published ClawHub plugins import it here (5 at 2026-11-21). Same rules as the one
+ * paste parser, plus the old requirement that a state is present.
  */
 export function parseOAuthCallbackInput(
-  /** Full redirect URL pasted by the operator after manual OAuth completion. */
   input: string,
-  messages: {
-    /** Override for URLs that omit the state query parameter. */
-    missingState?: string;
-    /** Override for values that are not parseable redirect URLs. */
-    invalidInput?: string;
-  } = {},
+  messages: { missingState?: string; invalidInput?: string } = {},
 ): OAuthCallbackResult | { error: string } {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return { error: "No input provided" };
-  }
-
-  const url = URL.parse(trimmed);
-  if (!url) {
+  if (!URL.parse(input.trim())) {
     return { error: messages.invalidInput ?? "Paste the full redirect URL, not just the code." };
   }
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  if (!code) {
-    return { error: "Missing 'code' parameter in URL" };
+  try {
+    const { code, state } = parseOAuthAuthorizationInput(input, {});
+    return state
+      ? { code, state }
+      : { error: messages.missingState ?? "Missing 'state' parameter in URL" };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
   }
-  if (!state) {
-    return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
-  }
-  return { code, state };
 }
 
 /**
@@ -205,8 +195,8 @@ export async function waitForLocalOAuthCallback(params: {
   progressMessage?: string;
   /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
-  /** Progress callback invoked after the server begins listening. */
-  onProgress?: (message: string) => void;
+  /** Progress callback; `reason` names a provider refusal that keeps the listener open. */
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   /** Stops and closes the callback listener when the owning login is cancelled. */
   signal?: AbortSignal;
   /**
@@ -227,6 +217,15 @@ export async function waitForLocalOAuthCallback(params: {
     timeoutMs,
     ...(params.hostname ? { bindHostname: params.hostname } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
+    // A refusal keeps the listener open so the user can go back and allow access.
+    ...(params.onProgress
+      ? {
+          onRefusal: (error) => {
+            const failure = providerAuthFailureFromOAuthError(error);
+            params.onProgress?.(failure.message, failure.reason);
+          },
+        }
+      : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist
       ? resolveOAuthCallbackOrigin
       : (originHeader) => {
@@ -248,7 +247,7 @@ export async function waitForLocalOAuthCallback(params: {
     );
     const result = await callback.waitForCallback();
     if (result.type === "oauth_error") {
-      throw new Error(`OAuth error: ${result.error}`);
+      throw providerAuthFailureFromOAuthError(result.error);
     }
     return { code: result.code, state: result.state };
   } finally {

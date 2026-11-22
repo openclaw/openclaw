@@ -19,10 +19,7 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
     /** Throws when the parent incarnation or the admitted run is no longer current. */
     assertCurrent: () => void;
-    /**
-     * Set when a requester holds owner authority for this run. Throws once the
-     * requester stops passing its owner check, so owner-only tools refuse mid-run.
-     */
+    /** Owner-only effects retain the same occurrence and run lifetime fence. */
     assertOwnerCurrent?: () => void;
   }>;
 
@@ -60,7 +57,8 @@ export type ScheduledOccurrence = Readonly<{
     /** Set with `binding`; aborts once the parent is reset or removed. */
     signal?: AbortSignal;
   }>;
-  mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
+  /** Admit current ownership when this trigger or payload starts, then fix its run facts. */
+  mint: (run: ScheduledOccurrenceRun) => Promise<MintedScheduledExecution>;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */
   release: () => void;
 }>;
@@ -77,7 +75,7 @@ export function failedScheduledExecution(error: string): MintedScheduledExecutio
 
 /** An occurrence whose admission could not run; every run it mints is a `fail` result. */
 export function unadmittedScheduledOccurrence(error: string): ScheduledOccurrence {
-  return { mint: () => failedScheduledExecution(error), release() {} };
+  return { mint: async () => failedScheduledExecution(error), release() {} };
 }
 
 /** The single notice a paused job sends; names the parent and the repair. */

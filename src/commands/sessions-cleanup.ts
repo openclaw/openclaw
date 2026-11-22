@@ -276,7 +276,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
             action: formatCleanupActionCell(row.action, rich),
             key: formatSessionKeyCell(row.key, rich),
             age: formatSessionAgeCell(row.updatedAt, rich),
-            model: formatSessionModelCell(resolveSessionDisplayModelRef(cfg, row).model, rich),
+            model: formatSessionModelCell(resolveSessionDisplayModelRef(cfg, row)?.model, rich),
             flags: formatSessionFlagsCell(row, rich),
           })),
         }).trimEnd(),

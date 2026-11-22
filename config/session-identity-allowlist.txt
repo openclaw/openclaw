@@ -203,7 +203,6 @@ extensions/teams-meetings/src/transports/teams-meetings-page-scripts.ts	3
 extensions/teams-meetings/src/transports/teams-meetings-status-prejoin-source.ts	2
 extensions/telegram/src/bot-handlers.callback-router.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
-extensions/telegram/src/bot-native-command-login.ts	1
 extensions/telegram/src/thread-bindings-reconcile.ts	1
 extensions/telegram/src/thread-bindings-state.ts	1
 extensions/tlon/src/monitor/index.ts	1
@@ -582,7 +581,6 @@ src/auto-reply/reply/bash-command.ts	2
 src/auto-reply/reply/channel-run-admission.ts	2
 src/auto-reply/reply/commands-compact.runtime.ts	12
 src/auto-reply/reply/commands-fork.ts	4
-src/auto-reply/reply/commands-login.ts	1
 src/auto-reply/reply/commands-session-abort.ts	2
 src/auto-reply/reply/commands-session-store.ts	2
 src/auto-reply/reply/conversation-turn-capture.ts	4
@@ -707,7 +705,7 @@ src/config/control-ui-link-base.ts	2
 src/config/io.audit.ts	1
 src/context-engine/delegate.ts	2
 src/context-engine/transcript-byte-limit.ts	2
-src/cron/active-jobs.ts	11
+src/cron/active-jobs.ts	4
 src/cron/isolated-agent/run-prepare-runtime.ts	2
 src/cron/isolated-agent/run-prompt-executor.ts	1
 src/cron/isolated-agent/run-session-state.ts	2
@@ -847,7 +845,6 @@ src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
 src/gateway/operator-invocation-authority.ts	3
 src/gateway/operator-run-authority.ts	1
-src/gateway/operator-run-recovery.ts	3
 src/gateway/plugin-command-scheduled-run.ts	9
 src/gateway/question-manager.ts	4
 src/gateway/question-session-access.ts	4
@@ -897,9 +894,9 @@ src/gateway/server-methods/chat-prediction-handler.ts	6
 src/gateway/server-methods/chat-reply-media.ts	1
 src/gateway/server-methods/chat-send-admission-errors.ts	1
 src/gateway/server-methods/chat-send-admission.ts	6
-src/gateway/server-methods/chat-send-agent-dispatch.ts	4
+src/gateway/server-methods/chat-send-agent-dispatch.ts	3
 src/gateway/server-methods/chat-send-commentary-media.ts	5
-src/gateway/server-methods/chat-send-dashboard-authority.ts	2
+src/gateway/server-methods/chat-send-dashboard-authority.ts	1
 src/gateway/server-methods/chat-send-delivery-authority.ts	1
 src/gateway/server-methods/chat-send-dispatch-errors.ts	1
 src/gateway/server-methods/chat-send-goal-admission.ts	5

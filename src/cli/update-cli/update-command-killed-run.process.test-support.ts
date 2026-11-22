@@ -178,6 +178,8 @@ beforeEach(() => {
   );
 });
 afterEach(async () => {
+  // A refused update sets the CLI's exit code; the forked worker would exit with it.
+  process.exitCode = undefined;
   // The managed Gateway's account home, service state, health and host facts end with their test.
   for (const spied of [
     os.homedir,
@@ -472,7 +474,12 @@ export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: Refusa
     await control?.(killed);
     const before = reserved(killed.runId);
 
-    await expect(nextUpdate(killed.slot, { dryRun, restart })).rejects.toThrow(refusal);
+    const refused = nextUpdate(killed.slot, { dryRun, restart });
+    await expect(refused).rejects.toThrow(refusal);
+    // Every refusal names the agent route before the manual command.
+    await expect(refused).rejects.toThrow(
+      "Run openclaw triage for an agent that reads this update history and settles it. By hand: ",
+    );
     await expect(nextUpdate(killed.slot, { dryRun, restart })).rejects.toThrow(
       /has unfinished recovery/u,
     );
