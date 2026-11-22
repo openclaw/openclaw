@@ -22,6 +22,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -102,6 +103,21 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
       description: value,
     })),
   );
+  const ambiguousRepoLabels = createMemo(() => {
+    const seen = new Set<string>();
+    const repeated = new Set<string>();
+    for (const { label } of repositories()) {
+      if (seen.has(label)) {
+        repeated.add(label);
+      }
+      seen.add(label);
+    }
+    return repeated;
+  });
+  const repoLabel = (root: string) => {
+    const label = pathDisplayName(root);
+    return ambiguousRepoLabels().has(label) ? root : label;
+  };
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
 
@@ -272,8 +288,11 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                         title={record().name}
                         description={
                           <>
-                            <span title={record().repoRoot}>
-                              {pathDisplayName(record().repoRoot)}
+                            <span
+                              id={`worktree-repository-${record().id}`}
+                              title={record().repoRoot}
+                            >
+                              {repoLabel(record().repoRoot)}
                             </span>
                             {" · "}
                             {record().branch}
@@ -299,18 +318,30 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                                   : t("worktrees.adminRequiredTooltip")
                               }
                               aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
+                              aria-describedby={`worktree-repository-${record().id}`}
                               disabled={
                                 !model.gateway.connected ||
                                 !view().operatorAccess.canAdmin ||
                                 busy()
                               }
-                              onClick={() =>
-                                void mutate("row", () =>
+                              onClick={async (event) => {
+                                const trigger = event.currentTarget;
+                                const epoch = model.gateway.readEpoch();
+                                await mutate("row", () =>
                                   record().removedAt
                                     ? model.restore(record())
                                     : model.removeWorktree(record()),
-                                )
-                              }
+                                );
+                                // A confirmation cannot restore its disabled invoker. Restore it
+                                // after refresh only if this row remains and focus hasn't moved.
+                                if (
+                                  epoch === model.gateway.readEpoch() &&
+                                  trigger.isConnected &&
+                                  document.activeElement === document.body
+                                ) {
+                                  focusProgrammatically(trigger, { preventScroll: true });
+                                }
+                              }}
                             >
                               {record().removedAt ? t("worktrees.restore") : t("common.delete")}
                             </button>
