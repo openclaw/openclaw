@@ -40,7 +40,11 @@ function rootRenderInputs(menu: ChatComposerPlusMenuContentProps) {
   for (const action of menu.pluginActions ?? []) {
     inputs.push(action.pluginId, action.pluginName);
   }
-  inputs.push(uploadsEnabled(menu.attachments.uploadConfig), menu.showCapabilities);
+  inputs.push(
+    uploadsEnabled(menu.attachments.uploadConfig),
+    menu.showCapabilities,
+    Boolean(menu.capabilityMenu),
+  );
   for (const toggle of menu.rootToggles ?? []) {
     inputs.push(
       toggle.value,
@@ -102,6 +106,9 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
   }
   if (!menu.showCapabilities) {
+    if (menu.capabilityMenu && !attachments.length && !entries.length && !plugins.length) {
+      entries.push({ id: "plus-menu-loading", label: t("common.loading"), disabled: true });
+    }
     return finish();
   }
   for (const view of ["skills", "connectors"] as const) {
