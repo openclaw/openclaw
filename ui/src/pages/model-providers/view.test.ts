@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { resolveDefaultModelPresentation } from "./data.ts";
+import { resolveDefaultModelPresentation, type ModelProviderCard } from "./data.ts";
 import { card, mount, props, settingsRow, text } from "./view.test-support.tsx";
 
 function expand(container: Element, providerId = "openai"): Element {
@@ -262,22 +262,27 @@ describe("renderModelProviders", () => {
       container.querySelector('.model-providers__catalog-progress[role="alert"]');
     // Providers that failed discovery still get a row; none is connected on a fresh install.
     const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
-    const fresh = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
-    );
-    const configured = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
+    const view = (cards: ModelProviderCard[], primary: string) =>
+      mount(
+        props({
+          cards,
+          configuredModels: [],
+          thinkingOverridden: false,
+          fastModeOverridden: false,
+          defaultModels: { primary, fallbacks: [], utilityModel: null },
+          catalogDiscoveryError: failure,
+        }),
+      );
+    const fresh = view([unconnected], "");
+    const configured = view([unconnected], "openai/gpt-5.5");
+    // Saved credentials with no default yet: the listing failure is why nothing works.
+    const signedIn = view(
+      [card({ profiles: [{ profileId: "openai:a", type: "oauth", status: "ok" }] })],
+      "",
     );
     await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
-    // Both views settled the same way; only the set-up one reports the failure.
+    await waitForFast(() => expect(alert(signedIn)?.textContent).toContain(failure));
+    // All settled the same way; only the fresh install keeps quiet.
     expect(alert(fresh)).toBeNull();
   });
 

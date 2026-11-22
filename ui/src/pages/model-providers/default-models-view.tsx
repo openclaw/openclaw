@@ -1,15 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  Errored,
-  For,
-  isPending,
-  latest,
-  Loading,
-  Show,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -98,6 +88,8 @@ export type DefaultModelsViewProps = {
   onCatalogRetry: () => void;
   /** The selected agent's own model when it differs from the default, as a sentence. */
   agentModel?: string;
+  /** Start with the folded rows open, for a link that points at them. */
+  openAdvanced?: boolean;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -518,16 +510,17 @@ export function DefaultModels(props: DefaultModelsViewProps) {
 
   // Discovery reports on the heading line, so the rows below it never move.
   const catalogProgress = <CatalogProgress {...props} />;
-  // The rest of the defaults stay folded until someone has changed one of them.
-  const [moreOpen, setMoreOpen] = createSignal(
-    untrack(
-      () =>
-        props.selection.fallbacks.length > 0 ||
-        props.selection.utilityModel !== null ||
-        Boolean(props.selection.decisionModel) ||
-        props.thinkingOverridden ||
-        props.fastModeOverridden,
-    ),
+  // The rest of the defaults stay folded until one of them is changed. Once open they stay open,
+  // so resetting the last change never folds the row under the pointer; a click always wins.
+  const [moreOpen, setMoreOpen] = createSignal<boolean>(
+    (open) =>
+      open === true ||
+      props.openAdvanced === true ||
+      props.selection.fallbacks.length > 0 ||
+      props.selection.utilityModel !== null ||
+      Boolean(props.selection.decisionModel) ||
+      props.thinkingOverridden ||
+      props.fastModeOverridden,
   );
   return (
     <SettingsSection

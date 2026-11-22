@@ -159,7 +159,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         }),
       ]);
       expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
-      expect(await page.locator(".model-providers__defaults").count()).toBe(0);
+      // A signed-in provider can list models, so the defaults (and any listing error) show.
+      expect(await page.locator(".model-providers__defaults").count()).toBe(1);
 
       if (recordVisuals) {
         await page.screenshot({

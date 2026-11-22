@@ -13,7 +13,7 @@ function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), sourceConfig: config };
 }
 suite.define(() => {
-  it("persists and clears a global decision model without a chat model", async () => {
+  it("persists and clears a global decision model", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       let config: unknown = {
         agents: {
@@ -35,7 +35,8 @@ suite.define(() => {
         methodResponses: {
           "agents.list": agentRoster({ main: "Main" }, "main", "per-sender"),
           "models.list": {
-            models: [],
+            // Defaults show once a chat model can be chosen; the decision model sits in More settings.
+            models: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5", available: true }],
             decisionModels: [
               { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
             ],
@@ -44,6 +45,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      await page.locator("[data-models-more-settings]").click();
       const picker = page.locator("openclaw-select-picker:has(#model-providers-decision-model)");
       await expect.poll(() => pickerValue(picker)).toBe("");
       for (const value of ["typesafe/jev-latest", ""]) {
@@ -62,6 +64,10 @@ suite.define(() => {
           hash: `decision-${revision}`,
         });
         await page.reload();
+        // Cleared, the decision model folds back under More settings.
+        if (!value) {
+          await page.locator("[data-models-more-settings]").click();
+        }
         await expect.poll(() => pickerValue(picker)).toBe(value);
       }
     });

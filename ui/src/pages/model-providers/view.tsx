@@ -155,8 +155,10 @@ export function ModelProviders(props: ModelProvidersViewProps) {
     props.providerDetailsReady === false || props.loading ? previous : connected().size === 0,
   );
   const available = (model: { available?: boolean }) => model.available !== false;
-  // Defaults matter once there is something to choose or something saved; before that they are
-  // seven empty controls.
+  // A provider with credentials can list models, so its listing errors (shown in the defaults
+  // heading, with Retry) matter; before that the defaults are seven empty controls.
+  const providerSetUp = () =>
+    props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0);
   const hasDefaults = () => {
     const saved = props.defaultModels;
     return (
@@ -165,7 +167,8 @@ export function ModelProviders(props: ModelProvidersViewProps) {
       ) ||
       props.thinkingOverridden ||
       props.fastModeOverridden ||
-      props.configuredModels.some(available)
+      props.configuredModels.some(available) ||
+      providerSetUp()
     );
   };
   const signedInNoModels = () =>
@@ -207,11 +210,12 @@ export function ModelProviders(props: ModelProvidersViewProps) {
               canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
               mutationBlockedReason={props.defaultsMutationBlockedReason}
               message={props.messages.defaults}
+              // A settings-search link to these defaults (effort, speed) opens the folded rows.
+              openAdvanced={globalThis.location?.hash === `#${MODEL_SETTINGS_TARGET_IDS.behavior}`}
               // Before any provider or default is set up, providers can't list models and the
               // catalog is the call to action; a listing failure isn't news then.
               catalogDiscoveryError={
-                !props.defaultModels.primary &&
-                !props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0)
+                !props.defaultModels.primary && !providerSetUp()
                   ? null
                   : props.catalogDiscoveryError
               }
