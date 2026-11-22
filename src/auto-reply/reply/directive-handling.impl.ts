@@ -40,7 +40,6 @@ import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.j
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import { hasSessionDirectives } from "./directive-handling.parse.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   acknowledgeIgnoredSessionDirective,
@@ -187,20 +186,17 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  if (!resolvedModel) {
-    // Session directives are settings of the model's turns; there is no model to apply them to.
-    // A bare /status has nothing to apply and renders the missing model itself.
-    return hasSessionDirectives(directives)
-      ? rejectModelTransaction(NO_MODEL_CONFIGURED_MESSAGE)
-      : undefined;
+  // Thinking and fast mode are capabilities of a model; the other session settings apply without one.
+  if (!resolvedModel && (directives.hasThinkDirective || directives.hasFastDirective)) {
+    return rejectModelTransaction(NO_MODEL_CONFIGURED_MESSAGE);
   }
   const preparedModel = modelSelection
     ? await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: activeAgentId,
         workspaceDir: params.workspaceDir,
-        provider: resolvedProvider,
-        model: resolvedModel,
+        provider: modelSelection.provider,
+        model: modelSelection.model,
         catalog: thinkingCatalog ?? [],
         rawRuntime: directives.rawModelRuntime,
         sessionEntry,
@@ -218,22 +214,26 @@ export async function handleDirectiveOnly(
     preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
-  const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: thinkingCatalog,
-    provider: resolvedProvider,
-    model: resolvedModel,
-  });
+  const selectedCatalogEntry = resolvedModel
+    ? findSelectedCatalogEntry({
+        catalog: thinkingCatalog,
+        provider: resolvedProvider,
+        model: resolvedModel,
+      })
+    : undefined;
   const resolveThinkingRuntime = (entry: typeof sessionEntry) =>
-    resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: resolvedProvider,
-      modelId: resolvedModel,
-      modelApi: selectedCatalogEntry?.api,
-      modelBaseUrl: selectedCatalogEntry?.baseUrl,
-      agentId: activeAgentId,
-      sessionKey: runtimePolicySessionKey,
-      sessionEntry: entry,
-    });
+    resolvedModel
+      ? resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: resolvedProvider,
+          modelId: resolvedModel,
+          modelApi: selectedCatalogEntry?.api,
+          modelBaseUrl: selectedCatalogEntry?.baseUrl,
+          agentId: activeAgentId,
+          sessionKey: runtimePolicySessionKey,
+          sessionEntry: entry,
+        })
+      : undefined;
   const thinkingRuntime = resolveThinkingRuntime(prospectiveSessionEntry);
   const thinkingPolicy = {
     provider: resolvedProvider,

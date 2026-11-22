@@ -223,6 +223,9 @@ it("runs commands without a model and refuses only the agent turn", async () => 
     ["/help", /\/model/u],
     ["/status", /Model: not configured/u],
     ["/new", /New session started/u],
+    ["/queue", /queue/iu],
+    ["/verbose off", /verbose/iu],
+    ["/think high", /No model is configured/u],
   ] as const) {
     const { texts } = await send("owner", body);
     expect(texts, body).toEqual([expect.stringMatching(expected)]);
