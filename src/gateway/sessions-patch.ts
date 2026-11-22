@@ -61,6 +61,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -511,12 +512,12 @@ function* projectSessionPatchSteps(
     }
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
-    if (raw === null) {
-      const configuredDefault = getResolvedDefault();
-      if (!configuredDefault) {
-        return invalid(NO_MODEL_CONFIGURED_MESSAGE);
-      }
-      selection = { ...configuredDefault, isDefault: true };
+    const clearedToDefault = raw === null ? getResolvedDefault() : undefined;
+    if (clearedToDefault) {
+      selection = { ...clearedToDefault, isDefault: true };
+    } else if (raw === null) {
+      // No configured model to return to: clearing the override leaves the session without one.
+      applyModelOverrideToSessionEntry({ entry: next, selection: { isDefault: true } });
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {

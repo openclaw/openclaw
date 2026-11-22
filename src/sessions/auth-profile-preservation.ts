@@ -101,7 +101,10 @@ export function shouldPreserveUnavailableSessionAuthProfileOverride(
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
 export function applyModelOverrideWithAuthProfileCompatibility(
   params: Omit<SessionAuthProfilePreservationParams, "provider"> &
-    Omit<Parameters<typeof applyModelOverrideToSessionEntry>[0], "preserveAuthProfileOverride">,
+    Omit<
+      Parameters<typeof applyModelOverrideToSessionEntry>[0],
+      "preserveAuthProfileOverride" | "selection"
+    > & { selection: { provider: string; model: string; isDefault?: boolean } },
 ): { updated: boolean } {
   return applyModelOverrideToSessionEntry({
     entry: params.entry,
