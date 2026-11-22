@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { SystemAgentChatResult, WizardStep } from "@openclaw/gateway-protocol";
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -40,7 +36,6 @@ const install = (page: Parameters<typeof installMockGateway>[0], response: Syste
 
 suite.define(() => {
   it("keeps a rejected text answer for correction and resets the next step", async () => {
-    const artifacts = createControlUiE2eArtifactDir("custodian-wizard-validation");
     await suite.withPage(options, async ({ page }) => {
       const gateway = await install(page, reply("Choose a Gateway port.", port));
       await page.goto(`${suite.server.baseUrl}custodian`);
@@ -58,13 +53,6 @@ suite.define(() => {
         exact: true,
       });
       await error.waitFor();
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator(".custodian-surface"),
-        [error, field],
-        { animations: "disabled", scrollTo: field },
-      );
-      await writeFile(path.join(artifacts, "validation.png"), frame.png);
       expect(await field.inputValue()).toBe("1878x");
       expect((await gateway.getRequests("openclaw.chat")).at(-1)?.params).toMatchObject({
         wizardAnswer: { stepId: "gateway-port", value: "1878x" },
