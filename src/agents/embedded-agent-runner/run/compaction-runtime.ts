@@ -524,7 +524,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = async (contextTokenBudget: number) => {
+  const prepareRecoverySession = async () => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
@@ -534,7 +534,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
             SessionManager.openAsync(
               owner.session.target,
               params.workspaceDir,
-              resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+              resolveEmbeddedSessionContextLimits({}),
             ),
           ));
     owner.assertActive();
