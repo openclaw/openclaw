@@ -1,2 +1,2 @@
-# Exact net regression-test lines for #203140: cron failure-alert deadline classification distinguishes pre-handoff non-delivery, in-flight unknown, acked-complete delivery, and definitive ordinary send failures, plus webhook indeterminate-outcome classification.
-83
+# Exact net regression-test lines for #203140: cron failure-alert deadline classification distinguishes pre-handoff non-delivery, in-flight unknown, acked-complete delivery, definitive ordinary send failures, and partial-send recipient evidence.
+102

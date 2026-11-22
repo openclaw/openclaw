@@ -658,6 +658,25 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expectSettlement("not-delivered", "adapter refused the alert");
   });
 
+  it("preserves recipient evidence when a later chunk fails", async () => {
+    mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
+      ({
+        onDeliveryAttempt: reportDeliveryAttempt,
+      }: {
+        onDeliveryAttempt?: (reachedRecipient: boolean) => void;
+      }) => {
+        // A first chunk reached the destination, then a later chunk failed before
+        // any complete acknowledgment: delivery is unproven, not disproven.
+        reportDeliveryAttempt?.(true);
+        return Promise.reject(new Error("later chunk failed"));
+      },
+    );
+    await expect(sendGatewayCronFailureAlert({ job: announceJob() })).rejects.toThrow(
+      "later chunk failed",
+    );
+    expectSettlement("unknown", "later chunk failed");
+  });
+
   it("defers detached completion delivery while suspension is prepared", async () => {
     const job = createCompletionWebhookJob();
     const suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});

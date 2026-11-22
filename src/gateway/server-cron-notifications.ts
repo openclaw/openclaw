@@ -449,8 +449,6 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
 ): Promise<FailureAlertTransportResult> {
   let mayHaveReachedRecipient = false;
-  /** A webhook attempt whose outcome was observed as indeterminate before it threw. */
-  let webhookOutcomeUnknown = false;
   let providerHandoff = false;
   let payloadDelivered = false;
   /** Set only by the announce deadline path; the webhook path never declares it. */
@@ -478,7 +476,6 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         ssrfPolicy: params.ssrfPolicy,
         onDeliveryState: (outcome) => {
           mayHaveReachedRecipient = outcome.status !== "not-delivered";
-          webhookOutcomeUnknown = outcome.status === "unknown";
         },
         payload: {
           jobId: params.job.id,
@@ -594,23 +591,28 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     };
   } catch (err) {
     const error = formatErrorMessage(err);
-    // A deadline is the only interruption where the abort can hide a delivery
-    // that the provider still completes: past the transport handoff the outcome
-    // is unknown unless the complete payload was already acked, which settles it
-    // as delivered (a later history failure stays a diagnostic). Ordinary
-    // failures are authoritative, so they keep their definitive non-delivery and
-    // its in-app fallback even after a handoff.
+    // A complete acknowledgment settles delivery regardless of how the call ends
+    // (a later history failure stays a diagnostic). Recipient evidence — a chunk
+    // the provider already accepted — always disproves non-delivery, so a later
+    // chunk failure records unknown instead of a fallback-worthy not-delivered.
+    // Only the deadline may turn a bare transport handoff into unknown, because
+    // only the abort can hide a delivery the provider still completes; an
+    // ordinary failure after a handoff stays authoritative non-delivery.
+    if (payloadDelivered) {
+      return {
+        kind: "failed",
+        error: err,
+        outcome: { delivered: true, status: "delivered", error },
+      };
+    }
     const deadlineHit = deadlineError !== undefined && err === deadlineError;
-    const reachedUnconfirmed =
-      (deadlineHit || webhookOutcomeUnknown) &&
-      !payloadDelivered &&
-      (providerHandoff || mayHaveReachedRecipient);
+    const reachedUnconfirmed = mayHaveReachedRecipient ? true : deadlineHit && providerHandoff;
     return {
       kind: "failed",
       error: err,
       outcome: {
-        delivered: payloadDelivered ? true : reachedUnconfirmed ? undefined : false,
-        status: payloadDelivered ? "delivered" : reachedUnconfirmed ? "unknown" : "not-delivered",
+        delivered: reachedUnconfirmed ? undefined : false,
+        status: reachedUnconfirmed ? "unknown" : "not-delivered",
         error,
       },
     };
