@@ -31,6 +31,7 @@ import {
   toArtifactSummary,
   resolveArtifactAvailability,
 } from "../artifacts-content.js";
+import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -55,10 +56,7 @@ import {
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
 import { sessionFilesError } from "./session-files-errors.js";
-import {
-  readGatewayRequestMutationAuthority,
-  retainGatewayRequestMutationAuthority,
-} from "./session-mutation-guards.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -99,14 +97,8 @@ const queuedArtifactDownloads = new Map<
   }
 >();
 
-function createArtifactRequestAccess(
-  request: GatewayRequestHandlerOptions,
-  authority: {
-    assertCurrent: () => void;
-    release?: () => void;
-  } = readGatewayRequestMutationAuthority(request),
-) {
-  const { assertCurrent } = authority;
+function createArtifactRequestAccess(request: GatewayRequestHandlerOptions, release?: () => void) {
+  const { assertCurrent } = readGatewayRequestMutationAuthority(request);
   const { context, respond } = request;
   const access = createArtifactSessionAccess({
     client: request.client,
@@ -116,8 +108,8 @@ function createArtifactRequestAccess(
       return context.getRuntimeConfig();
     },
   });
-  if (authority.release) {
-    access.retain(authority.release);
+  if (release) {
+    access.retain(release);
   }
   try {
     assertCurrent();
@@ -346,8 +338,8 @@ async function respondManagedArtifactDownload(
   respond: RespondFn,
   matched?: ArtifactRecord,
 ): Promise<void> {
-  const authority = retainGatewayRequestMutationAuthority(request);
-  using access = createArtifactRequestAccess(request, authority);
+  const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+  using access = createArtifactRequestAccess(request, releaseDevice);
   await runArtifactSessionOperation(respond, async () => {
     const selected = await prepareArtifactSessionRead(query, access);
     const scope = selected?.scope;
@@ -375,11 +367,13 @@ async function respondManagedArtifactDownload(
       assertCurrent: selected.assertCurrent,
       release: () => {
         selected.release();
-        authority.release();
+        releaseDevice?.();
       },
     });
     access.detach(selected.release);
-    access.detach(authority.release);
+    if (releaseDevice) {
+      access.detach(releaseDevice);
+    }
     respond(true, {
       artifact: {
         id: managed.artifactId,
@@ -578,8 +572,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     let managedUrl: { url: string; expiresAt: string } | undefined;
     if (managedSource) {
-      const authority = retainGatewayRequestMutationAuthority(request);
-      using managedAccess = createArtifactRequestAccess(request, authority);
+      const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
+      using managedAccess = createArtifactRequestAccess(request, releaseDevice);
       const selected = await runArtifactSessionOperation(respond, () =>
         prepareArtifactSessionRead(query, managedAccess),
       );
@@ -597,11 +591,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         assertCurrent: selection.assertCurrent,
         release: () => {
           selection.release();
-          authority.release();
+          releaseDevice?.();
         },
       });
       managedAccess.detach(selection.release);
-      managedAccess.detach(authority.release);
+      if (releaseDevice) {
+        managedAccess.detach(releaseDevice);
+      }
     }
     if (query.previewWidth !== undefined && !managedUrl) {
       let preview: Buffer | undefined;
