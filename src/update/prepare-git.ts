@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
+import { gitCommandArgv } from "../infra/git-exec.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { resolveUpdateBuildManager } from "../infra/update-package-manager.js";
@@ -91,7 +92,8 @@ export async function prepareGit(params: {
     };
     await run(
       "worktree",
-      ["git", "-C", params.checkout, "worktree", "add", "--detach", releaseRoot, params.sha],
+      // Fixture paths in the tree exceed MAX_PATH under the release root; the Git owner enables long paths.
+      gitCommandArgv(params.checkout, ["worktree", "add", "--detach", releaseRoot, params.sha]),
       params.checkout,
     );
     // The target's packageManager pin selects pnpm; installers leave no global pnpm on PATH.
@@ -129,7 +131,7 @@ export async function prepareGit(params: {
   } catch (error) {
     // Git owns its worktree registration; remove it before removing the staging prefix.
     await runCommandWithTimeout(
-      ["git", "-C", params.checkout, "worktree", "remove", "--force", releaseRoot],
+      gitCommandArgv(params.checkout, ["worktree", "remove", "--force", releaseRoot]),
       {
         timeoutMs: 30_000,
         killProcessTree: true,
