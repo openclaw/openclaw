@@ -24,11 +24,31 @@ beforeEach(resetIsolatedCompletionTestState);
 function configWith(workspace: string, agentProfileId: string | undefined): OpenClawConfig {
   return {
     agents: { defaults: { workspace, ...(agentProfileId ? { agentProfileId } : {}) } },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "http://127.0.0.1:1/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "gpt-test",
+              name: "Test 8B",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32_000,
+              maxTokens: 4_096,
+              modelSizeClass: "small",
+            },
+          ],
+        },
+      },
+    },
   } as OpenClawConfig;
 }
 
 describe("isolated completion with an Agent Profile selected", () => {
-  it.each(["openclaw/small", "openclaw/base", undefined])(
+  it.each(["openclaw/small", "auto", undefined])(
     "dispatches only the fixed prompts, with no workspace files, when agentProfileId is %s",
     async (agentProfileId) => {
       const workspace = tempDirs.make("isolated-profile-");

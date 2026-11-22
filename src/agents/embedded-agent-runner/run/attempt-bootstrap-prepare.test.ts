@@ -346,7 +346,8 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       "USER.md": "User: Onur",
     });
     const agentProfile = resolveAgentProfile({
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+      config: { agents: { defaults: { agentProfileId: "auto" } } },
+      modelSizeClass: "small",
     });
 
     const result = await prepareEmbeddedAttemptBootstrap({

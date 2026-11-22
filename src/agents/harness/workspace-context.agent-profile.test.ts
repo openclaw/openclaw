@@ -6,7 +6,12 @@ import { prepareAgentWorkspaceContext } from "./workspace-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const MODEL = { modelProvider: "llama-cpp", modelId: "local-8b" } as const;
+const SMALL_MODEL = {
+  modelProvider: "llama-cpp",
+  modelId: "local-8b",
+  modelSizeClass: "small",
+} as const;
+const UNBOUND_MODEL = { modelProvider: "anthropic", modelId: "claude-opus-4-1" };
 
 async function makeWorkspace() {
   const workspace = await fs.realpath(tempDirs.make("openclaw-harness-profile-"));
@@ -26,7 +31,7 @@ async function prepare(
   return prepareAgentWorkspaceContext({
     scope: "full",
     workspaceDir: workspace,
-    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/small" } } },
+    config: { agents: { defaults: { workspace, agentProfileId: "auto" } } },
     agentId: "main",
     sessionKey: "agent:main:s1",
     sessionId: "s1",
@@ -36,33 +41,45 @@ async function prepare(
 }
 
 describe("prepareAgentWorkspaceContext Agent Profile", () => {
-  it("caps context when the small profile is selected for the turn's model", async () => {
+  it("caps context for a model size class resolved from the catalog", async () => {
     const workspace = await makeWorkspace();
-    const context = await prepare(workspace, MODEL);
+    const context = await prepare(workspace, SMALL_MODEL);
     expect(totalChars(context.contextFiles)).toBeLessThanOrEqual(11_500);
   });
 
-  it("keeps the full context when no model is forwarded", async () => {
-    const workspace = await makeWorkspace();
-    const context = await prepare(workspace);
-    const agents = context.contextFiles.find((file) => file.path.endsWith("AGENTS.md"));
-    expect(agents?.content.length).toBeGreaterThan(11_500);
-  });
-
-  it("keeps the full context when no profile is configured", async () => {
+  it("caps context for a model that reports only a total parameter count", async () => {
     const workspace = await makeWorkspace();
     const context = await prepare(workspace, {
-      ...MODEL,
-      config: { agents: { defaults: { workspace } } },
+      modelProvider: "ollama",
+      modelId: "custom-8b",
+      modelParameterCount: 8_190_735_360,
     });
-    expect(totalChars(context.contextFiles)).toBeGreaterThan(11_500);
+    expect(totalChars(context.contextFiles)).toBeLessThanOrEqual(11_500);
   });
 
-  it("keeps the full context when the base profile is selected", async () => {
+  it("keeps the full context for a model without a size class and when no model is forwarded", async () => {
+    const workspace = await makeWorkspace();
+    const unbound = await prepare(workspace, UNBOUND_MODEL);
+    const noModel = await prepare(workspace);
+    for (const context of [unbound, noModel]) {
+      const agents = context.contextFiles.find((file) => file.path.endsWith("AGENTS.md"));
+      expect(agents?.content.length).toBeGreaterThan(11_500);
+    }
+  });
+
+  it("applies the fallback model, not the configured primary", async () => {
+    const workspace = await makeWorkspace();
+    const primary = await prepare(workspace, UNBOUND_MODEL);
+    const fallback = await prepare(workspace, SMALL_MODEL);
+    expect(totalChars(primary.contextFiles)).toBeGreaterThan(11_500);
+    expect(totalChars(fallback.contextFiles)).toBeLessThanOrEqual(11_500);
+  });
+
+  it("keeps the full context for a small model while size selection is off", async () => {
     const workspace = await makeWorkspace();
     const context = await prepare(workspace, {
-      ...MODEL,
-      config: { agents: { defaults: { workspace, agentProfileId: "openclaw/base" } } },
+      ...SMALL_MODEL,
+      config: { agents: { defaults: { workspace } } },
     });
     expect(totalChars(context.contextFiles)).toBeGreaterThan(11_500);
   });
@@ -70,12 +87,12 @@ describe("prepareAgentWorkspaceContext Agent Profile", () => {
   it("never widens a smaller operator budget", async () => {
     const workspace = await makeWorkspace();
     const context = await prepare(workspace, {
-      ...MODEL,
+      ...SMALL_MODEL,
       config: {
         agents: {
           defaults: {
             workspace,
-            agentProfileId: "openclaw/small",
+            agentProfileId: "auto",
             bootstrapMaxChars: 1_500,
             bootstrapTotalMaxChars: 2_000,
           },

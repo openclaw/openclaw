@@ -27,8 +27,12 @@ type KeysIn<T extends unknown[], K extends PropertyKey> = {
 }[number];
 const execute = async () => ({ content: [], details: {} });
 const factories = { sync: createSync, async: createAsync };
-async function surface(mode: "sync" | "async", config: SurfaceParams["config"]) {
-  const params = { modelToolsEnabled: true, config, executeTool: execute };
+async function surface(
+  mode: "sync" | "async",
+  config: SurfaceParams["config"],
+  extra: Partial<SurfaceParams> = {},
+) {
+  const params = { modelToolsEnabled: true, config, executeTool: execute, ...extra };
   const runtime = await factories[mode](params);
   onTestFinished(runtime.cleanup);
   return runtime;
@@ -60,6 +64,25 @@ it("preserves explicitly allowed tools in an asynchronously prepared compact sur
     agents: { defaults: { agentProfileId: "openclaw/small" } },
     tools: { allow: ["browser"], codeMode: false, toolSearch: false },
   });
+  const tools = ["browser", "tts"].map((name) => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    execute,
+  }));
+  expect(runtime.compactTools(tools).tools.map((tool) => tool.name)).toEqual(["browser"]);
+});
+
+it("preserves explicitly allowed tools for a model that only reports a parameter count", async () => {
+  const runtime = await surface(
+    "async",
+    {
+      agents: { defaults: { agentProfileId: "auto" } },
+      tools: { allow: ["browser"], codeMode: false, toolSearch: false },
+    },
+    { model: { parameterCount: 8_190_735_360 } },
+  );
   const tools = ["browser", "tts"].map((name) => ({
     name,
     label: name,

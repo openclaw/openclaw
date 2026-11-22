@@ -97,10 +97,10 @@ describe("resolveAgentConfig", () => {
   it("preserves an explicit per-agent profile selector", () => {
     const cfg = agentConfig({
       defaults: { agentProfileId: "openclaw/base" },
-      entries: { main: { agentProfileId: "openclaw/small" } },
+      entries: { main: { agentProfileId: "auto" } },
     });
 
-    expect(resolveAgentConfig(cfg, "main")?.agentProfileId).toBe("openclaw/small");
+    expect(resolveAgentConfig(cfg, "main")?.agentProfileId).toBe("auto");
   });
 
   it.each([

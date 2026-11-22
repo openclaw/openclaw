@@ -6,7 +6,12 @@ import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const MODEL = { modelProvider: "llama-cpp", modelId: "local-8b" } as const;
+const SMALL_MODEL = {
+  modelProvider: "llama-cpp",
+  modelId: "local-8b",
+  modelSizeClass: "small",
+} as const;
+const UNBOUND_MODEL = { modelProvider: "anthropic", modelId: "claude-opus-4-1" };
 
 async function makeWorkspace() {
   const workspace = await fs.realpath(tempDirs.make("openclaw-bootstrap-profile-"));
@@ -25,7 +30,7 @@ function resolve(
 ) {
   return resolveBootstrapContextForRun({
     workspaceDir: workspace,
-    config: { agents: { defaults: { workspace, agentProfileId: "openclaw/small" } } },
+    config: { agents: { defaults: { workspace, agentProfileId: "auto" } } },
     agentId: "main",
     sessionKey: "agent:main:s1",
     sessionId: "s1",
@@ -37,8 +42,26 @@ function resolve(
 describe("resolveBootstrapContextForRun Agent Profile", () => {
   it("caps context for the model the turn actually runs", async () => {
     const workspace = await makeWorkspace();
-    const { contextFiles } = await resolve(workspace, MODEL);
+    const { contextFiles } = await resolve(workspace, SMALL_MODEL);
     expect(totalChars(contextFiles)).toBeLessThanOrEqual(11_500);
+  });
+
+  it("caps context for a model that reports only a total parameter count", async () => {
+    const workspace = await makeWorkspace();
+    const { contextFiles } = await resolve(workspace, {
+      modelProvider: "ollama",
+      modelId: "custom-8b",
+      modelParameterCount: 8_190_735_360,
+    });
+    expect(totalChars(contextFiles)).toBeLessThanOrEqual(11_500);
+  });
+
+  it("follows the fallback model rather than the primary", async () => {
+    const workspace = await makeWorkspace();
+    const primary = await resolve(workspace, UNBOUND_MODEL);
+    const fallback = await resolve(workspace, SMALL_MODEL);
+    expect(totalChars(primary.contextFiles)).toBeGreaterThan(11_500);
+    expect(totalChars(fallback.contextFiles)).toBeLessThanOrEqual(11_500);
   });
 
   it("leaves the context unchanged when no model is forwarded", async () => {
@@ -47,10 +70,10 @@ describe("resolveBootstrapContextForRun Agent Profile", () => {
     expect(totalChars(contextFiles)).toBeGreaterThan(11_500);
   });
 
-  it("leaves the context unchanged when no profile is configured", async () => {
+  it("leaves the context unchanged for a small model while size selection is off", async () => {
     const workspace = await makeWorkspace();
     const { contextFiles } = await resolve(workspace, {
-      ...MODEL,
+      ...SMALL_MODEL,
       config: { agents: { defaults: { workspace } } },
     });
     expect(totalChars(contextFiles)).toBeGreaterThan(11_500);
@@ -59,12 +82,12 @@ describe("resolveBootstrapContextForRun Agent Profile", () => {
   it("never widens a smaller operator budget", async () => {
     const workspace = await makeWorkspace();
     const { contextFiles } = await resolve(workspace, {
-      ...MODEL,
+      ...SMALL_MODEL,
       config: {
         agents: {
           defaults: {
             workspace,
-            agentProfileId: "openclaw/small",
+            agentProfileId: "auto",
             bootstrapMaxChars: 1_500,
             bootstrapTotalMaxChars: 2_000,
           },
