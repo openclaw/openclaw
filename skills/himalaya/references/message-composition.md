@@ -1,5 +1,7 @@
 # Message Composition with MML (MIME Meta Language)
 
+> **Himalaya 2.x:** himalaya no longer parses MML itself. `message compose` and `message reply` emit RFC 5322 from flags, and MML handling belongs to a standalone composer such as `mml`, whose output pipes into `himalaya message send`. The syntax below describes that composer step.
+
 Himalaya uses MML for composing emails. MML is a simple XML-based syntax that compiles to MIME messages.
 
 ## Basic Message Structure
@@ -196,4 +198,4 @@ himalaya message write \
 - The editor opens with a template; fill in headers and body.
 - Save and exit the editor to send; exit without saving to cancel.
 - MML parts are compiled to proper MIME when sending.
-- Use `himalaya message read <id> --raw` to inspect the raw MIME structure of received emails.
+- Use `himalaya message export --full` to inspect the raw MIME structure of received emails.
