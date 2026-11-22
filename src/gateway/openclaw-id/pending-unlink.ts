@@ -55,10 +55,9 @@ function outcomeOf(error: unknown): UnlinkSendOutcome {
 }
 
 /**
- * Creates the sender. `start` sends every unsettled pending unlink now and arms retries,
- * resolving when that run ends; `stop` cancels the retry timer and requests in flight. A start
- * during a run joins it with one follow-up pass; a start after a stop waits for the stopped run
- * to end, then runs anew.
+ * Creates the sender. `start` resumes delivery and joins an active run without extending it.
+ * `flush` sends newly queued statements now, requesting a follow-up pass during an active run.
+ * `stop` cancels retries and requests; restarting waits for the stopped run before sending.
  */
 export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   const initialDelay = params.initialDelayMs ?? PUBLICATION_RETRY_INITIAL_MS;
@@ -91,15 +90,17 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   };
 
   // Sends each unsettled pending unlink once; true when one must be sent again.
-  const sendAll = async (signal: AbortSignal): Promise<boolean> => {
+  const sendAll = async (signal: AbortSignal, attempted: Set<string>): Promise<boolean> => {
     let retry = false;
     for (const pending of params.current()?.pending_unlinks ?? []) {
       if (signal.aborted) {
         return false;
       }
-      if (pending.refused) {
+      const clawId = pending.statement.body.claw_id;
+      if (pending.refused || attempted.has(clawId)) {
         continue;
       }
+      attempted.add(clawId);
       const label = `${pending.hostname} (claw ${pending.statement.body.claw_id})`;
       let outcome: UnlinkSendOutcome;
       try {
@@ -133,14 +134,15 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     return retry;
   };
 
-  // One run sends everything pending, again while more was requested meanwhile, then arms a
-  // retry if a send failed. A stopped run ends without arming anything.
+  // One run attempts each claw once, including newly queued work, then backs off failed sends.
+  // A flush that joins a lifecycle-started pass must not resend the same stalled statement.
   const runOnce = async (signal: AbortSignal): Promise<void> => {
     let retry = false;
+    const attempted = new Set<string>();
     for (;;) {
       rerun = false;
       try {
-        retry = await sendAll(signal);
+        retry = (await sendAll(signal, attempted)) || retry;
       } catch (error) {
         params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
         retry = true;
@@ -180,8 +182,17 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   };
 
   return {
-    /** Sends every unsettled pending unlink now (backoff reset) and keeps retrying until stopped. */
+    /** Resumes delivery once per lifetime, joining active work or preserving its backoff. */
     start(): Promise<void> {
+      if (active) {
+        return inflight?.done ?? Promise.resolve();
+      }
+      active = true;
+      attempt = 0;
+      return run();
+    },
+    /** Sends newly queued unlinks now, including a follow-up pass when a run is active. */
+    flush(): Promise<void> {
       active = true;
       attempt = 0;
       return run();

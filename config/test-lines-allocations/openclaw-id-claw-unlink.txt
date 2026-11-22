@@ -9,4 +9,6 @@
 # Final review repairs add Unlink staying in the menu when only the endpoint key is refused, and
 # the tunnel child starting unlinked (not pinned to the old K_srv) after a confirmed unlink.
 # The pin is also read after persistence but before acknowledgement, including initial linking.
-508
+# Lifecycle resume joins an active send without extending the committed reply; explicit flush
+# preserves newly queued statements, stop/start cancellation and retry backoff.
+592
