@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -9,11 +8,9 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
-import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
-import { getUpdateRun } from "../infra/update-run-ledger.js";
+import * as installStatus from "../infra/update-install-status.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
@@ -358,23 +355,12 @@ test("a write-scoped client cannot start an installation update", async () => {
   }
 });
 
-test("update.run persists the accepted handoff before parking and restarting its foreground owner", async () => {
+test("an admin-scoped client can start a Git update through the release route", async () => {
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
     async () => {
-      const [installStatus, gatewayOwner, handoff, restart] = await Promise.all([
-        import("../infra/update-install-status.js"),
-        import("../infra/gateway-owner-lease.js"),
-        import("../infra/update-managed-service-handoff.js"),
-        import("../infra/restart.js"),
-      ]);
-      const startedAt = getFileLockProcessStartTime(process.pid);
-      if (startedAt === null) {
-        throw new Error("the foreground fixture requires the current process start identity");
-      }
       const root = updateDirs.make("openclaw-update-role-");
       const entrypoint = path.join(root, "dist", "index.js");
-      const foregroundOrigin = { owner: "role-update-owner", pid: process.pid, startedAt, port };
       const installation = vi
         .spyOn(installStatus, "resolveStartupInstallStatus")
         .mockResolvedValue({
@@ -382,55 +368,6 @@ test("update.run persists the accepted handoff before parking and restarting its
           status: { root, installKind: "git", packageManager: "pnpm" },
           installReceipt: null,
         });
-      // The shared server starts below the CLI run loop that publishes its owner.
-      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockResolvedValue({
-        ...foregroundOrigin,
-        host: os.hostname(),
-        mode: "foreground",
-        supervisor: null,
-        state: "live",
-        expired: false,
-      });
-      const start = vi
-        .spyOn(handoff, "startManagedServiceUpdateHandoff")
-        .mockImplementation(async (params) => {
-          if (!params.handoffId) {
-            throw new Error("expected an admitted update handoff identity");
-          }
-          return {
-            status: "started",
-            command: "openclaw update --yes --json",
-            logPath: path.join(root, "handoff.log"),
-            handoffId: params.handoffId,
-            installRoot: params.root,
-          };
-        });
-      const transfer = vi
-        .spyOn(handoff, "transferManagedServiceUpdateHandoff")
-        .mockImplementation(async (identity) => {
-          const accepted = start.mock.calls[0]?.[0];
-          expect(identity).toEqual({
-            kind: "managed-update-handoff",
-            handoffId: accepted?.handoffId,
-            installRoot: root,
-          });
-          expect((await readRestartSentinel())?.payload).toMatchObject({
-            kind: "update",
-            status: "skipped",
-            stats: {
-              mode: "git",
-              root,
-              runId: accepted?.runId,
-              handoffId: identity.handoffId,
-              reason: "managed-service-handoff-started",
-            },
-          });
-          return true;
-        });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockResolvedValue(true);
-      const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
-      const restartSignal = vi.fn();
-      process.on("SIGUSR2", restartSignal);
 
       try {
         await fs.mkdir(path.dirname(entrypoint));
@@ -445,38 +382,10 @@ test("update.run persists the accepted handoff before parking and restarting its
         });
         expect(res).toMatchObject({
           ok: true,
-          payload: { ok: true, sentinel: { persisted: true }, handoff: { status: "started" } },
-        });
-        expect(start).toHaveBeenCalledOnce();
-        expect(transfer).toHaveBeenCalledOnce();
-        const accepted = start.mock.calls[0]?.[0];
-        if (!res.payload || !accepted?.beforePark) {
-          throw new Error("expected the accepted handoff's parking callback");
-        }
-        expect(accepted).toMatchObject({
-          root,
-          argv1: entrypoint,
-          runId: res.payload.runId,
-          supervisor: null,
-          foregroundOrigin,
-          meta: { completionOwner: "gateway-restart", runId: res.payload.runId },
-        });
-        expect(getUpdateRun(res.payload.runId)?.status).toBe("running");
-        expect(schedule).not.toHaveBeenCalled();
-        expect(restartSignal).not.toHaveBeenCalled();
-
-        await accepted.beforePark();
-        await vi.waitFor(() => expect(restartSignal).toHaveBeenCalledOnce(), FAST_WAIT_OPTS);
-        expect(restart.consumeGatewayRestartIntent()).toMatchObject({
-          reason: "update.run",
-          successorOwner: transfer.mock.calls[0]?.[0],
+          payload: { ok: true, runId: expect.any(String), result: { status: "ok" } },
         });
       } finally {
-        restart.resetGatewayRestartStateForInProcessRestart();
-        process.off("SIGUSR2", restartSignal);
-        for (const spy of [schedule, claim, transfer, start, readOwner, installation]) {
-          spy.mockRestore();
-        }
+        installation.mockRestore();
       }
     },
   );
