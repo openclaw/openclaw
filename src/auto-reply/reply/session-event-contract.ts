@@ -151,6 +151,10 @@ export type ScheduledSessionAutomation = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
   automationAdmin?: true;
+  /** Restore the saved requester before an unstarted occurrence is admitted again. */
+  readmitOperator?: (
+    signal: AbortSignal,
+  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">>;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:
@@ -163,6 +167,9 @@ export type ScheduledSessionAutomation = {
   preparePrompt?: (cfg: OpenClawConfig) => Promise<string>;
   /** Selected absent notices share the receiver's exact ordinary creation operation. */
   bindSessionCreation?: (operation: SessionEntryCreationOperation) => () => void;
+  providerRunSlot?: import("../../cron/service/timer-execution-timeout.js").CronProviderRunSlot;
+  /** Return false to yield the unstarted event to its owner's run-slot wait. */
+  beforeModelRun?: (provider: string) => boolean;
   beforeStart?: (
     operation?: ReplyOperationObservation,
   ) => boolean | NonNullable<CronRunOutcome["admissionDeferredReason"]>;

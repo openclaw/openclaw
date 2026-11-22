@@ -13,10 +13,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
@@ -27,7 +25,7 @@ import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {
   const controller = new AbortController();
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId,
     scopes,
     signal: controller.signal,
@@ -59,6 +57,7 @@ describe("session control source capability", () => {
     expect(hasSessionControlAuthority()).toBe(false);
     const { authority, revoke } = issueAuthority("control-profile");
     const forged: AdmittedRunOperatorAuthority = {
+      canonicalIdentity: null,
       profileId: authority.profileId,
       scopes: authority.scopes,
       assertCurrent: () => {},

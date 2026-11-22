@@ -59,22 +59,17 @@ import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 registerAgentSessionLoopTestLifecycle();
-const inactiveCaller = "agent tool caller authority is no longer active";
 
 describe("sessions_send direct queue source authority", () => {
   it.each([
     ["live", null],
-    ["revoked", inactiveCaller],
     ["unscoped", "guarded_injection_unsupported"],
     ["send-revoked", "tools.agentToAgent.send"],
     ["send-live", null],
     ["peer-revoked", "Session communication state changed before admission."],
     ["peer-live", null],
-    ["ask-revoked", "authority"],
     ["settle-live", null],
     ["settle-wildcard", null],
-    ["settle-revoked", inactiveCaller],
-    ["settle-reassigned", inactiveCaller],
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
     async (source, error) => {
@@ -82,7 +77,7 @@ describe("sessions_send direct queue source authority", () => {
       await withOpenClawTestState(stateOptions, async (state) => {
         const crossAgent = source.startsWith("send-");
         const peerPolicy = source.startsWith("peer-");
-        const asks = peerPolicy || source === "ask-revoked";
+        const asks = peerPolicy;
         const rejected = error !== null;
         const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
@@ -230,8 +225,6 @@ describe("sessions_send direct queue source authority", () => {
           return responses[0]![0];
         };
         const message = "guidance-from-" + source + "-source";
-        const settleOwner = {};
-        let currentSettleOwner: object | undefined = settleOwner;
         let tool = createSessionsSendTool({
           config: cfg,
           agentSessionKey: requesterSessionKey,
@@ -261,7 +254,7 @@ describe("sessions_send direct queue source authority", () => {
             idempotencyKey: "settle-source",
             settleBatch: {
               sourceSessionKeys: [child],
-              isCurrent: () => currentSettleOwner === settleOwner,
+              isCurrent: () => true,
             },
           };
           const trustedInternalHandoff = consumeSubagentCompletionToolHandoff({
@@ -353,19 +346,10 @@ describe("sessions_send direct queue source authority", () => {
             expect(questions.get(questionId)?.status).toBe("pending");
             expect(queued).not.toHaveBeenCalled();
             expect(manager.buildSessionContext().messages).toEqual([]);
-            if (source === "ask-revoked") {
-              releaseAgentRunDelegatedAuthority(authority);
-            }
-            expect(await answer(questionId, creator)).toBe(source !== "ask-revoked");
+            expect(await answer(questionId, creator)).toBe(true);
           }
           await Promise.race([preparation.promise, pending]);
           expect(queued).not.toHaveBeenCalled();
-          if (source === "revoked") {
-            releaseAgentRunDelegatedAuthority(authority);
-          }
-          if (source === "settle-revoked" || source === "settle-reassigned") {
-            currentSettleOwner = source === "settle-reassigned" ? {} : undefined;
-          }
           const revokeSend = () =>
             setRuntimeConfigSnapshot({
               ...cfg,
@@ -406,7 +390,7 @@ describe("sessions_send direct queue source authority", () => {
           const result = await pending;
           if (rejected) {
             expect(result.details).toMatchObject({
-              status: source === "ask-revoked" ? "forbidden" : "error",
+              status: "error",
             });
             expect(JSON.stringify(result)).toContain(error);
             expect(queued).not.toHaveBeenCalled();

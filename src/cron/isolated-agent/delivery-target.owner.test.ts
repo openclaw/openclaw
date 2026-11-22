@@ -4,6 +4,7 @@ import {
   createGenericTargetTestPlugin,
   createTargetsTestRegistry,
 } from "../../infra/outbound/targets.test-helpers.js";
+import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -83,3 +84,31 @@ it.each([
     }
   },
 );
+
+it("returns a sendable destination for an owner with a provider-prefixed session route", async () => {
+  const plugin = createGenericTargetTestPlugin("alpha");
+  plugin.config.listAccountIds = () => ["default"];
+  plugin.messaging = {
+    ...plugin.messaging,
+    resolveOutboundSessionRoute: ({ cfg: routeCfg, agentId, accountId, target }) =>
+      buildChannelOutboundSessionRoute({
+        cfg: routeCfg,
+        agentId,
+        channel: "alpha",
+        accountId,
+        peer: { kind: "direct", id: target },
+        chatType: "direct",
+        from: `alpha:${target}`,
+        to: `alpha:${target}`,
+      }),
+  };
+  setActivePluginRegistry(createTargetsTestRegistry([plugin]));
+
+  const result = await resolve({ target: "owner", channel: "alpha" });
+  expect(result).toMatchObject({
+    ok: true,
+    channel: "alpha",
+    to: "user:alice",
+    mode: "explicit",
+  });
+});

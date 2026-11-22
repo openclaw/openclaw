@@ -592,6 +592,9 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    // The catalog publish gate runs each release's own refresh from this file
+    // (RELEASED_READER_ENTRIES in scripts/lib/catalog-compare-released-gate.mts).
+    "model-catalog/remote-refresh": "src/model-catalog/remote-refresh.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "infra/device-identity": "src/infra/device-identity.ts",
@@ -1039,6 +1042,8 @@ const configs: UserConfig[] = [
     const bundleFsSafe = [
       "infra/sqlite-readonly-location.worker",
       "state/openclaw-state-read.worker",
+      // Hosts the state reader and must load fs-safe the same way.
+      "infra/shared-worker-host.worker",
     ].includes(name);
     const isFsSafe = (id: string) =>
       id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");

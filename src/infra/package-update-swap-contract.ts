@@ -6,7 +6,6 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
-import type { UpdateRunGitActivation } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export type PackageActivationOptions = {
@@ -25,8 +24,6 @@ export type PackageUpdateTransaction = {
   /** Drops server-side captures; retirement calls it before removing the snapshot root. */
   discardDatabaseCaptures?: () => Promise<void>;
   assertRollbackSafe?: () => Promise<void>;
-  /** Set only by an in-place Git checkout activation: the commit and build it made live. */
-  readGitActivation?: () => Promise<UpdateRunGitActivation | undefined>;
   rollback: (
     assertCurrent: () => void,
   ) => Promise<

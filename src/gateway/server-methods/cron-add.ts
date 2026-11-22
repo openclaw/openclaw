@@ -36,7 +36,7 @@ import {
   captureCronCreatorSession,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
-  assertCronDoesNotTargetAgentHarness,
+  assertValidCronSessionTarget,
 } from "./cron-input-validation.js";
 import { respondInvalidCronParams, respondRefusedCronAgent } from "./cron-job-access.js";
 import { withCronStreamExecApproval } from "./cron-stream-approval.js";
@@ -186,7 +186,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       cfg,
       runtimeAuthority !== undefined,
     );
-    await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
+    await assertValidCronSessionTarget(jobCreate, cfg);
     await assertValidCronCreateDelivery(
       cfg,
       { ...jobCreate, createdActor: creatorOptions.createdActor },

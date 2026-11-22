@@ -37,7 +37,10 @@ export const visitorTestStateOptions = {
 
 export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig {
   return {
-    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
+    agents: {
+      defaults: { workspace: workspaceDir, model: "openai/gpt-6-astra" },
+      entries: { main: {} },
+    },
     gateway: {
       controlUi: { github: { token: "synthetic-visitor-github-token" } },
       roles: {

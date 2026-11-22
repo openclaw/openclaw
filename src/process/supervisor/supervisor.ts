@@ -11,14 +11,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { watchHostExecMemory } from "../child-memory.js";
 import { applyAgentExecMemoryBudget, releaseAgentExecCgroupScope } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-policy.js";
-import { stopReleasedProcesses } from "./released-processes.js";
+import { loadSupervisorLogRuntime, stopReleasedProcesses } from "./released-processes.js";
 import {
   appendSupervisorCapturedOutput,
   DEFAULT_MAX_CAPTURED_OUTPUT_CHARS,
@@ -43,10 +42,6 @@ import type {
   StartingScope,
   TerminationReason,
 } from "./types.js";
-
-const loadSupervisorLogRuntime = createLazyRuntimeModule(
-  () => import("./supervisor-log.runtime.js"),
-);
 
 export function createProcessSupervisor(): ProcessSupervisor & {
   shutdown: () => Promise<void>;

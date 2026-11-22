@@ -37,6 +37,7 @@ const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
 const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
 const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
+const UNLINK = `${VALUE_PREFIX}unlink`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -187,6 +188,17 @@ function keyAttentionEntries(
   return entries;
 }
 
+// Unlinking signs with this computer's Gateway key over direct loopback; it needs no OpenClaw ID
+// sign-in, so it stays reachable when the account session expired, and when only the endpoint key
+// is refused. Hidden when the Gateway key is refused. Never offered over the tunnel.
+function unlinkEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  const gatewayKeyRefused =
+    status.status.state === "keys_refused" && status.status.key !== "endpoint";
+  return status.channel === "local_operator" && status.link.linked && !gatewayKeyRefused
+    ? [renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX")]
+    : [];
+}
+
 function isTunnelMember(status: OpenClawIdStatusResult): boolean {
   return status.channel === "tunnel" && status.connection?.kind === "member" && !status.owner;
 }
@@ -249,6 +261,7 @@ export function openClawIdMenuEntries(
           </button>
         ),
       },
+      ...unlinkEntries(status),
     ];
   }
   const card: MenuEntry[] = [];
@@ -354,6 +367,7 @@ export function openClawIdMenuEntries(
   if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
     entries.push(...keyAttentionEntries(status, publication));
     entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+    entries.push(...unlinkEntries(status));
   } else if (
     status.remoteAccessSetup === "personal_admin" &&
     status.link.linked &&
@@ -551,6 +565,19 @@ export function selectOpenClawIdMenuValue(
         }
       });
     }
+  } else if (
+    value === UNLINK &&
+    client &&
+    status.channel === "local_operator" &&
+    status.link.linked &&
+    status.link.hostname
+  ) {
+    const hostname = status.link.hostname;
+    openDialog(async () => {
+      if (await (await import("./unlink-dialog.tsx")).showUnlinkDialog({ client, hostname })) {
+        context.onKeysChanged?.();
+      }
+    });
   } else if (value === PUBLISH_KEYS && client) {
     const signedIn = setupSignedIn(status);
     if (signedIn) {

@@ -69,7 +69,7 @@ suite.define(() => {
       },
     ];
     await suite.withPage(
-      { locale: "en-US", viewport: { width: 1_280, height: 900 } },
+      { locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -92,10 +92,12 @@ suite.define(() => {
         });
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
+        await page.getByRole("button", { name: "Expand sidebar" }).click();
         await openAutomationActivity(page);
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
+            await page.getByRole("button", { name: "Expand sidebar" }).click();
             await openAutomation(page, job.id);
           }
           await expect
@@ -126,6 +128,38 @@ suite.define(() => {
           expect(await runs.nth(2).textContent()).toContain(
             "Synthetic best-effort delivery failure.",
           );
+
+          // On a phone the name may wrap, but it must not clip the run outcome or move the time.
+          await page.evaluate(() => document.fonts.ready);
+          const statusLayout = await runs
+            .locator(".cron-run-entry__title")
+            .evaluateAll((elements) =>
+              elements.every((title) => title.scrollWidth <= title.clientWidth + 1),
+            );
+          expect.soft(statusLayout, `${scope} outcomes are readable`).toBe(true);
+          const offsets = await runs
+            .locator(".cron-run-entry__time")
+            .evaluateAll((times) =>
+              times.map(
+                (time) =>
+                  time.parentElement!.getBoundingClientRect().right -
+                  time.getBoundingClientRect().right,
+              ),
+            );
+          expect
+            .soft(Math.max(...offsets.map(Math.abs)), "times stay on the trailing edge")
+            .toBeLessThanOrEqual(1);
+          if (scope === "job") {
+            const heading = await history.getByRole("heading").first().boundingBox();
+            const filter = await history
+              .getByRole("button", { name: "Filters", exact: true })
+              .boundingBox();
+            expect(
+              heading &&
+                filter &&
+                Math.abs(heading.y + heading.height / 2 - filter.y - filter.height / 2),
+            ).toBeLessThanOrEqual(1);
+          }
 
           const previousRequests = (await gateway.getRequests("cron.runs")).length;
           // The automation's own history keeps its filters behind one button.
