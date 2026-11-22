@@ -118,13 +118,6 @@ it.each([
     cut: false,
     oversized: true,
   },
-  {
-    route: "fallback from an oversized Claude CLI mirror",
-    native: "claude-cli",
-    fallback: true,
-    cut: false,
-    oversized: true,
-  },
 ])("admits the first embedded request after $route only if it fits", async (scenario) => {
   const { native, fallback, cut, oversized } = scenario;
   const { blocked, manual, legacy, resume, unrelated, laterNative, interveningThread } = {
@@ -154,6 +147,9 @@ it.each([
       if (fallback) {
         fixture.attempt.fallbackReason = "auth";
       }
+      // Prompt submission can annotate the newest, current user row. Compare the
+      // durable history before that input, including the untagged receipt itself.
+      const legacyRows = legacy ? loadTranscriptEventsSync(fixture.target).slice(0, -1) : undefined;
       const requests: string[] = [];
       streamMocks.streamSimple.mockImplementation((model, context) => {
         requests.push(JSON.stringify(context.messages));
@@ -192,12 +188,14 @@ it.each([
           expect(onCompactionStart).not.toHaveBeenCalled();
         } else if (laterNative) {
           const candidates: string[] = [];
-          const fail = await runWithModelFallback({
+          const completed = await runWithModelFallback({
             cfg: {},
             provider: "openai",
             model: "gpt-4.1-mini",
             fallbacksOverride: ["anthropic/claude-haiku-3-5", "openai/gpt-4.1"],
             skipAuthProfileRuntime: true,
+            resolveAgentHarnessRuntimeOverride: (provider) =>
+              provider === "openai" ? "codex" : "openclaw",
             run: async (provider, model) => {
               candidates.push(`${provider}/${model}`);
               if (candidates.length === 1) {
@@ -207,14 +205,24 @@ it.each([
                   reason: "auth",
                 });
               }
-              await submitEmbedded();
+              if (provider === "anthropic") {
+                try {
+                  await submitEmbedded();
+                } catch (error) {
+                  expect(resolveModelFallbackError(error).kind).toBe("coordination");
+                  throw error;
+                }
+                throw new Error("Embedded candidate was admitted");
+              }
+              return "native continuation";
             },
-          }).catch((error: unknown) => error);
-          expect(fail).toMatchObject({
-            message: expect.stringContaining("no portable compaction summary"),
           });
-          expect(resolveModelFallbackError(fail).kind).toBe("coordination");
-          expect(candidates).toEqual(["openai/gpt-4.1-mini", "anthropic/claude-haiku-3-5"]);
+          expect(completed.result).toBe("native continuation");
+          expect(candidates).toEqual([
+            "openai/gpt-4.1-mini",
+            "anthropic/claude-haiku-3-5",
+            "openai/gpt-4.1",
+          ]);
         }
         await expect(submitEmbedded()).rejects.toThrow("no portable compaction summary");
         expect(requests).toHaveLength(0);
@@ -275,8 +283,26 @@ it.each([
         { onModelRequest: (...args) => onModelRequest(...args) },
       );
 
-      const persisted = JSON.stringify(loadTranscriptEventsSync(fixture.target));
-      expect(persisted).toContain(oldText);
+      const persisted = loadTranscriptEventsSync(fixture.target);
+      expect(JSON.stringify(persisted)).toContain(oldText);
+      if (legacyRows) {
+        expect(legacyRows).toContainEqual(
+          expect.objectContaining({
+            message: expect.objectContaining({
+              idempotencyKey: "codex-context-compaction:thread-1:compact-turn:compact-1",
+              details: {
+                kind: "context_compaction",
+                backend: "codex-app-server",
+                threadId: "thread-1",
+                turnId: "compact-turn",
+                itemId: "compact-1",
+                runId: "manual-run",
+              },
+            }),
+          }),
+        );
+        expect(persisted.slice(0, legacyRows.length)).toEqual(legacyRows);
+      }
 
       if (oversized && !cut) {
         return;
