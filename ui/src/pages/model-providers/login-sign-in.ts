@@ -55,7 +55,7 @@ export function createLoginSignIn(
   let authProviderId: string | undefined;
   let authProviderLabel: string | undefined;
   // The last started sign-in, so a typed failure can offer to start it again.
-  let choice: { selectModel: boolean; restart: () => void } | undefined;
+  let lastSignIn: { selectModel: boolean; restart: () => void } | undefined;
   // Who started the running sign-in. Only the same owner resumes it after a reconnect.
   let owner: { recoveryScope: string | null; agentId: string | null } | undefined;
   // The record of the running sign-in, cleared once the Gateway no longer has it.
@@ -94,7 +94,7 @@ export function createLoginSignIn(
     const selectModel = allowSetup && kind !== "secret";
     mode = selected.requiresSetup ? (selectModel ? "activate" : "access") : "auth";
     const { id, label, brandId } = selected;
-    choice = {
+    lastSignIn = {
       selectModel,
       restart: () => {
         runner.prepareSignIn(kind, label, brandId);
@@ -116,7 +116,7 @@ export function createLoginSignIn(
     own(scope);
     record = persistFirstRunActivationReceipt(receiptContext(scope), {
       kind: intent.kind,
-      wizard: { ...intent.wizard, selectModel: choice?.selectModel },
+      wizard: { ...intent.wizard, selectModel: lastSignIn?.selectModel },
     });
     return observe(record);
   }
@@ -239,9 +239,9 @@ export function createLoginSignIn(
     /** Starts the chosen sign-in. */
     choose(selected: LoginChoice, allowSetup: boolean): void {
       adopt(selected, allowSetup);
-      choice?.restart();
+      lastSignIn?.restart();
     },
-    restart: () => choice?.restart(),
+    restart: () => lastSignIn?.restart(),
     get mode() {
       return mode;
     },
