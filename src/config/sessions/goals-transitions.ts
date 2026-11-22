@@ -122,7 +122,8 @@ export function applySettledSessionGoalUsage(
           status: "usage_limited",
           usageLimitedAt: now,
           updatedAt: now,
-          lastStatusNote: "Model token usage was unavailable. Review the Goal before resuming.",
+          lastStatusNote:
+            "Goal token usage was unavailable. Choose a built-in model that reports usage, then resume the Goal.",
         }
       : undefined;
   }

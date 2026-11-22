@@ -140,8 +140,9 @@ clear that goal explicitly; completion allows the next goal to start.
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
   restarts pursuit from the same objective with a fresh budget window.
-- `usage_limited`: a built-in turn may have used tokens, but the settled token
-  count was unavailable. Review the Goal before explicitly resuming it.
+- `usage_limited`: settled token usage is unavailable for the Goal, for example
+  after a CLI fallback. Choose a built-in model that reports usage before
+  explicitly resuming it.
 - `complete`: the goal was achieved. It stays complete until you explicitly use
   `/goal resume` or **Resume** in the Control UI to pursue the same objective again.
   Resuming preserves its identity, creation time, and conversation history. Token

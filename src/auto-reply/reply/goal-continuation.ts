@@ -190,7 +190,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (!eligible() || !entry?.goal) {
     return false;
   }
-  // CLI replies have no built-in settlement and need not set an agent harness ID.
+  // No unmetered CLI successor, even if the Goal was not active at turn admission.
   if (entry.goal.tokenBudget !== undefined && params.result.meta.executionTrace?.runner === "cli") {
     return false;
   }

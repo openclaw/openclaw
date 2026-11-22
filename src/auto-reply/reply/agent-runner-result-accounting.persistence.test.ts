@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { captureSessionGoalBudget } from "../../config/sessions/goals-transitions.js";
 import { createSessionGoal } from "../../config/sessions/goals.js";
@@ -165,6 +169,40 @@ it.each([
   expect(row?.goal).toMatchObject({ status, tokensUsed: 0 });
   expect(isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row)).toBe(
     status === "active",
+  );
+});
+
+it("records why a budgeted Goal stops after an unmetered CLI fallback", async () => {
+  const fixture = await createFixture();
+  const { context } = fixture;
+  const goal = await createSessionGoal({
+    storePath,
+    sessionKey: context.sessionKey!,
+    objective: "Index poems",
+    tokenBudget: 100_000,
+  });
+  context.admittedGoalBudget = captureSessionGoalBudget(goal);
+  fixture.setMeta({ usage: { input: 40_000, output: 5_000 } });
+  context.execution.result.meta.executionTrace = { runner: "cli", fallbackUsed: true };
+  context.execution.result.meta.stopReason = "end_turn";
+  setRuntimeConfigSnapshot(context.cfg);
+  try {
+    await withAccountingProvider(() => finalizeReplyAgentRun(context));
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+  const row = fixture.read();
+  expect(row).toMatchObject({
+    inputTokens: 40_000,
+    goal: {
+      id: goal.id,
+      status: "usage_limited",
+      tokensUsed: 0,
+      lastStatusNote: expect.stringContaining("resum"),
+    },
+  });
+  expect(isGoalContinuationCurrent({ goalId: goal.id, sessionId: fixture.sessionId }, row)).toBe(
+    false,
   );
 });
 
