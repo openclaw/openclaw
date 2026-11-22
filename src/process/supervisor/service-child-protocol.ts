@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { BrokerError } from "../spawn-broker/protocol.js";
+import type { ReleasedProcess } from "./types.js";
 
 export type ServiceChildStart = {
   executionIntent?: ProcessExecutionIntent;
@@ -24,6 +25,11 @@ export type ServiceChildStart = {
   /** Absent only for older Gateway hosts retained by update --no-restart. */
   acknowledgeClosing?: true;
   windowsShellCommand?: string;
+  /**
+   * Hand off processes still running after the root exits instead of stopping them.
+   * The host can also request this hand-off while the root runs.
+   */
+  releaseOnRootExit?: true;
   treeOwnership?: "linux-subreaper";
   /** Package-owned helper inherited by an admitted portable worker, never a remote command. */
   nativeProcessOwner?: string;
@@ -40,6 +46,7 @@ export type ServiceChildControlPayload =
   | { type: "worker-close" }
   | { type: "startup-error-ack" }
   | { type: "lineage-closed" }
+  | { type: "release" }
   | { type: "closing-ack"; closingSequence: number };
 
 export type ServiceChildControlMessage = ServiceChildControlPayload & {
@@ -81,6 +88,11 @@ export type ServiceChildAnchorPayload =
       descendantsReaped?: true;
     }
   | {
+      /** The owner gave up custody without signalling; these processes keep running. */
+      type: "released";
+      survivors: ReleasedProcess[];
+    }
+  | {
       type: "startup-error";
       error: string;
       errorDetails?: BrokerError;
@@ -95,6 +107,9 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
 export type ServiceChildRelayMessage =
   | ServiceChildStart
   | { type: "relay-error"; generation: string; error: string };
+
+/** Host to relay: the anchor released its group; exit without joining group extinction. */
+export type ServiceChildRelayRelease = { type: "release"; generation: string };
 
 export function readServiceChildMessage(
   raw: unknown,

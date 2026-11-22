@@ -391,7 +391,7 @@ describe("bundle LSP runtime", () => {
     }
 
     expect((await Promise.all(requests)).map((result) => result.content)).toEqual(
-      results.map((result) => [{ type: "text", text: JSON.stringify(result, null, 2) }]),
+      results.map((result) => [{ type: "text", text: JSON.stringify(result) }]),
     );
   });
 

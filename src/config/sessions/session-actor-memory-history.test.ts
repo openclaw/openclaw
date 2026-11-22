@@ -286,7 +286,7 @@ describe("memory actor history", () => {
     ];
     for (const query of reads) {
       expect(() => storage.readCurrent(query, authority)).toThrow(
-        "Transcript history message exceeds the 8388608-byte page limit",
+        "Chat history message exceeds the 8388608-byte page limit",
       );
     }
     expect(
@@ -510,6 +510,22 @@ describe("memory actor history facts", () => {
     });
     const recent = await read("recent-active-events", { maxEvents: 2 });
     expect(recent).toEqual([compact, answer]);
+  });
+
+  it("charges conversation, not the saved system-prompt checkpoint, as context bytes", async () => {
+    const question = message("question", null, "user", "Question");
+    const reply = message("reply", "question", "assistant", "Answer");
+    const checkpoint = {
+      type: "custom",
+      id: "prompt",
+      parentId: "reply",
+      customType: "openclaw.system-prompt",
+      data: { prefix: "x".repeat(150_000), routeKey: "r", historyId: "h" },
+    };
+    const { read } = await fixture([question, reply, checkpoint]);
+    await expect(
+      read("accounting", { options: { includeByteSize: true, includeUsage: false } }),
+    ).resolves.toEqual({ byteSize: bytes(question, reply) + 1, eventCount: 2 });
   });
 
   it("bounds detached tails without hiding an oversized gap or changing physical stats", async () => {

@@ -268,7 +268,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       },
     };
     const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
+    let actor: Awaited<ReturnType<typeof captureDurableSessionActor>> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -304,7 +304,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         kind: "participants",
         projection: { participants: [{ identity: peer }], participantCount: 1 },
       });
-      actor = captureDurableSessionActor({
+      actor = await captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target: actorTarget,
         lifetime: authority,
@@ -323,7 +323,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       expect(after?.participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 4 }]);
       expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
       expect(readSessionActorEntryFacts(actorTarget)?.participants).toEqual(after?.participants);
-      expect(participantLifecycle).toHaveBeenCalledTimes(2);
+      expect(participantLifecycle).toHaveBeenCalledTimes(1);
       await expect(
         addSessionMember(scope, {
           identityId: "stale",
@@ -498,7 +498,9 @@ it.each([
       const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
       const unavailable = "Session access facts are unavailable";
       const expectUnavailable = () =>
-        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(unavailable);
+        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+          mutation === "category" ? unavailable : "restart the Gateway",
+        );
       const publishedMemberships: boolean[] = [];
       const stopPublic = sessionChanges.subscribe((change) => {
         if (

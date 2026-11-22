@@ -6,7 +6,6 @@ import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
-  bindActiveCronAuthorityCurrentness,
   bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
@@ -39,7 +38,6 @@ export function finalizeCliMcpGrant(
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
-  const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
   const withCronManagementToolConstruction = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
@@ -52,7 +50,6 @@ export function finalizeCliMcpGrant(
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
-    ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     ...(withCronManagementToolConstruction ? { withCronManagementToolConstruction } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,
@@ -207,6 +204,8 @@ export function buildCliMcpGrantContext(params: {
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
+    // Compaction lists the session's tools only so its request prefix matches the turns'.
+    ...(params.run.controlOperation ? { toolCallsRefused: true as const } : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),

@@ -6,10 +6,13 @@ import { withDatabaseEngineSelection } from "../infra/database-engine/context.js
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { bindConfigOwner } from "./config-cli-owner-patch.js";
 
+let lastCommitted: unknown;
+
 // Commits one change through a synthetic owner and returns the config.patch request it sent.
 async function commitThroughOwner(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
-  hash?: string,
+  owner: { hash?: string; config?: unknown } = {},
+  patchResponse: Record<string, unknown> = {},
 ) {
   const env = { OPENCLAW_CONFIG_PATH: path.resolve("synthetic-owner", "openclaw.json") };
   const sent: Record<string, unknown>[] = [];
@@ -18,17 +21,32 @@ async function commitThroughOwner(
       sent.push(params);
     }
     // SAFETY: both synthetic responses match the fields the binder reads.
-    return (method === "config.get" ? { path: resolveConfigPath(env), hash } : {}) as R;
+    return (
+      method === "config.get" ? { path: resolveConfigPath(env), ...owner } : patchResponse
+    ) as R;
   };
   const commit = await withDatabaseEngineSelection(
     { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     () => bindConfigOwner(requestOwner, env),
   );
-  await commit(change);
+  lastCommitted = await commit(change);
   return sent[0] as { raw: string; baseHash?: string; replacePaths?: string[] };
 }
 
 describe("bindConfigOwner", () => {
+  it("returns the owner's billing-route warnings with the restart hint", async () => {
+    const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
+    await commitThroughOwner(
+      { previous: {}, next: { gateway: { reload: { mode: "off" } } } },
+      { hash: "base-hash" },
+      { restart: { scheduled: true }, billingRouteWarnings: [warning] },
+    );
+    expect(lastCommitted).toEqual({
+      hint: "The Gateway is restarting to apply it.",
+      warnings: [warning],
+    });
+  });
+
   it("sends only the change, with array replacement and deletion as explicit intent", async () => {
     const previous: OpenClawConfig = {
       gateway: { reload: { mode: "hybrid" }, nodes: { commands: { allow: ["a", "b"] } } },
@@ -40,7 +58,13 @@ describe("bindConfigOwner", () => {
       agents: { entries: {} },
       tools: { toolSearch: false },
     };
-    const request = await commitThroughOwner({ previous, next }, "base-hash");
+    // The Gateway's runtime view adds default arrays inside and outside the removed subtree.
+    const config = {
+      ...previous,
+      agents: { entries: { main: { skills: ["notes"], tools: { allow: ["read"] } } } },
+      models: { providers: { ollama: { models: [] } } },
+    };
+    const request = await commitThroughOwner({ previous, next }, { hash: "base-hash", config });
     // v2026.10.7 Gateways accept routed writes but close config.patch over these fields.
     const stableConfigPatchFields = new Set([
       "raw",
@@ -61,6 +85,7 @@ describe("bindConfigOwner", () => {
     expect(request.replacePaths).toEqual([
       "gateway.nodes.commands.allow",
       "agents.entries.main.skills",
+      "agents.entries.main.tools.allow",
       "tools.toolSearch.include",
     ]);
   });

@@ -221,6 +221,42 @@ const pluginPolicies = new WeakMap<
   PreparedPluginNodePolicy
 >();
 
+export function canInvokeNodeMcpLocally(commands: readonly string[]): boolean {
+  const policy = getNodeMcpInvokePolicy();
+  return (
+    commands.includes(NODE_MCP_TOOLS_CALL_COMMAND) &&
+    getPreparedPluginNodePolicy()?.dangerous.has(NODE_MCP_TOOLS_CALL_COMMAND) !== true &&
+    (!policy || typeof policy.policy.allowLocalMcpTool === "function")
+  );
+}
+
+function getNodeMcpInvokePolicy() {
+  return getActivePluginGatewayNodePolicyRegistry()?.nodeInvokePolicies.find((entry) =>
+    entry.policy.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND),
+  );
+}
+
+export function canInvokeNodeMcpToolLocally(subject: {
+  nodeId: string;
+  server: string;
+  tool: string;
+}): boolean {
+  if (getPreparedPluginNodePolicy()?.dangerous.has(NODE_MCP_TOOLS_CALL_COMMAND)) {
+    return false;
+  }
+  const entry = getNodeMcpInvokePolicy();
+  if (!entry) {
+    return true;
+  }
+  try {
+    return (
+      entry.policy.allowLocalMcpTool?.({ ...subject, pluginConfig: entry.pluginConfig }) === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {

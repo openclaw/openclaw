@@ -3,9 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   loadSessionEntry,
@@ -23,7 +23,7 @@ const fixture = useTempSessionsFixture("pending-input-mirror-replay-");
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
     await receipt.settled?.();
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -81,7 +81,7 @@ async function commitMirroredInput() {
     expectDefined(recorder.getPersistedMessage?.(), "native prompt"),
   );
   const transcript = await loadTranscriptEvents(scope);
-  recorder.finishPendingInput?.("interrupted");
+  recorder.finishPendingInput?.("interrupted", "failed");
   await closeOpenClawAgentDatabasesAsync();
   rotateAgentEventLifecycleGeneration();
   const replay = async (message: PersistedUserTurnMessage = original) => {
@@ -109,7 +109,7 @@ it("replays a committed native prompt without duplicating the mirrored input", a
   expect(receipt.state).toBe("queued");
   expect(receipt.message).toEqual(committed);
   const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
-  expect(readForeign()).toEqual(new Map([[receipt.inputId, committed.idempotencyKey]]));
+  expect(await readForeign()).toEqual(new Map([[receipt.inputId, committed.idempotencyKey]]));
   expect(
     await receipt.runAsync!(async () =>
       (await prepareForeignLiveSessionPendingInputEntries(scope))(),
@@ -119,9 +119,9 @@ it("replays a committed native prompt without duplicating the mirrored input", a
   const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
   await expect(receipt.completeAsync!(outcome)).resolves.toEqual(outcome);
   expect(await loadTranscriptEvents(scope)).toEqual(transcript);
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   await receipt.settled?.();
-  expect(readForeign()).toEqual(new Map());
+  expect(await readForeign()).toEqual(new Map());
 });
 
 it("still rejects changed completion content and requester facts against a native prompt", async () => {

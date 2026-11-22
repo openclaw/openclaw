@@ -38,6 +38,30 @@ it("screenshots a ref locator", async () => {
   expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
   expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
 });
+it.each([
+  [undefined, ["bringToFront", "screenshot"]],
+  [false, ["Page.startScreencast", "screenshot", "Page.stopScreencast", "detach"]],
+])(
+  "renders a background tab for capture without taking focus in headed Chrome (headless=%s)",
+  async (headless, calls) => {
+    const order: string[] = [];
+    const session = {
+      on: () => {},
+      send: async (method: string) => void order.push(method),
+      detach: async () => void order.push("detach"),
+    };
+    setPwToolsCoreCurrentPage({
+      context: () => ({ newCDPSession: async () => session }),
+      bringToFront: async () => void order.push("bringToFront"),
+      screenshot: async () => {
+        order.push("screenshot");
+        return Buffer.from("P");
+      },
+    });
+    await capture({ ...target, headless });
+    expect(order).toEqual(calls);
+  },
+);
 it("rejects fullPage for element or ref screenshots", async () => {
   const locator = {};
   setPwToolsCoreCurrentRefLocator(locator);

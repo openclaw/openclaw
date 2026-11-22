@@ -136,7 +136,7 @@ export async function runAgentStep(params: {
         });
       }
       const dispatch = () =>
-        callGateway<Record<string, unknown>>({
+        callGateway({
           method: "agent",
           // This is a returned result, not a new request to the peer. Consuming it
           // must not require an acknowledgment or repeat an already delivered final.

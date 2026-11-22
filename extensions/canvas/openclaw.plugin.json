@@ -54,5 +54,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Canvas is ready to display a visual on my paired Mac.",
+    "Help me preview a visual explanation for Canvas before presenting it."
+  ]
 }

@@ -47,7 +47,7 @@ async function expectReconnecting(page: Page) {
 }
 
 suite.define(() => {
-  it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
+  it("keeps recovery visible and automatically enters a reachable Gateway after refused upgrades", async () => {
     const page = await newPage();
     await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
     await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
@@ -85,12 +85,15 @@ suite.define(() => {
     });
 
     await page.goto(suite.server.baseUrl);
-    await page.clock.runFor(1);
-    const failure = page.locator('.login-gate__failure[data-kind="busy"]');
-    await failure.waitFor();
-    expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
-      "Gateway busy, retrying…",
-    );
+    const recovery = page.locator('.gateway-connection-view[data-connection-state="reconnecting"]');
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return recovery.isVisible();
+      })
+      .toBe(true);
+    expect((await recovery.getByRole("heading").textContent())?.trim()).toBe("Still connecting");
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await gateway.getRequests("connect")).toHaveLength(0);
 
     const retryHealthResponse = page.waitForResponse("**/healthz");
@@ -98,11 +101,12 @@ suite.define(() => {
     // The first probe's busy state can survive while the retry probe is still in flight.
     // Finish its real response before advancing the virtual one-second abort deadline.
     expect(await (await retryHealthResponse).finished()).toBeNull();
-    const countdown = failure.locator(".login-gate__retry");
-    await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
+    await recovery.waitFor();
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
     await page.clock.runFor(1_000);
-    expect((await countdown.textContent())?.trim()).toBe("Retrying in 1s…");
-    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+    expect(await recovery.isVisible()).toBe(true);
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
+    expect(await page.locator("openclaw-app-shell").count()).toBe(1);
 
     await page.clock.runFor(1_000);
     await gateway.waitForRequest("connect");
@@ -144,7 +148,9 @@ suite.define(() => {
     await gateway.rejectDeferred("connect", mismatch);
     const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
     await failure.waitFor();
-    expect((await failure.textContent())?.toLowerCase()).toContain("supported connection protocol");
+    expect((await failure.textContent())?.toLowerCase()).toContain(
+      "this page and the gateway use different versions",
+    );
     const refresh = failure.locator(".login-gate__failure-refresh");
     expect(await refresh.isVisible()).toBe(true);
     await page.clock.runFor(120_000);
@@ -191,7 +197,7 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
     await gateway.rejectDeferred("connect", {
       code: "UNAVAILABLE",
-      message: "protocol mismatch: Control UI updated; reload this page to continue",
+      message: "protocol mismatch: OpenClaw updated; reload this page to continue",
       details: {
         code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
         gatewayBuildId: "replacement-build",
@@ -207,7 +213,7 @@ suite.define(() => {
         }),
       )
       .toBe("reload-required");
-    await page.getByRole("button", { name: /Server updated/u }).waitFor();
+    await page.getByRole("button", { name: /OpenClaw was updated/u }).waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 
@@ -304,7 +310,7 @@ suite.define(() => {
   });
 
   it("retries pending pairing and enters the app after approval without clicks", async () => {
-    const page = await newPage();
+    const page = await newPage({ viewport: { width: 390, height: 844 } });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
     const pairingError = {
       code: "NOT_PAIRED",
@@ -324,9 +330,19 @@ suite.define(() => {
     const failure = page.locator('.login-gate__failure[data-kind="pairing-required"]');
     await failure.waitFor();
     await gateway.waitForRequest("connect", { after: 1 });
-    expect(await failure.textContent()).toContain(
-      "Waiting for approval… this page connects on its own once the request is approved.",
+    const waiting = failure.getByText(
+      "Waiting for approval… This page connects automatically once approved.",
+      { exact: true },
     );
+    const lineStarts = await waiting.evaluate(async (paragraph) => {
+      await document.fonts.ready;
+      const range = document.createRange();
+      const text = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT).nextNode()!;
+      range.selectNodeContents(text);
+      return [...range.getClientRects()].map((line) => line.left);
+    });
+    expect(lineStarts.length).toBeGreaterThan(1);
+    expect(Math.max(...lineStarts) - Math.min(...lineStarts)).toBeLessThanOrEqual(1);
     expect(await failure.getByRole("button", { name: "Check now", exact: true }).isEnabled()).toBe(
       true,
     );

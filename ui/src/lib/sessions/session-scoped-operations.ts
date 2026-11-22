@@ -9,6 +9,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
+  SessionWorkspaceStatResult,
 } from "../../api/types.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import { buildSessionRequestParams } from "./session-requests.ts";
@@ -78,6 +79,17 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       sessionKey: key,
       path,
       ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
+
+  const statFiles = (
+    key: string,
+    files: { path: string; messageEntryId?: string }[],
+    options: { agentId?: string | null } = {},
+  ) =>
+    requestCurrent<SessionWorkspaceStatResult>("sessions.files.stat", {
+      sessionKey: key,
+      files,
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
@@ -185,6 +197,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     listFiles,
     rewind,
     setFile,
+    statFiles,
     async subscribeMessages(
       key: string,
       options: GatewaySessionMessageSubscriptionOptions = {},
@@ -208,7 +221,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       }
       const normalizedKey = key.trim();
       const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
-      const { mode, includeApprovals, initialHistory } = options;
+      const { mode, includeApprovals, includeLiveToolOutput, initialHistory } = options;
       const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
       if (!isCurrent()) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -222,9 +235,10 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
           })
           .acquire(normalizedKey, {
             agentId,
-            ...(includeApprovals ? { includeApprovals: true } : {}),
-            ...(mode ? { mode } : {}),
-            ...(initialHistory ? { initialHistory } : {}),
+            includeApprovals,
+            includeLiveToolOutput,
+            mode,
+            initialHistory,
           }));
       ownedSubscriptions.add(subscription);
       if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {

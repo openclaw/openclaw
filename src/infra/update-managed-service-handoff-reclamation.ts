@@ -71,7 +71,7 @@ export function createManagedHandoffReclaimability({
     }
     const action = lease.action;
     if (managedCommandCustody(lease)) {
-      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
+      return !managedCommandUnsettled(lease, processState) && !hasUnsettledChildren(lease, db);
     }
     if (action.kind === "triage" && action.lifetime.kind === "foreground") {
       const boot = bootIdentity();
@@ -143,9 +143,8 @@ export function observeManagedHandoffReclamation(
     deps.readCommandChildren(roots, db).toSorted((a, b) => a.key.localeCompare(b.key));
   const commands = readCommands();
   const commandSettled = (lease: ManagedHandoffLease) =>
-    managedCommandCustody(lease) === "bound" &&
     deps.processState(lease.helper) === "dead" &&
-    !managedCommandUnsettled(lease);
+    !managedCommandUnsettled(lease, deps.processState);
   const dead =
     observed.every(({ lease }) => deps.reclaimable(lease, db)) && commands.every(commandSettled);
   // The caller runs this only after revalidating the exact original observation
@@ -290,8 +289,9 @@ export async function prepareManagedHandoffRepair(
     previous.mutationOriginal ||
     (!legacyUpdateChild(previous) &&
       (previous.action.kind !== "triage" ||
-        previous.action.lifetime.kind !== "foreground" ||
-        !["running", "uncertain"].includes(previous.action.phase)))
+        (previous.action.phase !== "closing" &&
+          (previous.action.lifetime.kind !== "foreground" ||
+            !["running", "uncertain"].includes(previous.action.phase)))))
   ) {
     return null;
   }
@@ -318,7 +318,7 @@ export async function prepareManagedHandoffRepair(
   const metadata = withDatabase(true, (db) =>
     readManagedHandoffRepairMetadata(db, previous, (operation) => store.transact(db, operation)),
   );
-  if (previous.action.kind === "triage" && previous.action.phase !== "uncertain" && !metadata) {
+  if (previous.action.kind === "triage" && previous.action.phase === "running" && !metadata) {
     return null;
   }
   const source = metadata?.source ?? managedHandoffLeaseRow(previous);
@@ -334,6 +334,17 @@ export async function prepareManagedHandoffRepair(
     };
     assertDead();
     const assertChildrenSettled = (db: DatabaseSync) => {
+      // Native closing also retains its cgroup until the existing scope owner
+      // proves it empty. Dead helper/executor PIDs alone do not settle that work.
+      if (
+        previous.action.kind === "triage" &&
+        previous.action.lifetime.kind === "native" &&
+        !reclaimable(previous, db)
+      ) {
+        throw new Error(
+          `Native triage scope ${previous.action.lifetime.scope} remains live or unverified. Verify it through the owning service manager, then run openclaw update repair.`,
+        );
+      }
       // A proven reboot closes legacy process claims, never newer receipt-owned custody.
       if (
         !children.every((child) => legacyUpdateChild(child) && familyExited(child)) &&
@@ -406,14 +417,20 @@ export async function prepareManagedHandoffRepair(
           }),
     });
   };
-  if (sourceLease.version !== 4) {
-    return await resume();
-  }
-  // An interrupted cancelled-custody repair still guards that custody.
   try {
     return await resume();
   } catch (error) {
-    throw new ManagedHandoffCustodyRetainedError(sourceLease, error);
+    // An interrupted cancelled-custody repair still guards that custody.
+    if (sourceLease.version === 4) {
+      throw new ManagedHandoffCustodyRetainedError(sourceLease, error);
+    }
+    if (previous.action.kind === "triage" && previous.action.phase === "closing") {
+      throw new Error(
+        `Triage/repair lease remains at ${previous.key} (owner ${previous.owner}, lease version ${previous.version}, phase closing, last activity ${new Date(previous.updatedAt).toISOString()}): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
 }
 

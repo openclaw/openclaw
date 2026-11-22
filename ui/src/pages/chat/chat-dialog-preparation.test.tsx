@@ -69,7 +69,7 @@ function mobileHeader(target = () => "sample-run") {
         disabled: false,
         pending: false,
         confirmation: {
-          title: "Stop worker",
+          title: "Stop",
           message: "Stop sample worker?",
           confirmLabel: "Stop",
           cancelLabel: "Cancel",
@@ -177,31 +177,29 @@ function dirtyPreview(editable: boolean) {
 }
 
 it("retains dirty workspace content when the close confirmation cannot open", async () => {
+  const message = "Close dialog unavailable";
   const { state, file, preview, save, discard } = dirtyPreview(true);
-  vi.spyOn(confirmDialog, "showConfirmChoiceDialog").mockRejectedValueOnce(
-    new Error("Close dialog unavailable"),
-  );
+  vi.spyOn(confirmDialog, "showConfirmChoiceDialog").mockRejectedValueOnce(new Error(message));
   expect(await requestCloseSessionWorkspacePreview(state, preview.id)).toBe(false);
   expect(getSessionWorkspace(state).previews).toContain(preview);
   expect(readFileDraft(file)?.content).toBe("Unsaved notes");
   expect(save).not.toHaveBeenCalled();
   expect(discard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: "Close dialog unavailable" });
+  expect(showToast).toHaveBeenCalledWith({ severity: "error", message });
 });
 
 it("keeps reload blocked and retries retained-draft review after preparation failure", async () => {
+  const message = "Draft review unavailable";
   const { file } = dirtyPreview(false);
   const review = vi
     .spyOn(draftDialog, "reviewFileDrafts")
-    .mockRejectedValueOnce(new Error("Draft review unavailable"))
+    .mockRejectedValueOnce(new Error(message))
     .mockResolvedValueOnce(undefined);
   expect(canReloadControlUiDocument(true)).toBe(false);
   const toast = vi.mocked(showToast).mock.calls.at(-1)?.[0];
   expect(toast?.onAction).toBeDefined();
   toast!.onAction!();
-  await waitForSolid(() =>
-    expect(showToast).toHaveBeenCalledWith({ message: "Draft review unavailable" }),
-  );
+  await waitForSolid(() => expect(showToast).toHaveBeenCalledWith({ severity: "error", message }));
   expect(readFileDraft(file)?.content).toBe("Unsaved notes");
   expect(canReloadControlUiDocument()).toBe(false);
   await reviewRetainedFileDrafts();

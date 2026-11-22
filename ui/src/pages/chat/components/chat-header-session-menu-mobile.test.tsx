@@ -31,6 +31,7 @@ async function menuFixture(mobile: boolean | undefined, group = "Alpha") {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
+  await import("./chat-header-session-menu-content.tsx");
   await waitForSolid(() =>
     expect(
       menu.querySelector(mobile ? '[value="mobile-copy"]' : '[value="rename"]'),
@@ -60,6 +61,8 @@ it.each([
   ["Mu\u0308nchen", "M\u00fcnchen"],
 ])("opens the controlled group picker and selects %s without autofocus", async (query, group) => {
   const { menu, open, close, onAction } = await menuFixture(true, group);
+  menu.groups = [...menu.groups, ...Array.from({ length: 7 }, (_, index) => `Zzz ${index}`)];
+  await menu.updateComplete;
   menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
   flush();
   expect(open).toHaveBeenCalledOnce();
@@ -157,7 +160,7 @@ it("dismisses the controlled Advanced page after a fork action", async () => {
   const mounted = mountSolid(() => page.content);
   flush();
   const fork = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Fork conversation",
+    (button) => button.textContent?.trim() === "Fork session",
   );
   expect(fork?.disabled).toBe(false);
   fork!.click();

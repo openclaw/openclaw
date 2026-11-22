@@ -1,46 +1,17 @@
-import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredentials } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
-import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
-const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
-const openAICodexOAuthOriginator = "openclaw";
+// Setup screens show these to people who never saw a redirect URL: say what to copy, not why.
+const manualInputPromptMessage = "Paste the address from your browser's address bar:";
+const callbackStillOpenMessage =
+  "Signed in, but nothing happened? Paste the address from your browser's address bar.";
+const callbackUnavailableMessage =
+  "Sign in in your browser, then paste the address from its address bar.";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
-type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
-
-function createOpenAICodexOAuthError(
-  code: OpenAICodexOAuthFailureCode,
-  message: string,
-  cause?: unknown,
-): Error & { code: OpenAICodexOAuthFailureCode } {
-  return Object.assign(new Error(`OpenAI Codex OAuth failed (${code}): ${message}`, { cause }), {
-    code,
-  });
-}
-
-function rewriteOpenAICodexOAuthError(error: unknown): Error {
-  const message = formatErrorMessage(error);
-  if (/unsupported_country_region_territory/i.test(message)) {
-    return createOpenAICodexOAuthError(
-      "unsupported_region",
-      [
-        "OpenAI rejected the token exchange for this country, region, or network route.",
-        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai`.",
-      ].join(" "),
-      error,
-    );
-  }
-  if (/state mismatch|missing authorization code/i.test(message)) {
-    return createOpenAICodexOAuthError("callback_validation_failed", message, error);
-  }
-  return error instanceof Error ? error : new Error(message);
-}
 
 export async function loginOpenAICodexOAuth(params: {
   prompter: ProviderAuthContext["prompter"];
@@ -57,58 +28,9 @@ export async function loginOpenAICodexOAuth(params: {
 
   ensureGlobalUndiciEnvProxyDispatcher();
 
-  const preflight = await runOpenAIOAuthTlsPreflight({
-    signal: params.signal,
-    assertCurrent: params.assertCurrent,
-  });
-  params.assertCurrent?.();
-  if (!preflight.ok && preflight.kind === "tls-cert") {
-    const execPath = process.execPath;
-    const marker = `${path.sep}Cellar${path.sep}`;
-    const idx = execPath.indexOf(marker);
-    const prefix = idx > 0 ? execPath.slice(0, idx) : process.env.HOMEBREW_PREFIX?.trim() || null;
-    const certBundlePath = prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
-    const lines = [
-      "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
-      `Cause: ${preflight.code ? `${preflight.code} (${preflight.message})` : preflight.message}`,
-      "",
-      "Fix (Homebrew Node/OpenSSL):",
-      `- ${formatCliCommand("brew postinstall ca-certificates")}`,
-      `- ${formatCliCommand("brew postinstall openssl@3")}`,
-    ];
-    if (certBundlePath) {
-      lines.push(`- Verify cert bundle exists: ${certBundlePath}`);
-    }
-    lines.push("- Retry the OAuth login flow.");
-    const hint = lines.join("\n");
-    await prompter.note(hint, "OAuth prerequisites");
-    runtime.error(hint);
-    throw new Error(`OpenAI Codex OAuth prerequisites failed: ${preflight.message}`);
-  }
-
-  await prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "Open it, sign in, then paste the redirect URL here.",
-          "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
-        ].join("\n")
-      : [
-          "Browser will open for OpenAI authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "OpenAI OAuth uses localhost:1455 for the callback.",
-        ].join("\n"),
-    "OpenAI Codex OAuth",
-  );
-
-  const spin = prompter.progress("Starting OAuth flow...");
+  const spin = prompter.progress("Starting sign-in…");
   let progressActive = true;
-  const updateProgress = (message: string) => {
-    if (progressActive) {
-      spin.update(message);
-    }
-  };
+  let manualEntryOffered = false;
   const stopProgress = (message?: string) => {
     if (progressActive) {
       progressActive = false;
@@ -127,21 +49,22 @@ export async function loginOpenAICodexOAuth(params: {
       runtime,
       spin,
       openUrl,
-      localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser...",
+      localBrowserMessage: localBrowserMessage ?? "Sign in to ChatGPT in your browser…",
       manualPromptMessage: manualInputPromptMessage,
       manualPromptSignal: manualPromptAbort.signal,
     });
     const promptForManualCode = () => onPrompt({ message: manualInputPromptMessage });
-    const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
-      updateProgress(progressMessage);
-      if (logMessage) {
-        runtime.log(logMessage);
-      }
-      stopProgress("Manual OAuth entry required");
-      return await promptForManualCode();
+    // Setup apps show only the newest step, so the reason belongs in the prompt itself.
+    const offerManualEntry = async (message: string) => {
+      stopProgress();
+      manualEntryOffered = true;
+      return await onPrompt({ message });
     };
 
-    const runLocalManualFallback = async () => {
+    const runLocalManualFallback = async (callback: { listening: boolean }) => {
+      if (!callback.listening) {
+        return await offerManualEntry(callbackUnavailableMessage);
+      }
       for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
         const outcome = await raceWithTimeout(
           waitForLoginToSettle.then(
@@ -155,29 +78,31 @@ export async function loginOpenAICodexOAuth(params: {
           return await new Promise<string>(() => {});
         }
       }
-      return await switchToManualEntry(
-        "Browser callback did not finish. Paste the redirect URL to continue...",
-        `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
-      );
+      // The browser callback keeps racing this prompt, so sign-in may still finish on its own.
+      return await offerManualEntry(callbackStillOpenMessage);
     };
     const creds = await loginOpenAICodex({
       onAuth,
-      onPrompt,
-      originator: openAICodexOAuthOriginator,
+      // A failure reason still reaches the paste prompt after the progress line ended.
+      onProgress: (message, reason) => {
+        if (progressActive || reason) {
+          spin.update(message, reason);
+        }
+      },
       onManualCodeInput:
         params.onManualCodeInput ?? (isRemote ? promptForManualCode : runLocalManualFallback),
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     });
     stopProgress("OpenAI OAuth complete");
-    return creds ?? null;
-  } catch (err) {
-    stopProgress("OpenAI OAuth failed");
-    const rewrittenError = rewriteOpenAICodexOAuthError(err);
-    runtime.error(String(rewrittenError));
-    await prompter.note("Trouble with OAuth? See https://docs.openclaw.ai/start/faq", "OAuth help");
-    throw rewrittenError;
+    if (manualEntryOffered) {
+      // The progress line already ended at the offer; close the prompt before confirming.
+      manualPromptAbort.abort();
+      runtime.log("OpenAI OAuth complete");
+    }
+    return creds;
   } finally {
+    stopProgress();
     manualPromptAbort.abort();
     markLoginSettled();
   }

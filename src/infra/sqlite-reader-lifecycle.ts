@@ -7,6 +7,7 @@ import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sqliteReaderCounter } from "./sqlite-reader-metrics.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+import { currentWorkerDiagnosticIdentity } from "./worker-diagnostic-script.js";
 
 const HEAVY_READ_BYTES = 64 * 1024 * 1024;
 
@@ -70,6 +71,12 @@ const readerOwners = new AsyncContext<
       databaseAdmissionWaitMs: number;
       transactions: { count: number };
       holdContext?: SqliteOperationHoldContext;
+      // Hydration owners fill scalars; only slow transactions materialize log context.
+      hydrationActiveEvents?: number;
+      hydrationMetadataRows?: number;
+      hydrationMetadataLimit?: number;
+      hydrationExhausted?: number;
+      hydrationDependencyRows?: number;
       diskRead?: { context?: SqliteOperationHoldContext };
     };
   }
@@ -157,6 +164,7 @@ export function withSqliteReaderOwner<T>(
             },
             pid: process.pid,
             threadId,
+            ...currentWorkerDiagnosticIdentity(),
             thresholdBytes: HEAVY_READ_BYTES,
           });
         } catch {
@@ -190,6 +198,27 @@ export function captureSqliteReaderOwner(): SqliteReaderOwner | undefined {
 /** Mutable diagnostic counters only; never source or write authority. */
 export function currentSqliteOperationTiming() {
   return readerOwners.getStore()?.timing;
+}
+
+/** Materialize only after the transaction owner's slow-hold threshold. */
+export function readSqliteOperationHoldContext(
+  diagnosticContext: SqliteOperationHoldContext | undefined,
+  hydration: boolean,
+) {
+  const timing = currentSqliteOperationTiming();
+  return {
+    ...diagnosticContext,
+    ...timing?.holdContext,
+    ...(hydration && timing?.hydrationActiveEvents !== undefined
+      ? {
+          activeEvents: timing.hydrationActiveEvents,
+          metadataRows: timing.hydrationMetadataRows,
+          metadataLimit: timing.hydrationMetadataLimit,
+          exhausted: timing.hydrationExhausted,
+          dependencyRows: timing.hydrationDependencyRows,
+        }
+      : {}),
+  };
 }
 
 function currentOwner(

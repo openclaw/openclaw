@@ -10,9 +10,11 @@ import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import "../styles/wizard-step-controls.css";
+import { ModelSetupSignIn, PasteSignIn } from "./wizard-sign-in.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
@@ -23,6 +25,8 @@ type WizardStepControlsProps = {
   busy: boolean;
   inputId: string;
   validationErrorId?: string;
+  /** Shown under the pasted-address field; other steps leave validation copy to the caller. */
+  validationError?: string | null;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown) => void;
   onAutofocusRef?: (element: HTMLElement) => void;
@@ -216,15 +220,9 @@ function Answer(
     <Show
       when={props.presentation === "channels"}
       fallback={
-        <Show
-          when={
-            (props.presentation === "model-setup" && !props.externalAuthInput) ||
-            props.leadingAction
-          }
-          fallback={button}
-        >
+        <Show when={props.presentation === "model-setup" || props.leadingAction} fallback={button}>
           <ActionRow
-            modal={props.presentation === "model-setup" && !props.externalAuthInput}
+            modal={props.presentation === "model-setup"}
             class="wizard-step__actions wizard-step__actions--split"
           >
             {props.leadingAction}
@@ -246,6 +244,10 @@ function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
   const focusText = () => props.presentation === "model-setup";
+  // A browser sign-in that takes the address its redirect lands on labels the field itself.
+  const pasteUrl = () => (props.externalAuthInput ? props.step.externalUrl : undefined);
+  const label = () =>
+    pasteUrl() ? t("modelSetup.wizard.pasteLabel") : formatUiExternalText(props.step.message ?? "");
   let form: HTMLFormElement | undefined;
   // Disabling the field while a reply is pending drops its focus to the page. When the reply
   // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
@@ -274,16 +276,21 @@ function TextForm(props: WizardStepControlsProps) {
         );
       }}
     >
-      <Show when={props.step.message}>
-        <div class={stepClass(props, "message")}>
-          {/* This pre-wrap message retains the original Lit label spacing. */}
-          {"\n              "}
-          <label for={props.inputId}>{formatUiExternalText(props.step.message!)}</label>
-          {"\n            "}
-        </div>
+      <Show when={pasteUrl()} fallback={<SignIn {...props} waiting={false} />}>
+        {(url) => (
+          <PasteSignIn
+            url={url()}
+            brandId={props.brandId}
+            providerLabel={props.providerLabel}
+            icon={props.signInIcon}
+            titled={props.presentation === "model-setup"}
+          />
+        )}
       </Show>
-      <Show when={!props.externalAuthInput}>
-        <SignIn {...props} waiting={false} />
+      <Show when={label()}>
+        <div class={stepClass(props, "message")}>
+          <label for={props.inputId}>{label()}</label>
+        </div>
       </Show>
       <Show
         when={props.step.sensitive && props.onToggleSensitiveVisibility}
@@ -293,7 +300,7 @@ function TextForm(props: WizardStepControlsProps) {
             class="input"
             name="wizard-text"
             type={props.step.sensitive ? "password" : "text"}
-            autocomplete={props.step.sensitive ? "off" : "on"}
+            autocomplete={props.step.sensitive || pasteUrl() ? "off" : "on"}
             placeholder={props.step.placeholder ?? ""}
             ref={[
               liveValue(value),
@@ -307,9 +314,7 @@ function TextForm(props: WizardStepControlsProps) {
             disabled={props.busy}
             aria-invalid={props.validationErrorId ? "true" : undefined}
             aria-describedby={props.validationErrorId}
-            aria-label={
-              props.step.message ? undefined : props.step.title || t("chat.questions.answer")
-            }
+            aria-label={label() ? undefined : props.step.title || t("chat.questions.answer")}
             onInput={(event) =>
               props.presentation !== "channels" && props.onValueChange(event.currentTarget.value)
             }
@@ -324,35 +329,22 @@ function TextForm(props: WizardStepControlsProps) {
           disabled={props.busy}
           invalid={Boolean(props.validationErrorId)}
           describedBy={props.validationErrorId}
-          label={props.step.message ? undefined : props.step.title || t("chat.questions.answer")}
+          label={label() ? undefined : props.step.title || t("chat.questions.answer")}
           onInput={props.onValueChange}
           onToggle={() => props.onToggleSensitiveVisibility?.()}
         />
       </Show>
+      <Show when={pasteUrl() && props.validationError}>
+        <InlineAlert tone="danger" id={props.validationErrorId} role="alert">
+          {props.validationError}
+        </InlineAlert>
+      </Show>
       <Answer
         {...props}
-        leadingAction={props.externalAuthInput ? undefined : props.leadingAction}
-        label={t("modelSetup.wizard.submit")}
+        label={t(pasteUrl() ? "modelSetup.wizard.finishSignIn" : "modelSetup.wizard.submit")}
+        disabled={Boolean(pasteUrl()) && !value().trim()}
       />
     </form>
-  );
-}
-
-function TextStep(props: WizardStepControlsProps) {
-  return (
-    <Show when={props.externalAuthInput} fallback={<TextForm {...props} />}>
-      <SignIn {...props} waiting />
-      <details class="wizard-step__manual-entry">
-        <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
-        <TextForm {...props} />
-      </details>
-      <ActionRow
-        modal={props.presentation === "model-setup"}
-        class="wizard-step__actions wizard-step__actions--split"
-      >
-        {props.leadingAction}
-      </ActionRow>
-    </Show>
   );
 }
 
@@ -375,42 +367,52 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
   };
   const selectedIndex = () =>
     props.options.findIndex((option) => Object.is(option.value, current()));
-  const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
-    const selected = selectedIndex();
-    return {
-      label: label(),
-      value:
-        selected < 0
-          ? null
-          : channels()
-            ? String(props.options[selected]?.value)
-            : String(selected),
-      options: props.options.map<ChannelPickerOption>((option, index) => ({
+  // Keep the bridge's required params object stable while the active step changes.
+  const params: PickerParams<ChannelPickerOption> = {
+    get label() {
+      return label();
+    },
+    get value() {
+      const selected = selectedIndex();
+      return selected < 0
+        ? null
+        : channels()
+          ? String(props.options[selected]?.value)
+          : String(selected);
+    },
+    get options() {
+      return props.options.map<ChannelPickerOption>((option, index) => ({
         value: channels() ? String(option.value) : String(index),
         label: option.label,
         description: option.hint,
         kind: channels() ? "channel" : "neutral",
-      })),
-      disabled: props.busy,
-      invalid: Boolean(props.validationErrorId),
-      describedBy: props.validationErrorId,
-      onChange: (value) => {
-        const answer = channels() ? value : props.options[Number(value)]?.value;
-        if (confirms()) {
-          setPicked({ step: props.step.id, value: answer });
-        } else {
-          props.onAnswer(answer);
-        }
-      },
-    };
-  });
+      }));
+    },
+    get disabled() {
+      return props.busy;
+    },
+    get invalid() {
+      return Boolean(props.validationErrorId);
+    },
+    get describedBy() {
+      return props.validationErrorId;
+    },
+    onChange: (value) => {
+      const answer = channels() ? value : props.options[Number(value)]?.value;
+      if (confirms()) {
+        setPicked({ step: props.step.id, value: answer });
+      } else {
+        props.onAnswer(answer);
+      }
+    },
+  };
   return (
     <Show
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
         <>
-          <Show when={channels()} fallback={<Picker params={params()} />}>
-            <ChannelPicker {...params()} />
+          <Show when={channels()} fallback={<Picker params={params} />}>
+            <ChannelPicker {...params} />
           </Show>
           <Show when={confirms()}>
             <Answer
@@ -471,8 +473,7 @@ function MultipleChoice(props: WizardStepControlsProps & { options: WizardStepOp
               when={props.presentation === "channels"}
               fallback={
                 <label class="wizard-step__option">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected().some((value) => Object.is(value, option().value))}
                     disabled={props.busy}
                     aria-invalid={props.validationErrorId ? "true" : undefined}
@@ -630,7 +631,7 @@ export function WizardStepControls(props: WizardStepControlsProps): JSX.Element 
     <Switch>
       <Match when={props.step.type === "text"}>
         <Show when={props.step.id} keyed>
-          {(_stepId) => <TextStep {...props} />}
+          {(_stepId) => <TextForm {...props} />}
         </Show>
       </Match>
       <Match when={props.step.type === "select" || props.step.type === "multiselect"}>

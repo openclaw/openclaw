@@ -30,6 +30,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { omitDescribedOutputSchema } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -219,6 +220,7 @@ export async function runBridgeRequest(params: {
   sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
+  onDeadline?: (deadlineAtMs: number) => void;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -309,7 +311,8 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
-          parentToolCallId: params.parentToolCallId,
+          // Discovery returns lazy guest handles, not model-visible metadata.
+          // Their getters/serialization mark exposure; actual calls retain host provenance.
         });
         value = exactBinding
           ? [exactBinding.callableName]
@@ -344,10 +347,17 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        // The declaration renders output types from the schema; describe() returns the raw
+        // output schema only on explicit request because API.read already types the result.
         value =
           values[1] === "declaration"
             ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
-            : { ...guestDescription, callableName: binding.callableName };
+            : {
+                ...(values[1] === "outputSchema"
+                  ? guestDescription
+                  : omitDescribedOutputSchema(guestDescription)),
+                callableName: binding.callableName,
+              };
         break;
       }
       case "callValue": {
@@ -523,7 +533,9 @@ export async function runBridgeRequest(params: {
         if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
           throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
         }
-        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+        const timeoutMs = resolveSafeTimeoutDelayMs(delay, { minMs: 0 });
+        params.onDeadline?.(Date.now() + timeoutMs);
+        value = await sleep(timeoutMs, null, {
           signal: params.signal,
         });
         break;

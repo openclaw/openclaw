@@ -610,6 +610,7 @@ describe("retained config and committed model publication", () => {
           sourceConfig: committed,
           isCurrent: () => true,
           publish: async (commit) => {
+            setRuntimeConfigSnapshot(committed, committed);
             await commit();
             const catalog = getSnapshot(ownerInput(committed));
             if (rebuild) {

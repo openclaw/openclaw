@@ -136,7 +136,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const engine = page.getByRole("combobox", { name: "Memory engine", exact: true });
-      const frequencyRow = settingsRow(page, "Dreaming frequency");
+      const frequencyRow = settingsRow(page, "Schedule (cron)");
       const frequency = frequencyRow.getByRole("textbox");
       await expect.poll(() => engine.inputValue()).toBe("memory-core");
       await expect.poll(() => frequency.getAttribute("placeholder")).toBe("0 3 * * *");

@@ -1,5 +1,5 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { conversationAccessSection, type GrantSessions } from "./conversation-access-view.js";
 import { loadVocabulary } from "./inspection-client.js";
 import { ontologyView } from "./ontology-view.js";
@@ -363,7 +363,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
               assignmentApplied(ui, result, changing);
             }
           } catch (error) {
-            feedback.textContent = `The assignment was not changed. ${error instanceof Error ? error.message : String(error)}`;
+            feedback.textContent = `Could not confirm the assignment. Close this dialog and reopen Stores & sharing before trying again. ${error instanceof Error ? error.message : String(error)}`;
             feedback.classList.add("knowledge-error");
           } finally {
             saving = false;
@@ -411,7 +411,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
             void load(true);
             return undefined;
           } catch (error) {
-            return `Access was not changed. ${error instanceof Error ? error.message : String(error)}`;
+            return `Could not confirm the access change. Reopen Stores & sharing before trying again. ${error instanceof Error ? error.message : String(error)}`;
           }
         },
       ),
@@ -511,7 +511,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
 // After an applied assignment, refresh facts; reset the reading view if the viewed store moved.
 function assignmentApplied(
   ui: Page,
-  result: FeatureOutput<typeof contract, "stores_change">,
+  result: FeatureOutput<FullOutputContract, "stores_change">,
   agent: string,
 ) {
   const { s, displayName, viewedAgent, announce, load, refresh, renderStoreContext } = ui;

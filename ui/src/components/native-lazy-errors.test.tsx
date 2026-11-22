@@ -28,6 +28,7 @@ afterEach(async () => {
   await waitForSolid(() => expect(document.querySelector('[role="alert"]')).toBeNull());
   document.body.replaceChildren();
   vi.useRealTimers();
+  localStorage.clear();
 });
 
 describe("native lazy renderer failures", () => {

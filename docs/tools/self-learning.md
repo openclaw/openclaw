@@ -42,9 +42,9 @@ count toward the same 10-iteration threshold.
 A queued review normally starts after 30 seconds with no agent or reply run active;
 later activity in the same session restarts that wait on a best-effort basis.
 Reviews run one at a time.
-The foreground reply never waits for a review. A review yields when another
-agent or reply run starts; it is not replayed. A later eligible turn can queue
-fresh evidence. Resetting the
+The foreground reply never waits for a review, and activity in other sessions
+does not stop one. A review that fails or is interrupted is not replayed; a later
+eligible turn can queue fresh evidence. Resetting the
 conversation or changing its permissions cancels the review. Before changing a
 skill, the review also verifies that its original transcript anchor is still valid.
 
@@ -64,25 +64,25 @@ starts them over.
 
 ## What a review does
 
-The review reads a recent excerpt through the finished turn, bounded to 64
-transcript events and 32 KiB. Large tool results can be replaced with explicit
-omission notices; missing outcomes must not be inferred. If a required context
-boundary cannot fit, the review stops without a model call.
+The review is a fork of the conversation through the finished turn. It sends
+the session's own request (system prompt, tool definitions, prompt-cache key,
+thinking setting and history) and appends one review instruction, so the
+provider serves the session's cached prefix. The initiating sender and model are
+looked up within 20,000 events and 8 MiB, omitting large tool-result bodies. If
+that window cannot retain the initiating input, the review reports that instead
+of guessing who requested the turn.
 
-It reuses the foreground provider, model, and auth profile, with a minimal
-prompt and only the `skill_workshop` tool. Workspace bootstrap files, the full
-skill catalog, client tools, and foreground-only instructions are omitted.
-The run targets a 16,384-token context budget. Review responses use at most
-2,048 output tokens and low reasoning effort; the run lasts at most two minutes.
-Context maintenance uses the runtime's normal compaction policy, so these
-settings are not a hard total-token limit for a successful multi-step review. Model fallbacks and transient provider retries
-are disabled. It runs on the embedded OpenClaw harness under a private session that never
-appears in your transcript. It is internal system work, not a new user turn;
-user-only reply hooks, including Advisor admission, do not run for it.
+It reuses the foreground provider, model, auth profile and output limit, and
+lasts as long as the agent's run timeout. Model fallbacks and transient provider
+retries are disabled. It runs on the embedded OpenClaw harness under a private
+session that never appears in your transcript. It is internal system work, not a
+new user turn; user-only reply hooks, including Advisor admission, do not run
+for it.
 
-The review uses `skill_workshop` to list and view learned skills and save a
-lesson supported by the excerpt. It cannot browse files, fetch more history,
-or re-run your task. The review must `view` a skill
+Every tool of the session stays listed, but only `skill_workshop` runs. Tools
+that act, such as `exec`, `write`, or `message`, return a normal result such as
+`exec is not available in this background run.` That result is not a failure,
+and the review never re-runs your task. The review must `view` a skill
 before it patches, writes, or archives it, and an archive needs `absorbed_into`
 or `reason`.
 
@@ -158,9 +158,10 @@ update learned skills when you ask, through `/learn`, or in a
 ## Cost and privacy
 
 A review is one extra model run on the foreground provider and model after
-substantial work, not after every message. It can make several bounded requests
-while it views and edits skills. It uses its own prompt rather than replaying
-the whole foreground prefix; provider pricing still applies.
+substantial work, not after every message. It can make several requests while
+it views and edits skills. Each request repeats the session's prefix, which the
+provider prompt cache usually serves at cached-input prices; provider pricing
+still applies.
 
 A rate-limit error from a review or foreground turn pauses all background
 reviews in this Gateway for 15 minutes. Repeated saturation increases that wait

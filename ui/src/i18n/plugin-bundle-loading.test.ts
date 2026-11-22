@@ -30,7 +30,7 @@ it("loads bundle fallback copy with the file preview without replacing the activ
     "This file exceeds the preview limit. Its contents have not been truncated or loaded.",
   );
   expect(manager.t("filePreview.bundle.unavailable")).toBe(
-    "This file could not be read safely or is unavailable. Close and reopen the skill to try again.",
+    "Couldn’t read this file. Close and reopen the skill to try again.",
   );
   expect(manager.t("filePreview.bundle.incomplete")).toBe(
     "Some bundle content is unavailable. Select a file to see its status.",
@@ -38,6 +38,6 @@ it("loads bundle fallback copy with the file preview without replacing the activ
   expect(manager.t("filePreview.label")).toBe("Support files");
   await manager.setLocale("en");
   expect(manager.t("filePreview.bundle.binary")).toBe(
-    "This binary file is included in the bundle but cannot be displayed as text.",
+    "This binary file is included in the bundle but can’t be displayed as text.",
   );
 });

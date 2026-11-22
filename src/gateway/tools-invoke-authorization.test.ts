@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
@@ -9,8 +10,13 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -51,7 +57,6 @@ vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: runtime.authorize }));
 // mock-isolation: Keep execution inert while exercising HTTP and WebSocket authorization.
 vi.mock("../agents/openclaw-tools.js", () => ({ createOpenClawToolsAsync: runtime.createTools }));
-vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: runtime.beforeHook,
 }));
@@ -328,5 +333,70 @@ it.each([false, true])(
       const body = await response.text();
       expect(body.includes("private tool result")).toBe(expectedStatus === 200);
     });
+  },
+);
+
+it.each([false, true])(
+  "refuses sandbox-required profile standalone tools without a default role (stored=%s)",
+  async (stored) => {
+    await withToolsInvokeTestState(
+      { label: "member-standalone-sandbox", prepareProfileCatalog: true },
+      async () => {
+        const profile = ensureProfileForEmail("member-admin-sandbox@example.test");
+        setUserProfileRole(profile.id, "isolated");
+        const principal = {
+          kind: "member" as const,
+          peerKey: "iroh:required-admin",
+          accountId: "required-admin",
+          role: "display-only",
+        };
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+        runtime.cfg = {
+          gateway: {
+            openclawId: { enabled: true },
+            roles: {
+              definitions: {
+                isolated: {
+                  sessions: { others: "view" },
+                  agents: "*",
+                  scopes: ["operator.admin"],
+                  sandbox: "required",
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(runtime.cfg);
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        try {
+          const sessionKey = "agent:main:host-tool-target";
+          if (stored) {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              { sessionId: "host-target", updatedAt: 1 },
+            );
+          }
+          const result = await invokeGatewayTool({
+            cfg: runtime.cfg,
+            input: { name: "session_status", sessionKey },
+            openclawIdPrincipal: principal,
+            operatorRoleActor: { kind: "operator", profileId: profile.id },
+            operatorScopes: ["operator.admin"],
+            senderIsOwner: true,
+            toolCallIdPrefix: "http",
+          });
+          expect(result).toMatchObject({ ok: false, status: 403 });
+          expect(JSON.stringify(result)).toContain("requires a sandboxed session");
+          expect(runtime.execute).not.toHaveBeenCalled();
+        } finally {
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+          setOpenClawIdMemberAccountLookup(undefined);
+        }
+      },
+    );
   },
 );

@@ -3,9 +3,11 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { resolveCatalogOriginalUrl } from "../lib/sessions/catalog-original-url.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
@@ -56,6 +58,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         return;
       }
       showToast({
+        severity: result.complete && result.importedItems > 0 ? "success" : undefined,
         message: t(
           !result.complete
             ? "chat.catalog.importIncomplete"
@@ -81,7 +84,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
     } catch (error) {
       if (isMutationCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   }
@@ -94,6 +97,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
     const scope = { ...mutation, catalogGeneration: props.host.sessionData.sessionScopeGeneration };
     try {
       const confirmed = await showConfirmDialog({
+        title: t("chat.catalog.deleteSessionTitle"),
         message: t("chat.catalog.deleteSessionConfirm"),
         details: menu.name,
         confirmLabel: t("chat.catalog.deleteSession"),
@@ -102,6 +106,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
       if (!isMutationCurrent(scope)) {
         showToast({
+          severity: "error",
           message: t("sessionsView.deleteSessionStale", { session: menu.name }),
         });
         return;
@@ -132,7 +137,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         });
       }
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   }
 
@@ -142,10 +147,22 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       y={props.menu.y}
       trigger={props.trigger}
       lastActive={props.menu.meta}
+      canOpenOriginal={
+        props.menu.key.catalogId === "openclaw"
+          ? Boolean(resolveCatalogOriginalUrl(props.menu.originalUrl))
+          : undefined
+      }
       canDelete={props.menu.canDelete}
       canImport={canImport(props.viewHost)}
       terminalDisabled={!props.menu.canOpenTerminal || !props.viewHost.terminalAvailable}
       onAction={(action) => {
+        if (action === "original") {
+          const url = resolveCatalogOriginalUrl(props.menu.originalUrl);
+          if (url) {
+            openExternalUrlSafe(url);
+          }
+          return;
+        }
         if (action === "import") {
           if (canImport()) {
             void importSession(props.menu);

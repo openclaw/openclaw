@@ -321,7 +321,10 @@ export function createAppearanceBackground(
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       host().style.setProperty("--settings-background-preview-top", `${bounds.top}px`);
-      host().style.setProperty("--settings-background-preview-left", `${bounds.left}px`);
+      host().style.setProperty(
+        "--settings-background-preview-left",
+        `${bounds.left + canvas.clientLeft}px`,
+      );
       host().style.setProperty("--settings-background-preview-width", `${width}px`);
       host().style.setProperty("--settings-background-preview-height", `${height}px`);
       // Docks and responsive chrome can change the canvas without window resize.
@@ -508,11 +511,8 @@ export function createAppearanceBackground(
       });
       metadata = { ...scope, revision: metadataRevision, snapshot: result };
       application.theme.refresh();
-      return t(
-        file
-          ? "configView.appearance.background.saved"
-          : "configView.appearance.background.removed",
-      );
+      // The selected image is already visible; no duplicate success notice.
+      return null;
     } catch (error) {
       if (isCurrent()) {
         throw error;

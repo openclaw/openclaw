@@ -60,13 +60,9 @@ enum OpenClawChatTypography {
 
     #if os(iOS)
     static var bodyUIFont: UIFont {
-        self.bodyUIFont(compatibleWith: nil)
-    }
-
-    static func bodyUIFont(compatibleWith traits: UITraitCollection?) -> UIFont {
         let base = UIFont(name: self.bodyPostScriptName, size: self.bodySize) ??
             UIFont.systemFont(ofSize: self.bodySize)
-        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base, compatibleWith: traits)
+        return UIFontMetrics(forTextStyle: .body).scaledFont(for: base)
     }
     #endif
 

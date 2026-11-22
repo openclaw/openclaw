@@ -17,7 +17,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -304,11 +304,10 @@ it("does not replay an authorization consumer after its own effect changes the r
 it.each([
   { scopeName: "operator.write", change: "none" },
   { scopeName: "operator.sessions.write", change: "none" },
-  { scopeName: "operator.sessions.write", change: "revoke-at-commit" },
   { scopeName: "operator.sessions.write", change: "foreign-reset" },
   { scopeName: "operator.sessions.write", change: "replacement" },
 ] as const)(
-  "checks $scopeName idle-rollover input at the pending-input write ($change)",
+  "stages $scopeName idle-rollover input while retaining lifecycle custody ($change)",
   ({ scopeName, change }) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {
@@ -401,9 +400,6 @@ it.each([
           staged.runId === runId
         ) {
           commitChecks += 1;
-          if (change === "revoke-at-commit") {
-            client.connect.scopes = [];
-          }
         }
         check(request, grant);
       });
@@ -457,12 +453,8 @@ it.each([
             items: [{ runId, message: { content: "Continue after the idle interval." } }],
           });
         } else {
-          await expect(pending).rejects.toThrow(
-            change === "revoke-at-commit"
-              ? "Session-scoped writes require your own session."
-              : "Chat admission ended or was cancelled",
-          );
-          expect(commitChecks).toBe(change === "revoke-at-commit" ? 1 : 0);
+          await expect(pending).rejects.toThrow("Chat admission ended or was cancelled");
+          expect(commitChecks).toBe(0);
           expect(await listSessionPendingInputs({ ...scope, sessionId: entry.sessionId })).toEqual({
             items: [],
             total: 0,
@@ -470,7 +462,7 @@ it.each([
         }
       } finally {
         commit.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
         work.release();
         registration.cleanup();
@@ -519,109 +511,106 @@ it.for([false, true])(
     }),
 );
 
-it.each(["membership", "lifecycle"] as const)(
-  "keeps committing %s facts authoritative over older published sharing",
-  (change) =>
+it("keeps committing lifecycle facts authoritative over older published sharing", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = rolePolicyConfig();
+    const client = roleClient("view", "transaction-member");
+    const scope = await memberSession(client);
+    const authorization = await authorize(client, scope, () => cfg);
+    using _ = { [Symbol.dispose]: () => authorization.release?.() };
+    const input = authorization.admittedInputAuthority!;
+    const effect = vi.fn();
+    await input.withCurrent((facts, assertSourceCurrent) => {
+      expect(facts.members).toContainEqual(
+        expect.objectContaining({ identityId: client.authenticatedUserProfile!.profileId }),
+      );
+      const committing = {
+        ...facts,
+        entry: { ...facts.entry!, lifecycleRevision: "transaction-successor" },
+      };
+      expect(() => input.withPreparedCurrent(committing, effect, assertSourceCurrent)).toThrow(
+        "session changed",
+      );
+    });
+    authorization.assertAdmittedInputCurrent!();
+    expect(effect).not.toHaveBeenCalled();
+  }));
+
+it.each(["worker-before-read", "reset-before-read", "owner-before-consume"] as const)(
+  "retains admitted access but refuses changed custody (%s)",
+  (boundary) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
-      const client = roleClient("view", "transaction-member");
+      const client = roleClient("view", "worker-member");
       const scope = await memberSession(client);
       const authorization = await authorize(client, scope, () => cfg);
       using _ = { [Symbol.dispose]: () => authorization.release?.() };
-      const input = authorization.admittedInputAuthority!;
-      const effect = vi.fn();
-      await input.withCurrent((facts, assertSourceCurrent) => {
-        expect(facts.members).toContainEqual(
-          expect.objectContaining({ identityId: client.authenticatedUserProfile!.profileId }),
-        );
-        const committing = {
-          ...facts,
-          ...(change === "membership"
-            ? { members: [] }
-            : { entry: { ...facts.entry!, lifecycleRevision: "transaction-successor" } }),
-        };
-        expect(() => input.withPreparedCurrent(committing, effect, assertSourceCurrent)).toThrow(
-          change === "membership" ? "session is read-only" : "session changed",
-        );
-      });
-      authorization.assertAdmittedInputCurrent!();
-      expect(effect).not.toHaveBeenCalled();
-    }),
-);
-
-it.each([
-  "worker-before-read",
-  "reset-before-read",
-  "native-before-consume",
-  "owner-before-consume",
-] as const)("rejects %s authority revocation before disclosure", (boundary) =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = rolePolicyConfig();
-    const client = roleClient("view", "worker-member");
-    const scope = await memberSession(client);
-    const database = openOpenClawAgentDatabase(scope);
-    const authorization = await authorize(client, scope, () => cfg);
-    await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
-      expect(facts).toMatchObject({
-        entry: { sessionId: "sid" },
-        members: [{ identityId: client.authenticatedUserProfile!.profileId }],
-      });
-      assertCurrent();
-      authorization.assertCurrent();
-    });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    let revoked = false;
-    let inventories = 0;
-    let closing: Promise<void> | undefined;
-    const runExternalClose = AsyncLocalStorage.snapshot();
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      const kind =
-        reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value
-          ? reply.value.kind
-          : undefined;
-      if (kind === "session-target-inventory") {
-        inventories += 1;
-      }
-      if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
-        revoked = true;
-        if (boundary === "owner-before-consume") {
-          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
-        } else {
-          // Raw SDK DML has no sessionChanges publication and cannot join the held writer FIFO.
-          database.db
-            .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
-            .run(scope.sessionKey, client.authenticatedUserProfile!.profileId);
-        }
-      }
-      return reply;
-    });
-    const effect = vi.fn();
-    try {
-      if (boundary === "worker-before-read") {
-        await removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
-      } else if (boundary === "reset-before-read") {
-        replaceSessionEntrySync(scope, {
-          sessionId: "sharing-successor",
-          lifecycleRevision: "successor",
-          updatedAt: 2,
-          visibility: "read-only",
-          createdActor: createdActor("another-profile"),
+      await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+        expect(facts).toMatchObject({
+          entry: { sessionId: "sid" },
+          members: [{ identityId: client.authenticatedUserProfile!.profileId }],
         });
-      } else {
-        invalidateSessionReadFacts(scope);
+        assertCurrent();
+        authorization.assertCurrent();
+      });
+      const read = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      let revoked = false;
+      let closing: Promise<void> | undefined;
+      const runExternalClose = AsyncLocalStorage.snapshot();
+      const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+        const reply = await read(...args);
+        const kind =
+          reply.ok &&
+          typeof reply.value === "object" &&
+          reply.value !== null &&
+          "kind" in reply.value
+            ? reply.value.kind
+            : undefined;
+        if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
+          revoked = true;
+          closing = runExternalClose(closeOpenClawAgentDatabasesAsync);
+        }
+        return reply;
+      });
+      const effect = vi.fn();
+      try {
+        if (boundary === "worker-before-read") {
+          await removeSessionMember(scope, client.authenticatedUserProfile!.profileId);
+        } else if (boundary === "reset-before-read") {
+          replaceSessionEntrySync(scope, {
+            sessionId: "sharing-successor",
+            lifecycleRevision: "successor",
+            updatedAt: 2,
+            visibility: "read-only",
+            createdActor: createdActor("another-profile"),
+          });
+        } else {
+          invalidateSessionReadFacts(scope);
+        }
+        if (boundary === "worker-before-read") {
+          await authorization.admittedInputAuthority!.withCurrent(effect);
+          expect(effect).toHaveBeenCalledOnce();
+          const fresh = await resolveSessionMutationAuthorizationAsync({
+            client,
+            method: "chat.send",
+            requestParams: scope,
+            context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+          });
+          fresh.authorization?.release?.();
+          expect(fresh.authorization).toBeUndefined();
+          expect(fresh.error?.message).toContain("session is read-only for this connection");
+        } else {
+          await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
+          expect(effect).not.toHaveBeenCalled();
+        }
+        if (boundary.endsWith("before-consume")) {
+          expect(revoked).toBe(true);
+        }
+      } finally {
+        spy.mockRestore();
+        await closing;
       }
-      await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
-      expect(effect).not.toHaveBeenCalled();
-      expect(inventories).toBe(0);
-      if (boundary.endsWith("before-consume")) {
-        expect(revoked).toBe(true);
-      }
-    } finally {
-      spy.mockRestore();
-      await closing;
-    }
-  }),
+    }),
 );
 
 it.each(["membership", "routing", "policy"] as const)(
@@ -649,7 +638,7 @@ it.each(["membership", "routing", "policy"] as const)(
 );
 
 it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
-  "rechecks prepared %s policy at the next worker admission",
+  "keeps admitted role facts but retains config/data fences (%s)",
   (change) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
@@ -672,8 +661,13 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         cfg = restrictView(cfg, change === "agent" ? { agents: [] } : { sandbox: "required" });
       }
       const effect = vi.fn();
-      await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-      expect(effect).not.toHaveBeenCalled();
+      if (change === "role" || change === "unprepared-role") {
+        await authorization.withCurrent!(effect);
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
+      }
       if (change === "unprepared-role") {
         expect(client.preparedSessionProfile).toBeUndefined();
       }

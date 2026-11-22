@@ -8,6 +8,52 @@ import Testing
 @Suite(.testWaitLimit)
 @MainActor
 struct QuickChatPresentationTests {
+    func checkConnectionStatusSurvivesModelCatalogFailure() async throws {
+        for (gate, message) in [
+            (QuickChatConnectionGate.unconfigured, "Not configured"),
+            (.paused, "OpenClaw is paused"),
+            (.disconnected, "Gateway disconnected"),
+            (.available, "Couldn't load model settings."),
+        ] {
+            let model = QuickChatModel(
+                sessionKeyProvider: { "agent:main:main" },
+                agentsProvider: { throw URLError(.notConnectedToInternet) },
+                agentIdentityProvider: { _ in .placeholder },
+                permissionStatusProvider: { _ in [:] },
+                connectionGateProvider: { gate },
+                modelControlsProvider: { _ in throw URLError(.notConnectedToInternet) },
+                modelCatalogEventsProvider: { AsyncStream { $0.finish() } })
+            let controller = QuickChatController(
+                enableUI: true, model: model, monitoringEnabled: false,
+                hotkeyRegistrar: { _ in }, hotkeyRemover: {})
+            defer { controller.stop() }
+            controller.present()
+            try await TestWait.state("failed model controls") { model.modelControlStatusMessage != nil }
+            let panel = try #require(AppKitTestSupport.application.windows.first {
+                ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
+            })
+            var renderedMessages = Set<String>()
+            var stableSince = ContinuousClock.now
+            try await TestWait.state("settled Quick Chat status") {
+                let elements = try await AppKitTestSupport.accessibilityElements(in: panel)
+                let labels = Set(elements.compactMap {
+                    let value: Any? = $0.accessibilityValue?()
+                    return (value as? String) ?? AppKitTestSupport.accessibilityName(of: $0)
+                })
+                let nextMessages = labels.intersection([
+                    "Not configured", "OpenClaw is paused", "Gateway disconnected", "Couldn't load model settings.",
+                ])
+                if nextMessages != renderedMessages {
+                    renderedMessages = nextMessages
+                    stableSince = .now
+                }
+                // An outgoing status can remain accessible during SwiftUI's transition.
+                return !renderedMessages.isEmpty && stableSince.duration(to: .now) >= .milliseconds(350)
+            }
+            #expect(renderedMessages == [message])
+        }
+    }
+
     func checkConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
         let application = AppKitTestSupport.application
         let suiteName = "ai.openclaw.quickchat-proof.\(UUID().uuidString)"

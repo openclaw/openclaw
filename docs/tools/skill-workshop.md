@@ -29,6 +29,9 @@ Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
 Disabling it (`plugins.entries.skill-workshop.enabled: false`, `plugins.enabled: false`,
 or a `plugins.allow` list without `skill-workshop`) stops loading learned skills into the
 agent's prompt.
+While it is off, the Control UI's Skill workshop page offers **Turn on Skill Workshop**
+to operators with admin scope. It enables the plugin, adding it to `plugins.allow` when
+needed, and loads the Workshop without a reload.
 
 Skills you write yourself (workspace, project, managed, ClawHub, plugin, and
 bundled skills) are not Workshop skills. Edit them at their source; see
@@ -90,8 +93,8 @@ and archives skills the review created. Pressing it again reports that the
 change was already undone. The chat command needs the owner, plus
 `operator.admin` from Gateway clients.
 
-You can also undo one skill from the Control UI (**Undo** on the skill's latest
-change or in its History tab) or the CLI:
+You can also undo one skill from its **History** tab in the Control UI or from
+the CLI:
 
 ```bash
 openclaw skills workshop restore deploy-staging
@@ -326,14 +329,16 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
 ## Operator surfaces
 
 - **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
-  most used first (or by recent activity or name), each with its latest change
-  and **Undo**; skills idle for two weeks are flagged, since
-  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  most used first (or by recent activity or name). Skills idle for two weeks are
+  flagged, since [unused-skill cleanup](#unused-skill-cleanup) may archive them
+  at 30 days.
   Selecting a skill shows its instructions, support files, and history.
-  From the history you can compare an earlier version with today's, restore it,
-  or undo a change. **Archive** and **Restore** switch a skill between the
-  Active and Archived lists. The **Drafts** list appears in `propose` mode or
-  while drafts wait; see [Drafts](#drafts). The page header holds the learning mode switch and
+  The Workshop's **History** view lists the latest change per skill. Select a
+  change to open the skill's own **History** tab, where you can compare versions,
+  restore an earlier version, or undo a change. **Archive** and **Restore**
+  switch a skill between the Active and Archived lists. The **Drafts** list
+  appears in `propose` mode or while drafts wait; see [Drafts](#drafts). The page
+  header holds the learning mode switch and
   **Learn from history**. If the learning configuration cannot be loaded, the
   page shows the error and a **Retry** button while keeping the skill library available.
 - **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.
@@ -388,7 +393,7 @@ files you need from them by hand; OpenClaw does not restore them.
 | A skill was archived unexpectedly  | Unused-skill cleanup archives skills with no activity for 30 days. Run `openclaw skills workshop restore <name>`.                                                                                                                               |
 | A skill was split into references  | The daily [skill diet](#skill-diet) shrank it. Run `openclaw skills workshop restore <name>` to undo.                                                                                                                                           |
 
-In `auto` and `propose` modes, `openclaw doctor` runs the `core/doctor/skill-workshop-tool-policy`
+In `auto` and `propose` modes, `openclaw doctor` runs the `skill-workshop/tool-policy`
 check for each agent. It names the sandbox setting or the config layer that
 hides `skill_workshop` and the exact `allow` or `alsoAllow` change to make.
 

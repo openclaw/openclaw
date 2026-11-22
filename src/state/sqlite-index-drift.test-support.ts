@@ -1,7 +1,12 @@
 import { expect } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
-import { replaceNamedIndexesWithNoncanonicalIndexes } from "./sqlite-schema-shape.test-support.js";
+import {
+  collectSqliteSchemaShape,
+  createSqliteSchemaShapeFromSql,
+  normalizeSqliteSchemaShapeSql,
+  replaceNamedIndexesWithNoncanonicalIndexes,
+} from "./sqlite-schema-shape.test-support.js";
 
 type Database = InstanceType<ReturnType<typeof requireNodeSqlite>["DatabaseSync"]>;
 const open = (pathname: string) => new (requireNodeSqlite().DatabaseSync)(pathname);
@@ -99,5 +104,16 @@ export function createCanonicalAgentIndexDrift(databasePath: string): void {
                ('trajectory-session', 1, 'run-1', '{"type":"named"}', 2);
     `);
   expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  // The replaced active-event unique index also backs the facts foreign key.
+  expect(() => drifted.prepare("PRAGMA foreign_key_check").all()).toThrow(
+    'foreign key mismatch - "session_transcript_active_event_facts" referencing "session_transcript_active_events"',
+  );
+}
+
+export function expectCanonicalAgentIndexRepair(database: Database): void {
+  const canonicalShape = normalizeSqliteSchemaShapeSql(
+    createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
+  );
+  expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(database))).toEqual(canonicalShape);
+  expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 }

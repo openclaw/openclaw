@@ -98,8 +98,8 @@ function mockGitHub(
   writeFileSync(
     ghPath,
     `#!/usr/bin/env node
-const fs = require('node:fs');
-const path = require('node:path');
+import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2);
 const download = ${JSON.stringify(download)};
 if (args[0] === 'run' && args[1] === 'view') {

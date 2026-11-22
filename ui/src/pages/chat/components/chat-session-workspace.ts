@@ -3,6 +3,11 @@ import {
   parseManagedOutgoingArtifactId,
 } from "../../../../../src/gateway/managed-outgoing-artifact-id.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
+import {
+  SESSION_FILES_DISPLAY_DEFAULTS,
+  type SessionFilesDisplay,
+} from "../../../app/settings-contract.ts";
+import { patchSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -51,8 +56,8 @@ export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    sessionWorkspaceForHost(state).publish();
   }
+  sessionWorkspaceForHost(state).publish();
 }
 
 async function readWorkspaceContent<T>(
@@ -62,6 +67,7 @@ async function readWorkspaceContent<T>(
 ): Promise<T | null> {
   const client = state.client;
   const {
+    checkFileLinkAvailability,
     downloadSessionFile,
     loadSessionWorkspaceArtifactContent,
     loadSessionWorkspaceFileContent,
@@ -69,6 +75,7 @@ async function readWorkspaceContent<T>(
   // Loading code cannot transfer an admitted preview to a replacement connection or checkout.
   return state.connected && state.client === client && isCurrentSessionWorkspace(state, workspace)
     ? read({
+        checkFileLinkAvailability,
         downloadSessionFile,
         loadSessionWorkspaceArtifactContent,
         loadSessionWorkspaceFileContent,
@@ -126,7 +133,7 @@ function openFile(
         ),
       ),
     (result) => result.content,
-    `Failed to load ${path}`,
+    `Couldn’t load ${path}. Check that the file still exists.`,
     {
       line: opts.line,
       disposition: opts.disposition,
@@ -194,8 +201,23 @@ export function openSessionWorkspaceFile(
   });
 }
 
+/** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
+function checkSessionWorkspaceFileLinks(
+  state: SessionWorkspaceHost,
+  links: HTMLElement[],
+  scope: string,
+) {
+  const workspace = getSessionWorkspace(state);
+  readWorkspaceContent(state, workspace, (runtime) =>
+    runtime.checkFileLinkAvailability(state, workspace, links, scope),
+  ).catch(() => {
+    // Links stay usable when the check cannot load. main.ts owns lazy-chunk fetch
+    // recovery through the Vite preload-error listener.
+  });
+}
+
 /** Resolve a chat reference without moving the original attachment's history ownership. */
-export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
   if (!isManagedOutgoingMediaSource(href)) {
     return false;
   }
@@ -433,6 +455,17 @@ export function createSessionWorkspaceProps(
       workspace.tree!.sessionExpanded = expanded;
       publish();
     },
+    sessionFilesDisplay: state.settings?.sessionFilesDisplay ?? SESSION_FILES_DISPLAY_DEFAULTS,
+    onSessionFilesDisplayChange: (display: Partial<SessionFilesDisplay>) => {
+      // A browser-wide preference, like the dashboards gallery: every Files panel follows it.
+      state.settings = patchSettings({
+        sessionFilesDisplay: {
+          ...(state.settings?.sessionFilesDisplay ?? SESSION_FILES_DISPLAY_DEFAULTS),
+          ...display,
+        },
+      });
+      publish();
+    },
     onNavigationScroll: (area: "tree" | "session", top: number) => {
       if (area === "tree") {
         workspace.tree!.treeScroll = top;
@@ -466,6 +499,10 @@ export function createSessionWorkspaceProps(
       ),
     onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
+      // Activity reveals default results; refresh and All preserve manual disclosure.
+      if (options?.presentation === undefined && filter !== "all") {
+        workspace.tree!.sessionExpanded = true;
+      }
       if (mobile && filter !== "all") {
         mobile.expandedGroups[filter] = true;
       }
@@ -580,7 +617,7 @@ export function createSessionWorkspaceProps(
             runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId, signal),
           ),
         (result) => result.content,
-        `Failed to load artifact ${artifactId}`,
+        `Couldn’t load artifact ${artifactId}. Check that the artifact is still available.`,
         {
           disposition: artifactDisposition,
           intent: openIntent,
@@ -636,4 +673,25 @@ export function resolveSessionDiffSidebarContent(
       }
     },
   );
+}
+
+/** One permission scope drives both retained Markdown restoration and availability answers. */
+export function sessionWorkspaceFileLinkProps(
+  state: SessionWorkspaceHost,
+  session: { permissionMode?: string | null } | null | undefined,
+  picker: { defaultMode?: string | null } | undefined,
+) {
+  const scope = JSON.stringify([
+    session?.permissionMode,
+    picker?.defaultMode,
+    state.sessionWorkspaceState?.fileLinksRevision ?? 0,
+  ]);
+  return {
+    workspaceFileLinkScope: scope,
+    onWorkspaceFileLinks: (links: HTMLElement[]) =>
+      checkSessionWorkspaceFileLinks(state, links, scope),
+    onOpenWorkspaceFile: (target: WorkspaceFileLinkTarget) =>
+      void openSessionWorkspaceFile(state, target),
+    onOpenManagedArtifact: (href: string) => openSessionWorkspaceManagedArtifact(state, href),
+  };
 }

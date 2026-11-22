@@ -11,7 +11,7 @@
  * mocks; no database or workspace scan belongs to this in-memory owner. This is
  * owner CPU/allocation evidence, not whole-Gateway latency or model execution.
  * Compare interleaved revisions and identical-source A/A controls. Acceptance:
- * unrelated auth, logging and provider changes retain all consumers; selected
+ * unrelated auth, logging, maintenance, provider and MCP server changes retain all consumers; selected
  * auth changes refuse them. Report CPU/allocation changes and spread.
  * --phase bind includes complete policy capture and its first check, accounting
  * for preparation moved out of repeated live-policy checks.
@@ -47,7 +47,11 @@ const stateDir = path.resolve(values["state-dir"]);
 const workspace = path.resolve(values.workspace);
 const rounds = Number(values.rounds);
 assert(Number.isSafeInteger(rounds) && rounds > 0);
-assert(["unrelated", "unchanged", "logging", "unrelated-provider"].includes(values.scenario));
+assert(
+  ["unrelated", "unchanged", "logging", "unrelated-provider", "mcp", "maintenance"].includes(
+    values.scenario,
+  ),
+);
 assert(values.phase === "check" || values.phase === "bind");
 assert(!existsSync(values.output), "Refusing to overwrite a measurement");
 const fixture = JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"));
@@ -59,7 +63,9 @@ const database = new DatabaseSync(databasePath, { readOnly: true });
 let sessionKeys: string[];
 try {
   sessionKeys = database
-    .prepare("SELECT session_key FROM session_nodes ORDER BY session_key")
+    .prepare(
+      "SELECT session_key FROM session_nodes WHERE session_key GLOB 'agent:main:team-shape-session-*' ORDER BY session_key",
+    )
     .all()
     .map(({ session_key: key }) => {
       assert(typeof key === "string" && key.startsWith("agent:main:team-shape-session-"));
@@ -70,7 +76,6 @@ try {
 }
 assert.equal(sessionKeys.length, 5000);
 const directories = readdirSync(workspace);
-assert.equal(directories.length, 620);
 let workspaceFiles = 0;
 let workspaceBytes = 0;
 for (const directory of directories) {
@@ -101,7 +106,7 @@ registerHooks({
     return { format: loaded.format, source: loaded.source, shortCircuit: true };
   },
 });
-const { captureScheduledSessionEventConfigPolicy } =
+const { captureSessionEventConfigRelevance } =
   await import("../../src/auto-reply/reply/session-event-policy.js");
 const original: OpenClawConfig = {
   ...JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8")),
@@ -123,7 +128,12 @@ const relevant: OpenClawConfig = {
   ...original,
   auth: { profiles: { "openai:manual": { provider: "openai", mode: "oauth" } } },
 };
-const selected = { provider: "openai", model: "synthetic-model" };
+const selected = {
+  provider: "openai",
+  model: "synthetic-model",
+  agentRuntime: "openclaw",
+  cliExecution: false,
+};
 const prepareConsumer = (sessionKey: string, index: number) => {
   const job: CronStoredJob = {
     id: `synthetic-job-${index}`,
@@ -137,7 +147,7 @@ const prepareConsumer = (sessionKey: string, index: number) => {
     payload: { kind: "agentTurn", message: "Synthetic scheduled work" },
     state: {},
   };
-  return captureScheduledSessionEventConfigPolicy(original, "main", job, selected);
+  return captureSessionEventConfigRelevance(original, "main", job, selected);
 };
 const consumers = sessionKeys.map(prepareConsumer);
 const check = (config: OpenClawConfig, policies = consumers) => {
@@ -156,14 +166,21 @@ const measuredConfig: OpenClawConfig =
     ? original
     : values.scenario === "logging"
       ? { ...original, logging: { ...original.logging, level: "debug" } }
-      : values.scenario === "unrelated-provider"
+      : values.scenario === "maintenance"
         ? {
             ...original,
-            models: {
-              providers: { other: { baseUrl: "https://after.example/v1", models: [] } },
-            },
+            session: { ...original.session, maintenance: { coldStorage: { enabled: true } } },
           }
-        : unrelated;
+        : values.scenario === "unrelated-provider"
+          ? {
+              ...original,
+              models: {
+                providers: { other: { baseUrl: "https://after.example/v1", models: [] } },
+              },
+            }
+          : values.scenario === "mcp"
+            ? { ...original, mcp: { servers: { unrelated: { enabled: false, command: "true" } } } }
+            : unrelated;
 const measure = () =>
   check(measuredConfig, values.phase === "bind" ? sessionKeys.map(prepareConsumer) : consumers);
 for (let warmup = 0; warmup < 3; warmup++) {

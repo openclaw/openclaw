@@ -74,9 +74,16 @@ function fixture() {
   const root = fs.realpathSync(tempDirs.make("repo-e2e-artifacts-"));
   const { write, read, json } = fixtureFiles(root);
   const artifact = path.join(root, "artifacts");
+  const browserEntry = `dist/control-ui/${"a".repeat(64)}/index.js`;
   const assets = {
+    "dist/control-ui/index.html": "<!doctype html>production UI\n",
+    "dist/build-info.json": '{"buildId":"production-build"}\n',
     "extensions/demo/assets/.bundle.hash": "generated-hash\n",
     "extensions/demo/assets/runtime.js": "generated-runtime\n",
+    "extensions/demo/dist/openclaw.plugin.json": JSON.stringify({
+      controlUi: { entry: browserEntry },
+    }),
+    [`extensions/demo/${browserEntry}`]: "generated-browser\n",
   };
   for (const [file, contents] of Object.entries({
     "package.json": '{"name":"artifact-fixture"}\n',
@@ -89,7 +96,10 @@ function fixture() {
   const asset = "assets/runtime.js";
   json("extensions/demo/package.json", {
     openclaw: {
-      assetScripts: { build: "fixture-build", buildOutputs: ["assets/.bundle.hash"] },
+      assetScripts: {
+        build: "fixture-build",
+        buildOutputs: ["assets/.bundle.hash", "dist/openclaw.plugin.json"],
+      },
       build: { staticAssets: [{ source: asset, output: asset }] },
     },
   });
@@ -149,13 +159,39 @@ describe("repo E2E artifact transfer", () => {
   beforeEach(() => vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1"));
   afterEach(() => vi.unstubAllEnvs());
 
+  it("reuses restored deployment assets without selecting a reduced UI inventory", () => {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/openclaw-repo-e2e-reusable.yml", "utf8"),
+    );
+    const steps = workflow.jobs.test.steps;
+    const runIndex = steps.findIndex(
+      (step: { name: string }) => step.name === "Run repo E2E suite",
+    );
+    const restoreIndex = steps.findIndex(
+      (step: { name: string }) => step.name === "Restore repo E2E build",
+    );
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(runIndex).toBeGreaterThan(restoreIndex);
+    expect(steps[runIndex].env.OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT).toBe(
+      "${{ github.workspace }}/dist/control-ui",
+    );
+    expect(steps[runIndex].env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT).toBeUndefined();
+    expect(steps[runIndex].env.OPENCLAW_E2E_WORKERS).toBe("2");
+  });
+
   it.each(["full", "ciArtifacts"])(
     "restores a complete %s build through the workflow harness without rebuilding",
     (profile) => {
       const { root, artifact, assets, read, mtime, remove } = fixture();
       const producerStamp = read("dist/.buildstamp");
       transferThroughWorkflowHarness("pack", artifact, profile, root);
-      remove("dist", "dist-runtime", "packages/demo/dist", "extensions/demo/assets");
+      remove(
+        "dist",
+        "dist-runtime",
+        "packages/demo/dist",
+        "extensions/demo/assets",
+        "extensions/demo/dist",
+      );
       // Clean Git state outranks archive mtimes; restore still refreshes the local stamp.
       execFileSync("tar", ["-xzf", path.join(artifact, "repo-e2e-build.tar.gz")], { cwd: root });
       expect(requirement(root)).toEqual({ shouldBuild: false, reason: "clean" });

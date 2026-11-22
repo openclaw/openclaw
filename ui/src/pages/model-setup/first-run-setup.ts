@@ -316,7 +316,9 @@ export class FirstRunSetup {
     ) {
       return;
     }
-    const receipt = readFirstRunActivationReceipt(context);
+    const stored = readFirstRunActivationReceipt(context);
+    // A Models sign-in record belongs to its login dialog, not to first-run activation.
+    const receipt = stored?.kind === "provider-login" ? null : stored;
     if (this.pending?.receipt && receipt?.owner !== this.pending.receipt.owner) {
       this.pending = null;
     }
@@ -353,7 +355,7 @@ export class FirstRunSetup {
       this.host.setVerifyState({
         phase: "failed",
         status: "unknown",
-        error: `${t("modelSetup.access.gatewayTooOld")}. ${t("updates.confirm.action")}. ${t("desktop.reconnect")}.`,
+        error: t("modelSetup.access.gatewayTooOld"),
       });
       return;
     }
@@ -449,6 +451,18 @@ export class FirstRunSetup {
 
   get unresolved(): boolean {
     return this.pending !== null;
+  }
+
+  /** An activation from an earlier visit is recovered from discovery before new setup starts. */
+  get awaitsRecovery(): boolean {
+    if (this.pending !== null) {
+      return true;
+    }
+    if (this.host.routeData()?.firstRun !== true) {
+      return false;
+    }
+    const receipt = readFirstRunActivationReceipt(this.host.context());
+    return receipt !== null && receipt.kind !== "provider-login";
   }
 
   get canUseCurrentModel(): boolean {

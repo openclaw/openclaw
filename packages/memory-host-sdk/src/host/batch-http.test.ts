@@ -10,6 +10,14 @@ vi.mock("./remote-http.js", () => ({
 
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
+function createBatchRetry(
+  sleep: (ms: number) => Promise<void>,
+): ReturnType<typeof createRetryRunner> {
+  const run = createRetryRunner({ random: () => 0.5 });
+  return (fn, options, initialDelayMs) =>
+    run(fn, typeof options === "object" ? { sleep, ...options } : options, initialDelayMs);
+}
+
 describe("postJsonWithRetry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -31,10 +39,7 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: ["a", "b"] },
         errorPrefix: "memory batch failed",
-        retryImpl: createRetryRunner({
-          random: () => 0.5,
-          sleep: async (delayMs) => void waits.push(delayMs),
-        }),
+        retryImpl: createBatchRetry(async (delayMs) => void waits.push(delayMs)),
       }),
     ).resolves.toEqual({ ok: true, ids: [1, 2] });
 
@@ -54,10 +59,7 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: ["a"] },
         errorPrefix: "memory batch failed",
-        retryImpl: createRetryRunner({
-          random: () => 0.5,
-          sleep: async (delayMs) => void waits.push(delayMs),
-        }),
+        retryImpl: createBatchRetry(async (delayMs) => void waits.push(delayMs)),
       }),
     ).rejects.toMatchObject({ status, retryAfterMs: 60_000 });
 
@@ -77,7 +79,7 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: [] },
         errorPrefix: "memory batch failed",
-        retryImpl: createRetryRunner({ sleep }),
+        retryImpl: createBatchRetry(sleep),
       }),
     ).rejects.toMatchObject({ status: 400, message: "memory batch failed (400): invalid input" });
 

@@ -14,6 +14,7 @@ import {
   metadataSnapshot as managementMetadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -196,6 +197,38 @@ describe("managed plugin inspection", () => {
       expect(inspection.reviewToken).toBeUndefined();
     },
   );
+
+  it("offers Models setup only for an enabled plugin with declared guided sign-in", async () => {
+    const pluginId = "cloud-plugin";
+    const provider = "cloud-models";
+    const snapshot = metadataSnapshot({ enabled: true, id: pluginId });
+    const owners = {
+      ...makeEmptyPluginMetadataOwners(),
+      providers: new Map([[provider, [pluginId]]]),
+    };
+    const manifest = snapshot.plugins[0]!;
+    manifest.providers = [provider];
+    mocks.metadata.mockReturnValue({ ...snapshot, owners });
+    const inspect = (enabled: boolean) =>
+      inspectManagedPlugin({
+        config: { plugins: { entries: { [pluginId]: { enabled } } } },
+        pluginId,
+        env: {},
+      });
+    expect((await inspect(true)).providerSignIn).toBeUndefined();
+    manifest.providerAuthChoices = [
+      {
+        provider,
+        method: "oauth",
+        choiceId: "cloud-login",
+        choiceLabel: "Sign in to Cloud Models",
+        appGuidedAuth: "oauth",
+        credentialOnly: true,
+      },
+    ];
+    expect((await inspect(true)).providerSignIn).toBe(true);
+    expect((await inspect(false)).providerSignIn).toBeUndefined();
+  });
 
   it("offers installed account sign-in and follows operator configuration changes", async () => {
     const snapshot = metadataSnapshot({ enabled: true });
@@ -463,7 +496,7 @@ describe("managed plugin inspection", () => {
           entries: {
             "community-plugin": {
               enabled: false,
-              hooks: { allowPromptInjection: false, allowConversationAccess: true },
+              hooks: { allowPromptModification: false, allowConversationAccess: true },
               llm: { allowModelOverride: true },
             },
           },

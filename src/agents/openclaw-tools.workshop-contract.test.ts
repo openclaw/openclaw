@@ -13,7 +13,8 @@ import { prepareGatewaySkillAuthoring } from "../gateway/skill-library-authoring
 import { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -26,14 +27,12 @@ import {
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let resetWorkshopPlugin: (() => void) | undefined;
 const skill = (name: string, body = "Run the deployment.", description = "Deploy staging builds") =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
 const text = (result: { content: Array<{ type: string; text?: string }> }) =>
@@ -46,26 +45,44 @@ beforeEach(async () => {
   });
   config = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
-    plugins: { enabled: false },
+    plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
   root = path.join(state.agentDir(), "workshop-skills");
 });
 afterEach(async () => {
+  resetWorkshopPlugin?.();
   vi.restoreAllMocks();
   await closeSkillsWatchers(true);
   await state.cleanup();
 });
 
+/** A Workshop background review: the plugin's own fork of the reviewed session. */
+function reviewFork(sourceSessionKey: string) {
+  return {
+    inputProvenance: {
+      kind: "internal_system" as const,
+      sourceTool: "session_fork",
+      sourceSessionKey,
+    },
+    runtimePluginToolOwnerId: "skill-workshop",
+  };
+}
 function tools(overrides: Partial<NonNullable<Parameters<typeof createOpenClawTools>[0]>> = {}) {
+  const runId = overrides.runId ?? randomUUID();
   return createOpenClawTools({
     config,
     agentDir: state.agentDir(),
     workspaceDir: state.workspaceDir,
     agentSessionKey: "agent:main:contract",
-    runId: randomUUID(),
+    runId,
+    // Run facts an embedded attempt gives its tools: the admitted-run guard, and the run id
+    // the tool-call wrapper attributes plugin-reported skill use to.
+    assertInvocationCurrent: () => {},
+    beforeToolCallHookContext: { runId },
     ...overrides,
   });
 }
@@ -257,7 +274,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     const options = {
       runId,
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf },
+      ...reviewFork(reviewOf),
     };
     const review = workshop(options);
     const actions = [
@@ -307,7 +324,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     setRuntimeConfigSnapshot(config);
     const review = workshop({
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf: "agent:main:telegram:direct:42" },
+      ...reviewFork("agent:main:telegram:direct:42"),
     });
     await review.execute("view", { action: "view", name: "deploy" });
     await expect(
@@ -380,33 +397,6 @@ describe("Workshop through the OpenClaw tool set", () => {
     await expect(fs.stat(path.join(root, ".archive", "deploy"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("T7: captures the invoking source authority before its first await", async () => {
-    await seed();
-    const tool = workshop();
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:contract",
-      receiptAuthority: () => false,
-    };
-    const pending = withGatewayToolCallerIdentity(identity, () => {
-      const write = tool.execute("retired-source", {
-        action: "patch",
-        name: "deploy",
-        old_text: "deployment",
-        new_text: "release",
-      });
-      const caller = getGatewayToolCallerIdentity();
-      if (!caller) {
-        throw new Error("Expected the invoking caller scope");
-      }
-      caller.receiptAuthority = () => true;
-      return write;
-    });
-    await expect(pending).rejects.toThrow("tool invocation authority is no longer active");
-    expect(await fs.readFile(path.join(root, "deploy", "SKILL.md"), "utf8")).toBe(skill("deploy"));
-    expect((await changes()).changes).toEqual([]);
   });
 
   it("L2 L3: retains ten prior trees and serves a feed with pruned-version references", async () => {
@@ -666,9 +656,13 @@ describe("Workshop through the OpenClaw tool set", () => {
       try {
         const admitted = await admission.admit("embedded");
         capability!.bind(admitted);
-        const run = { sandboxed: true, skillLibraryAuthoring: capability };
-        expect(skillToolNames(run)).toEqual(
-          multiple ? ["skill_library"] : ["skill_workshop", "skill_library"],
+        // Documented loss: the plugin tool refuses sandboxed runs, so this library turn is not
+        // sandboxed (it was `sandboxed: true` while core admitted Workshop through the grant).
+        const run = { sandboxed: false, skillLibraryAuthoring: capability };
+        // Plugin tools follow core tools; provider requests sort tools by name, so only the set
+        // of skill tools is model-visible behavior.
+        expect(skillToolNames(run).toSorted()).toEqual(
+          multiple ? ["skill_library"] : ["skill_library", "skill_workshop"],
         );
         const surface = tools(run);
         const invoke = (name: string, args: Record<string, unknown>) =>

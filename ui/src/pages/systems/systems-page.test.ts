@@ -167,6 +167,46 @@ async function mount(controller: Systems, presented = () => true) {
 }
 
 describe("Systems workspace", () => {
+  it.each(["system.info", "node.list"])(
+    "shows the device inventory while %s is pending",
+    async (method) => {
+      const telemetry = createDeferred<unknown>();
+      const { controller, request } = harness();
+      const respond = request.getMockImplementation()!;
+      request.mockImplementation((called, params, options) => {
+        if (called === method) {
+          return telemetry.promise;
+        }
+        return respond(called, params, options);
+      });
+      const { page, sidebar } = await mount(controller);
+      expect(sidebar.textContent).toContain("Cloud worker");
+      const selectedId = method === "system.info" ? host.id : offline.id;
+      controller.select(selectedId);
+      await waitForSolid(() => expect(text(page, ".systems-no-telemetry")).toBe("Loading…"));
+      controller.select(worker.id);
+      controller.updatePresentation({ showDetails: true });
+      await waitForSolid(() => expect(text(page, ".systems-heading h2")).toBe("Cloud worker"));
+      expect(page.querySelector(".systems-details")).not.toBeNull();
+      const healthyMethod = method === "system.info" ? "node.list" : "system.info";
+      controller.select(healthyMethod === "system.info" ? host.id : offline.id);
+      const reads = calls(request, healthyMethod).length;
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 15_000);
+      await controller.refreshTelemetry();
+      expect(calls(request, healthyMethod)).toHaveLength(reads + 1);
+      controller.select(selectedId);
+      telemetry.reject(new Error("Telemetry unavailable"));
+      await waitForSolid(() =>
+        expect(text(page, ".systems-no-telemetry")).toBe("Telemetry unavailable"),
+      );
+      request.mockImplementation(respond);
+      await controller.refreshTelemetry();
+      await waitForSolid(() =>
+        expect(text(page, ".systems-no-telemetry")).not.toBe("Telemetry unavailable"),
+      );
+    },
+  );
+
   const cloudWorker: NonNullable<EnvironmentSummary["worker"]> = {
     providerId: "crabbox",
     profileId: "standard",
@@ -402,7 +442,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.state.backups).toBeNull();
-    expect(text(page, ".systems-backups")).not.toContain("old-host");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("old-host");
   });
 
   it("retires a pending storage probe when the connection leaves", async () => {
@@ -426,7 +467,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.storageProbes.size).toBe(0);
-    expect(text(page, ".systems-backups")).not.toContain("1 GB free");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("1 GB free");
   });
 
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
