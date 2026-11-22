@@ -674,14 +674,15 @@ Select the agent to open its session and workspace context: rename the session,
 open its parent conversation, or use the workspace actions. **Details** also
 keeps workspace information available. The regular session view and external
 CLI catalog headers keep their workspace/session breadcrumbs.
+An ordinary **New Session** chat starts without a parent. When you explicitly
+create a child session or fork a conversation, the header links to its parent.
 
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
 
-An ordinary conversation's **Actions** menu also offers **Move to group**, even
-when its header links back to Home. That breadcrumb does not make the
-conversation a nested child.
+An ordinary conversation's **Actions** menu also offers **Move to group**.
+Existing ordinary chats that still link to Home remain top-level sessions.
 
 A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
