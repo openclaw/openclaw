@@ -36,6 +36,8 @@ export type SessionDisplayPullRequest = (
   | ControlUiSessionPullRequest
   | (Omit<ControlUiSessionPullRequest, "state"> & { state?: undefined })
 ) & {
+  /** The current checkout cannot inspect or monitor CI for this task receipt. */
+  taskOnly?: true;
   sourceSessionKey?: string;
   sourceAgentId?: string;
 };
@@ -53,13 +55,14 @@ export function displaySessionPullRequests(
       branch: task.branch,
       url: task.url,
       title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
+      taskOnly: true as const,
       sourceSessionKey: task.sourceSessionKey,
       sourceAgentId: task.sourceAgentId,
     };
     requests.set(task.url, task.pullRequest ? { ...receipt, ...task.pullRequest } : receipt);
   }
   for (const request of snapshot?.pullRequests ?? []) {
-    requests.set(request.url, { ...requests.get(request.url), ...request });
+    requests.set(request.url, { ...requests.get(request.url), ...request, taskOnly: undefined });
   }
   return orderSessionPullRequests([...requests.values()]);
 }

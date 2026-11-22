@@ -377,14 +377,16 @@ function PullRequestRow(props: {
             {(pullRequest) => (
               <span class="chat-pr__meta">
                 <SessionGitDiff classPrefix="chat-pr" item={pullRequest()} />
-                <Checks
-                  pullRequest={pullRequest()}
-                  gateway={props.owner.gateway}
-                  sessionKey={props.owner.sessionKey}
-                  sessionId={props.owner.sessionId}
-                  presented={props.owner.presented}
-                  dismissed={props.owner.dismissed}
-                />
+                <Show when={!props.entry.request?.taskOnly}>
+                  <Checks
+                    pullRequest={pullRequest()}
+                    gateway={props.owner.gateway}
+                    sessionKey={props.owner.sessionKey}
+                    sessionId={props.owner.sessionId}
+                    presented={props.owner.presented}
+                    dismissed={props.owner.dismissed}
+                  />
+                </Show>
                 <Show when={pullRequest().state !== "open"}>
                   <span class="chat-pr__state">{t(STATE_LABEL_KEYS[pullRequest().state])}</span>
                 </Show>
@@ -414,7 +416,7 @@ function PullRequestRow(props: {
           dismissed={props.owner.dismissed}
           onDismiss={dismiss}
           url={props.entry.url}
-          pullRequest={details()}
+          pullRequest={props.entry.request?.taskOnly ? undefined : details()}
           owner={props.owner}
         />
       </Show>

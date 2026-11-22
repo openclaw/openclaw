@@ -479,13 +479,14 @@ function MobileHostContent(
       ) {
         const pullRequests = details.displayPullRequests ?? details.pullRequests;
         const pullRequest = pullRequests?.find(
-          (request): request is ControlUiSessionPullRequest =>
+          (request): request is ControlUiSessionPullRequest & { taskOnly?: true } =>
             request.state !== undefined && chatPullRequestId(request) === selected.id,
         );
+        const checkoutRequest = pullRequest?.taskOnly ? undefined : pullRequest;
         const currentRequest = () =>
           owner.current() && pullRequest !== undefined && pullRequests?.includes(pullRequest);
         const openCi = (kind: "pull-request-checks" | "pull-request-monitoring", title: string) => {
-          if (currentRequest() && selected.kind === "pull-request") {
+          if (checkoutRequest && currentRequest() && selected.kind === "pull-request") {
             open({ kind, id: selected.id }, title);
           }
         };
@@ -494,9 +495,12 @@ function MobileHostContent(
           content: {
             ...recovery(),
             pullRequest,
-            onOpenChecks: () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle")),
-            onOpenMonitoring: () =>
-              openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring")),
+            onOpenChecks: checkoutRequest
+              ? () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle"))
+              : undefined,
+            onOpenMonitoring: checkoutRequest
+              ? () => openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring"))
+              : undefined,
             onDismiss: (request) => {
               if (
                 !currentRequest() ||
@@ -520,7 +524,7 @@ function MobileHostContent(
         });
         const ci = {
           ...recovery(),
-          pullRequest,
+          pullRequest: checkoutRequest,
           gateway: details.pullRequestsGateway,
           sessionKey: scopedSessionArtifactKey(
             details.sessionKey,
