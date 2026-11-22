@@ -123,6 +123,9 @@ export async function startCodexAttemptThread(params: {
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   historyBootstrapItems?: Parameters<typeof startOrResumeThread>[0]["historyBootstrapItems"];
   historyDeltaItems?: Parameters<typeof startOrResumeThread>[0]["historyDeltaItems"];
+  assertFreshThreadInputFits?: Parameters<
+    typeof startOrResumeThread
+  >[0]["assertFreshThreadInputFits"];
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
@@ -490,6 +493,7 @@ export async function startCodexAttemptThread(params: {
                 contextEngineProjection: params.contextEngineProjection,
                 historyBootstrapItems: params.historyBootstrapItems,
                 historyDeltaItems: params.historyDeltaItems,
+                assertFreshThreadInputFits: params.assertFreshThreadInputFits,
                 signal,
                 pluginThreadConfig: createPluginThreadConfig?.({
                   requestTimeoutMs: params.appServer.requestTimeoutMs,

@@ -28,9 +28,11 @@ import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import {
+  buildCodexConversationTurnInstructions,
   buildDeveloperInstructions,
   resolveCodexOpenClawBaseInstructions,
 } from "./thread-prompt.js";
+import { buildCodexParentLocalInstructions } from "./turn-params.js";
 
 export async function prepareCodexAttemptContext(
   runtime: CodexAttemptRuntime,
@@ -291,3 +293,23 @@ export async function prepareCodexAttemptContext(
 }
 
 export type CodexAttemptContext = Awaited<ReturnType<typeof prepareCodexAttemptContext>>;
+
+export function renderCodexInferenceTurnInstructions(
+  context: CodexAttemptContext,
+  turnDeveloperInstructions: string | undefined,
+): string {
+  const { runtime, attemptTools, workspaceBootstrapContext } = context;
+  const { connection, runtimeParams } = runtime;
+  return joinPresentSections(
+    connection.usesSupervisionConnection
+      ? undefined
+      : (buildCodexParentLocalInstructions(runtimeParams, {
+          personaInstructions: workspaceBootstrapContext.personaInstructions,
+          skillsInstructions: context.skillsInstructions,
+          memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+          sessionProjectGuidance: workspaceBootstrapContext.sessionProjectGuidance,
+        }) ?? undefined),
+    turnDeveloperInstructions,
+    buildCodexConversationTurnInstructions(runtimeParams, attemptTools.toolBridge.availableSpecs),
+  );
+}

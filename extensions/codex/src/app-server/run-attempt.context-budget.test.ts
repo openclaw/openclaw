@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { setupRunAttemptTestHooks, tempDir } from "./run-attempt-test-harness.js";
 import {
@@ -11,10 +13,103 @@ import {
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
+import { writeExistingBinding } from "./run-attempt.existing-binding.test-support.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt native context budget", () => {
+  it.each([
+    "current request",
+    "rendered prompt hook",
+    "request after native rotation",
+    "late replacement prompt hook",
+  ] as const)(
+    "rejects an oversized %s before starting inference or binding a cold native thread",
+    async (source) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+      params.agentDir = path.join(tempDir, "agent");
+      params.authoredContextTokenCap = 32_000;
+      // This is well under the native RPC text limit but over the authored model cap.
+      const oversizedText = "Synthetic request with mandatory text. ".repeat(6_000);
+      const lateReplacement = source === "late replacement prompt hook";
+      if (source === "current request" || source === "request after native rotation") {
+        params.prompt = oversizedText;
+      } else {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_prompt_build",
+              ...(lateReplacement ? { requiresToolAuthority: true } : {}),
+              handler: (event: unknown) =>
+                lateReplacement
+                  ? (event as { continuity?: { state: string } }).continuity?.state ===
+                    "invalidated"
+                    ? { prependContext: oversizedText }
+                    : undefined
+                  : { prependSystemContext: oversizedText },
+            },
+          ]),
+        );
+      }
+      if (source === "request after native rotation") {
+        await writeExistingBinding(sessionFile, params.workspaceDir);
+        const rolloutDir = path.join(params.agentDir, "codex-home", "sessions");
+        await fs.mkdir(rolloutDir, { recursive: true });
+        await fs.writeFile(
+          path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+          `${JSON.stringify({ payload: { type: "token_count", info: { total_token_usage: { total_tokens: 300_000 } } } })}\n`,
+        );
+      }
+      if (lateReplacement) {
+        await writeExistingBinding(sessionFile, params.workspaceDir, {
+          dynamicToolsFingerprint: '["stale"]',
+        });
+      }
+      const predecessor = lateReplacement && (await readCodexAppServerBinding(sessionFile));
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareBoundedSeed: async () => [],
+      };
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          throw new Error("Oversized request reached the synthetic native inference boundary");
+        }
+        return undefined;
+      });
+
+      await expect.soft(runCodexAppServerAttempt(params)).rejects.toThrow(/context budget/i);
+
+      const methods = harness.requests.map(({ method }) => method);
+      expect.soft(methods).not.toContain("turn/start");
+      expect.soft(methods).not.toContain("thread/start");
+      expect.soft(methods).not.toContain("thread/resume");
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(
+        lateReplacement ? predecessor : undefined,
+      );
+    },
+  );
+
+  it("admits current input that fits without reserving optional framing for an empty seed", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+    params.agentDir = path.join(tempDir, "agent");
+    params.authoredContextTokenCap = 32_000;
+    params.prompt = "Synthetic request with mandatory text. ".repeat(720);
+    const prepareBoundedSeed = vi.fn(async () => []);
+    params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([harness.waitForMethod("turn/start"), run]);
+    await harness.completeTurn();
+    await run;
+
+    expect(prepareBoundedSeed).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 1 }));
+    expect(harness.requests.map(({ method }) => method)).not.toContain("thread/inject_items");
+  });
+
   it.each([
     ["matching model", "gpt-5.4-codex", false, undefined, undefined, 258_400],
     ["provider-qualified model", "openai/gpt-5.4-codex", false, undefined, undefined, 258_400],
