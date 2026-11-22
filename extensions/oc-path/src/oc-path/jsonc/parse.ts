@@ -113,13 +113,19 @@ function nodeToJsoncValue(
       };
     case "string":
       return { kind: "string", value: String(node.value), line };
-    case "number":
+    case "number": {
+      const literal = source.slice(node.offset, node.offset + node.length);
+      const unsafeLiteral = unsafeIntegerLiteral(literal);
+      // Only plain integers outside the exactly-representable range keep their
+      // source text; every other spelling stays on the String(value) path
+      // consumers have always compared and printed (`1e3` reads as "1000").
       return {
         kind: "number",
-        value: Number(node.value),
-        raw: source.slice(node.offset, node.offset + node.length),
+        value: Number(literal),
+        ...(unsafeLiteral === undefined ? {} : { raw: unsafeLiteral }),
         line,
       };
+    }
     case "boolean":
       return { kind: "boolean", value: Boolean(node.value), line };
     case "null":
@@ -127,6 +133,18 @@ function nodeToJsoncValue(
     default:
       return { kind: "null", line };
   }
+}
+
+/**
+ * Doubles hold every integer up to 2^53 exactly, so a plain integer literal
+ * beyond that range can round to a neighbour's value. Only those literals need
+ * their exact text: `9007199254740993` must not read as `...992`.
+ */
+function unsafeIntegerLiteral(literal: string): string | undefined {
+  if (!/^-?[0-9]+$/.test(literal)) {
+    return undefined;
+  }
+  return Number.isSafeInteger(Number(literal)) ? undefined : literal;
 }
 
 function createLineForOffset(raw: string): LineForOffset {

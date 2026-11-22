@@ -21,7 +21,7 @@ export type JsoncValue =
   | {
       readonly kind: "number";
       readonly value: number;
-      /** Exact source literal; JSON integers past 2^53 collide as doubles. */
+      /** Exact source text, only for plain integers outside the safe range (> 2^53 - 1). */
       readonly raw?: string;
       readonly line?: number;
     }

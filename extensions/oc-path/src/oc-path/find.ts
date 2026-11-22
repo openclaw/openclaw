@@ -725,7 +725,8 @@ function jsoncChildFieldText(
     return v.value;
   }
   if (v.kind === "number") {
-    // Exact literal: JSON integers past 2^53 collide as doubles.
+    // Unsafe plain integers keep their source text; everything else compares by
+    // its normalized String(value) reading, so `1e3` still matches `[id=1000]`.
     return v.raw ?? String(v.value);
   }
   if (v.kind === "boolean") {
