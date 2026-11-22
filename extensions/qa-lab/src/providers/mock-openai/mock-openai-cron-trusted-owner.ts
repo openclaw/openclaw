@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { hasToolOutput } from "./mock-openai-input.js";
 
 const QA_CRON_TRUSTED_OWNER_PROMPT_RE =
   /Trusted automation owner QA check: action=(pause|narrow|realert|dormant|redeclare) target=(\S+) marker=(\S+)/;
@@ -20,8 +21,7 @@ export function planCronTrustedOwnerTurn(params: {
   }
   const [, action, jobId, marker] = match;
   // Earlier pauses stay in this conversation's history; only this turn's result counts.
-  const lastUser = params.input.findLastIndex((item) => item.role === "user");
-  if (!params.input.slice(lastUser + 1).some((item) => item.type === "function_call_output")) {
+  if (!hasToolOutput(params.input)) {
     if (action === "redeclare") {
       // jobId carries the declaration key for this action.
       return params.buildToolCall("automations", {

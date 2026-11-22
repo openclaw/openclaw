@@ -14,7 +14,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "./model-selection-normalize.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 function resetRuntime() {
@@ -133,7 +133,7 @@ it("applies source manifest normalization once without an executable hook", asyn
     const script = `
         const { pathToFileURL } = await import("node:url");
         const load = (file) => import(pathToFileURL(${JSON.stringify(process.cwd())} + "/" + file).href);
-        const { normalizeModelRef } = await load("src/agents/model-ref-shared.ts");
+        const { normalizeModelRef } = await load("src/agents/model-selection-normalize.ts");
         const { createPluginMetadataSnapshotFixture } = await load("src/plugins/plugin-metadata.test-support.ts");
         const { createEmptyPluginRegistry } = await load("src/plugins/registry-empty.ts");
         const { withPluginRuntimeGenerationScope } = await load("src/plugins/runtime/generation-scope.ts");

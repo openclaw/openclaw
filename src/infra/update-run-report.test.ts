@@ -137,7 +137,7 @@ it("bounds the repaired update lead alongside long pending-repair guidance", () 
 
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
-    "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
+    "Skipped agent database path repair for 1 registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
   const report = render({
     steps: [
       { step: "warning:doctor", status: "completed", detail },

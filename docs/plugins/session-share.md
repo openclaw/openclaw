@@ -166,7 +166,7 @@ openclaw devices approve <requestId>
 openclaw nodes list
 ```
 
-Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. The catalog only recognizes nodes advertising both commands. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
+Check that the pairing request and connected node declare only `openclaw.sessions.list.v1` and `openclaw.sessions.read.v1`, with the `openclaw-sessions` capability. A node set up for [Open original](#open-original-on-a-paired-node) also declares `openclaw.sessions.list-with-links.v1`. The catalog only recognizes nodes advertising both commands. See [Connect](/cli/connect) for join-code expiry and [Nodes](/nodes#restrict-the-node-command-surface) for the command allowlist.
 
 ## Read shared sessions
 
@@ -214,11 +214,75 @@ Receiver-side identity settings are optional and keyed by the node ID shown by `
 
 Without node-specific settings, attribution stays remote. Source-local profile IDs are namespaced as remote identities, never interpreted directly as profiles on the receiver. Source and receiver settings may coexist in one plugin configuration.
 
+## Open original on a paired node
+
+The shared-session menu can open an eligible session in a separate tab on the source Control UI. The shared view on the receiver stays read-only. The source asks for its own sign-in and applies its own permissions. Only paired node sources support this action; outbound Gateway sources do not provide original links.
+
+Nothing is enabled by default, and both machines need a release that includes this action. Follow the steps in order: the Gateway withholds a command that is not allowed at the moment the node connects.
+
+1. On the receiver, add the link command to the existing `gateway.nodes.commands.allow` array. Preserve any commands already present. A matching `gateway.nodes.commands.deny` entry overrides it.
+
+   ```json5
+   {
+     gateway: {
+       nodes: {
+         commands: {
+           allow: ["openclaw.sessions.list-with-links.v1"],
+         },
+       },
+     },
+   }
+   ```
+
+2. On the receiver, set the source Control UI address for that node:
+
+   ```json5
+   {
+     plugins: {
+       entries: {
+         "session-share": {
+           config: {
+             nodes: {
+               "<nodeId>": {
+                 controlUiOrigin: "https://team.example.com",
+                 controlUiBasePath: "/openclaw",
+               },
+             },
+           },
+         },
+       },
+     },
+   }
+   ```
+
+   `controlUiOrigin` is an HTTP(S) origin with no credentials, path, query, or fragment. Set `controlUiBasePath` only when the source serves its Control UI under a path prefix. Choose the address yourself. Never copy it from a node IP address or from anything the source sends.
+
+3. On the source, replace the saved command allowlist with all three IDs. `--commands` replaces the saved list, so repeat the two read commands:
+
+   ```bash
+   openclaw node install --force \
+     --commands openclaw.sessions.list.v1,openclaw.sessions.read.v1,openclaw.sessions.list-with-links.v1
+   ```
+
+   For a foreground node, pass the same list to `openclaw node run`.
+
+4. On the receiver, approve the widened command surface and confirm that the node now has three commands:
+
+   ```bash
+   openclaw nodes pending
+   openclaw nodes approve <requestId>
+   openclaw nodes describe --node <nodeId>
+   ```
+
+The source returns only a source-relative path, and only for a session that its current routing still resolves to the stored session. The receiver joins that path to the origin you configured. Links follow the source's current routing; they are not permanent session addresses.
+
+While any step is missing, the receiver keeps using the ordinary list command. Shared sessions stay readable, and the menu shows **Open original** disabled with setup guidance.
+
 ## Security boundary
 
 The source chooses what to publish; the receiver trusts the paired device for the identity claims attached to that publication. Attribution is display metadata and never grants access.
 
-With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
+With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The optional Open original command is also read-only: it adds a source-relative Control UI path to listed rows and no other session content. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
 
 Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Included text is not secret-masked. Review credentials and other sensitive content before publishing. Choose publication filters deliberately and treat received transcripts as untrusted text.
 
@@ -247,6 +311,10 @@ Refresh the catalog. The source may be offline, the session may have been delete
 **Catalog refreshes sometimes take 30 seconds**
 
 When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs refreshes that take at least one second, at most once per minute. Progressive callers see a loading host while these refreshes run. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
+
+**Open original is disabled**
+
+Check each step in [Open original on a paired node](#open-original-on-a-paired-node). `openclaw nodes describe --node <nodeId>` on the receiver must list `openclaw.sessions.list-with-links.v1`, and the node needs a valid `controlUiOrigin`. If you allowed the command after the source connected, run `openclaw node restart` on the source, then approve the request shown by `openclaw nodes pending`. A session whose stored address no longer matches the source's current routing has no link.
 
 **Names do not link to local profiles**
 

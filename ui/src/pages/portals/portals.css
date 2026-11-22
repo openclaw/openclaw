@@ -25,13 +25,13 @@ main.content:where(.content--portals-page) .portals-empty {
   flex: 1 1 auto;
 }
 
-/* The standalone page reads in the standard wide page column, under its header. */
+/* Match the header column; the shell already supplies the gutter on phones. */
 openclaw-portals-page:not([embedded]) > .portals-empty,
 openclaw-portals-page:not([embedded]) > .portals-layout {
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 /* The preview's own 480px frame floor keeps the layout tall enough to scroll in
