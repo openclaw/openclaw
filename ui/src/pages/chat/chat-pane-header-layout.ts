@@ -11,7 +11,7 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import { chatHistoryRequests, isChatSessionProvenAbsent } from "./chat-history-state.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { chatDetailsDockingLayout } from "./chat-snapshot-prewarm.ts";
@@ -67,9 +67,12 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     });
   };
 
-  /** A main conversation has no row, and so no processes, until its first turn creates it. */
+  /**
+   * Processes belong to a session row. A pane learns the row from the roster, its cached
+   * transcript or its history read; a main conversation has none until its first turn.
+   */
   protected processesOpener(state: ChatPageHost, session: GatewaySessionRow | undefined) {
-    return !session && isChatSessionProvenAbsent(state) ? undefined : this.showDetailsProcess;
+    return session || state.currentSessionId ? this.showDetailsProcess : undefined;
   }
 
   protected readonly returnToProcessDetails = () => {
