@@ -1,4 +1,5 @@
 import { hasCompactToolProfile, resolveAgentProfile } from "../agents/agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../agents/agent-profiles/model-size-class.js";
 import { prepareConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 // Keep Tool Search and Code Mode dependencies out of the lightweight harness lifecycle SDK.
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
@@ -84,6 +85,7 @@ export async function createAgentHarnessToolSurfaceRuntimeAsync(
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    modelSizeClass: resolveProfileModelSizeClass(params.model),
   });
   const profile = hasCompactToolProfile(agentProfile)
     ? await prepareConversationCapabilityProfile({

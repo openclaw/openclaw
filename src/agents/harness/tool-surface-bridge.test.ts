@@ -422,6 +422,21 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     });
   });
 
+  it("selects the agent profile from the route-matched parameter count", () => {
+    const config: OpenClawConfig = { agents: { defaults: { agentProfileId: "auto" } } };
+    expect(
+      createRuntime(config, { model: { parameterCount: 8_190_735_360 } }).agentProfile.profile.id,
+    ).toBe("openclaw/small");
+    expect(createRuntime(config, { model: {} }).agentProfile.profile.id).toBe("openclaw/base");
+  });
+
+  it("keeps the base profile for a reported parameter count while size selection is off", () => {
+    const runtime = createRuntime({}, { model: { parameterCount: 8_190_735_360 } });
+
+    expect(runtime.agentProfile.profile.id).toBe("openclaw/base");
+    expect(runtime.agentProfile.selectionSource).toBe("fallback");
+  });
+
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { agentProfileId: "openclaw/small" } },
@@ -491,9 +506,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   );
 
   it.each(["openclaw/base", "openclaw/small"] as const)(
-    "keeps the gateway-selected %s on a worker and trusts the Gateway's tool projection",
+    "keeps the gateway-selected %s on a worker whose model reports a small parameter count and trusts the Gateway's tool projection",
     (selected) => {
-      const model = {};
+      const model = { parameterCount: 8_190_735_360 };
       const config: OpenClawConfig = {
         agents: { defaults: { agentProfileId: selected } },
         tools: { codeMode: false, toolSearch: false },

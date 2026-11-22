@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import {
   applyAgentProfileToolSearchDefaults,
   filterToolsByAgentProfile,
@@ -26,27 +27,58 @@ const heavyTools = [
   "exec",
 ];
 
+const autoConfig: OpenClawConfig = { agents: { defaults: { agentProfileId: "auto" } } };
+
 describe("Agent Profile selection", () => {
-  it("keeps the base profile when no profile is configured", () => {
-    for (const resolved of [resolveAgentProfile({ config: {} }), resolveAgentProfile({})]) {
+  it.each(["tiny", "small", "medium", "large"] as const)(
+    "keeps a %s model on the base profile until size selection is enabled",
+    (modelSizeClass) => {
+      const resolved = resolveAgentProfile({ config: {}, modelSizeClass });
+
       expect(resolved.profile.id).toBe("openclaw/base");
       expect(resolved.selectionSource).toBe("fallback");
-    }
+    },
+  );
+
+  it("keeps the base profile for a size class when no config is given", () => {
+    const resolved = resolveAgentProfile({ modelSizeClass: "small" });
+
+    expect(resolved.profile.id).toBe("openclaw/base");
+    expect(resolved.selectionSource).toBe("fallback");
   });
 
   it("chains the small profile from the base profile", () => {
-    const config: OpenClawConfig = { agents: { defaults: { agentProfileId: "openclaw/small" } } };
-    const resolved = resolveAgentProfile({ config });
+    const resolved = resolveAgentProfile({ config: autoConfig, modelSizeClass: "small" });
 
     expect(resolved.profile.ancestry).toEqual(["openclaw/base", "openclaw/small"]);
-    expect(resolved.selectionSource).toBe("defaults-explicit");
   });
 
-  it("uses an explicit default profile", () => {
+  it.each([
+    ["tiny", "openclaw/small"],
+    ["small", "openclaw/small"],
+    ["medium", "openclaw/base"],
+    ["large", "openclaw/base"],
+  ] as const)("maps %s model metadata to %s", (modelSizeClass, expectedProfileId) => {
+    const resolved = resolveAgentProfile({ config: autoConfig, modelSizeClass });
+
+    expect(resolved.profile.id).toBe(expectedProfileId);
+    expect(resolved.selectionSource).toBe("model-size");
+  });
+
+  it("falls back to the base profile without trusted matching facts", () => {
+    const resolved = resolveAgentProfile({
+      config: autoConfig,
+    });
+
+    expect(resolved.profile.id).toBe("openclaw/base");
+    expect(resolved.selectionSource).toBe("fallback");
+  });
+
+  it("uses an explicit default profile before automatic bindings", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { agentProfileId: "openclaw/base" } },
     };
-    const resolved = resolveAgentProfile({ config });
+    const resolved = resolveAgentProfile({ config, modelSizeClass: "small" });
 
     expect(resolved.profile.id).toBe("openclaw/base");
     expect(resolved.selectionSource).toBe("defaults-explicit");
@@ -65,6 +97,25 @@ describe("Agent Profile selection", () => {
 
     expect(resolved.profile.id).toBe("openclaw/small");
     expect(resolved.selectionSource).toBe("agent-explicit");
+  });
+
+  it("lets a per-agent auto selector bypass an explicit default", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { agentProfileId: "openclaw/base" },
+        entries: {
+          main: { agentProfileId: "auto" },
+        },
+      },
+    };
+    const resolved = resolveAgentProfile({
+      config,
+      agentId: "main",
+      modelSizeClass: "small",
+    });
+
+    expect(resolved.profile.id).toBe("openclaw/small");
+    expect(resolved.selectionSource).toBe("model-size");
   });
 });
 
@@ -177,9 +228,40 @@ describe("small profile Tool Search defaults", () => {
     expect(applyAgentProfileToolSearchDefaults({ config })).toBe(config);
   });
 
-  it("does not change config when no profile is selected", () => {
+  it("selects the small profile before applying defaults", () => {
+    expect(
+      applyAgentProfileToolSearchDefaults({
+        config: autoConfig,
+        modelSizeClass: "small",
+      })?.tools?.toolSearch,
+    ).toMatchObject({ enabled: true, mode: "tools" });
+  });
+
+  it("leaves Tool Search alone for a small model while size selection is off", () => {
     const config: OpenClawConfig = {};
 
-    expect(applyAgentProfileToolSearchDefaults({ config })).toBe(config);
+    expect(applyAgentProfileToolSearchDefaults({ config, modelSizeClass: "small" })).toBe(config);
   });
+
+  it("does not change config for an unmatched model", () => {
+    const config: OpenClawConfig = {};
+
+    expect(
+      applyAgentProfileToolSearchDefaults({
+        config,
+      }),
+    ).toBe(config);
+  });
+
+  it.each<ModelSizeClass>(["tiny", "small"])(
+    "enables Tool Search for %s model metadata",
+    (modelSizeClass) => {
+      expect(
+        applyAgentProfileToolSearchDefaults({
+          config: autoConfig,
+          modelSizeClass,
+        })?.tools?.toolSearch,
+      ).toMatchObject({ enabled: true });
+    },
+  );
 });

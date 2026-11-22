@@ -85,7 +85,7 @@ function normalizeAgentProfile(value: string | undefined): AgentProfileSelector 
   if (isAgentProfileSelector(value)) {
     return value;
   }
-  throw new Error("--agent-profile must be openclaw/base or openclaw/small.");
+  throw new Error("--agent-profile must be auto, openclaw/base, or openclaw/small.");
 }
 
 /**

@@ -556,7 +556,11 @@ async function prepareCliRunContextWithinReadFence(
   // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
   const requestedContextModelId = params.nativeModelId ?? modelId;
   const normalizedContextModelId = params.nativeModelId ?? normalizedCatalogModel;
-  const { contextWindowInfo, providerThinkingLevel } = resolveCliModelCapabilities({
+  const {
+    contextWindowInfo,
+    providerThinkingLevel,
+    modelSizeClass: agentProfileModelSizeClass,
+  } = resolveCliModelCapabilities({
     run: params,
     runConfig,
     workspaceDir,
@@ -620,6 +624,7 @@ async function prepareCliRunContextWithinReadFence(
     skipsTurnPrefix,
     sessionAgentId,
     sessionLabel,
+    modelSizeClass: agentProfileModelSizeClass,
     workspaceDir,
     bootstrapWorkspaceDir,
     runtimeChatType,

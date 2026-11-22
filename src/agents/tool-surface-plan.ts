@@ -1,5 +1,6 @@
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyAgentProfileToolSearchDefaults,
@@ -7,6 +8,7 @@ import {
   resolveAgentProfile,
   type ResolvedAgentProfile,
 } from "./agent-profiles.js";
+import { resolveProfileModelSizeClass } from "./agent-profiles/model-size-class.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
   applyCodeModeCatalog,
@@ -27,7 +29,13 @@ export type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { api?: string; compat?: unknown; toolSearchMode?: "tools" | false };
+  model?: {
+    api?: string;
+    compat?: unknown;
+    modelSizeClass?: ModelSizeClass;
+    parameterCount?: number;
+    toolSearchMode?: "tools" | false;
+  };
   modelProvider?: string;
   modelId?: string;
   resolvedProfile?: ResolvedAgentProfile;
@@ -68,6 +76,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
         config: runtimeConfig,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        modelSizeClass: resolveProfileModelSizeClass(params.model),
         resolvedProfile: params.resolvedProfile,
       });
   const selectedToolConfig: OpenClawConfig | undefined =
@@ -130,6 +139,7 @@ export function prepareAgentToolSurfacePresentation(
           config: params.config,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
+          modelSizeClass: resolveProfileModelSizeClass(params.model),
         }),
     ),
     forceDirectMessageTool: params.forceDirectMessageTool,

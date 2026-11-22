@@ -179,7 +179,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 60000).",
   "agents.defaults.agentProfileId":
-    'Agent Profile selector. Omit it to keep openclaw/base (default). Set a registered profile id such as "openclaw/small" to pin one.',
+    'Agent Profile selector. Omit it to keep openclaw/base (default). Set "auto" to select a profile from the model\'s trusted total parameter count (openclaw/small up to 20B), or set a registered profile id such as "openclaw/small" to pin one.',
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.decisionAssistance":

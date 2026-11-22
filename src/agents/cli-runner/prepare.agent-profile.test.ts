@@ -220,23 +220,39 @@ describe("prepareCliRunContext agent profiles", () => {
 
   it.each([
     {
-      name: "the small profile",
-      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
-      expected: { id: "openclaw/small", selectionSource: "defaults-explicit" },
+      name: "a model with a small size class",
+      modelProvider: "llama-cpp",
+      model: "local-8b",
+      config: { agents: { defaults: { agentProfileId: "auto" } } },
+      expected: { id: "openclaw/small", selectionSource: "model-size" },
     },
     {
-      name: "no configured profile",
+      name: "a model with a small size class while size selection is off",
+      modelProvider: "llama-cpp",
+      model: "local-8b",
       config: {},
+      expected: { id: "openclaw/base", selectionSource: "fallback" },
+    },
+    {
+      name: "a model without a size class",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-1",
+      config: { agents: { defaults: { agentProfileId: "auto" } } },
       expected: { id: "openclaw/base", selectionSource: "fallback" },
     },
   ] satisfies Array<{
     name: string;
+    modelProvider: string;
+    model: string;
     config: OpenClawConfig;
     expected: { id: string; selectionSource: string };
   }>)(
-    "selects the CLI profile from the configuration and not the backend id: $name",
-    async ({ config, expected }) => {
+    "selects the CLI profile from the model and not the backend id: $name",
+    async ({ modelProvider, model, config, expected }) => {
       setCliRunnerPrepareTestDeps({
+        loadManifestModelCatalog: vi.fn(() => [
+          { id: "local-8b", name: "Local 8B", provider: "test-cli", modelSizeClass: "small" },
+        ]),
         resolveBootstrapContextForRun: vi.fn(async () => ({
           bootstrapFiles: [
             {
@@ -252,8 +268,8 @@ describe("prepareCliRunContext agent profiles", () => {
 
       const context = await fixture.prepare({
         provider: "test-cli",
-        modelProvider: "llama-cpp",
-        model: "local-8b",
+        modelProvider,
+        model,
         sessionKey: "agent:main:test",
         agentId: "main",
         trigger: "user",
@@ -270,6 +286,9 @@ describe("prepareCliRunContext agent profiles", () => {
 
   it("never widens a smaller operator budget in the CLI profile", async () => {
     setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        { id: "local-8b", name: "Local 8B", provider: "test-cli", modelSizeClass: "small" },
+      ]),
       resolveBootstrapContextForRun: vi.fn(async () => ({
         bootstrapFiles: [
           {
@@ -291,11 +310,78 @@ describe("prepareCliRunContext agent profiles", () => {
       agentId: "main",
       trigger: "user",
       prompt: "Who are you?",
-      config: {
-        agents: { defaults: { agentProfileId: "openclaw/small", bootstrapTotalMaxChars: 2_000 } },
-      },
+      config: { agents: { defaults: { agentProfileId: "auto", bootstrapTotalMaxChars: 2_000 } } },
     });
 
     expect(context.systemPromptReport.workspaceContext?.totalMaxChars).toBe(2_000);
+  });
+
+  it.each([
+    {
+      label: "8B total parameters",
+      entry: { parameterCount: 8_190_735_360 },
+      expected: { id: "openclaw/small", selectionSource: "model-size" },
+    },
+    {
+      label: "34.66B total parameters",
+      entry: { parameterCount: 34_660_610_688 },
+      expected: { id: "openclaw/base", selectionSource: "model-size" },
+    },
+    {
+      label: "no parameter count",
+      entry: {},
+      expected: { id: "openclaw/base", selectionSource: "fallback" },
+    },
+    {
+      label: "explicit config class over the count",
+      entry: { parameterCount: 8_190_735_360, modelSizeClass: "medium" as const },
+      expected: { id: "openclaw/base", selectionSource: "model-size" },
+    },
+  ])("selects the CLI agent profile from $label", async ({ entry, expected }) => {
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        { id: "test-model", name: "Test Model", provider: "test-cli", ...entry },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "test-cli",
+      model: "test-model",
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "hello",
+      config: { agents: { defaults: { agentProfileId: "auto" } } },
+    });
+
+    expect(context.systemPromptReport.agentProfile).toEqual(expected);
+  });
+
+  it("keeps the base profile for a catalog entry with a parameter count while size selection is off", async () => {
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "test-model",
+          name: "Test Model",
+          provider: "test-cli",
+          parameterCount: 8_190_735_360,
+        },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "test-cli",
+      model: "test-model",
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      prompt: "hello",
+      config: {},
+    });
+
+    expect(context.systemPromptReport.agentProfile).toEqual({
+      id: "openclaw/base",
+      selectionSource: "fallback",
+    });
   });
 });

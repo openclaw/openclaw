@@ -1,15 +1,16 @@
 ---
-summary: "How OpenClaw applies named prompt and tool behavior"
+summary: "How OpenClaw selects model-specific prompt and tool behavior"
 title: "Agent Profiles"
 read_when:
-  - You want a smaller tool surface and bounded workspace context for a model
+  - You want OpenClaw to select a smaller tool surface for a model
+  - You want to turn on model-size profile selection
   - You need to pin or override a profile
   - You are migrating from experimental.localModelLean
 ---
 
 Agent Profiles are named, validated sets of agent-harness behavior. OpenClaw
-applies the profile you select before it builds the workspace context and the
-tool surface.
+selects one profile after it resolves the model and before it builds the tool
+surface.
 
 Agent Profiles do not select a model or change provider transport, credentials,
 context-window settings, or local serving configuration.
@@ -46,18 +47,54 @@ OpenClaw extension resolution remain separate.
 ## Selection
 
 Without configuration, every agent uses `openclaw/base`, which keeps standard
-OpenClaw behavior. Set `agents.defaults.agentProfileId` (or `agentProfileId` on
-one agent) to select a profile. OpenClaw uses this order:
+OpenClaw behavior. Size-based selection is opt-in. Set
+`agents.defaults.agentProfileId: "auto"` (or `agentProfileId: "auto"` on one
+agent) to select a profile from the model. OpenClaw uses this order:
 
-1. Explicit per-agent profile.
-2. Explicit default profile.
+1. Explicit per-agent profile, including `auto`.
+2. Explicit default profile, including `auto`.
 3. `openclaw/base` when neither is set.
 
-The `--agent-profile` flag accepts the same profile ids for one run.
+With `auto`, a trusted model-size class selects a profile:
+
+| Model-size class | Profile          |
+| ---------------- | ---------------- |
+| `tiny`           | `openclaw/small` |
+| `small`          | `openclaw/small` |
+| `medium`         | `openclaw/base`  |
+| `large`          | `openclaw/base`  |
+
+Medium and large models keep the base behavior. There is no separate built-in
+profile for them; the size classes themselves stay `tiny`, `small`, `medium`,
+and `large`.
+
+OpenClaw does not infer size from model names. Trusted sources are, in order,
+`models.providers.<provider>.models[].modelSizeClass` and the total parameter
+count that the provider or model catalog reports. Mixture-of-experts models are
+classified by total parameters, never active ones. Ollama, LM Studio, and a
+llama-server endpoint (`meta.n_params` in `/v1/models`) report that count during
+model discovery. There is no numeric parameter-count key in user config; set
+`modelSizeClass` to override a discovered or missing size. With `auto`, an unknown
+size falls back to `openclaw/base`.
+
+The `--agent-profile` flag accepts the same values for one run.
 
 ## Configuration
 
-Select the small profile for every agent:
+Turn on size-based selection for every agent. Without this key, models of any
+size stay on `openclaw/base`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      agentProfileId: "auto",
+    },
+  },
+}
+```
+
+Pin a profile explicitly:
 
 ```json5
 {
@@ -69,11 +106,14 @@ Select the small profile for every agent:
 }
 ```
 
-Select it for one agent and keep the base profile for the rest:
+Turn on size-based selection by default and pin one agent:
 
 ```json5
 {
   agents: {
+    defaults: {
+      agentProfileId: "auto",
+    },
     entries: {
       local: {
         model: "llama-cpp/qwen3.6-35b-a3b",
@@ -143,7 +183,8 @@ Run `openclaw doctor --fix` to migrate the retired
 | `false` on an agent under a `true` default | `agentProfileId: "openclaw/base"`  |
 | `false` on an agent otherwise              | key removed                        |
 
-A legacy `true` becomes an explicit `openclaw/small`. An explicit `agentProfileId` at the same scope always wins and the
+A legacy `true` becomes an explicit `openclaw/small`, so the migration does not
+need `auto`. An explicit `agentProfileId` at the same scope always wins and the
 legacy key is dropped. The CLI flag `--local-model-lean` remains a deprecated alias for
 `--agent-profile openclaw/small`.
 

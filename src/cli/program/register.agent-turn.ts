@@ -119,7 +119,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--isolated", "Ignore the ambient config and run against exec defaults only", false)
     .option("--model <provider/model>", "Use an explicit primary model for this run")
     .option("--code-mode <mode>", "Tool mode: direct | auto | code")
-    .option("--agent-profile <id>", "Agent Profile: openclaw/base | openclaw/small")
+    .option("--agent-profile <id>", "Agent Profile: auto | openclaw/base | openclaw/small")
     .option("--local-model-lean", "Deprecated alias for --agent-profile openclaw/small", false)
     .option(
       "--thinking <level>",

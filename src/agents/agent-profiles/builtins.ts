@@ -1,9 +1,15 @@
 import type { AgentProfileResource } from "agentprofiles";
 import type { AgentProfileId } from "../../config/agent-profile-ids.js";
+import type { ModelSizeClass } from "../../config/types.models.js";
 
 export type BuiltInAgentProfile = {
   id: AgentProfileId;
   resource: AgentProfileResource;
+};
+
+export type BuiltInAgentProfileBinding = {
+  selector: { modelSizeClass: ModelSizeClass };
+  profileId: AgentProfileId;
 };
 
 // The built-ins are typed constants. The released portable validator checks them in
@@ -49,4 +55,12 @@ export const BUILT_IN_AGENT_PROFILES: readonly BuiltInAgentProfile[] = [
       },
     },
   }),
+];
+
+// Medium and large models keep the base behavior: a separate built-in would be byte-identical.
+export const BUILT_IN_AGENT_PROFILE_BINDINGS: readonly BuiltInAgentProfileBinding[] = [
+  { selector: { modelSizeClass: "tiny" }, profileId: "openclaw/small" },
+  { selector: { modelSizeClass: "small" }, profileId: "openclaw/small" },
+  { selector: { modelSizeClass: "medium" }, profileId: "openclaw/base" },
+  { selector: { modelSizeClass: "large" }, profileId: "openclaw/base" },
 ];

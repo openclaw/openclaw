@@ -1,5 +1,6 @@
 /** OpenClaw behavior applied from resolved Agent Profiles. */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentProfile, type ResolvedAgentProfile } from "./agent-profiles/resolve.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -57,6 +58,7 @@ export function filterToolsByAgentProfile<T extends Pick<AnyAgentTool, "name">>(
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  modelSizeClass?: ModelSizeClass;
   resolvedProfile?: ResolvedAgentProfile;
   preserveToolNames?: Iterable<string>;
 }): T[] {
@@ -78,6 +80,7 @@ export function applyAgentProfileToolSearchDefaults(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  modelSizeClass?: ModelSizeClass;
   resolvedProfile?: ResolvedAgentProfile;
 }): OpenClawConfig | undefined {
   if (!params.config) {

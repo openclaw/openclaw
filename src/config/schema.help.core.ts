@@ -397,7 +397,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
   "agents.entries.*.agentProfileId":
-    'Per-agent Agent Profile selector. Omit it to inherit agents.defaults.agentProfileId. Set a registered profile id such as "openclaw/small" to pin one.',
+    'Per-agent Agent Profile selector. Omit it to inherit agents.defaults.agentProfileId. Use "auto" to select by the model\'s trusted total parameter count, or a registered profile id to pin one.',
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":

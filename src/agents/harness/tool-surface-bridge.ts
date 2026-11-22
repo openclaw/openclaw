@@ -1,11 +1,13 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { ModelSizeClass } from "../../config/types.models.js";
 import {
   filterToolsByAgentProfile,
   hasCompactToolProfile,
   resolveAgentProfile,
   resolveAgentProfilePreserveToolNames,
 } from "../agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../agent-profiles/model-size-class.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -49,7 +51,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     presentation?: AgentToolSurfacePresentation;
     forceMessageTool?: boolean;
     isRawModelRun?: boolean;
-    model?: { contextWindow?: number };
+    model?: { contextWindow?: number; modelSizeClass?: ModelSizeClass; parameterCount?: number };
     contextTokenBudget?: number;
     modelToolsEnabled: boolean;
     /** False when the harness cannot dispatch an unregistered catalog name directly. */
@@ -91,6 +93,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        modelSizeClass: resolveProfileModelSizeClass(params.model),
       });
   // Placement facts cannot restore general execution on a persistence-only turn.
   const plan =

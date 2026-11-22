@@ -1,4 +1,5 @@
 import type { ChatType } from "../../channels/chat-type.js";
+import type { ModelSizeClass } from "../../config/types.models.js";
 import { resolveAgentProfile } from "../agent-profiles.js";
 import { prepareAgentProfileWorkspaceContext } from "../agent-profiles/workspace-context.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
@@ -14,6 +15,7 @@ export async function prepareCliAgentProfileContext(args: {
   skipsTurnPrefix: boolean;
   sessionAgentId: string;
   sessionLabel: string;
+  modelSizeClass: ModelSizeClass | undefined;
   workspaceDir: string;
   bootstrapWorkspaceDir: string;
   runtimeChatType: ChatType | undefined;
@@ -23,6 +25,7 @@ export async function prepareCliAgentProfileContext(args: {
     config: params.config,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
+    modelSizeClass: args.modelSizeClass,
   });
   const warn = makeBootstrapWarn({
     sessionLabel: args.sessionLabel,

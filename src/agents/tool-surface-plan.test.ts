@@ -30,26 +30,28 @@ const basePlanParams: AgentToolSurfacePlanParams = {
   isRawModelRun: false,
 };
 
-const smallConfig: OpenClawConfig = { agents: { defaults: { agentProfileId: "openclaw/small" } } };
+const autoConfig: OpenClawConfig = { agents: { defaults: { agentProfileId: "auto" } } };
 
 describe("resolveAgentToolSurfacePlan", () => {
-  it("keeps the full directory when no profile is configured", () => {
+  it("keeps the full directory for a small model while size selection is off", () => {
     const presentation = prepareAgentToolSurfacePresentation({
       ...basePlanParams,
       config: {},
       modelProvider: "llama-cpp",
       modelId: "local-8b",
+      model: { modelSizeClass: "small", parameterCount: 8_190_735_360 },
     });
 
     expect(presentation.toolSearchDirectoryLean).toBe(false);
   });
 
-  it("enables Tool Search when the small profile is selected", () => {
+  it("enables Tool Search for the profile selected from a small size class", () => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
-      config: smallConfig,
+      config: autoConfig,
       modelProvider: "llama-cpp",
       modelId: "local-8b",
+      model: { modelSizeClass: "small" },
     });
 
     expect(plan.codeModeControlsEnabled).toBe(false);
@@ -62,15 +64,42 @@ describe("resolveAgentToolSurfacePlan", () => {
     });
   });
 
-  it("presents the compact directory when the small profile is selected", () => {
+  it("enables Tool Search for a model that only reports a total parameter count", () => {
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config: autoConfig,
+      model: { parameterCount: 8_190_735_360 },
+      modelProvider: "custom",
+      modelId: "unbound-model",
+    });
+
+    expect(plan.toolSearchControlsEnabled).toBe(true);
+    expect(plan.toolSearchConfig).toMatchObject({ searchDefaultLimit: 5, maxSearchLimit: 10 });
+  });
+
+  it("presents the compact directory for a model that only reports a parameter count", () => {
     const presentation = prepareAgentToolSurfacePresentation({
       ...basePlanParams,
-      config: smallConfig,
+      config: autoConfig,
+      model: { parameterCount: 8_190_735_360 },
       modelProvider: "custom",
       modelId: "unbound-model",
     });
 
     expect(presentation.toolSearchDirectoryLean).toBe(true);
+  });
+
+  it("enables Tool Search from trusted model-size metadata", () => {
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config: autoConfig,
+      model: { modelSizeClass: "small" },
+      modelProvider: "custom",
+      modelId: "unbound-model",
+    });
+
+    expect(plan.toolSearchControlsEnabled).toBe(true);
+    expect(plan.toolSearchConfig.mode).toBe("tools");
   });
 
   it.each(
