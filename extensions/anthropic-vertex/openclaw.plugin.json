@@ -11,6 +11,25 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["anthropic-vertex"],
   "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
+  "setup": {
+    "providers": [
+      {
+        "id": "anthropic-vertex",
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
+            "fallbackPaths": [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json"
+            ],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "gcloud adc"
+          }
+        ]
+      }
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

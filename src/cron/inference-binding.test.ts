@@ -330,4 +330,36 @@ describe("durable cron inference authorization", () => {
       );
     });
   });
+
+  it("keeps Claude on Vertex ADC automations unbound like any configured key", async () => {
+    await fixture(async (root, cfg) => {
+      const adcPath = path.join(root.stateDir, "application_default_credentials.json");
+      await fs.writeFile(adcPath, JSON.stringify({ type: "authorized_user", project_id: "p" }));
+      const vertex: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          entries: { main: { agentDir: root.agentDir } },
+          defaults: { model: "anthropic-vertex/claude-sonnet-5-5" },
+        },
+        models: {
+          providers: {
+            "anthropic-vertex": {
+              api: "anthropic-messages",
+              apiKey: "gcp-vertex-credentials",
+              baseUrl: "https://aiplatform.googleapis.com",
+              models: [],
+            },
+          },
+        },
+      };
+      await withEnvAsync(
+        { GOOGLE_APPLICATION_CREDENTIALS: adcPath, ANTHROPIC_VERTEX_USE_GCP_METADATA: undefined },
+        async () => {
+          await expect(
+            captureCronInferenceBinding({ cfg: vertex, agentId: "main" }),
+          ).resolves.toBeUndefined();
+        },
+      );
+    });
+  });
 });
