@@ -11,6 +11,8 @@ import {
   withStateDirEnv,
 } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { upsertAuthProfileAsync } from "../../agents/auth-profiles/profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { writeFixtureJson } from "../../cli/cli-fixtures.test-support.js";
 import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { runModelsAuthLoginFlowCore } from "./auth.js";
@@ -130,3 +132,112 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
     expect(saved.models.providers.custom.models).toEqual([other]);
   });
 });
+
+it.each([
+  { method: "oauth", force: false },
+  { method: "device-code", force: true },
+])(
+  "preserves only verified xAI account names on $method reconnect (force=$force)",
+  async ({ method, force }) => {
+    const gatewayPort = await acquireTestPortBlock({ offsets: [0] });
+    onTestFinished(() => gatewayPort.release());
+    await withStateDirEnv("xai-relogin-name-", async ({ stateDir }) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      await writeFixtureJson(configPath, {
+        gateway: { mode: "local", port: gatewayPort.port },
+        plugins: { allow: ["xai"] },
+        agents: { defaults: { workspace: path.join(stateDir, "workspace") } },
+      });
+      let subject: string | undefined = "fixture-account";
+      let exchanges = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async (input) => {
+          switch (new URL(requestUrl(input)).pathname) {
+            case "/.well-known/openid-configuration":
+              return jsonResponse({
+                device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+                token_endpoint: "https://auth.x.ai/oauth2/token",
+              });
+            case "/oauth2/device/code":
+              return jsonResponse({
+                device_code: "fixture-device",
+                user_code: "FIXTURE",
+                verification_uri: "https://auth.x.ai/device",
+                expires_in: 600,
+                interval: 1,
+              });
+            case "/oauth2/token": {
+              const payload = Buffer.from(
+                JSON.stringify({
+                  sub: subject,
+                  email: "fixture@example.test",
+                  name: "Provider name",
+                }),
+              ).toString("base64url");
+              return jsonResponse({
+                access_token: "fixture-access-" + ++exchanges,
+                refresh_token: "fixture-refresh",
+                id_token: ["eyJhbGciOiJub25lIn0", payload, "signature"].join("."),
+                expires_in: 86400,
+              });
+            }
+            default:
+              throw new Error("Unexpected xAI fixture request");
+          }
+        }),
+      );
+      const login = (forceLogin = false) =>
+        runModelsAuthLoginFlowCore({
+          provider: "xai",
+          method,
+          agent: "main",
+          force: forceLogin,
+          credentialOnly: true,
+          runtime: createRuntimeEnv(),
+          prompter: createTestWizardPrompter(),
+          openUrl: async () => {},
+        });
+      const initial = await login();
+      // The legacy device-code request now resolves to the canonical OAuth method.
+      expect(initial.methodId).toBe("oauth");
+      const profile = initial.profiles[0];
+      if (!profile) {
+        throw new Error("Expected xAI login to persist a profile");
+      }
+      const { profileId } = profile;
+      const read = async () =>
+        (await loadAuthProfileStoreWithoutExternalProfilesAsync()).profiles[profileId];
+      const name = async () => {
+        const credential = await read();
+        if (!credential) {
+          throw new Error("Expected a saved xAI credential");
+        }
+        await upsertAuthProfileAsync({
+          profileId,
+          credential: { ...credential, displayName: "Work" },
+        });
+      };
+      await name();
+      expect(await read()).toMatchObject({ displayName: "Work" });
+      await login(force);
+      expect(await read()).toMatchObject({ displayName: "Work", access: "fixture-access-2" });
+
+      subject = "replacement-account";
+      await login(force);
+      expect(await read()).toMatchObject({
+        displayName: "Provider name",
+        access: "fixture-access-3",
+      });
+
+      await name();
+      subject = undefined;
+      await login(force);
+      expect(await read()).toMatchObject({
+        displayName: "Provider name",
+        access: "fixture-access-4",
+      });
+    });
+  },
+);
