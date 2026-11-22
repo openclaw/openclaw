@@ -58,6 +58,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const rich = page.locator(".agent-chat__composer-combobox [data-composer-editor]");
         const active = () =>
           page.locator(
             ".agent-chat__composer-combobox textarea:visible, .agent-chat__composer-combobox [data-composer-editor]",
@@ -87,9 +88,11 @@ suite.define(() => {
           .toEqual([expect.stringContaining("Mu\u0308nchen")]);
         await screenshot("skill-reference-picker.png", picker);
         await active().press("Enter");
-        await draft("Review this with $autoreview ");
-
-        await active().fill(`${await composer.inputValue()}and $cafe\u0301`);
+        const firstSkillDraft = "Review this with $autoreview ";
+        await draft(firstSkillDraft);
+        // The draft is published before the native textarea hands focus to CodeMirror.
+        await rich.and(page.locator(":focus")).waitFor();
+        await page.keyboard.insertText("and $cafe\u0301");
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await active().press("Tab");
         await draft("Review this with $autoreview and $technical_documentation ");
@@ -116,9 +119,9 @@ suite.define(() => {
         await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
         await active().press("Enter");
-        await draft("Review this with $autoreview ");
+        await draft(firstSkillDraft);
 
-        await active().fill("/");
+        await rich.fill("/");
         await slashPicker.waitFor({ state: "visible" });
         await expect
           .poll(() => page.getByRole("option", { name: /^(?:\/status|Status Report)\b/u }).count())
