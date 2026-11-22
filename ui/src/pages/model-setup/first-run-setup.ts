@@ -453,6 +453,18 @@ export class FirstRunSetup {
     return this.pending !== null;
   }
 
+  /** An activation from an earlier visit is recovered from discovery before new setup starts. */
+  get awaitsRecovery(): boolean {
+    if (this.pending !== null) {
+      return true;
+    }
+    if (this.host.routeData()?.firstRun !== true) {
+      return false;
+    }
+    const receipt = readFirstRunActivationReceipt(this.host.context());
+    return receipt !== null && receipt.kind !== "provider-login";
+  }
+
   get canUseCurrentModel(): boolean {
     const page = this.host.pageState();
     return (
