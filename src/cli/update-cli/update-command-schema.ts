@@ -4,6 +4,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -19,6 +20,7 @@ import {
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import { resolveUpdateSqlitePath } from "../../infra/update-database-path.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
@@ -631,11 +633,12 @@ export async function assertPendingMigrationsReleasedByNodeService(params: {
     service.readCommand(params.env, options).catch(() => null),
     service.readRuntime(params.env, options).catch(() => undefined),
   ]);
+  // The service resolves its state without this CLI's selectors; aliases name one directory.
   if (
     !command ||
     runtime?.status !== "running" ||
-    path.resolve(resolveStateDir({ ...params.env, ...command.environment })) !==
-      path.resolve(resolveStateDir(params.env))
+    resolveUpdateSqlitePath(resolveStateDir(mergeGatewayServiceEnv(params.env, command))) !==
+      resolveUpdateSqlitePath(resolveStateDir(params.env))
   ) {
     return;
   }
