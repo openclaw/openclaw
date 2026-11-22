@@ -28,7 +28,10 @@ enum BrowserFaviconScript {
           if (!ready) return null;
         }
         const icons = Array.from(document.querySelectorAll('link[rel~="icon"]'))
-          .filter((link) => link.getAttribute("href")?.trim());
+          .filter((link) => {
+            const media = link.getAttribute("media")?.trim();
+            return link.getAttribute("href")?.trim() && (!media || matchMedia(media).matches);
+          });
         const preferred = icons.find((link) => /(?:^|\s)32x32(?:\s|$)/i.test(link.getAttribute("sizes") || ""));
         const candidates = [
           ...(preferred ? [preferred.href] : []),

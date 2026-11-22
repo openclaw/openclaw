@@ -633,6 +633,25 @@ struct DashboardNativeBrowserFaviconTests {
         }
         let sameDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
         #expect(sameDocument as? Bool == true)
+
+        let requestReceived = AsyncTestGate()
+        let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
+            requestReceived.open()
+            await AsyncTestGate().wait()
+        })
+        defer { stalled.stop() }
+        try browser.navigate(tabId: "mac-theme", url: stalled.url("/pending"))
+        try await requestReceived.wait("the navigation is waiting for its response")
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'light'")
+        try await TestWait.state("the reading view adopts light while loading") {
+            webView.appearance?.name == .aqua && webView.isLoading
+        }
+        try browser.perform(.stop, tabId: "mac-theme")
+        try await TestWait.state("the retained page gets the new favicon when navigation stops") {
+            !webView.isLoading && browser.state.tabs.first?.favicon == light
+        }
+        let retainedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(retainedDocument as? Bool == true)
     }
 
     @Test func `navigations that keep the displayed page keep its favicon`() async throws {

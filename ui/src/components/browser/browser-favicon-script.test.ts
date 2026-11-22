@@ -32,7 +32,6 @@ afterEach(() => {
 });
 
 it("waits for WebKit and the page to adopt the new color scheme before reading its icon", async () => {
-  vi.useFakeTimers();
   const icon = document.createElement("link");
   icon.rel = "icon";
   icon.href = "/dark.png";
@@ -45,8 +44,17 @@ it("waits for WebKit and the page to adopt the new color scheme before reading i
   preference.matches = true;
   preference.dispatchEvent(new Event("change"));
   icon.href = "/light.png";
-  await vi.advanceTimersByTimeAsync(0);
   expect(await result).toBe("data:image/png;base64,eA==");
+  expect(fetchIcon.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/light.png"]);
+});
+
+it("uses the matching media-qualified icon instead of the first equally sized link", async () => {
+  document.head.innerHTML = `<link rel="icon" sizes="32x32" media="(prefers-color-scheme: dark)" href="/dark.png">
+    <link rel="icon" sizes="32x32" media="(prefers-color-scheme: light)" href="/light.png">`;
+  const fetchIcon = vi.fn().mockResolvedValue(iconResponse());
+  const media = (query: string) =>
+    Object.assign(new EventTarget(), { matches: query === "(prefers-color-scheme: light)" });
+  expect(await readFavicon(fetchIcon, "light", media)).toBe("data:image/png;base64,eA==");
   expect(fetchIcon.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/light.png"]);
 });
 

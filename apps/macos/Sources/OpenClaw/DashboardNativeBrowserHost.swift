@@ -292,7 +292,9 @@ final class DashboardNativeBrowserHost {
         for tab in self.tabs {
             let browser = tab.browser
             browser.webView.appearance = appearance
-            if !browser.webView.isLoading {
+            if browser.webView.isLoading {
+                browser.faviconRefreshPending = true
+            } else {
                 self.refreshFavicon(for: browser)
             }
         }
@@ -300,6 +302,7 @@ final class DashboardNativeBrowserHost {
 
     private func refreshFavicon(for browser: DashboardBrowserTab) {
         let webView = browser.webView
+        browser.faviconRefreshPending = false
         browser.faviconGeneration &+= 1
         let generation = browser.faviconGeneration
         let colorScheme = self.colorScheme
@@ -326,7 +329,11 @@ final class DashboardNativeBrowserHost {
         let nsError = error as NSError
         // Stop, replacement navigations, and response-policy handoffs (downloads,
         // external browser) cancel deliberately and keep the current page.
-        if !Self.isDeliberateInterruption(nsError) {
+        if Self.isDeliberateInterruption(nsError) {
+            if browser.faviconRefreshPending {
+                self.refreshFavicon(for: browser)
+            }
+        } else {
             let url = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL ??
                 browser.representedURL ?? browser.requestedURL
             browser.showFailure(
