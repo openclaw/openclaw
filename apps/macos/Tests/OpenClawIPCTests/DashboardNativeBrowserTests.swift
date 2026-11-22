@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import Testing
 import WebKit
 @testable import OpenClaw
@@ -364,6 +365,40 @@ struct DashboardNativeBrowserHostTests {
         try fixture.host.close(tabId: "mac-second")
         #expect(!fixture.host.hasTabs)
         #expect(second.superview == nil)
+    }
+
+    @Test func `toast cutouts preserve browser frame and route clicks to the dashboard until removed`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        try fixture.host.open(tabId: "mac-first", url: #require(URL(string: "about:blank")), sessionKey: "")
+        let tab = try #require(fixture.host.webView(for: "mac-first"))
+        let view = try #require(tab.superview)
+        try fixture.host.present(
+            scope: "panel", tabId: "mac-first", rect: .init(x: 50, y: 80, width: 600, height: 400), visible: true)
+        let frame = view.frame
+        let first = DashboardBrowserCutout(rect: .init(x: 100, y: 65, width: 100, height: 44), radius: 22)
+        let second = DashboardBrowserCutout(rect: .init(x: 170, y: 75, width: 120, height: 48), radius: 14)
+        let overlap = CGPoint(x: 205, y: 535) // Dashboard viewport (185, 95).
+        let clear = CGPoint(x: 400, y: 400)
+        func hit(_ point: CGPoint) -> NSView? { fixture.container.hitTest(point) }
+        func belongs(_ hit: NSView?, to webView: WKWebView) -> Bool {
+            hit === webView || hit?.isDescendant(of: webView) == true
+        }
+        #expect(belongs(hit(overlap), to: tab))
+
+        fixture.host.setOverlayCutouts([first, second])
+        #expect(view.frame == frame)
+        #expect(!tab.isHidden)
+        let mask = try #require(view.layer?.mask as? CAShapeLayer)
+        let visible = try #require(mask.path)
+        #expect(!visible.contains(view.convert(overlap, from: fixture.container)))
+        #expect(visible.contains(view.convert(clear, from: fixture.container)))
+        #expect(belongs(hit(overlap), to: fixture.dashboard))
+        #expect(belongs(hit(clear), to: tab))
+
+        fixture.host.setOverlayCutouts([])
+        #expect(view.layer?.mask == nil)
+        #expect(belongs(hit(overlap), to: tab))
     }
 
     @Test func `most recent scope wins and releasing it restores the surviving presentation`() throws {
