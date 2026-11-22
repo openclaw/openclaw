@@ -1,10 +1,19 @@
+import { readFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+  type ManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
 
 it("joins queued thumbnails at capacity while refusing new work", async () => {
-  const ready = createDeferredCore<Buffer>();
-  const thumbnail = Buffer.from("thumbnail");
+  const ready = createDeferredCore<ManagedImageThumbnail>();
+  const thumbnail: ManagedImageThumbnail = {
+    data: Buffer.from("thumbnail"),
+    extension: ".webp",
+    mimeType: "image/webp",
+  };
   const create = vi.fn(() => ready.promise);
   // Four active transforms and 128 queued transforms fill the admission budget.
   const admitted = Array.from({ length: 132 }, (_, index) =>
@@ -13,7 +22,7 @@ it("joins queued thumbnails at capacity while refusing new work", async () => {
   const excessCreate = vi.fn(async () => thumbnail);
   const excess = resolveManagedImageThumbnail("capacity-excess", excessCreate);
   const refused = expect(excess).rejects.toThrow("managed image thumbnail queue is full");
-  const duplicateCreate = vi.fn(async () => Buffer.from("duplicate"));
+  const duplicateCreate = vi.fn(async () => ({ ...thumbnail, data: Buffer.from("duplicate") }));
   const joined = resolveManagedImageThumbnail("capacity-131", duplicateCreate);
   try {
     ready.resolve(thumbnail);
@@ -31,4 +40,13 @@ it("joins queued thumbnails at capacity while refusing new work", async () => {
     ready.resolve(thumbnail);
     await Promise.allSettled([...admitted, excess, joined]);
   }
+});
+
+it.each(["hevc", "msf1"])("refuses HEIF sequence brand %s before transcoding", async (brand) => {
+  const source = await readFile(new URL("./fixtures/thumbnail-still.heic", import.meta.url));
+  // Change the file type brand without needing a platform codec for sequences.
+  source.write(brand, 8, "ascii");
+  await expect(encodeImageThumbnail(source)).rejects.toThrow(
+    "Managed image thumbnail is unavailable for this image format",
+  );
 });

@@ -8,6 +8,46 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+For Git checkouts and npm, pnpm, or Bun global installs, run:
+
+```bash
+openclaw update
+openclaw update status
+```
+
+The next version is prepared beside the serving installation, not over it.
+Git installs build a detached worktree; package installs download and extract the
+package outside `node_modules`, then install its production dependencies.
+When OpenClaw runs under Bun, preparation uses Bun's production installer and
+keeps Bun for release checks and plugin maintenance. Bun is admitted through its
+WAL-reset-safe `node:sqlite` requirement, not the package's Node engine range.
+The new release checks its own configuration and plugin surfaces with
+`update check-release` and maintains plugins with `update plugins`.
+Targets that predate the release-update commands and launcher readiness contract
+are refused without changing the serving release. The error gives an exact manual
+install command. Targets supporting older database schemas are refused by the
+existing schema compatibility check before release preparation.
+
+A resident launcher selects the pending release when the Gateway next starts.
+The Gateway migrates state at boot and confirms that it is ready. If the new
+Gateway cannot start, the launcher restores the previous release and the SQLite
+migration originals. Writes during a failed trial can be lost. PostgreSQL
+migrations do not have data rollback.
+
+`--no-restart` prepares the release but leaves the running Gateway alone; its next
+start still receives the same automatic trial and rollback protection.
+The first conversion keeps existing PATH shims working through forwarding
+entries and stages an owned user service's launcher definition with a backup.
+System-owned service definitions keep their forwarding entries.
+
+Plugin maintenance failures are warnings, not failed core updates. Retry them
+with `openclaw plugins update`. An already-current installation still maintains
+plugins and restarts only when needed and restart was requested.
+
+Older installed updaters still perform their first hop with their shipped update
+flow. The compatibility and recovery details below also cover those older
+updaters; they do not describe in-place replacement by the release updater.
+
 Failed-update recovery on Linux restarts an installed Gateway through systemd.
 If a foreground OpenClaw process owns that service's state directory, recovery
 checks native restart permission and live identity, requests graceful shutdown, and waits for it to exit
@@ -50,6 +90,15 @@ Before upgrading, follow the [preflight checklist](/install/updating/rollback-an
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
+
+## Local packaged-code overrides
+
+Prepared-release updates currently refuse `--reapply-local-overrides` instead of
+silently discarding trusted local `dist` edits or using a second activation path.
+Save your edits outside the installation, run `openclaw update` without the flag,
+then reapply the overrides by hand to the selected release. Keep the saved edits
+until you have verified the updated Gateway; automatic rollback restores the
+previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 
@@ -1234,14 +1283,12 @@ instead of the managed-service commands above.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm, pnpm, Bun, or git), checks the new version while
-the old Gateway serves, then activates and verifies the update.
+Detects your install type (npm, pnpm, Bun, or Git), prepares and checks a separate
+release while the old Gateway serves, then starts a rollback-protected trial.
 
-Use `openclaw update` for a managed Gateway so the updater coordinates the package
-and the service definition. To update the service's existing installation in place,
-run the CLI from the install root shown by `openclaw gateway status`. Writable Node
-services can instead move to the invoking CLI's updated installation, as described
-below; externally managed installations retain their deployment owner.
+Use `openclaw update` for an OpenClaw-managed installation. A configured local
+Gateway updates its own installation; without one, the CLI prepares the release
+itself. Externally managed installations retain their deployment owner.
 
 A bare `npm install -g openclaw@<version>` uses the global prefix of the Node/npm
 selected by your shell. Switching Node versions can install a second OpenClaw
@@ -1257,34 +1304,14 @@ openclaw update
 
 ### Host prerequisites
 
-Before it stages anything, `openclaw update` checks the host. On a failure it
-prints one `Update refused: ...` line that names what to install or free, and
-changes nothing. The saved report keeps the details.
+Before preparing a release, the updater checks that Node satisfies the target's
+requirements, required tools are available (Git and pnpm for source builds, npm
+for packages), and the install and state filesystems have room for the release
+and state migration copies. Refusals name what to install or free.
 
-- **Node:** the target's `engines.node` must accept the Node that the Gateway
-  service runs. The updater reads it from the launchd plist, systemd unit, or
-  Windows task, not from the shell's `PATH`. If the updater's own Node
-  qualifies, the update moves an owned service to it. Otherwise install the
-  named Node (for example `nvm install 24.22.1`) and run the update with it.
-- **Git (Git checkouts):** Git 2.31 or newer. Older Git misreads
-  `git rev-parse --path-format=absolute` instead of failing. The updater looks
-  for Git next to its Node first, then in system directories such as
-  `/usr/bin`, so the refusal names the Git it found.
-- **Disk (package installs):** the install volume must hold about 4.4 times the
-  target's registry `dist.unpackedSize` (the package, its dependencies and npm's
-  cache). Registries that omit `dist.unpackedSize` skip this check. The state
-  snapshot has its own measured check.
-
-A package update that must migrate a shared or agent database runs that
-migration in the candidate Doctor, which needs exclusive access to the state.
-A Gateway that the updater does not manage as a service keeps running through
-the update, for example a foreground `openclaw gateway run` under a non-default
-`OPENCLAW_HOME` or `OPENCLAW_STATE_DIR` profile, or one under an external
-supervisor. If such a Gateway owns the state, the update refuses before
-replacing the package. The refusal names each database with its schema hop and
-the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
-terminal, then rerun `openclaw update`. Updates that need no migration still
-run while it serves.
+The old Gateway keeps serving during preparation. State migration happens when
+the new Gateway starts, through the boot-time copy-and-swap owner, not through a
+private rehearsal or an in-place package swap.
 
 Updates stop Gateways, not node services. The update Doctor needs exclusive
 access to `state/openclaw.sqlite`, and a running node host service using the

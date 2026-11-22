@@ -143,6 +143,18 @@ suite.define(() => {
     const bubble = page.locator(".chat-bubble").filter({ has: card });
     expect(await link.getByText("Download", { exact: true }).isVisible()).toBe(true);
     expect(await open.getByText("Open", { exact: true }).isVisible()).toBe(true);
+    const actionColor = (action: Locator) =>
+      action.evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+        return getComputedStyle(element).color;
+      });
+    expect(await actionColor(link)).toBe(await actionColor(open));
+
+    await open.hover();
+    const openHoverColor = await actionColor(open);
+    await link.hover();
+    expect(await actionColor(link)).toBe(openHoverColor);
+
     await page.setViewportSize({ width: 568, height: 390 });
     await waitForControlUiProofSurface(card, [title, link, open]);
     expect((await rectangle(card)).width).toBeCloseTo((await rectangle(bubble)).width, 0);
