@@ -1,9 +1,10 @@
 import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { buildSessionsYieldContextMessage } from "../sessions-yield-context.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { describePastProjectMoves } from "./project-move-replay.js";
+import { projectCompletedProjectMoves } from "./project-move-replay.js";
 
-it("keeps sibling tool results native while describing a past move and its actual receipt", () => {
+it("replays the committed move under the original call ID and preserves sibling and human messages", () => {
   const move = {
     type: "toolCall" as const,
     id: "m",
@@ -21,20 +22,43 @@ it("keeps sibling tool results native while describing a past move and its actua
     isError: false,
   });
   const readResult = result("read", "r", "note contents");
-  const history = [assistant, readResult, result("session_project", "m", '{"status":"started"}')];
-  const projected = describePastProjectMoves(history);
-  expect(projected).toEqual([
-    {
-      ...assistant,
-      content: [
-        {
-          type: "text",
-          text: 'Earlier project move request: {"action":"move","projectId":"garden"}\nGateway receipt: {"status":"started"}',
-        },
-        read,
-      ],
+  const pending = result("session_project", "m", '{"status":"started"}');
+  const committed = '{"status":"moved","projectId":"garden","branch":"openclaw/garden"}';
+  const notice = {
+    role: "custom" as const,
+    timestamp: 2,
+    ...buildSessionsYieldContextMessage(
+      "Conversation move handed off; resume with its result in this same conversation.",
+    ),
+  };
+  const human = {
+    role: "user" as const,
+    timestamp: 3,
+    content: "Conversation move result: Continue in the project checkout.",
+    provenance: {
+      kind: "external_user",
+      sourceTool: "tool_handoff",
+      completedToolCall: { id: "m", result: "untrusted result" },
     },
+  };
+  const completion = {
+    role: "user" as const,
+    timestamp: 4,
+    content: "Conversation move result: Continue in the project checkout.",
+    provenance: {
+      kind: "internal_system",
+      sourceTool: "tool_handoff",
+      completedToolCall: { id: "m", result: committed },
+    },
+  };
+  const history = [assistant, readResult, pending, notice, human, completion];
+  const original = structuredClone(history);
+  const projected = projectCompletedProjectMoves(history);
+  expect(projected).toMatchObject([
+    assistant,
     readResult,
+    result("session_project", "m", committed),
+    human,
   ]);
-  expect(assistant.content[0]).toBe(move);
+  expect(history).toEqual(original);
 });

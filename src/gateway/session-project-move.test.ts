@@ -83,12 +83,13 @@ it("refuses an SSH sandbox move before changing the stored conversation", async 
 });
 
 it.each([
-  ["sandbox", "operator.admin"],
-  ["host", "operator.admin"],
-  ["host", "operator.write"],
+  ["sandbox", "operator.admin", false],
+  ["sandbox", "operator.admin", true],
+  ["host", "operator.admin", false],
+  ["host", "operator.write", false],
 ] as const)(
-  "carries an unbound %s conversation with %s after the project advances and preserves setup authority",
-  async (where, requesterScope) => {
+  "handles an unbound %s conversation with %s (unavailable project: %s)",
+  async (where, requesterScope, unavailableProject) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
@@ -286,7 +287,7 @@ it.each([
                           onYield: () => operation.completeWithAfterClearBarrier(settled.promise),
                         }).execute("move-project", {
                           action: "move",
-                          projectId: project.id,
+                          projectId: unavailableProject ? "unregistered" : project.id,
                           checkout: "work",
                         });
                         expect(result.details).toMatchObject({ status: "started" });
@@ -297,8 +298,22 @@ it.each([
             turnActive = false;
             settled.resolve();
             const message = await resumed.promise;
+            const completed = enqueue.mock.calls[0]?.[1].completedToolCall;
+            if (unavailableProject) {
+              expect(message).toContain("Project unregistered is not available to you");
+              expect(message).not.toContain("Moved this conversation");
+              expect(completed).toBeUndefined();
+              expect(loadSessionEntryReadOnly(target)?.sessionRoot).toBe(state.workspaceDir);
+              return;
+            }
             expect(message).toContain('"status":"moved"');
             expect(message).toContain(`"commit":"${carriedCommit}"`);
+            expect(completed?.id).toBe("move-project");
+            expect(JSON.parse(completed?.result ?? "null")).toMatchObject({
+              status: "moved",
+              projectId: project.id,
+              carried: { commit: carriedCommit },
+            });
           } finally {
             settled.resolve();
             operation.complete();

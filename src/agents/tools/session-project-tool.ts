@@ -5,6 +5,7 @@ import { findSessionControllerOperationByRunId } from "../../sessions/session-co
 import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { PROJECT_MOVE_HANDOFF_NAME } from "../sessions-yield-context.js";
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
@@ -54,7 +55,7 @@ export function createSessionProjectTool(options: {
       },
       { additionalProperties: false },
     ),
-    execute: async (_toolCallId, rawArgs, signal) => {
+    execute: async (toolCallId, rawArgs, signal) => {
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as { action: "list" | "move"; projectId?: string; checkout?: string };
       const caller = getGatewayToolCallerIdentity();
@@ -105,7 +106,7 @@ export function createSessionProjectTool(options: {
       const { moveSessionIntoProject } = await import("../../gateway/session-project-move.js");
       const { handoffSessionTool } = await import("./session-tool-handoff.js");
       return handoffSessionTool({
-        name: "Conversation move",
+        name: PROJECT_MOVE_HANDOFF_NAME,
         sessionId,
         runId: options.runId,
         operation,
@@ -166,11 +167,22 @@ export function createSessionProjectTool(options: {
             signal: handoffSignal,
           });
         },
-        formatResult: (result) =>
-          "Moved this conversation from the default workspace into the selected project. " +
-          "Use the available tools now to finish any remaining instructions from the user's request in the new checkout before replying. " +
-          "In the final reply, confirm which project this conversation moved into and report any results. Mention the branch only if useful.\n" +
-          JSON.stringify(result),
+        formatResult: (result) => {
+          const receipt = JSON.stringify(result);
+          if (result.status !== "moved") {
+            return receipt;
+          }
+          return (
+            "Moved this conversation from the default workspace into the selected project. " +
+            "Use the available tools now to finish any remaining instructions from the user's request in the new checkout before replying. " +
+            "In the final reply, confirm which project this conversation moved into and report any results. Mention the branch only if useful.\n" +
+            receipt
+          );
+        },
+        completedToolCall: (result) =>
+          result.status === "moved"
+            ? { id: toolCallId, result: JSON.stringify(result) }
+            : undefined,
       });
     },
   };

@@ -16,6 +16,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/h
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { describePastProjectMoves } from "../project-move-replay.js";
@@ -143,7 +144,11 @@ export async function prepareEmbeddedAttemptHistory(
         assertActive,
       );
       assertActive();
-      if (sessionEntry?.priorWorkspace && attempt.model.api === "openai-completions") {
+      if (
+        sessionEntry?.priorWorkspace &&
+        attempt.model.api === "openai-completions" &&
+        !isLocalBaseUrl(attempt.model.baseUrl)
+      ) {
         validated = describePastProjectMoves(validated);
       }
       const suspension = sessionEntry?.quotaSuspension;
