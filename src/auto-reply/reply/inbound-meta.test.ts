@@ -161,14 +161,14 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toBe(
-      `Active goal: ${"x".repeat(199)}… — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.`,
+      `Active goal: ${"x".repeat(199)}… — advance; keep active until fully achieved; use update_goal waiting_on_human immediately for required human authorization/decisions, with a note; otherwise block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.`,
     );
     expect(text).not.toContain("\n");
   });
 
   it("removes a captured goal line when a queued turn is admitted after completion", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; use update_goal waiting_on_human immediately for required human authorization/decisions, with a note; otherwise block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
     const context = {
       text: ["Conversation info:", goalContext, "Current message:\nmessage_id=next-turn"].join(
         "\n\n",
@@ -190,7 +190,7 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(refreshed?.text).toBe(
-      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.\n\nCurrent message:\nmessage_id=queued-turn",
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; use update_goal waiting_on_human immediately for required human authorization/decisions, with a note; otherwise block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.\n\nCurrent message:\nmessage_id=queued-turn",
     );
   });
 

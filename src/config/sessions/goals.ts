@@ -34,11 +34,17 @@ type CreateSessionGoalOptions = SessionGoalStoreOptions & {
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
-  status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
+  status:
+    | Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">
+    | "waiting_on_human";
   note?: string;
 };
 
-export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
+export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = [
+  "complete",
+  "blocked",
+  "waiting_on_human",
+] as const;
 
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
