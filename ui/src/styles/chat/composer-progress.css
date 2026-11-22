@@ -451,17 +451,6 @@
   backdrop-filter: blur(8px);
 }
 
-.agent-chat__goal-float
-  :is(
-    .agent-chat__goal--blocked,
-    .agent-chat__goal--budget_limited,
-    .agent-chat__goal--usage_limited
-  ) {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-}
-
 .agent-chat__goal-float .agent-chat__goal-row,
 .session-progress-card__summary {
   /* The surrounding card supplies the two border pixels. */
@@ -695,18 +684,6 @@
   }
 }
 
-.agent-chat__goal-float .agent-chat__goal--blocked {
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--warn) 13%, transparent),
-      transparent 42%
-    ),
-    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
-  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .session-progress-card--composer,
   .session-progress-card__summary,
@@ -715,4 +692,31 @@
     animation: none;
     transition: none;
   }
+}
+
+/* Plugin composer tasks reuse the status band at one height, so every state swaps in place. */
+.agent-chat__composer-task {
+  block-size: 96px;
+}
+
+/* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
+.agent-chat__composer-task-meta {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__composer-task > :last-child {
+  margin: 0 14px;
+}
+
+/* Two rows of steps, newest first; long labels clip at the card edge. */
+.agent-chat__composer-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-block-size: 40px;
+  font-size: 12px;
+  white-space: nowrap;
 }

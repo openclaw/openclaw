@@ -144,7 +144,6 @@ describe("before_model_request on CLI runtimes", () => {
         interrupt: async () => {},
       }),
       signal: new AbortController().signal,
-      assertCurrent: () => {},
       context: {
         params: { workspaceDir: "/tmp" },
         beforeModelRequest: createCliModelRequestGate({

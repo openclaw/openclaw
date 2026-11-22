@@ -19,7 +19,7 @@ function transcriptParams(row: Row, entry: EntryRow["entry"]) {
     sessionKey: row.key,
     sessionId: entry.sessionId,
     sessionEntry: entry,
-    model: row.materialized && {
+    model: row.materialized?.source.selectedModel && {
       selectedProvider: row.materialized.source.selectedModel.provider,
       selectedModel: row.materialized.source.selectedModel.model,
       config: row.materialized.source.cfg,
@@ -103,12 +103,17 @@ export function createSessionRowProjectionBackfill(params: {
           if (fields && facts?.transcriptAssistantMessage === "unknown") {
             facts.transcriptAssistantMessage = fields.lastAssistantMessage ?? null;
           }
+          if (fields && facts && facts.transcriptHasMessages === undefined) {
+            facts.transcriptHasMessages = fields.hasMessages;
+          }
           params.publish(
             live,
             facts?.transcriptPreview !== undefined &&
+              facts.transcriptHasMessages !== undefined &&
               facts.transcriptAssistantMessage !== "unknown" &&
               facts.transcriptTerminalModel !== undefined
               ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
+                  hasMessages: facts.transcriptHasMessages,
                   lastMessagePreview: facts.transcriptPreview,
                   lastAssistantMessage: facts.transcriptAssistantMessage,
                   terminalModel: facts.transcriptTerminalModel,
@@ -152,6 +157,7 @@ export function createSessionRowProjectionBackfill(params: {
         params.publish(
           row,
           presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
+            hasMessages: facts.transcriptHasMessages,
             lastMessagePreview: facts.transcriptPreview,
             lastAssistantMessage:
               facts.transcriptAssistantMessage === "unknown"
@@ -160,7 +166,10 @@ export function createSessionRowProjectionBackfill(params: {
             terminalModel: facts.transcriptTerminalModel,
           }),
         );
-        if (facts.transcriptAssistantMessage !== "unknown") {
+        if (
+          facts.transcriptAssistantMessage !== "unknown" &&
+          facts.transcriptHasMessages !== undefined
+        ) {
           revisions.set(id, next);
           queued.delete(id);
           return;

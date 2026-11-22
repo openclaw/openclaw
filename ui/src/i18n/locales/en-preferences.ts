@@ -46,7 +46,6 @@ const enPreferences = {
       lobsterdexSeen: "{seen}/{total} visited",
       lobsterdexCardFirstVisited: "First visited {date}",
       lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
-      lobsterdexCardCopyLink: "Copy link",
       lobsterdexThemeHidden:
         "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },

@@ -27,19 +27,12 @@ import {
 } from "./agent-session-types.js";
 import { compactionErrorMessage } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
-import {
-  prepareAgentCompactionWork,
-  createCompactionReplacementProjector,
-} from "./compaction/preparation.js";
+import { prepareAgentCompactionWork } from "./compaction/preparation.js";
 import type {
   CompactionSummaryOutputPolicy as SummaryOutputPolicy,
   CompactionRequestBudget,
   CompactionRequestConstraints,
 } from "./compaction/preparation.types.js";
-import {
-  preparedSessionCompactionWork,
-  type PreparedSessionCompactionWork,
-} from "./compaction/prepared-work.js";
 import {
   commitSessionCompactionSummary,
   createCompactionRequestBudget,
@@ -59,7 +52,6 @@ type CompactionReason = "manual" | "threshold" | "overflow";
 type AutomaticCompactionOptions = CompactionRequestConstraints & {
   onSummaryReady?: () => void;
   itemId?: string;
-  [preparedSessionCompactionWork]?: PreparedSessionCompactionWork;
 };
 type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
@@ -278,7 +270,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     pendingUserEntryId?: string;
     requestRequiresCompaction?: true;
     onSummaryReady?: () => void;
-    [preparedSessionCompactionWork]?: PreparedSessionCompactionWork;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     const assertContextReplacementActive = this.assertContextReplacementActive;
@@ -309,62 +300,24 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const privateWork = options[preparedSessionCompactionWork];
-    const prepared = privateWork
-      ? {
-          status: "prepared" as const,
-          requestBudget: privateWork.requestBudget,
-          pendingEntryIndex: privateWork.pendingEntryId
-            ? pathEntries.findIndex((entry) => entry.id === privateWork.pendingEntryId)
-            : -1,
-          requestTokenLimit: privateWork.requestTokenLimit,
-          preparation: privateWork.preparation,
-          projectReplacement: createCompactionReplacementProjector(pathEntries, options.itemId),
-        }
-      : prepareAgentCompactionWork(pathEntries, {
-          ...options,
-          contextWindow: model.contextWindow,
-          systemPrompt: this.agent.state.systemPrompt,
-          tools: this.agent.state.tools,
-        });
+    const prepared = prepareAgentCompactionWork(pathEntries, {
+      ...options,
+      contextWindow: model.contextWindow,
+      systemPrompt: this.agent.state.systemPrompt,
+      tools: this.agent.state.tools,
+    });
     if (prepared.status === "skipped") {
       return prepared;
     }
     const { requestBudget, pendingEntryIndex, requestTokenLimit, preparation, projectReplacement } =
       prepared;
-    const assertPreparedCurrent = () => {
-      if (!privateWork) {
-        return;
-      }
-      // Auth above can await: prepared facts never replace live custody.
-      options.signal.throwIfAborted();
-      const controller = isManual
-        ? this.compactionAbortController
-        : this.autoCompactionAbortController;
-      if (controller?.signal !== options.signal) {
-        throw new Error("Prepared compaction context changed before summary execution");
-      }
-      assertContextReplacementActive?.();
-      if (privateWork.pendingEntryId && pendingEntryIndex < 0) {
-        throw new Error("Compaction cannot find the admitted pending user request.");
-      }
-      if (!pathEntries.some((entry) => entry.id === preparation.firstKeptEntryId)) {
-        throw new Error("Prepared compaction lost its retained boundary");
-      }
-    };
-    assertPreparedCurrent();
-
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
     let withoutSummary = options.summaryOutputPolicy === "deterministic";
     if (withoutSummary) {
       // Summary producers, including session_before_compact hooks, already failed.
-      compactionResult = compactWithoutNewSummary(
-        preparation,
-        this.sessionManager,
-        privateWork?.deterministic,
-      );
-    } else if (privateWork || this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+      compactionResult = compactWithoutNewSummary(preparation, this.sessionManager);
+    } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
       // Cancellation provenance belongs to this attempt; an earlier hook may decline first.
       setCompactionSafeguardCancellation(this.sessionManager, undefined);
       const event = {
@@ -378,29 +331,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         thinkingLevel: compactionThinkingLevel,
         streamFn: this.agent.streamFn,
       };
-      // Only the privately constructed builtin accepts omitted history arrays.
-      // Public mutable extension inputs continue through the unchanged runner.
-      const extensionResult = privateWork
-        ? await privateWork.execute(event, {
-            model,
-            modelRegistry: this.modelRegistry,
-            sessionManager: this.sessionManager,
-          })
-        : await this.currentExtensionRunner.emit(event);
-      if (privateWork) {
-        if (options.signal.aborted) {
-          return { status: "aborted" };
-        }
-        // Recovery can record a failed attempt: revalidate before that write too.
-        assertPreparedCurrent();
-      }
+      const extensionResult = await this.currentExtensionRunner.emit(event);
 
       if (extensionResult?.cancel) {
         const floor = await settleCompactionSafeguardCancellation(
           this.sessionManager,
           preparation,
           options,
-          privateWork?.deterministic,
         );
         if (!floor) {
           return { status: "aborted" };
@@ -415,9 +352,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     }
 
-    if (!compactionResult && privateWork) {
-      throw new Error("Prepared builtin compaction did not settle its summary");
-    }
     if (!compactionResult) {
       const coreInstructions = buildCoreCompactionInstructions(
         options.customInstructions,
@@ -461,20 +395,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...withCompactionSummaryRoute(compactionResult, this.sessionManager, model, withoutSummary),
-      summary: commitSessionCompactionSummary(
-        compactionResult,
-        preparation,
-        withoutSummary,
-        () =>
-          privateWork
-            ? privateWork.summaryReplayTokenBudget
-            : replayTokenBudget(
-                this,
-                model,
-                options.settings,
-                projectReplacement(compactionResult, ""),
-              ),
-        privateWork?.floor,
+      summary: commitSessionCompactionSummary(compactionResult, preparation, withoutSummary, () =>
+        replayTokenBudget(this, model, options.settings, projectReplacement(compactionResult, "")),
       ),
     };
 

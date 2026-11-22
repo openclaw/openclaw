@@ -16,6 +16,8 @@ export type MarkdownRenderOptions = {
   interactiveImages?: boolean;
   linkFavicons?: boolean;
   progressBars?: boolean;
+  /** Leave relative link labels as text when the reader has no document base. */
+  relativeLinks?: boolean;
   mode?: "document" | "message";
   remoteImages?: boolean;
   sessionLinks?: boolean;
@@ -42,6 +44,7 @@ export function normalizeMarkdownRenderOptions(
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,
+    relativeLinks: options.relativeLinks ?? true,
     mode: options.mode ?? "message",
     remoteImages: options.remoteImages ?? options.mode === "document",
     sessionLinks: options.sessionLinks ?? false,

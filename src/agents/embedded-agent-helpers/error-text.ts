@@ -69,8 +69,6 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
   callback_timeout:
     "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
-  callback_validation:
-    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
     "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
   auth_html:

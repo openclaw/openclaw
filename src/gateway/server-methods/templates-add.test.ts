@@ -156,7 +156,7 @@ async function applyThrough(
 }
 
 it.each(["plan", "apply"] as const)(
-  "templates.add.%s requires its scope and Labs",
+  "templates.add.%s requires its scope and Templates availability",
   async (operation) => {
     const method = `templates.add.${operation}`;
     expect(coreGatewayHandlers[method]).toBeDefined();
@@ -166,7 +166,9 @@ it.each(["plan", "apply"] as const)(
       allowed: false,
       missingScope: operation === "plan" ? "operator.read" : "operator.admin",
     });
-    const request = await callAdd(operation, () => ({}));
+    const request = await callAdd(operation, () => ({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    }));
     expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     expect(operation === "plan" ? planAdd : applyAdd).not.toHaveBeenCalled();
   },
@@ -187,10 +189,12 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   expect(request).toEqual([[true, plan]]);
 });
 
-it("drops a preview if Labs is switched off mid-request", async () => {
+it("drops a preview if Templates availability is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
-  const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
+  const request = await callAdd("plan", () =>
+    calls++ === 0 ? enabled : { gateway: { controlUi: { experimental: { templates: false } } } },
+  );
   expect(request[0]?.[2]).toMatchObject({
     code: "FORBIDDEN",
     details: { mutationAccepted: false },
@@ -361,7 +365,7 @@ it.each(["matching", "stale"] as const)(
   },
 );
 
-it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
+it("guards live authority while leaving post-admission Templates availability policy to the Add service", async () => {
   let authorized = true;
   const revoked = await applyThrough(
     (input) => {
@@ -372,18 +376,20 @@ it("guards live authority while leaving post-admission Labs policy to the Add se
   );
   expect(revoked[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
 
-  let labsEnabled = true;
+  let templatesEnabled = true;
   applyAdd.mockImplementation(async (input) => {
-    labsEnabled = false;
+    templatesEnabled = false;
     input.assertCurrent();
     return complete;
   });
-  const switchedOff = await callAdd("apply", () => (labsEnabled ? enabled : {}));
+  const switchedOff = await callAdd("apply", () =>
+    templatesEnabled ? enabled : { gateway: { controlUi: { experimental: { templates: false } } } },
+  );
   expect(switchedOff).toEqual([[true, complete]]);
 });
 
-it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
-  readPolicy.mockResolvedValue({});
+it("blocks Add when persisted Templates availability is off despite a stale Gateway cache", async () => {
+  readPolicy.mockResolvedValue({ gateway: { controlUi: { experimental: { templates: false } } } });
 
   const request = await callAdd("apply");
 
@@ -545,7 +551,7 @@ it("keeps the new agent when another automation appears before rollback", async 
   expect(deleteAgent).not.toHaveBeenCalled();
 });
 
-it("rejects a declaration created after the Template list check without mutating it", async () => {
+it("rejects an existing declaration at the scheduler without relying on a list precheck", async () => {
   const cron = makeCron({
     add: vi.fn(async (_input, options) => {
       options.matchesExisting({
@@ -557,13 +563,9 @@ it("rejects a declaration created after the Template list check without mutating
     }),
   });
   validateDelivery.mockResolvedValue(undefined);
-  const request = await applyThrough(
-    async (input) => {
-      expect(await input.cronGateway!.list!(agentId)).toEqual({ jobs: [] });
-      await input.cronGateway!.add(schedule);
-    },
-    { cron },
-  );
+  const request = await applyThrough((input) => input.cronGateway!.add(schedule), { cron });
+
+  expect(cron.list).not.toHaveBeenCalled();
 
   expect(request[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
 });

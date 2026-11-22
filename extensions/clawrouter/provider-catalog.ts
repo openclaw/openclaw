@@ -22,6 +22,7 @@ import {
   readClawRouterCapabilityOffers,
   type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import { converseBaseUrl, selectConverseOffer } from "./converse-offer.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
@@ -216,6 +217,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
 // Older router catalogs omit input. Match exact native OpenAI identities, not a
 // GPT generation prefix: unknown siblings can have different modality contracts.
 const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-astra",
@@ -292,7 +295,16 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (
+  if (provider.id === "aws-bedrock") {
+    const converse = selectConverseOffer(provider.httpOffers, id, upstream);
+    if (!converse) {
+      return undefined;
+    }
+    api = "bedrock-converse-stream";
+    endpoint = converse.endpoint;
+    baseUrl = converseBaseUrl(converse);
+    upstreamModel = upstream;
+  } else if (
     provider.id === "vercel-ai-gateway" &&
     id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
   ) {
@@ -535,7 +547,8 @@ function readRouteMetadata(params: ProviderRuntimeModel["params"]): RouteMetadat
     (api !== "openai-responses" &&
       api !== "openai-completions" &&
       api !== "anthropic-messages" &&
-      api !== "google-generative-ai")
+      api !== "google-generative-ai" &&
+      api !== "bedrock-converse-stream")
   ) {
     return undefined;
   }

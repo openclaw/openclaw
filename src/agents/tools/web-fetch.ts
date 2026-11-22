@@ -29,7 +29,6 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { stringEnum } from "../schema/string-enum.js";
 import {
@@ -394,7 +393,7 @@ async function buildWebFetchPayload(params: {
         spillOutput,
       );
     } catch (error) {
-      spillOutput.assertCurrent?.();
+      throwIfFetchAborted(spillOutput.signal);
       if (!spillOutput.sandbox) {
         throw error;
       }
@@ -494,7 +493,6 @@ export function createWebFetchTool(options?: {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   agentSessionKey?: string;
-  assertInvocationCurrent?: () => void;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
@@ -517,12 +515,6 @@ export function createWebFetchTool(options?: {
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
-      const assertCurrent = () => {
-        assertSourceCurrent();
-        options?.assertInvocationCurrent?.();
-      };
-      assertCurrent();
       const {
         config,
         preferRuntimeProviders,
@@ -616,7 +608,6 @@ export function createWebFetchTool(options?: {
           ...(options?.sandboxed
             ? { sandbox: { root: options.sandboxRoot, bridge: options.sandboxFsBridge } }
             : {}),
-          assertCurrent,
           signal,
         };
         const fetchWebPayload = async (): Promise<Record<string, unknown>> => {
@@ -869,7 +860,7 @@ export function createWebFetchTool(options?: {
                   signal,
                 })
               )?.type === "file";
-            fetchOutput.assertCurrent?.();
+            throwIfFetchAborted(signal);
             if (available) {
               return { ...cached.value, cached: true };
             }
@@ -881,7 +872,6 @@ export function createWebFetchTool(options?: {
           // Publish only after guard release: cancellation or cleanup failure must not
           // leave a successful cache entry for a call that never returned its content.
           throwIfFetchAborted(signal);
-          fetchOutput.assertCurrent?.();
           // Retry a failed sandbox save on the next call; never cache an unavailable spill.
           if (!fetchOutput.sandbox || !payload.truncated || payload.spill) {
             writeCache(FETCH_CACHE, cacheKey, payload, cacheTtlMs);

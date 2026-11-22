@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   countCurrentToolOutputs,
+  extractAllToolOutputText,
+  extractFollowthroughEvidenceText,
+  extractLatestToolOutput,
   extractToolOutput,
+  extractToolOutputCallId,
+  extractToolOutputStructuredError,
+  extractToolOutputValue,
+  extractUserTextAfterLatestToolOutput,
   hasToolOutput,
   resolveMockSubagentTurn,
 } from "./mock-openai-input.js";
@@ -24,6 +31,37 @@ it.each([
   expect(hasToolOutput(continued)).toBe(true);
   expect(countCurrentToolOutputs(continued)).toBe(1);
 });
+
+it.each(["function_call_output", "custom_tool_call_output"])(
+  "keeps linked %s evidence and its user tail after named context",
+  (type) => {
+    const value = { text: "completed work" };
+    const continuation = "Continue the OpenClaw runtime event.";
+    const input = [
+      { role: "user", content: "Read the setup file." },
+      { type, call_id: "setup-read", output: value, is_error: false },
+      { role: "user", content: continuation },
+      {
+        type: "function_call_output",
+        name: "notifications",
+        namespace: "slack",
+        output: "sender context",
+        is_error: true,
+      },
+    ];
+    expect(hasToolOutput(input)).toBe(true);
+    expect(countCurrentToolOutputs(input)).toBe(1);
+    expect(extractToolOutput(input)).toBe("completed work");
+    expect(extractToolOutputValue(input)).toEqual(value);
+    expect(extractToolOutputStructuredError(input)).toBe(false);
+    expect(extractToolOutputCallId(input)).toBe("setup-read");
+    expect(extractLatestToolOutput(input)).toBe("completed work");
+    expect(extractAllToolOutputText(input)).toBe("completed work");
+    expect(extractUserTextAfterLatestToolOutput(input)).toBe(continuation);
+    expect(extractFollowthroughEvidenceText(input)).toBe(`completed work
+${continuation}`);
+  },
+);
 
 const kickoff = { role: "user", content: "Subagent terminal reply QA check: fallback." };
 const settled =
