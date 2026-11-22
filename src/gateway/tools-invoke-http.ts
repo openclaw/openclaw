@@ -8,10 +8,7 @@ import {
   sendMethodNotAllowed,
   watchClientDisconnect,
 } from "./http-common.js";
-import {
-  assertGatewayHttpRequestCurrent,
-  type GatewayHttpRequestAuthOptions,
-} from "./http-request-authority.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
@@ -80,7 +77,6 @@ export async function handleToolsInvokeHttpRequest(
     if (bodyUnknown === undefined || signal.aborted) {
       return true;
     }
-    await requestAuth.revalidate();
     const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
 
     // Resolve message channel/account hints (optional headers) for policy inheritance.
@@ -115,7 +111,8 @@ export async function handleToolsInvokeHttpRequest(
         context,
         resolveGatewayContext: opts.resolveGatewayContext,
         signal,
-        hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
+        hasCurrentClientAuthority: () =>
+          !signal.aborted && requestAuth.hasCurrentClientAuthority?.() !== false,
         isWebchatConnect: () => false,
         pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
@@ -135,7 +132,6 @@ export async function handleToolsInvokeHttpRequest(
           conversationReadOrigin: "direct-operator",
           toolCallIdPrefix: "http",
           signal,
-          assertInvocationCurrent: () => assertGatewayHttpRequestCurrent(requestAuth),
         }),
     );
     if (signal.aborted) {

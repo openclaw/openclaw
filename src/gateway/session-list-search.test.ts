@@ -391,9 +391,9 @@ function eagerSearchFields(params: SessionListFilterParams, key: string, entry: 
           allowPluginNormalization: false,
           configuredDefaultModelByAgent: rowContext.configuredDefaultModelByAgent,
         },
-      ),
+      ) ?? {},
     );
-    modelFields(source.selectedModel);
+    modelFields(source.selectedModel ?? {});
     modelFields(source.rowModelIdentity);
   }
   models.push(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));

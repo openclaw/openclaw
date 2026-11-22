@@ -1,27 +1,23 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureActiveEmbeddedRunPersonalToolParticipants } from "../agents/embedded-agent-runner/run-state.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
-/** Caller and participant assertions only; runtime authority is checked once at pre-dispatch. */
+/** Participant assertions only; runtime authority is checked once at pre-dispatch. */
 export function resolveSessionRuntimeAuthority(params: {
   method: string;
   runtimeIdentity: AgentRuntimeIdentity | undefined;
 }) {
-  const caller = getGatewayToolCallerIdentity();
   const { method, runtimeIdentity } = params;
-  if (caller?.personalToolIdentityScoped || !isSessionTargetMethod(method)) {
-    return undefined;
-  }
-  const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
-  if (!runtimeIdentity && !assertCallerCurrent) {
+  if (
+    !runtimeIdentity ||
+    getGatewayToolCallerIdentity()?.personalToolIdentityScoped ||
+    !isSessionTargetMethod(method)
+  ) {
     return undefined;
   }
   const checked = <T>(run: () => T): T => {
@@ -34,17 +30,11 @@ export function resolveSessionRuntimeAuthority(params: {
     }
   };
   const activeTurn = checked(() =>
-    runtimeIdentity
-      ? captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, {
-          allowMissingRegistry: true,
-        })
-      : undefined,
+    captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, {
+      allowMissingRegistry: true,
+    }),
   );
-  const assertCurrent = () =>
-    checked(() => {
-      assertCallerCurrent?.();
-      activeTurn?.assertCurrent();
-    });
+  const assertCurrent = () => checked(() => activeTurn?.assertCurrent());
   assertCurrent();
   return { assertCurrent };
 }

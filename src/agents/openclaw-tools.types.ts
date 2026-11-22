@@ -104,6 +104,8 @@ export type OpenClawSharedToolsOptions = {
   fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
+  /** Admitted session is in its default workspace. The move checks live authority separately. */
+  sessionProjectMoveEligible?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
@@ -189,8 +191,8 @@ export type OpenClawToolsOptions = {
   cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  /** Prepared profile authority for the gateway tool's configuration-read actions. */
-  gatewayConfigReadAllowed?: boolean;
+  /** Whether the tool profile exposes Gateway management actions beyond maintenance. */
+  gatewayManagementActionsAllowed?: boolean;
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];

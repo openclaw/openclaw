@@ -2190,6 +2190,7 @@ export async function autoMigrateLegacyState(params: AutoMigrateLegacyStateParam
   completedPluginIds?: readonly string[];
   requiredPluginIds?: readonly string[];
   statelessPluginIds?: readonly string[];
+  deferredPluginMigrations?: MigrationMessages["deferredPluginMigrations"];
   stepReceipts: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
 }> {

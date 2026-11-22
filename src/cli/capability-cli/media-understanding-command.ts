@@ -2,9 +2,9 @@ import type { Command } from "commander";
 import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 type MediaUnderstandingOptions = {
   file: string;

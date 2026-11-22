@@ -259,7 +259,7 @@ it.for([
                 const review = await engine.handle("Review this published Template");
                 expect(review.text).toContain(
                   scenario === "labs"
-                    ? "Settings > Labs"
+                    ? "Gateway configuration"
                     : scenario === "authority"
                       ? "operator.admin"
                       : "Template Add preview is unavailable",

@@ -62,16 +62,16 @@ function choice(menu: ParentNode, direction: Direction, mode: Mode) {
 }
 
 describe("session communication menu", () => {
-  it("does not notify row consumers when empty settings are closed again", () => {
+  it("does not notify communication consumers when empty settings are closed again", () => {
     const { settings, read, dispose } = createRoot((disposeRoot) => {
       const menuSettings = createSessionMenuSettings({
         context: () => undefined,
         readState: () => ({ session: { sessionId: null }, selectionCount: 0 }),
         runAction: () => {},
       });
-      const readRow = vi.fn(menuSettings.row);
-      createEffect(readRow, () => {});
-      return { settings: menuSettings, read: readRow, dispose: disposeRoot };
+      const readCommunication = vi.fn(menuSettings.communicationState);
+      createEffect(readCommunication, () => {});
+      return { settings: menuSettings, read: readCommunication, dispose: disposeRoot };
     });
     try {
       flush();

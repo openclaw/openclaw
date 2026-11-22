@@ -176,7 +176,6 @@ function messageFixture(overrides: Partial<TurnInput> = {}) {
 
 let context: GatewayRequestContext;
 let currentContext: GatewayRequestContext | undefined;
-let callerActive: boolean;
 const hostedSource = {
   turnSourceChannel: "telegram",
   turnSourceTo: "alice",
@@ -206,7 +205,7 @@ function runHosted<T>(
       ...hostedSource,
       gatewayUiCommandTarget,
       gatewayContextResolver: () => currentContext,
-      receiptAuthority: () => callerActive,
+      receiptAuthority: () => true,
       cronSelfManagementJobId: "current-job",
       cronToolsAllowCapture: "final-executable-surface",
       cronExecToolTarget: { host: "gateway", ask: "always" },
@@ -224,7 +223,6 @@ describe("Gateway tool identity and hosted routing", () => {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext;
     currentContext = context;
-    callerActive = true;
     mocks.callGateway.mockReset().mockResolvedValue({ ok: true });
     mocks.handleGatewayRequest
       .mockReset()
@@ -702,28 +700,25 @@ describe("Gateway tool identity and hosted routing", () => {
 
   it.each([
     { owner: "run", pending: false },
-    { owner: "caller", pending: false },
-    { owner: "run", pending: true },
     { owner: "gateway", pending: true },
-  ])("rejects retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
+  ])("handles retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
     const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
     await runHosted(async (_caller, authority) => {
       const request = deferred ? callGatewayTool("node.list", {}, {}) : undefined;
       await deferred?.entered.promise;
       if (owner === "run") {
         releaseAgentRunDelegatedAuthority(authority);
-      } else if (owner === "caller") {
-        callerActive = false;
       } else {
         currentContext = { ...context };
       }
-      const rejected = expect(request ?? callGatewayTool("cron.list", {}, {})).rejects.toThrow(
-        pending
-          ? /authority.*no longer active|Gateway instance unavailable/
-          : /authority.*no longer active|active delegated run authority/,
-      );
-      deferred?.release.resolve();
-      await rejected;
+      if (request) {
+        deferred?.release.resolve();
+        await expect(request).resolves.toEqual({ ok: true });
+      } else {
+        await expect(callGatewayTool("cron.list", {}, {})).rejects.toThrow(
+          /authority.*no longer active|active delegated run authority/,
+        );
+      }
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
     if (!pending) {

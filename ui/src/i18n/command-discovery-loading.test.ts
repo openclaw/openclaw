@@ -16,9 +16,7 @@ describe("command discovery English loading", () => {
     ] as const) {
       expect(getSlashCommandTitle({ key, name: key, description: "" })).toBe(title);
     }
-    expect(manager.t("sessionsView.personalGroupScopeMine")).toBe(
-      "sessionsView.personalGroupScopeMine",
-    );
+    expect(manager.t("sessionsView.searchPlaceholder")).toBe("sessionsView.searchPlaceholder");
   });
 
   it.each([

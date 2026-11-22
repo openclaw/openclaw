@@ -1,10 +1,12 @@
 // Publishes internal mutation notifications after Gateway session patch calls.
+import type {
+  SessionPatchHookContext,
+  SessionPatchHookEvent,
+} from "../hooks/internal-hook-types.js";
 import {
   hasInternalHookListeners,
   omitHookSessionOperatorSources,
   triggerInternalHook,
-  type SessionPatchHookContext,
-  type SessionPatchHookEvent,
 } from "../hooks/internal-hooks.js";
 
 // Session patch hooks are fire-and-forget internal hooks. The context is cloned

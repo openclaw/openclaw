@@ -242,6 +242,7 @@ describe("Full Access delegated chat", () => {
       applyPluginRuntime,
       authority,
       delegatedSession,
+      sessions,
       runConfigSet: vi.mocked(runConfigSetCommand),
       broadcast,
       callChat,
@@ -542,27 +543,37 @@ describe("Full Access delegated chat", () => {
     },
   );
 
-  it.each([false, true])(
-    "bounds Full Access repair when the correction fails=%s",
-    async (fails) => {
+  it.each(["applied", "correction-failed", "session-replaced"] as const)(
+    "bounds Full Access repair with outcome %s",
+    async (outcome) => {
       const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
-      fixture.runConfigSet.mockRejectedValueOnce(
-        new Error("Config validation failed: fixture write rejected"),
-      );
-      if (fails) {
+      fixture.runConfigSet.mockImplementationOnce(async () => {
+        if (outcome === "session-replaced") {
+          fixture.sessions.set("delegate-full", { ...fixture.delegatedSession });
+        }
+        throw new Error("Config validation failed: fixture write rejected");
+      });
+      if (outcome === "correction-failed") {
         fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
-      const reply = await fixture.callChat("Set the Gateway port to banana.", {
+      const reply = fixture.callChat("Set the Gateway port to banana.", {
         assertAutoApproveChangesCurrent: () => {},
       });
-      expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
+      if (outcome === "session-replaced") {
+        await expect(reply).rejects.toThrow(
+          "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
+        );
+      } else {
+        expectReplyParts(
+          (await reply).payload,
+          outcome === "correction-failed"
+            ? "stopped after one corrective attempt"
+            : "[openclaw] done: config.set",
+        );
+      }
+      expect(fixture.runConfigSet).toHaveBeenCalledTimes(outcome === "session-replaced" ? 1 : 2);
       expect(await fixture.manager.listPendingRecords()).toEqual([]);
       expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
-      expect(reply.payload).toMatchObject({
-        reply: expect.stringContaining(
-          fails ? "stopped after one corrective attempt" : "[openclaw] done: config.set",
-        ),
-      });
     },
   );
 

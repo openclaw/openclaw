@@ -1,14 +1,12 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
-import type { AutomationSavedDefinition } from "../../../../../src/shared/automation-saved-definition.js";
 import { pathForRoute } from "../../../app-route-paths.ts";
+import { AutomationCard, AutomationCardClock } from "../../../components/automation-card.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Switch } from "../../../components/solid/switch.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
-import type {
-  AutomationCreationCardPlan,
-  AutomationCreationRow,
-} from "../../../lib/chat/automation-creation-card.ts";
+import type { AutomationCreationCardPlan } from "../../../lib/chat/automation-creation-card.ts";
+import { automationCardSchedule } from "../../../lib/cron/session-automation-schedule.ts";
 import {
   watchCronJobDefinition,
   type CronJobObservation,
@@ -16,78 +14,12 @@ import {
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 import "../../../styles/chat/created-automations.css";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerCronEnglish);
 
-function ClockTile() {
-  return (
-    <span class="chat-created-automations__clock" aria-hidden="true">
-      <Icon name="clock" />
-    </span>
-  );
-}
-
-function SlotStatus(props: {
-  name: string;
-  phase: "pending" | "failed" | "loading" | "unavailable";
-  retry?: () => void;
-}) {
-  const waiting = () => props.phase === "pending" || props.phase === "loading";
-  return (
-    <>
-      <div class="chat-created-automations__copy" role="status">
-        <strong>{props.name}</strong>
-        <Show
-          when={waiting()}
-          fallback={
-            <small class={{ "chat-created-automations__failed": props.phase === "failed" }}>
-              {t(
-                props.phase === "failed"
-                  ? "chat.sessionAutomation.notCreated"
-                  : "chat.sessionAutomation.unavailable",
-              )}
-            </small>
-          }
-        >
-          <span class="chat-created-automations__schedule-placeholder" aria-hidden="true" />
-          <span class="sr-only">
-            {t(
-              props.phase === "pending"
-                ? "chat.sessionAutomation.creating"
-                : "chat.sessionDetails.automationLoading",
-            )}
-          </span>
-        </Show>
-      </div>
-      <span class="chat-created-automations__action">
-        {waiting() && (
-          <span class="chat-created-automations__switch-placeholder" aria-hidden="true" />
-        )}
-        {props.phase === "failed" && (
-          <Icon name="alertTriangle" class="chat-created-automations__failed" />
-        )}
-        {props.retry && (
-          <button
-            type="button"
-            class="chat-created-automations__retry"
-            aria-label={t("common.retry")}
-            title={t("common.retry")}
-            onClick={() => props.retry?.()}
-          >
-            <Icon name="refresh" />
-          </button>
-        )}
-      </span>
-    </>
-  );
-}
-
-/** Only a confirmed job ID mounts a scheduler observer; a plan name is never a write target. */
-type ConfirmedJob = { id: string; initial?: AutomationSavedDefinition };
-function LiveAutomation(props: { job: ConfirmedJob; name: string }) {
+function LiveAutomation(props: { jobId: string; name: string }) {
   const app = useOptionalApplication();
   const [state, publish] = createSignal<CronJobObservation>({
     loading: Boolean(app),
@@ -96,12 +28,7 @@ function LiveAutomation(props: { job: ConfirmedJob; name: string }) {
   let watch: ReturnType<typeof watchCronJobDefinition> | undefined;
   onSettled(() => {
     if (app) {
-      const observer = watchCronJobDefinition(
-        app.gateway,
-        props.job.id,
-        publish,
-        props.job.initial,
-      );
+      const observer = watchCronJobDefinition(app.gateway, props.jobId, publish);
       watch = observer;
       return () => observer.dispose();
     }
@@ -111,31 +38,47 @@ function LiveAutomation(props: { job: ConfirmedJob; name: string }) {
   const name = () => job()?.displayName ?? job()?.name ?? props.name;
   const schedule = createMemo(() => {
     const value = job()?.schedule;
-    if (!value) {
-      return "";
-    }
-    const label = sessionAutomationSchedule(value);
-    return value.kind === "cron" && value.tz
-      ? t("cron.scheduleLabel.withTimeZone", { value: label, timeZone: value.tz })
-      : label;
+    return value ? automationCardSchedule(value) : "";
   });
-  const search = () => `?${new URLSearchParams({ job: props.job.id, tab: "settings" })}`;
+  const search = () => `?${new URLSearchParams({ job: props.jobId, tab: "settings" })}`;
   return (
     <>
       <Show
         when={job()}
         fallback={
-          <SlotStatus
-            name={props.name}
-            phase={state().loading ? "loading" : "unavailable"}
-            retry={state().retryable && !state().loading ? () => void watch?.retry() : undefined}
-          />
+          <>
+            <div class="automation-card__copy chat-created-automations__copy" role="status">
+              <strong>{props.name}</strong>
+              <small>
+                {t(
+                  state().readFailure === "not-found"
+                    ? "chat.sessionAutomation.removed"
+                    : state().loading
+                      ? "chat.sessionAutomation.created"
+                      : "chat.sessionAutomation.unavailable",
+                )}
+              </small>
+            </div>
+            <span class="chat-created-automations__action">
+              <Show when={state().readFailure === "retryable" && !state().loading}>
+                <button
+                  type="button"
+                  class="chat-created-automations__retry"
+                  aria-label={t("common.retry")}
+                  title={t("common.retry")}
+                  onClick={() => void watch?.retry()}
+                >
+                  <Icon name="refresh" />
+                </button>
+              </Show>
+            </span>
+          </>
         }
       >
         {(loaded) => (
           <>
             <a
-              class="chat-created-automations__copy chat-created-automations__link"
+              class="automation-card__copy chat-created-automations__copy chat-created-automations__link"
               href={pathForRoute("cron", app?.basePath ?? "") + search()}
               onClick={(event) =>
                 app &&
@@ -170,67 +113,39 @@ function LiveAutomation(props: { job: ConfirmedJob; name: string }) {
   );
 }
 
-function AutomationRow(props: { row: AutomationCreationRow; single: boolean }) {
-  // A receipt seeds only the observer for a transition this mounted slot saw.
-  // Retain that identity through unrelated plan updates; a remount starts without it.
-  const binding = createMemo<ConfirmedJob | "pending" | undefined>((previous) => {
-    const row = props.row;
-    if (row.status !== "created") {
-      return row.status === "pending" || previous === "pending" ? "pending" : undefined;
-    }
-    if (previous && previous !== "pending" && previous.id === row.jobId) {
-      return previous;
-    }
-    return { id: row.jobId, initial: previous === "pending" ? row.definition : undefined };
-  });
-  const confirmed = () => {
-    const value = binding();
-    return value === "pending" ? undefined : value;
-  };
-  return (
-    <li
-      class="chat-created-automations__row"
-      data-slot-id={props.row.slotId}
-      data-job-id={confirmed()?.id}
-    >
-      {props.single && <ClockTile />}
-      <Show
-        when={confirmed()}
-        keyed
-        fallback={
-          <SlotStatus
-            name={props.row.name}
-            phase={props.row.status === "failed" ? "failed" : "pending"}
-          />
-        }
-      >
-        {(job) => <LiveAutomation job={job} name={props.row.name} />}
-      </Show>
-    </li>
-  );
-}
-
 export function ChatCreatedAutomations(props: { plan: AutomationCreationCardPlan }) {
-  const single = () => props.plan.rows.length === 1;
+  const single = () => !props.plan.grouped;
   return (
-    <Show when={props.plan.rows.length}>
-      <div
-        class={["chat-created-automations", { "chat-created-automations--single": single() }]}
-        role="group"
-        aria-label={t("chat.sessionDetails.automations")}
-      >
-        {!single() && (
-          <h3 class="chat-created-automations__heading">
-            <ClockTile />
-            {t("chat.sessionDetails.automations")}
-          </h3>
-        )}
-        <ul class="chat-created-automations__rows" role="list">
-          <For each={props.plan.rows} keyed={(row) => row.slotId}>
-            {(row) => <AutomationRow row={row()} single={single()} />}
-          </For>
-        </ul>
-      </div>
-    </Show>
+    <AutomationCard
+      class={
+        single()
+          ? "chat-created-automations chat-created-automations--single"
+          : "chat-created-automations"
+      }
+      label={t("chat.sessionDetails.automations")}
+    >
+      <Show when={!single()}>
+        <h3 class="chat-created-automations__heading">
+          <AutomationCardClock class="chat-created-automations__clock" />
+          {t("chat.sessionDetails.automations")}
+        </h3>
+      </Show>
+      <ul class="chat-created-automations__rows" role="list">
+        <For each={props.plan.rows} keyed={(row) => row.jobId}>
+          {(row) => (
+            <li
+              class="chat-created-automations__row"
+              data-slot-id={row().slotId}
+              data-job-id={row().jobId}
+            >
+              <Show when={single()}>
+                <AutomationCardClock class="chat-created-automations__clock" tile />
+              </Show>
+              <LiveAutomation jobId={row().jobId} name={row().name} />
+            </li>
+          )}
+        </For>
+      </ul>
+    </AutomationCard>
   );
 }

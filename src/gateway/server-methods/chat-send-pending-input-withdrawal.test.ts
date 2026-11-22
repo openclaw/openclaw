@@ -167,7 +167,7 @@ describe("queued chat input withdrawal", () => {
     },
   );
 
-  it("keeps refused browser input revoked after its session access returns", async () => {
+  it("finishes admitted browser input but refuses the next start after session access changes", async () => {
     await using fixture = await createBrowserFollowupFixture({
       preserveContent: true,
       persistDuringDispatch: true,
@@ -177,32 +177,25 @@ describe("queued chat input withdrawal", () => {
     fixture.client.connect.scopes = ["operator.read", "operator.write"];
     const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
     const recorder = await fixture.dispatchedRecorder;
-    const check = () =>
-      recorder.withPendingInputCurrent
-        ? recorder.withPendingInputCurrent(() => {})
-        : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
     await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
-    await expect(check()).rejects.toMatchObject({
-      message: "Message injection authority is no longer current",
-      cause: {
-        message: expect.stringContaining("session is draft for this connection"),
-      },
-    });
-    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
-    await expect(check()).rejects.toThrow("Message injection authority is no longer current");
+    const refused = await fixture.send(
+      undefined,
+      { expectedProfileId: profile.id },
+      { ...fixture.params, idempotencyKey: "browser-follow-up-after-revocation" },
+    );
+    expect(refused.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("session is draft for this connection") },
+    ]);
     await fixture.finishDispatch();
     expect(ack).toHaveBeenCalledOnce();
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-      total: 1,
-      items: [{ state: "cancelled" }],
-    });
-    expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
+    expect(recorder.getAdmissionReceipt()).toBeDefined();
+    expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+    expect(loadTranscriptEventsSync(fixture.scope)).toContainEqual(
       expect.objectContaining({
-        message: expect.objectContaining({
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        }),
+        message: expect.objectContaining({ content: fixture.params.message }),
       }),
     );
   });

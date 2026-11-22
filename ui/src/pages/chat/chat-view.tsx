@@ -77,6 +77,7 @@ type ChatViewInput = {
   questions: ComposerQuestions;
   props: ChatProps;
   frame: ChatViewFrame;
+  showComposerSessionCards: boolean;
   presented: boolean;
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
@@ -179,7 +180,7 @@ function ChatFooterContent(
           </ChatLazyBoundary>
         </div>
       </Show>
-      <Show when={!input.props.detailsEnabled}>
+      <Show when={input.showComposerSessionCards}>
         <ChatPullRequests
           pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
@@ -272,20 +273,15 @@ function ChatComposerView(input: ChatViewInput) {
           : undefined,
     };
   });
+  const showProgress = () => input.showComposerSessionCards && !activities()?.progress;
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
-      progressCard={
-        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
-      }
-      progressCardInitialLoading={
-        input.props.detailsEnabled || activities()?.progress
-          ? false
-          : input.props.progressCardInitialLoading
-      }
+      progressCard={showProgress() ? input.props.progressCard : null}
+      progressCardInitialLoading={showProgress() && input.props.progressCardInitialLoading}
       displayQueue={input.frame.displayQueue}
       footerContent={
         <ChatFooterContent
@@ -493,6 +489,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     questions: input.questions,
     props: input.props,
     frame: frame(),
+    // Full chat owns these in Details; the assistant dock has no fallback cards.
+    showComposerSessionCards: !input.props.detailsEnabled && !input.props.hideComposerSessionCards,
     presented: presented(),
     application,
     bindTranscriptViewport,

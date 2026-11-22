@@ -14,6 +14,7 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { StoredClaw } from "./claw-store.js";
 import { DiscoveryRequestError, type DiscoveryClient } from "./discovery-client.js";
+import { canonicalMemberProfiles, type OpenClawIdMemberProfiles } from "./member-profiles.js";
 
 /** Outcome of one publication attempt, shown in status. */
 export type PublishOutcome =
@@ -182,6 +183,7 @@ function buildDescriptor(
  */
 export async function publishClaw(params: {
   record: StoredClaw;
+  readMemberProfiles?: OpenClawIdMemberProfiles["read"];
   relayUrl: string;
   client: DiscoveryClient;
   signer: StatementSigner;
@@ -203,11 +205,15 @@ export async function publishClaw(params: {
   let ownerAccountId = params.record.discovery.owner_account_id;
   const registeredBefore = ownerAccountId !== null;
   let descriptorFailure: Extract<PublishOutcome, { state: "failed" }> | undefined;
-  const snapshot = await signStatement(
-    "MembershipSnapshot",
-    snapshotBody(state, bindingSeq, now),
-    params.signer,
+  const profiles = await (params.readMemberProfiles ?? canonicalMemberProfiles.read)(
+    Object.keys(state.members),
   );
+  const body = snapshotBody(state, bindingSeq, now);
+  body.members = body.members.map((member) => ({
+    ...member,
+    role: profiles[member.account_id]?.effectiveRole ?? "unassigned",
+  }));
+  const snapshot = await signStatement("MembershipSnapshot", body, params.signer);
   // A binding after the first comes from a re-bind (new K_gw): until Discovery confirmed it,
   // it goes out with its snapshot in one write.
   const rebindPending =
@@ -248,6 +254,11 @@ export async function publishClaw(params: {
     await params.client.publishSnapshot(descriptor.claw_id, snapshot);
   } catch (error) {
     const failed = descriptorFailure ?? failure(error);
+    // Pending mutations can change profile labels without advancing the signed membership seq.
+    // A same-second refusal must retain that work for the existing publication retry owner.
+    if (failed.code === "stale_snapshot" && params.record.discovery.publish_pending) {
+      failed.retryable = true;
+    }
     return !registeredBefore && ownerAccountId ? { ...failed, ownerAccountId } : failed;
   }
   return (
