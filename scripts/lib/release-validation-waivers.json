@@ -90,7 +90,7 @@
       "targetVersion": "2026.11.10-beta.2",
       "childRole": "releaseChecksIndependent",
       "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins C)",
-      "reason": "Optional Novita video-provider route is unavailable in the test account.",
+      "reason": "Optional Novita video-provider route is unavailable in the test account. Z.AI video also returned HTTP 429 insufficient balance; both prerequisite gaps are accepted, not passing video coverage.",
       "aggregates": [
         {
           "jobName": "Verify release checks",
@@ -367,7 +367,7 @@
       "targetVersion": "2026.11.10-beta.2",
       "childRole": "releaseChecksIndependent",
       "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins O-Z other)",
-      "reason": "Accepted O-Z prerequisite coverage gaps including unverified Qwen Standard entitlement and SenseAudio platform; no passing completion asserted.",
+      "reason": "Accepted O-Z prerequisite gaps include Qwen Standard entitlement, SenseAudio platform, and two Z.AI general-endpoint completions returning HTTP 429 insufficient balance; no passing completion is asserted.",
       "aggregates": [
         {
           "jobName": "Verify release checks",
