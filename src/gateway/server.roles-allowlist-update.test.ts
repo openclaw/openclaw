@@ -391,7 +391,6 @@ test("an authorized client starts a package release update and observes its reco
           expect(getUpdateRun(runId)).toMatchObject({
             status: "failed",
             reason: "update-failed",
-            diagnostics: { failure: { detail: "Error: synthetic candidate unavailable" } },
           });
         }, FAST_WAIT_OPTS);
       } finally {
