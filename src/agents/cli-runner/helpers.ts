@@ -118,7 +118,8 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,

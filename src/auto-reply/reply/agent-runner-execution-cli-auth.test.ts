@@ -324,7 +324,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
           preparedModelCatalog: { entries: catalog, routeVariants: catalog, authoritative: true },
         });
         followupRun.run.provider = selected.provider;
-        followupRun.run.model = selected.model;
+        followupRun.run.model = selected.model ?? model;
         followupRun.run.requestedRouteResolution = selected.requestedRouteResolution;
         return executeAgentTurn({
           ...createMinimalRunAgentTurnParams({ followupRun }),

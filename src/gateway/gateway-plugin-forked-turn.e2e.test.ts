@@ -548,6 +548,26 @@ describe("plugin forked turns through the real Gateway", () => {
             result: { status: "settled" },
           });
 
+          // A delivery mirror is an assistant row no provider answered. A fork through it runs
+          // on the model of the turn's last provider response, never on the mirror's marker.
+          const mirrored = await storedTurn([
+            { role: "user", content: "Hello", timestamp: 1 },
+            assistant("Hi"),
+            {
+              ...assistant("Hi"),
+              api: "openclaw-transcript",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              timestamp: 3,
+            },
+          ]);
+          await expect(fixture.fork(mirrored, {})).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+          // Settlement carries the run's own outcome; a fork sent to the marker fails there.
+          expect(fixture.proof.settled.at(-1)).toMatchObject({ ok: true, error: undefined });
+
           // Steering joins the running turn; policy follows the initiating sender (42).
           const steered = await storedTurn([
             {

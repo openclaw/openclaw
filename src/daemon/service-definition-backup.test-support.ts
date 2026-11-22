@@ -40,6 +40,7 @@ async function fixture(
   ancillary = false,
   originalDefinition?: Buffer,
   originalMode = 0o600,
+  exportTask: (xml: string) => string = (xml) => xml,
 ) {
   const root = await fs.realpath(dirs.make("service-definition-backup-"));
   const env: GatewayServiceEnv = {
@@ -119,7 +120,7 @@ async function fixture(
   const originalTask = task;
   native.task.mockImplementation(async (args: string[]) => {
     if (args[0] === "/Query") {
-      return { code: 0, stderr: "", stdout: args.includes("/XML") ? task : "" };
+      return { code: 0, stderr: "", stdout: args.includes("/XML") ? exportTask(task) : "" };
     }
     if (args[0] === "/Create") {
       task = (await fs.readFile(args[args.indexOf("/XML") + 1]!)).subarray(2).toString("utf16le");

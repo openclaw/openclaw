@@ -263,6 +263,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         catalogModel("ß-provider", "test-model", "Test Model"),
       ],
       methodResponses: {
+        // The agent's chosen model keeps setup out of the way of provider access.
+        "config.get": sourceConfigSnapshot(
+          { agents: { defaults: { model: "openai/gpt-5.5" } } },
+          "configured-providers",
+        ),
         "models.authStatus": {
           ts: NOW,
           providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
@@ -527,7 +532,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await expandProvider(page, "openai");
-      for (const action of ["Remove provider", "Add account", "Test access"]) {
+      for (const action of [
+        "Remove provider",
+        "Remove saved access",
+        "Add account",
+        "Test access",
+      ]) {
         const control = page.getByRole("button", { name: `${action}: OpenAI`, exact: true });
         expect(await control.count()).toBe(1);
         expect((await control.textContent())?.trim()).toBe(action);
@@ -545,7 +555,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await openaiCard.getByLabel("API key", { exact: true }).fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
       await gateway.deferNext("models.authSetApiKey");
-      await openaiCard.getByRole("button", { name: "Save" }).click();
+      await openaiCard.getByRole("button", { name: "Save", exact: true }).click();
       const keyWrite = await gateway.waitForRequest("models.authSetApiKey", {
         after: keyWriteCount,
       });

@@ -7,7 +7,6 @@ import {
   type PreparedModelRuntimeLease,
   type PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type {
@@ -103,7 +102,11 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const admission = resolveAgentRunAdmissionModel(params);
+  if (!admission) {
+    return undefined;
+  }
+  const { resolvedRuntime, providerFacts, modelSelection } = admission;
   const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let preparing = true;
@@ -133,12 +136,6 @@ export async function prepareAgentRunDispatch(
         cfg: params.cfgForAgent ?? params.cfg,
         overrideSeconds: timeoutSeconds,
       });
-      const providerFacts = {
-        providerId: resolvedRuntime.provider,
-        authProviderId: resolveProviderIdForAuth(resolvedRuntime.provider, {
-          config: params.cfgForAgent ?? params.cfg,
-        }),
-      };
       if (existing?.entry) {
         // Retain the exact preparing input; admission adds presentation facts only.
         updateRpcSourceSessionId(existing.entry, params.getAdmittedSessionId());
@@ -467,8 +464,18 @@ export async function prepareAgentRunDispatch(
       throw new Error("agent input admission no longer owns this run");
     }
   };
+  const operatorRun = {
+    ...params,
+    lifecycleStorePath,
+    assertInputCurrent: assertInputOwnerCurrent,
+    entry: activeRunAbort.entry,
+  };
   try {
     assertInputAdmissionCurrent?.();
+    if (params.privateCompletion) {
+      // Admit before input persistence yields; retain this same decision below.
+      capturedOperator = await retainAgentTurnOperatorRun(operatorRun);
+    }
     userTurn = await prepareAgentRunUserTurn({
       ...params,
       assertCurrent: () => {
@@ -534,8 +541,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     const context = params.context.resolveGatewayContext?.();
-    // Provenance is caller-supplied on public RPC. Only the host's system principal
-    // may resolve a session owner; explicitly requester-bound calls keep that requester.
+    // Only host System input may resolve a session owner; public provenance never grants it.
     const systemTurn =
       context &&
       params.canUseInternalRuntimeHandoff &&
@@ -559,23 +565,7 @@ export async function prepareAgentRunDispatch(
             },
           }
         : undefined;
-    // Accepted work retains this caller's continuation for the turn's whole lifetime.
-    capturedOperator = await retainAgentTurnOperatorRun({
-      ...params,
-      lifecycleStorePath,
-      assertInputCurrent: assertInputOwnerCurrent,
-      systemTurn,
-      entry: activeRunAbort.entry,
-      abortSession: params.resolvedSessionKey
-        ? {
-            cfg: params.cfg,
-            storePath: params.lifecycleStorePath,
-            entry: params.sessionEntry,
-            canonicalKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-          }
-        : undefined,
-    });
+    capturedOperator ??= await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;

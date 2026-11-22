@@ -394,12 +394,13 @@ describe("launchd process ancestry guards", () => {
         mode: "kickstart",
         waitForPid: process.pid,
       });
-      expectServiceCalls("print");
+      // The second print compares the loaded command with the plist before choosing kickstart.
+      expectServiceCalls("print", "print");
       expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
     } else {
       expect(result).toEqual({ outcome: "completed" });
       expect(handoff).not.toHaveBeenCalled();
-      expectServiceCalls("print", "enable", ["kickstart", "-k"]);
+      expectServiceCalls("print", "print", "enable", ["kickstart", "-k"]);
     }
   });
 

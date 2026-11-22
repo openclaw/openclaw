@@ -12,7 +12,10 @@ import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
+import {
+  resolveUiConfiguredMainKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
   createHumanMentionMenu,
@@ -130,7 +133,6 @@ export class CommandPaletteState {
   private sessionSearchRead: { promise: Promise<void> } | undefined;
   private sessionSearchFailed = false;
   private sessionSearchPartial = false;
-  private archivedTranscriptsExcluded = 0;
   private sessionSearchIndexing = false;
 
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -412,7 +414,6 @@ export class CommandPaletteState {
     this.sessionSearchRead = undefined;
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
-    this.archivedTranscriptsExcluded = 0;
     this.sessionSearchIndexing = false;
   }
 
@@ -580,7 +581,6 @@ export class CommandPaletteState {
       }
       const transcriptResult = transcriptOutcome.result;
       this.sessionSearchPartial = transcriptOutcome.error;
-      this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
       this.sessionSearchIndexing = transcriptResult?.indexing === true;
       this.sessionItems = buildCommandPaletteSessionItems({
         visibleRows,
@@ -640,9 +640,12 @@ export class CommandPaletteState {
 
   readProps() {
     const models = this.settledModels;
+    const agentsList = this.context?.agents.state.agentsList;
+    const gateway = this.context?.gateway.snapshot;
     return {
       ...this.props,
       basePath: this.context?.basePath ?? "",
+      mainKey: resolveUiConfiguredMainKey({ agentsList, hello: gateway?.hello }),
       open: this.open,
       query: this.draft.message,
       searchQuery: this.searchQuery,
@@ -689,18 +692,18 @@ export class CommandPaletteState {
         this.activeId = null;
         this.changed();
       },
-      agents: this.context?.agents.state.agentsList?.agents ?? [],
+      agents: agentsList?.agents ?? [],
       agentIdentity: this.context?.agentIdentity,
       defaultAgentId:
         this.context?.agentSelection.state.selectedId ??
-        resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
+        resolveUiSelectedGlobalAgentId(gateway ?? {}),
       sessionItems: this.sessionItems,
       remoteSearchOffline:
         !this.gateway.connected && Boolean(normalizeOptionalString(this.searchQuery)),
       modelSearchError:
         this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
-      canAdmin: hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+      canAdmin: hasOperatorAdminAccess(gateway?.hello?.auth ?? null),
       nativeDeviceSettings: this.context?.nativeDeviceSettings ?? null,
       catalogItems: this.catalogItems,
       modelItems: this.modelItems,
@@ -711,7 +714,6 @@ export class CommandPaletteState {
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,
-      archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
       onToggle: this.togglePalette,
       onQueryChange: (query: string, event: InputEvent) => {
         this.draft.setMessage(

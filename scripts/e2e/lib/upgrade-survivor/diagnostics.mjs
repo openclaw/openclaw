@@ -202,7 +202,37 @@ function installedRecoveryCurrent(value, sanitize) {
   }
   const names =
     value.cut === null
-      ? ["killed-update", "next-update", "next-update-status"]
+      ? [
+          "killed-update",
+          "next-update",
+          "next-update-status",
+          // The live-gateway cell's commands; its files live at the run root.
+          "baseline-probe",
+          "next-update-probe",
+          "killed-update-no-restart",
+          "refused-update",
+          "update-repair",
+          "update-repair-probe",
+          // The owed-plugin-retry cell's commands.
+          "owed-update",
+          "owed-update-probe",
+          "owed-enable-auto",
+          "owed-status-before",
+          "owed-status-after",
+          "owed-retry-probe",
+          "owed-next-check-probe",
+          // The data-at-risk cell's commands.
+          "marked-update",
+          "stopped-marked-update",
+          "marked-repair",
+          "marked-repair-probe",
+          "after-mark-update",
+          "after-mark-update-probe",
+          "inconsistent-update",
+          "inconsistent-repair",
+          "restored-repair",
+          "restored-repair-probe",
+        ]
       : [
           "displacement",
           "missing-status",
@@ -2289,7 +2319,7 @@ function failedUpdateContext(text, label) {
   try {
     // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
     const result = JSON.parse(text.slice(text.indexOf("{")));
-    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+    if (!["ok", "error"].includes(result?.status) || !Array.isArray(result.steps)) {
       return "";
     }
     const index = result.steps.findIndex(

@@ -30,6 +30,7 @@ import {
   isMobileNavLayout,
   shouldFloatShellHeader,
   shouldMergeChatChrome,
+  usesBrowserDrawer,
 } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -275,6 +276,7 @@ export function readShellView(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
   const sidebarProperties = {
+    newSessionInRail: usesBrowserDrawer(mobileNavLayout),
     connectionPending: initialGatewayConnection,
     basePath: context.basePath,
     activeRouteId: activeRoute,
@@ -342,14 +344,17 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
-  // The floating refresh notice takes the badge's place below the phone header.
+  // The refresh notice above the composer speaks for the connection while it
+  // shows, so the sidebar and pane headers show no second status.
+  const refreshNoticeVisible = controlUiRefreshRequired && !initialGatewayConnection;
+  const chromeGatewayStatus = refreshNoticeVisible
+    ? { ...gatewayStatus, kind: null }
+    : gatewayStatus;
+  // Desktop panes resolve their own badge unless the refresh notice owns it.
   const mobileGatewayStatus = () =>
-    mobileNavLayout &&
-    !navDrawerOpen() &&
-    !nativeEmbed &&
-    !controlUiRefreshRequired &&
-    !initialGatewayConnection
-      ? gatewayStatus
+    refreshNoticeVisible ||
+    (mobileNavLayout && !navDrawerOpen() && !nativeEmbed && !initialGatewayConnection)
+      ? chromeGatewayStatus
       : null;
   const floatingUpdateCard = {
     get navigationSurfaceHidden() {
@@ -360,7 +365,7 @@ export function readShellView(host: ShellViewHost) {
     compact: mergedChatChrome && !controlUiRefreshRequired,
     statusBanner: overlaySnapshot.updateStatusBanner,
     updateRun: overlaySnapshot.updateRun,
-    refreshRequired: controlUiRefreshRequired && !initialGatewayConnection,
+    refreshRequired: refreshNoticeVisible,
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };
@@ -472,6 +477,7 @@ export function readShellView(host: ShellViewHost) {
     },
     shellConnectionStatus,
     gatewayStatus,
+    chromeGatewayStatus,
     get mobileGatewayStatus() {
       return mobileGatewayStatus();
     },

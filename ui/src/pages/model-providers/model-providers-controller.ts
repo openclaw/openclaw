@@ -1,6 +1,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -94,9 +95,7 @@ export function createModelProviders(
         state.accountUsageRevision += 1;
       }
     },
-    onComplete: ({ client, data }) => {
-      supplemental.adoptCoreData(client, data);
-    },
+    onComplete: ({ client, data }) => supplemental.adoptCoreData(client, data),
     onCatalogComplete: (result) => {
       state.data &&= {
         ...state.data,
@@ -105,8 +104,10 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
-    reload: () => supplemental.loadUsage(),
+    // Route readiness gates automatic work; this page only consumes the provider lane.
+    isSessionLoading: () => loaderPending || !routeDataObserved,
+    isProviderLoading: () => supplemental.loading,
+    reload: ({ provider }) => (provider && readAccess ? supplemental.loadUsage() : undefined),
     onIncompleteUsageExhausted: notify,
   });
   const supplemental = new ModelProviderSupplementalLoader(notify, {
@@ -198,6 +199,8 @@ export function createModelProviders(
       );
     },
   });
+  const setProbeResult = (cardId: string, result: ModelsProbeResult | null) =>
+    (state.probeResults = updateRecordEntry(state.probeResults, cardId, result));
   const profileActions = createModelProviderProfileActions({
     onLogoutStarted: (receipt) => void mutations.logoutStarted(receipt),
     getAgentEpoch: () => agentEpoch,
@@ -216,9 +219,7 @@ export function createModelProviders(
     isCurrentClient: (client, epoch) => gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(state.busy[key]),
     setBusy: (key, value) => setBusy(key, value),
-    setProbeResult: (cardId, result) =>
-      (state.probeResults = updateRecordEntry(state.probeResults, cardId, result)),
-    setProbeError: (cardId, error) => setMessage(cardId, { kind: "error", text: error }),
+    setProbeResult,
     getConfig: () => context.runtimeConfig,
   });
   const discovery = createModelProviderDiscovery({
@@ -313,6 +314,7 @@ export function createModelProviders(
     if (loaderChanged && !pending) {
       ensureInitialData();
       supplemental.resume();
+      void refreshPolicy.flushPending();
     }
     notify();
   }
@@ -510,7 +512,6 @@ export function createModelProviders(
     }
     const client = gateway.client;
     if (!gateway.connected || !readAccess || !client) {
-      refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
     // Another client's write is outside the selected owner, so reconcile every provider.
@@ -543,6 +544,7 @@ export function createModelProviders(
     getAgentEpoch: () => agentEpoch,
     canMutate,
     clearProbe: profileActions.clearProbe,
+    setProbeResult,
     refresh: () => refresh("replacement"),
     setBusy,
     setMessage,
@@ -635,7 +637,7 @@ export function createModelProviders(
     const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
-      onConnectProvider: () => void login.connectProvider(values.configuredModels),
+      onConnectProvider: () => void login.open(),
       accountUsage:
         !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
           ? {

@@ -6,7 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
@@ -191,6 +191,7 @@ function makeStarterParams(params?: { entry?: unknown; sessionKey?: string; stor
       cfg: {},
       clientRunId: "run-1",
       entry: params?.entry as never,
+      resolvedSessionModel: { provider: "openai", model: "test-model" },
       sessionKey,
       storePath: params?.storePath ?? "",
     },
@@ -435,13 +436,13 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             throw refusal;
           }
         };
-        const ownerAuthority = createAdmittedRunOperatorAuthority({
+        const ownerAuthority = createTestOperatorAuthority({
           profileId: "projection-owner",
           scopes: ["operator.write"],
           gatewayAccessGrant: null,
           assertCurrent: () => operation.abortSignal.throwIfAborted(),
         });
-        params.operatorAuthority = createAdmittedRunOperatorAuthority({
+        params.operatorAuthority = createTestOperatorAuthority({
           ...ownerAuthority,
           profileId: "projection-participant",
           assertCurrent: params.assertCurrent,

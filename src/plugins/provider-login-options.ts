@@ -54,6 +54,17 @@ function loginKind(choice: ProviderAuthChoiceMetadata): ProviderLoginOption["kin
   return choice.appGuidedAuth ?? (choice.appGuidedSecret ? "secret" : undefined);
 }
 
+/** CLI `--device-code` (method `device-code`) also selects a declared device-code sign-in with another method id. */
+export function matchesProviderLoginMethod(
+  choice: Pick<ProviderAuthChoiceMetadata, "methodId" | "appGuidedAuth">,
+  method: string,
+): boolean {
+  return (
+    choice.methodId.toLowerCase() === method ||
+    (method === "device-code" && choice.appGuidedAuth === "device-code")
+  );
+}
+
 export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
   return loginKind(choice) !== undefined;
 }

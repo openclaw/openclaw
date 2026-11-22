@@ -288,8 +288,10 @@ export async function prepareSessionsSendCommunication(params: {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
     let source = await readSessionCommunicationLineage(params.source, read, assertSource);
@@ -519,7 +521,6 @@ export async function prepareSessionsSendCommunication(params: {
     await refresh();
     const callGateway = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
-      requireDurableDelivery = false,
     ): Promise<T> => {
       if (request.method !== "agent") {
         return params.callGateway<T>(request);
@@ -592,11 +593,11 @@ export async function prepareSessionsSendCommunication(params: {
         return result;
       };
       const sender = source[0]!;
-      // A safely refused volatile steer needs pending-input recovery even for an
-      // owned task. Resume keeps its existing task owner and never uses this path.
+      // Task continuations keep their existing task owner. Ordinary peer input
+      // transfers to the Gateway pending-input owner, independent of the sender turn.
       if (
         context &&
-        (!ownedTask || requireDurableDelivery) &&
+        !ownedTask &&
         !resume &&
         sender.entry &&
         hasRunId &&
@@ -634,9 +635,6 @@ export async function prepareSessionsSendCommunication(params: {
           dispatch,
         );
       }
-      if (requireDurableDelivery) {
-        throw new Error("Durable steering fallback requires an in-process delivery owner.");
-      }
       return dispatch();
     };
     return {
@@ -644,8 +642,6 @@ export async function prepareSessionsSendCommunication(params: {
       assertCurrent,
       refresh,
       callGateway,
-      callDurableGateway: <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) =>
-        callGateway<T>(request, true),
       ownedTask,
       sourceSandboxed: sandboxed,
       captureReplyAdmission: (runId: string): SessionSendReplyAdmission => {

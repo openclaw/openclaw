@@ -150,7 +150,8 @@ class BrokerHost implements SpawnBrokerHost {
     return this.resourceClaims?.hasOpenClaims ?? false;
   }
   get nativeResourceAdmissionClosed(): boolean {
-    return this.resourceClaims?.admissionClosed ?? false;
+    // Native IPC state can change before the disconnect callback is delivered.
+    return (this.resourceClaims?.admissionClosed ?? false) || this.process?.connected === false;
   }
   ready(): Promise<void> {
     return this.closing
@@ -240,9 +241,7 @@ class BrokerHost implements SpawnBrokerHost {
   ): Request {
     message.admission = getSpawnBrokerAdmission();
     const capacityError = childCapacityError(this.childAdmissions.values(), message.admission);
-    const request = createBrokerCommandRequest(message, initiateSpawn, (value, handle, initiate) =>
-      this.transmit(value, handle, initiate),
-    );
+    const request = createBrokerCommandRequest(message, initiateSpawn, this.transmit.bind(this));
     const { child, result, output } = request;
     const fail = (error: Error) => {
       request.resultSettled = true;
@@ -408,6 +407,7 @@ class BrokerHost implements SpawnBrokerHost {
       this.markNativeReady = undefined;
       receiver.clear();
       this.available = false;
+      this.resourceClaims?.closeAdmission();
       this.sendMessage = undefined;
       // Every failure retires the transport, including send/receive failures while
       // IPC is still connected. The broker ignores supervisor signals until this

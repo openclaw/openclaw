@@ -168,11 +168,11 @@ it.each([false, true])(
     fs.writeFileSync(store.storePath, JSON.stringify(legacyStore), { mode: 0o600 });
 
     const original = fs.readFileSync(store.transcriptPath);
-    const snapshot = readers.readOnlySqliteValidationSnapshot;
+    const snapshot = readers.readSessionImportValidationSnapshot;
     using spy = vi
-      .spyOn(readers, "readOnlySqliteValidationSnapshot")
-      .mockImplementation((target) => {
-        const result = snapshot(target);
+      .spyOn(readers, "readSessionImportValidationSnapshot")
+      .mockImplementation((target, env) => {
+        const result = snapshot(target, env);
         if (failed && result.ok && result.snapshot.sessionIdsBySessionKey.has("agent:main:alias")) {
           const keys = new Map(result.snapshot.sessionIdsBySessionKey);
           keys.delete("agent:main:alias");

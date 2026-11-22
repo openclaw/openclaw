@@ -376,3 +376,62 @@ it.each([
     );
   },
 );
+
+it.each<{
+  name: string;
+  config: OpenClawConfig;
+  authModes: PreparedModelRuntimeSnapshot["authModes"];
+  acquired: boolean;
+}>([
+  // No configured primary: credentials or runtime policy alone never plan a model.
+  { name: "no credentials", config: {}, authModes: {}, acquired: false },
+  { name: "unrelated credentials", config: {}, authModes: { acme: "api_key" }, acquired: false },
+  { name: "API-key default", config: {}, authModes: { openai: "api_key" }, acquired: false },
+  {
+    name: "native sign-in default",
+    config: {},
+    authModes: { openai: { source: "native", mode: "oauth" } },
+    acquired: false,
+  },
+  {
+    name: "explicit runtime without a primary",
+    config: {
+      agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "codex" } } } } },
+    },
+    authModes: {},
+    acquired: false,
+  },
+])(
+  "does not mistake the fallback model for configured demand: $name",
+  async ({ config, authModes, acquired }) => {
+    const native: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-6-astra",
+      name: "Default model",
+      nativeRuntime: "codex",
+    };
+    const loadNativeModelCatalog = vi.fn(async () => catalog([native]));
+    publishedSnapshotMock.mockReturnValue({
+      ...owner(config, [
+        { ...native, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      ]),
+      authModes,
+      loadNativeModelCatalog,
+    });
+    const { prewarmDefaultNativeModelCatalog, loadProviderScopedThinkingCatalog } =
+      await import("./prepared-model-catalog.js");
+    await prewarmDefaultNativeModelCatalog(config);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 1 : 0);
+
+    // Skipping speculative startup must not disable discovery on the first native turn.
+    expect(
+      await loadProviderScopedThinkingCatalog({
+        config,
+        provider: "openai",
+        model: "gpt-6-astra",
+        agentRuntime: "codex",
+      }),
+    ).toEqual([native]);
+    expect(loadNativeModelCatalog).toHaveBeenCalledTimes(acquired ? 2 : 1);
+  },
+);

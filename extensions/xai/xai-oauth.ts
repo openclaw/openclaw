@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   positiveSecondsToSafeMilliseconds,
@@ -8,6 +7,7 @@ import {
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOauthProviderAuthResult,
+  ProviderAuthFailure,
   toFormUrlEncoded,
   type OAuthCredential,
   type ProviderAuthResult,
@@ -151,7 +151,7 @@ function parseXaiOAuthTokenResponse(
   const refreshToken = readNonBlankString(json.refresh_token);
   if ((options.requireRefreshToken || json.refresh_token !== undefined) && !refreshToken) {
     throw new Error(
-      "xAI OAuth token response is missing refresh_token. Re-run the login; if the issue persists, the OAuth client is not configured to issue refresh tokens (commonly because the offline_access scope was rejected).",
+      "xAI OAuth token response is missing refresh_token. The OAuth client may not be configured to issue refresh tokens (commonly because the offline_access scope was rejected).",
     );
   }
   const idToken = readNonBlankString(json.id_token);
@@ -162,9 +162,7 @@ function parseXaiOAuthTokenResponse(
     resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: Date.now() }) ??
     resolveExpiresAtMsFromEpochSeconds(decodeJwtPayload(accessToken).exp);
   if (expires === undefined) {
-    throw new Error(
-      "xAI OAuth token response is missing a usable access-token lifetime. Re-run xAI OAuth login.",
-    );
+    throw new Error("xAI OAuth token response is missing a usable access-token lifetime.");
   }
   return {
     accessToken,
@@ -257,8 +255,7 @@ async function requestXaiOAuthRefresh(
           /text\/html/i.test(response.headers.get("content-type") ?? "") ||
           /<!doctype html|<html\b/i.test(body.text))
       ) {
-        error.message +=
-          ": xAI returned an HTML/Cloudflare challenge instead of OAuth JSON. Re-run xAI OAuth login if it persists.";
+        error.message += ": xAI returned an HTML/Cloudflare challenge instead of OAuth JSON.";
       }
       throw error;
     }
@@ -379,11 +376,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     );
     const tokenEndpoint = requireTrustedXaiOAuthEndpoint(rawTokenEndpoint, "token endpoint");
     progress.update("Requesting xAI OAuth device code...");
-    const response = await fetchXaiOAuth(
-      requireTrustedXaiOAuthEndpoint(deviceAuthorizationEndpoint, "device authorization endpoint"),
-      requestOptions,
-      { client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE },
-    );
+    const response = await fetchXaiOAuth(deviceAuthorizationEndpoint, requestOptions, {
+      client_id: XAI_OAUTH_CLIENT_ID,
+      scope: XAI_OAUTH_SCOPE,
+    });
     const json =
       asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
     const deviceCode = readNonBlankString(json.device_code);
@@ -447,15 +443,11 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       let pollIntervalMs = intervalMs;
 
       while (performance.now() < deadlineMs) {
-        const result = await fetchXaiOAuth(
-          requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
-          requestOptions,
-          {
-            grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
-            client_id: XAI_OAUTH_CLIENT_ID,
-            device_code: deviceCode,
-          },
-        );
+        const result = await fetchXaiOAuth(tokenEndpoint, requestOptions, {
+          grant_type: XAI_DEVICE_CODE_GRANT_TYPE,
+          client_id: XAI_OAUTH_CLIENT_ID,
+          device_code: deviceCode,
+        });
         const { response: tokenResponse } = result;
         let body: unknown;
         try {
@@ -482,10 +474,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
           continue;
         }
         if (error === "access_denied" || error === "authorization_denied") {
-          throw new Error("xAI device authorization was denied");
+          throw new ProviderAuthFailure("device_code_denied");
         }
         if (error === "expired_token") {
-          throw new Error("xAI device code expired. Re-run the login.");
+          throw new ProviderAuthFailure("device_code_expired");
         }
 
         const description = readStringValue(errorBody?.error_description);
@@ -495,7 +487,8 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
         );
       }
 
-      throw new Error("xAI device authorization timed out");
+      // The poll deadline is the code's expires_in.
+      throw new ProviderAuthFailure("device_code_expired");
     };
     const tokens = await pollXaiDeviceCodeToken();
     const identity = resolveXaiOAuthIdentity(tokens);
@@ -532,8 +525,9 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ],
     });
   } catch (err) {
-    progress.stop("xAI OAuth failed");
-    throw new Error(`xAI OAuth failed: ${formatErrorMessage(err)}`, { cause: err });
+    // Cancels and failures reach core unchanged; core prints the message once.
+    progress.stop();
+    throw err;
   }
 }
 

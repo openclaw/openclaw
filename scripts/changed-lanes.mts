@@ -130,9 +130,7 @@ export function hasAgentsInstructionInput(changedPaths: string[]): boolean {
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
   "apps/android/CHANGELOG.md",
-  "apps/android/Config/Version.properties",
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-  "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   ...CONFIG_DOC_BASELINE_PATHS,

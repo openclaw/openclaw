@@ -38,6 +38,7 @@ import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
+import { registerChatWorktreeEnglish } from "../../ui/src/i18n/locales/en-chat-worktree.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -46,6 +47,7 @@ import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
+import { registerDevicePairSecureAccessEnglish } from "../../ui/src/i18n/locales/en-device-pair-secure-access.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
@@ -58,7 +60,7 @@ import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts"
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerLogsEnglish } from "../../ui/src/i18n/locales/en-logs.ts";
 import { registerMcpAppEnglish } from "../../ui/src/i18n/locales/en-mcp-app.ts";
-import { registerMcpEnglish } from "../../ui/src/i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../../ui/src/i18n/locales/en-mcp-management.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
@@ -153,6 +155,7 @@ const sourceFiles = [
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
   "en-chat-composer.ts",
+  "en-chat-worktree.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
@@ -176,6 +179,7 @@ const sourceFiles = [
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
+  "en-device-pair-secure-access.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
   "en-processes.ts",
@@ -185,6 +189,7 @@ const sourceFiles = [
   "en-github.ts",
   "en-github-connections.ts",
   "en-mcp.ts",
+  "en-mcp-management.ts",
   "en-mcp-app.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
@@ -258,8 +263,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const menuCopy = registerSessionMenuEnglish.catalog.sessionsView;
   // Menu leaves retain their original positions in the canonical translation memory.
   const menuBefore = new Map<string, keyof typeof menuCopy>([
-    ["personalGroupReferenceAdded", "personalGroupAdd"],
-    ["personalGroupEdit", "personalGroupNew"],
     ["subagentPrefix", "communication"],
     ["actionRequiresScope", "actionUnavailable"],
     ["withParticipant", "ownerYou"],
@@ -664,6 +667,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatComposerEnglish.catalog.chat,
         composer: {
           ...registerChatComposerEnglish.catalog.chat.composer,
+          ...registerChatWorktreeEnglish.catalog.chat.composer,
           menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,
         },
         permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
@@ -676,6 +680,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerConnectionRecoveryEnglish.catalog,
     registerCronEnglish.catalog,
     registerDevicesEnglish.catalog,
+    registerDevicePairSecureAccessEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
     registerProcessesEnglish.catalog,
@@ -683,7 +688,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,
-    registerMcpEnglish.catalog,
+    registerMcpManagementEnglish.catalog,
     registerMcpAppEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,

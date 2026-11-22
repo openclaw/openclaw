@@ -70,7 +70,7 @@ export function registerWorkerGoalChatCases(
   it.each([
     "continue",
     "preparation-failed",
-    "revoked",
+    "transport-closed",
     "claim-revoked",
     "claim-reassigned",
   ] as const)(
@@ -250,7 +250,7 @@ export function registerWorkerGoalChatCases(
         if (mode === "preparation-failed" && runEmbeddedAgent.mock.calls.length === 1) {
           throw new Error("Worker setup declined input");
         }
-        if (mode === "revoked") {
+        if (mode === "transport-closed") {
           operator.invalidated = true;
         }
         const calls = runEmbeddedAgent.mock.calls.length;
@@ -324,6 +324,22 @@ export function registerWorkerGoalChatCases(
         }
         promote.resolve();
         const started = await starting;
+        if (mode === "transport-closed") {
+          expectAccepted(started, {
+            status: "started",
+            action: "start",
+            goalId: expect.any(String),
+          });
+          await waitForDispatchEnd();
+          expect(loadSessionEntry(scope())?.goal).toMatchObject({
+            status: "paused",
+            continuationTurns: 0,
+          });
+          expect(userMessages()).toHaveLength(1);
+          expect(modelExecuted).toHaveBeenCalledOnce();
+          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+          return;
+        }
         if (mode !== "continue") {
           expect(started.mock.calls[0]?.[0]).toBe(false);
           await waitForDispatchEnd();
