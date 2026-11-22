@@ -255,9 +255,13 @@ export async function restoreFailedUpdateDatabases(params: {
     return await refuse("Migration receipt belongs to a different database backup");
   }
   try {
+    const journalReconciliationFailures: string[] = [];
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
+      onJournalReconciliationFailures: (failures) => {
+        journalReconciliationFailures.push(...failures);
+      },
     });
     if (migratedPaths === null) {
       return await refuse(
@@ -275,6 +279,11 @@ export async function restoreFailedUpdateDatabases(params: {
         `Restored pre-migration databases from ${params.backup.directory}.`,
         ...migratedPaths.map(
           (file) => `Migrated database file retained for manual recovery: ${file}`,
+        ),
+        ...journalReconciliationFailures.map(
+          (failure) =>
+            "Journal policy re-establishment failed (recoverable; while no process holds the files run PRAGMA journal_mode=WAL): " +
+            failure,
         ),
       ],
     };

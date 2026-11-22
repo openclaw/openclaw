@@ -16,7 +16,9 @@ import {
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
@@ -24,6 +26,8 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
+import { enableSqliteWalJournalMode } from "./sqlite-wal.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -122,6 +126,19 @@ async function withDatabaseExclusion<T>(
   return outcome.value;
 }
 
+/** Restore the filesystem journal policy while the caller retains database exclusion. */
+async function reestablishRestoredDatabaseJournalMode(databasePath: string): Promise<void> {
+  if (resolvePathJournalPolicy(databasePath) !== "wal") {
+    return;
+  }
+  const database = openNodeSqliteDatabase(databasePath);
+  try {
+    enableSqliteWalJournalMode(database, 0, { databasePath });
+  } finally {
+    database.close();
+  }
+}
+
 /** The caller owns a settled failed candidate that has never admitted user work. */
 export async function restoreUpdateDatabaseBackup(params: {
   backup: UpdateDatabaseBackup;
@@ -129,6 +146,8 @@ export async function restoreUpdateDatabaseBackup(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
+  /** Report recoverable journal failures separately from restored database contents. */
+  onJournalReconciliationFailures?: (failures: readonly string[]) => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -322,6 +341,21 @@ export async function restoreUpdateDatabaseBackup(params: {
           await output.publish();
           assertOwned();
         }
+        // Snapshot images use DELETE mode. Restore WAL before releasing exclusion,
+        // without making a journal failure misreport successfully restored contents.
+        const journalModeFailures: string[] = [];
+        for (const entry of sources) {
+          assertOwned();
+          try {
+            await reestablishRestoredDatabaseJournalMode(entry.path);
+          } catch (error) {
+            journalModeFailures.push(entry.path + ": " + formatErrorMessage(error));
+          }
+        }
+        if (journalModeFailures.length > 0) {
+          params.onJournalReconciliationFailures?.(journalModeFailures);
+        }
+        assertOwned();
         return displaced;
       },
     );

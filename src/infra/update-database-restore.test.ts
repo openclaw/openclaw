@@ -22,6 +22,8 @@ import {
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
+import * as sqliteWalFilesystem from "./sqlite-wal-filesystem.js";
+import * as sqliteWal from "./sqlite-wal.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateDatabaseGenerationsIsolated,
@@ -157,6 +159,70 @@ async function unchangedFiles(fixture: RestoreFixture) {
     }
   };
 }
+
+it("reestablishes WAL after publishing standalone rollback snapshots", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.restore();
+    for (const owner of [fixture.shared, fixture.agent]) {
+      using restored = new DatabaseSync(owner.path, { readOnly: true });
+      expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      expect(restored.prepare("SELECT value FROM restore_witness").get()).toEqual({
+        value: "baseline",
+      });
+    }
+    await fixture.close();
+  });
+});
+
+it("reports journal conversion failure without undoing restored contents", async () => {
+  await withFixture(async (fixture) => {
+    const failures: string[] = [];
+    const fault = vi.spyOn(sqliteWal, "enableSqliteWalJournalMode").mockImplementation(() => {
+      throw new Error("injected journal conversion failure");
+    });
+    try {
+      const displaced = await restoreUpdateDatabaseBackup({
+        backup: fixture.backup,
+        runId: fixture.run.runId,
+        env: fixture.state.env,
+        assertCurrent() {},
+        onJournalReconciliationFailures: (items) => failures.push(...items),
+      });
+      expect(displaced).not.toBeNull();
+      expect(failures).toHaveLength(fixture.backup.databases.length);
+      expect(failures.every((item) => item.includes("injected journal conversion failure"))).toBe(
+        true,
+      );
+      for (const owner of [fixture.shared, fixture.agent]) {
+        using restored = new DatabaseSync(owner.path, { readOnly: true });
+        expect(restored.prepare("SELECT value FROM restore_witness").get()).toEqual({
+          value: "baseline",
+        });
+      }
+    } finally {
+      fault.mockRestore();
+      await fixture.close();
+    }
+  });
+});
+
+it("retains DELETE journal policy on rollback-policy filesystems", async () => {
+  await withFixture(async (fixture) => {
+    const policy = vi
+      .spyOn(sqliteWalFilesystem, "resolvePathJournalPolicy")
+      .mockReturnValue("rollback");
+    try {
+      await fixture.restore();
+      for (const owner of [fixture.shared, fixture.agent]) {
+        using restored = new DatabaseSync(owner.path, { readOnly: true });
+        expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+      }
+    } finally {
+      policy.mockRestore();
+      await fixture.close();
+    }
+  });
+});
 
 it("restores aliased databases through timestamp drift without rewinding update history", async () => {
   await withFixture(async (fixture) => {

@@ -306,6 +306,14 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
         runId: receipt.runId,
         env: process.env,
         assertCurrent: () => {},
+        onJournalReconciliationFailures: (failures) => {
+          for (const failure of failures) {
+            console.error(
+              "[update] journal policy re-establishment failed (recoverable; while no process holds the files run PRAGMA journal_mode=WAL): " +
+                failure,
+            );
+          }
+        },
       });
       receipt.status = "restoring-config";
       receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
