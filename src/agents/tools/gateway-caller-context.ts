@@ -125,8 +125,6 @@ type GatewayToolCallerIdentity = {
   /** Host-only native issuer retained by the current MCP grant; never serialized. */
   mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
-  /** Cron permission can end while the admitted run retains its other tools. */
-  cronAuthorityCheck?: () => boolean;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceLocal?: true;
@@ -162,7 +160,6 @@ type AdmittedGatewayToolCallerParams = {
   requesterOrigin?: RequesterOrigin;
   receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
-  cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
   approvalSignals?: readonly AbortSignal[];
   agentId?: string;
@@ -279,7 +276,6 @@ export function createAdmittedGatewayToolCallerIdentity(
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
-    ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
     gatewayContextResolver: captureGatewayContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
@@ -636,10 +632,6 @@ export async function withGatewayToolCallerIdentity<T>(
         identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant,
       mintCronRequesterGrant: inheritedValue("mintCronRequesterGrant"),
       cronManagementGrant: identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant,
-      cronAuthorityCheck: composeReceiptAuthority(
-        inheritedOwner?.cronAuthorityCheck,
-        identity.cronAuthorityCheck,
-      ),
       executionIdentityToken: inheritedValue("executionIdentityToken"),
       receiptAuthority: composeReceiptAuthority(
         inheritedOwner?.receiptAuthority,
