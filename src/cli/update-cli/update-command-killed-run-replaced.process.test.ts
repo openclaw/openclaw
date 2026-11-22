@@ -265,22 +265,53 @@ describe.skipIf(process.platform === "win32")(
       }),
     );
 
-    it("keeps today's refusals while its package directory still exists", () =>
+    // A path that cannot be read is not evidence that the directory is gone.
+    const searchable = process.getuid?.() !== 0;
+    it.each<{ name: string; leave: (key: string) => void; skip?: boolean }>([
+      { name: "its package directory still exists", leave: () => undefined },
+      {
+        // lstat fails with ENOTDIR, not ENOENT.
+        name: "a file stands where its package directory's parent was",
+        leave: (key) => {
+          fs.rmSync(path.dirname(key), { recursive: true });
+          fs.writeFileSync(path.dirname(key), "");
+        },
+      },
+      {
+        // lstat fails with EACCES; root reads through the mode, so it cannot see this.
+        name: "its package directory's parent cannot be searched",
+        leave: (key) => fs.chmodSync(path.dirname(key), 0o000),
+        skip: !searchable,
+      },
+    ])("keeps today's refusals when $name", ({ leave, skip }, context) =>
       fixtures.lifetime.run(async () => {
+        if (skip) {
+          context.skip();
+        }
         const install = await linkedInstallation();
         const killed = await updater(install.key, { ...verified, root: install.slot });
         await replacePackageDirectory(install, { keepPrevious: true });
+        leave(install.key);
         const before = reserved(killed.runId);
-
-        await expect(nextUpdate(install.slot)).rejects.toThrow(
-          `It belongs to the installation at ${install.key}. Run openclaw triage for an agent that reads this update history and settles it. By hand: Run ${repair} from that installation.`,
-        );
-        await expect(runRepair(install.slot)).rejects.toThrow(
-          /^Plugin cohort recovery belongs to a different installation\.$/u,
-        );
+        try {
+          await expect(nextUpdate(install.slot)).rejects.toThrow(
+            `It belongs to the installation at ${install.key}. Run openclaw triage for an agent that reads this update history and settles it. By hand: Run ${repair} from that installation.`,
+          );
+          await expect(runRepair(install.slot)).rejects.toThrow(
+            /^Plugin cohort recovery belongs to a different installation\.$/u,
+          );
+        } finally {
+          // The fixture's cleanup must be able to remove what this case made unsearchable.
+          const parent = path.dirname(install.key);
+          if (fs.statSync(parent, { throwIfNoEntry: false })?.isDirectory()) {
+            fs.chmodSync(parent, 0o755);
+          }
+        }
 
         expect(mocks.proceed).not.toHaveBeenCalled();
         expect(reserved(killed.runId)).toEqual(before);
-      }));
+        expect(replacedWarning(killed.runId)).toBeUndefined();
+      }),
+    );
   },
 );
