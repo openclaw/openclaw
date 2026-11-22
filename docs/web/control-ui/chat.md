@@ -74,6 +74,8 @@ presentation does not resume the run or recover an answer that was never saved.
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
+Before you archive or delete a session with enabled linked automations, the
+confirmation shows their names and any available schedules in read-only cards.
 
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
