@@ -316,6 +316,7 @@ it.each([
 
     if (failure === "disconnect") {
       expect(host.nativeResourceAdmissionClosed).toBe(true);
+      expect(callbacks.failed).not.toHaveBeenCalled();
       expect(() => fixture.capture()).toThrow();
     }
     // Proxy rejection and failed write delivery are not native settlement receipts.

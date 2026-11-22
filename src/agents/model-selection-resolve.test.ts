@@ -54,7 +54,6 @@ describe("implicit primary selection with an explicit utility model", () => {
       cfg,
       agentId,
       defaultProvider: "ordinary",
-      defaultModel: "primary",
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     });
@@ -80,10 +79,11 @@ describe("implicit primary selection with an explicit utility model", () => {
     expect(resolve(cfg)).toEqual({ provider, model: "small" });
 
     cfg.meta = { migrations: { utilityModelSeparation: true } };
+    // A separated utility row is not a primary, and nothing else names one.
     expect(resolve(cfg, "worker")).toEqual(
-      scenario.excluded ? { provider: "ordinary", model: "primary" } : { provider, model: "small" },
+      scenario.excluded ? undefined : { provider, model: "small" },
     );
-    expect(resolve(cfg)).toEqual({ provider: "ordinary", model: "primary" });
+    expect(resolve(cfg)).toBeUndefined();
   });
 
   it.each(["defaults", "agent"])("preserves explicit utility model as %s primary", (scope) => {
@@ -137,7 +137,6 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     expect(
       resolveAllowed(cfg, "litellm/cron", {
         defaultProvider: "ollama",
-        defaultModel: "qwen35-27b-researcher",
       }),
     ).toEqual(allowed({ provider: "litellm", model: "cron" }));
   });
@@ -151,7 +150,6 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
       resolveConfiguredModelRef({
         cfg,
         defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
       }),
     ).toEqual({ provider: "openrouter", model: "openrouter/auto" });
   });

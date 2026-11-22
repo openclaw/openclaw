@@ -36,14 +36,10 @@ function expectNotifications(f: RepairFixture, repairs: number, alerts: number, 
 
 const oneShot = () => ({ kind: "at" as const, at: new Date(Date.now()).toISOString() });
 
+/** A finished one-shot is off because it completed; a failure records no auto-disable. */
 function expectDisabled(job: CronJob | undefined, consecutiveErrors: number) {
-  expect(job).toMatchObject({
-    enabled: false,
-    state: {
-      consecutiveErrors,
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors },
-    },
-  });
+  expect(job).toMatchObject({ enabled: false, state: { consecutiveErrors } });
+  expect(job?.state.autoDisabled).toBeUndefined();
 }
 
 const repairCase = (run: AlertParams[1]) => () => withRepair(run);
@@ -320,13 +316,13 @@ describe("CronService failure repair", () => {
     ],
     ["owned when repair cannot start", { owner: owned.owner }, [1, 1, 0], true],
     ["unowned", {}, [0, 1, 0]],
-    ["unowned without a route", { delivery: { mode: "none" } }, [0, 0, 1]],
+    ["unowned without a route", { delivery: { mode: "none" } }, [0, 0, 0]],
     [
       "inherited best-effort alert suppressed",
       { delivery: { ...createTelegramDelivery(), bestEffort: true } },
-      [0, 0, 1],
+      [0, 0, 0],
     ],
-    ["alerts disabled", { failureAlert: false }, [0, 0, 1]],
+    ["alerts disabled", { failureAlert: false }, [0, 0, 0]],
   ])(
     "notifies a terminal one-shot script failure: %s",
     (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) =>
@@ -359,12 +355,6 @@ describe("CronService failure repair", () => {
         const expectTerminalNotifications = () => {
           expect(f.runScriptJob).toHaveBeenCalledOnce();
           expectNotifications(f, repairs, alerts, notices);
-          if (notices) {
-            expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
-              expect.stringContaining("auto-disabled"),
-              expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-            );
-          }
         };
         expectTerminalNotifications();
         if (alerts) {
@@ -375,7 +365,7 @@ describe("CronService failure repair", () => {
               to: "19098680",
               mode: "announce",
               payload: expect.objectContaining({
-                text: expect.stringContaining('Automation "continue PR work" was auto-disabled'),
+                text: expect.stringContaining('Automation "continue PR work" failed'),
               }),
             }),
           );

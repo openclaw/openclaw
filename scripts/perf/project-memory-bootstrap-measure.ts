@@ -17,6 +17,8 @@
  * with recorded omissions, native-lease CPU/allocation, and unchanged fast recall.
  * providerStarted=false means caller admission may remain outstanding; that cold
  * sample does not claim complete settlement CPU. Warm samples require a native lease.
+ * --edit-record <private record> changes an unselected record before each warm
+ * recall to exercise vault invalidation instead of only whole-scan reuse.
  * Cold omissions are recorded separately. Explicit native retrieval then warms the
  * store outside timing; warm recall must succeed without the injected delay.
  */
@@ -49,6 +51,7 @@ const { values } = parseArgs({
     "candidate-delay-ms": { type: "string", default: "0" },
     "expect-skips": { type: "boolean", default: false },
     "allow-skips": { type: "boolean", default: false },
+    "edit-record": { type: "string" },
   },
 });
 assert(values.root, "--root must name an isolated synthetic fixture directory");
@@ -470,6 +473,11 @@ try {
     }
     const warm = [];
     for (let i = 0; i < iterations; i++) {
+      if (values["edit-record"]) {
+        const file = path.join(vaultRoot, "private", values["edit-record"]);
+        const raw = readFileSync(file, "utf8");
+        writeFileSync(file, `${raw.trimEnd().replace(/ [AB]$/, "")} ${i % 2 ? "A" : "B"}\n`);
+      }
       warm.push(await run());
     }
     let allocatedBytes: number | undefined;

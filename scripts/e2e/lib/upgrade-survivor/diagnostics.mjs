@@ -221,6 +221,17 @@ function installedRecoveryCurrent(value, sanitize) {
           "owed-status-after",
           "owed-retry-probe",
           "owed-next-check-probe",
+          // The data-at-risk cell's commands.
+          "marked-update",
+          "stopped-marked-update",
+          "marked-repair",
+          "marked-repair-probe",
+          "after-mark-update",
+          "after-mark-update-probe",
+          "inconsistent-update",
+          "inconsistent-repair",
+          "restored-repair",
+          "restored-repair-probe",
         ]
       : [
           "displacement",
@@ -2308,7 +2319,7 @@ function failedUpdateContext(text, label) {
   try {
     // Match the warning-prefixed updater JSON accepted by assertions.readUpdateJson.
     const result = JSON.parse(text.slice(text.indexOf("{")));
-    if (result?.status !== "error" || !Array.isArray(result.steps)) {
+    if (!["ok", "error"].includes(result?.status) || !Array.isArray(result.steps)) {
       return "";
     }
     const index = result.steps.findIndex(

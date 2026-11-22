@@ -42,6 +42,11 @@ export async function commitBackgroundResultToSession(params: {
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  /**
+   * The producing turn ran in this conversation, so its own reply already holds the text in
+   * model context. The row is then for display only and is never placed into model context.
+   */
+  displayOnly?: true;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -132,9 +137,11 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            ...(isSessionControllerWorkActive(storePath, [sessionKey, sessionId], params.agentId)
-              ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
-              : {}),
+            ...(params.displayOnly
+              ? { excludeFromContext: true }
+              : isSessionControllerWorkActive(storePath, [sessionKey, sessionId], params.agentId)
+                ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+                : {}),
             ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
           } satisfies SessionTranscriptAssistantMessage & {
             idempotencyKey: string;

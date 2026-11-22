@@ -4,10 +4,8 @@ import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
-import {
-  resolveModelCostConfig,
-  estimateAggregateUsageCostAsync,
-} from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import type { NormalizedUsage } from "../usage.js";
 import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";

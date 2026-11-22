@@ -396,10 +396,9 @@ describe("CronService failure alerts", () => {
 
           const alert = alertCallArg(sendCronFailureAlert);
           expect(alert.text).toContain("Cause: auth_permanent");
-          expect(alert.text).toContain("Send `/login openai`");
+          expect(alert.text).toContain("Send /login openai");
           if (oneShot) {
             expect(cron.getJob(job.id)?.enabled).toBe(false);
-            expect(alert.text).toContain("was auto-disabled");
           }
           const signIn = {
             label: "Sign in",

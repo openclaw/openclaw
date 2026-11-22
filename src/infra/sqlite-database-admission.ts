@@ -75,7 +75,6 @@ const descriptors = createSqliteDatabaseDescriptorOwner(seals);
 export const {
   prepareOwnedSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmissionAsync,
-  retainSqliteDatabaseAdmissionLocation,
   retainPreparedSqliteDatabaseAdmissionLocation,
   prepareSqliteDatabaseAdmission,
 } = descriptors;
@@ -562,6 +561,13 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
 
 export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
   revoke(pathAdmission(location), location);
+}
+
+/** Closed connections can lose their published admission while the host still owns the file. */
+export function* captureSqliteDatabaseDescriptorCustodyLocations(): Iterable<string> {
+  for (const { location } of state.registry.descriptors.values()) {
+    yield location;
+  }
 }
 
 /** Explicit removal or maintenance calls this only after its owner has joined native consumers. */

@@ -584,13 +584,13 @@ describe.each(["image", "music", "video"] as const)(
             const result = await outcome;
             expect(result.error).toBeInstanceOf(Error);
             expect(result.value).toBeUndefined();
+            expect(createTask).not.toHaveBeenCalled();
             if (pause !== "reference loading") {
               if (kind === "image") {
                 expect(reference).toHaveBeenCalledOnce();
               } else {
                 expect(reference).not.toHaveBeenCalled();
               }
-              expect(createTask).not.toHaveBeenCalled();
               expect(lookups).toBe(1);
             }
             expect(fixture.connections[0]!.generated).toBe(0);

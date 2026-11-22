@@ -6,6 +6,7 @@ import {
 } from "../../agents/reply-completion.js";
 import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -557,7 +558,8 @@ export async function runReplyAgent(
       },
     });
     try {
-      if (turn.preflightError) {
+      // Channel admission rethrows its memoized preflight failure in the execution handler.
+      if (turn.preflightError && !isChannelRunAuthorizationError(turn.preflightError)) {
         throw turn.preflightError;
       }
       await replyOperation.bindToolAuthoritySnapshotAsync(

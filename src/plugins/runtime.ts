@@ -453,6 +453,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
         const previous = owner.activeRegistry;
         try {
           if (
+            previous.memoryBackends.length === 0 &&
             !previous.memoryCapabilities.some(
               ({ capability }) => capability.runtime || capability.providerRuntime,
             )

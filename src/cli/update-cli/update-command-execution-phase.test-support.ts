@@ -148,7 +148,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           });
         });
       } finally {
-        await run.sourceArtifactLock?.release();
         await closeStateDatabaseForTest();
       }
     });

@@ -8,7 +8,10 @@ import {
   listCacheFiles,
   type ArtifactRecord,
 } from "./build-artifact-cache.mts";
-import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
+import {
+  createNativeTypeScriptConfigReader,
+  readNativeTypeScriptConfig,
+} from "./native-typescript-config.mts";
 
 type CompilerInputPolicy = {
   toolchainFiles: string[];
@@ -205,6 +208,11 @@ export class CompilerInputSnapshot {
   }
 
   private read(file: string) {
+    // Captured bytes belong to this phase; only new reads need filesystem admission.
+    const captured = this.files.get(path.resolve(this.rootDir, file));
+    if (captured) {
+      return captured;
+    }
     // Admit the same spelling used for reads and prior-snapshot keys, including Windows aliases.
     const absolute = this.inputPath(file);
     let entry = this.files.get(absolute);
@@ -250,16 +258,32 @@ export class CompilerInputSnapshot {
   /** Supply the compiler and cache signature with the same captured bytes. */
   readText = (file: string) => this.read(file).bytes.toString("utf8");
 
-  private config(file: string) {
+  /** Capture one synchronous phase's configs without restarting the compiler for each file. */
+  prepareConfigs(files: string[]) {
+    using reader = createNativeTypeScriptConfigReader({
+      cwd: this.rootDir,
+      readFile: this.readText,
+      assertInput: this.policy.assertInput,
+    });
+    for (const file of files) {
+      this.config(file, reader.read);
+    }
+  }
+
+  private config(
+    file: string,
+    read = (configFileName: string) =>
+      readNativeTypeScriptConfig({
+        cwd: this.rootDir,
+        configFileName,
+        readFile: this.readText,
+        assertInput: this.policy.assertInput,
+      }),
+  ) {
     let result = this.configs.get(file);
     if (!result) {
       try {
-        const parsed = readNativeTypeScriptConfig({
-          cwd: this.rootDir,
-          configFileName: this.inputPath(file),
-          readFile: this.readText,
-          assertInput: this.policy.assertInput,
-        });
+        const parsed = read(this.inputPath(file));
         result = {
           files: parsed.configFiles,
           roots: parsed.fileNames.toSorted(),

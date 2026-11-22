@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionMessageEntry } from "../../src/agents/sessions/session-manager-types.js";
 import { CURRENT_SESSION_VERSION } from "../../src/config/sessions/version.js";
-import type { PersistedUserTurnMessage } from "../../src/sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../src/sessions/user-turn-input.types.js";
 
 const { values } = parseArgs({
   options: {

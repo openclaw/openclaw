@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   GitHubIdentityError,
@@ -382,7 +382,7 @@ describe("worker GitHub launch binding", () => {
     let current = true;
     const release = vi.fn();
     const retain = vi.fn(() => release);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {

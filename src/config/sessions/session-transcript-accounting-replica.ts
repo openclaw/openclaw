@@ -3,7 +3,10 @@ import {
   readSessionActorCompleteTranscriptFromReplica,
   readSessionActorTranscriptStateFromReplica,
 } from "./session-actor-replica.js";
-import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
+import {
+  readSessionTranscriptAccountingTail,
+  selectSessionTranscriptAccountingTail,
+} from "./session-transcript-accounting-policy.js";
 import {
   SQLITE_USAGE_TAIL_MAX_EVENTS,
   type SessionTranscriptAccountingOptions,
@@ -35,23 +38,21 @@ export function readSessionTranscriptAccountingFromReplica(
     result.byteSize = stats.sizeBytes;
     result.eventCount = stats.eventCount;
   }
+  const tail: unknown[] = [];
+  for (
+    let index = current.rows.length - 1;
+    index >= 0 && tail.length < SQLITE_USAGE_TAIL_MAX_EVENTS;
+    index -= 1
+  ) {
+    const { event } = current.rows[index]!;
+    if (!isRecord(event) || event.type !== "session") {
+      tail.push(event);
+    }
+  }
+  const selected = selectSessionTranscriptAccountingTail(tail.toReversed(), (event) => event);
   Object.assign(
     result,
-    readSessionTranscriptAccountingTail((visit) => {
-      let visited = 0;
-      for (
-        let index = current.rows.length - 1;
-        index >= 0 && visited < SQLITE_USAGE_TAIL_MAX_EVENTS;
-        index -= 1
-      ) {
-        const { event } = current.rows[index]!;
-        if (isRecord(event) && event.type === "session") {
-          continue;
-        }
-        visit(event);
-        visited += 1;
-      }
-    }, options),
+    readSessionTranscriptAccountingTail(selected.toReversed(), options, tail.length),
   );
   // The policy borrows trailing message bodies; callers own the returned snapshot.
   return structuredClone(result);

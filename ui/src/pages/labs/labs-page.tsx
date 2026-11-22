@@ -174,39 +174,6 @@ export function LabsPage() {
       enabled === featureState.defaultEnabled ? labFeatureResetPatch(value, feature) : null;
     updateSetting(feature.id, enabled, resetPatch ?? labFeatureMergePatch(feature, enabled));
   }
-  function codeModeConfig(): unknown {
-    const tools = editableConfig()?.tools;
-    return isRecord(tools) ? tools.codeMode : undefined;
-  }
-  function setCodeModeExecutor(executor: string) {
-    if (executor !== "node" && executor !== "quickjs") {
-      return;
-    }
-    const value = codeModeConfig();
-    updateSetting("codeModeExecutor", executor, {
-      tools: {
-        codeMode: {
-          ...(value === undefined
-            ? { enabled: "auto" }
-            : typeof value === "boolean" || value === "auto"
-              ? { enabled: value }
-              : {}),
-          executor: executor === "node" ? null : executor,
-        },
-      },
-    });
-  }
-  function executorValue() {
-    const value = codeModeConfig();
-    const current = currentPending();
-    const executor =
-      current?.featureId === "codeModeExecutor"
-        ? current.value
-        : isRecord(value)
-          ? value.executor
-          : null;
-    return executor === "quickjs" ? "quickjs" : "node";
-  }
   function predictionModel() {
     const gateway = editableConfig()?.gateway;
     const controlUi = isRecord(gateway) ? gateway.controlUi : undefined;
@@ -302,20 +269,6 @@ export function LabsPage() {
             ]}
           />
         ) : null}
-        {props.feature.id === "codeMode" ? (
-          <SettingsSelectRow
-            nested
-            title={t("labsPage.codeMode.executor")}
-            description={t("labsPage.codeMode.executorDescription")}
-            value={executorValue()}
-            disabled={presentation().saving() || !canToggle()}
-            onChange={setCodeModeExecutor}
-            options={[
-              { value: "node", label: t("labsPage.codeMode.executorNode") },
-              { value: "quickjs", label: t("labsPage.codeMode.executorQuickjs") },
-            ]}
-          />
-        ) : null}
       </>
     );
   }
@@ -338,6 +291,21 @@ export function LabsPage() {
         <SettingsPage>
           <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
+            <For
+              each={config
+                .read()
+                .state.configSnapshot?.warnings?.filter(
+                  (warning) => warning.path === "gateway.openclawId.enabled",
+                )}
+            >
+              {(warning) => (
+                <SettingsRow
+                  role="status"
+                  title={t("labsPage.openclawId.title")}
+                  description={warning.message}
+                />
+              )}
+            </For>
             <Loading on={receipt()}>
               <Errored
                 fallback={(error) => (

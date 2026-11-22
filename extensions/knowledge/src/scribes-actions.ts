@@ -1,7 +1,12 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off, repair and update. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { repairPrompt, scribeLabel, setupIdempotencyKey } from "./scribes-catalog.js";
+import {
+  repairPrompt,
+  rescheduledRunMessage,
+  scribeLabel,
+  setupIdempotencyKey,
+} from "./scribes-catalog.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
@@ -179,30 +184,44 @@ export function needsUpdate(snapshot: ScribeSnapshot) {
 
 /**
  * Ask the scribe's conversation to bring its automation up to date, with `runMessage` (the job's
- * own message by default, an unedited earlier one becoming the current one). The conversation
- * re-declares the automation in a turn, as setup did. A direct edit from the page would drop the
- * owner's turn authority that the automation's runs use. One request per automation revision.
+ * own message by default, an unedited earlier one becoming the current one), or to move it to
+ * `schedule`, with the run message that schedule takes. The conversation re-declares the
+ * automation in a turn, as setup did. A direct edit from the page would drop the owner's turn
+ * authority that the automation's runs use. One request per automation revision and change.
  */
 export async function updateScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
   job: ScribeJob,
   agentId: string,
-  runMessage = job.payload?.message,
-  attempt = "1",
+  change: { runMessage?: string; schedule?: ScribeJob["schedule"]; attempt?: string } = {},
 ) {
   const { scribe } = snapshot;
+  const { schedule, attempt = "1" } = change;
+  const saved = job.payload?.message;
+  const runMessage =
+    change.runMessage ??
+    (schedule && saved ? rescheduledRunMessage(scribe.id, saved, job.schedule, schedule) : saved);
   const sessionKey = await conversation(host, snapshot, agentId);
   const prompt = repairPrompt(
     scribe.id,
-    { schedule: job.schedule, ...(runMessage ? { runMessage } : {}), saved: savedOptions(job) },
-    "update",
+    {
+      schedule: schedule ?? job.schedule,
+      ...(runMessage ? { runMessage } : {}),
+      saved: savedOptions(job),
+    },
+    schedule ? "reschedule" : "update",
   );
+  const kind = schedule
+    ? `schedule:${schedule.expr ?? schedule.kind}:${schedule.tz ?? ""}`
+    : runMessage === saved
+      ? "update"
+      : "reset";
   await host.request("chat.send", {
     sessionKey,
     agentId,
     message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:${runMessage === job.payload?.message ? "update" : "reset"}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:${kind}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
   });
   return sessionKey;
 }

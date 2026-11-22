@@ -3,10 +3,8 @@ import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import type { OAuthCredential } from "../../auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "../../model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
@@ -164,7 +162,7 @@ it.each(["current", "revoked", "reassigned"])(
 );
 
 it("enforces restricted-role grants for defaults without overriding explicit Standard", async () => {
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: "access-default-fixture",
     scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
