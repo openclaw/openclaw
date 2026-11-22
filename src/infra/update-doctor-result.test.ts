@@ -48,6 +48,7 @@ it("shares verified digests only between generation reads of one write capture",
       committed: { [pathname]: "generation" },
       physical: { [pathname]: "generation" },
       emptyReaderAlternates: {},
+      rebuiltIndexAlternates: {},
     });
   const options = { env: {}, signal: new AbortController().signal, warn: vi.fn() };
   const first = createUpdateDoctorDatabaseWriteCapture({ [pathname]: "generation" }, options)!;
