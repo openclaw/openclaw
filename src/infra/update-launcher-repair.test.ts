@@ -16,14 +16,19 @@ const quoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
  * `2026.11.4 -> 2026.11.5` update: every exec line and NODE_PATH name the removed
  * stage, and only the `cmd-shim-target` comment names the live install.
  */
-function publishedShim(home: string, recorded: string) {
-  const target = quoted(`../${STAGE}/${GROUP}/node_modules/openclaw/openclaw.mjs`);
+function publishedShim(
+  home: string,
+  recorded: string,
+  entry = `${GROUP}/node_modules/openclaw/openclaw.mjs`,
+  nodePath = `${home}/${STAGE}/${GROUP}/node_modules/.pnpm/node_modules`,
+) {
+  const target = quoted(`../${STAGE}/${entry}`);
   return [
     "#!/bin/sh",
     'basedir_abs=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P) || exit $?',
     'basedir="$basedir_abs"',
     'basedir_win="$basedir"',
-    `export NODE_PATH=${quoted(`${home}/${STAGE}/${GROUP}/node_modules/.pnpm/node_modules`)}`,
+    `export NODE_PATH=${quoted(nodePath)}`,
     'if [ -x "$basedir/node" ]; then',
     `  exec "$basedir/node"  "$basedir_abs"/${target} "$@"`,
     "elif command -v node >/dev/null 2>&1; then",
@@ -108,6 +113,42 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
       }),
   );
+
+  it("repairs a pnpm 11 grouped launcher from the Gateway's real package path without PNPM_HOME", async () =>
+    withTestDir({ prefix: "launcher-repair-pnpm11-" }, async (base) => {
+      // Captured after a pnpm 11.28.13 update: the hash link selects a group whose
+      // project-local `.pnpm` store holds the package, and NODE_PATH names that live group.
+      const { home, launcher } = await pnpmHome(base);
+      const hashEntry = path.join(home, "global", "v11", "9440847f");
+      const group = path.join(home, "global", "v11", "708-1a1f51a997e");
+      const realRoot = path.join(group, ".pnpm", "openclaw@2026.11.6", "node_modules", "openclaw");
+      await fs.mkdir(realRoot, { recursive: true });
+      await fs.writeFile(path.join(realRoot, "openclaw.mjs"), "");
+      await fs.mkdir(path.join(group, "node_modules"));
+      await fs.symlink(realRoot, path.join(group, "node_modules", "openclaw"));
+      await fs.symlink(group, hashEntry);
+      const recorded = path.join(hashEntry, "node_modules", "openclaw", "openclaw.mjs");
+      const nodePath = path.join(group, ".pnpm", "openclaw@2026.11.6", "node_modules");
+      await fs.writeFile(
+        launcher,
+        publishedShim(home, recorded, "v11/9440847f/node_modules/openclaw/openclaw.mjs", nodePath),
+        { mode: 0o755 },
+      );
+      await expect(runFile(launcher)).rejects.toThrow();
+
+      // The Gateway knows only its real path; pnpm's home comes from that path's layout.
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({
+        root: realRoot,
+        env: { PATH: path.join(base, "empty-path") },
+      });
+
+      expect(failed).toEqual([]);
+      expect(repaired).toEqual([
+        expect.objectContaining({ file: launcher, stage: path.join(home, STAGE) }),
+      ]);
+      const [entry, liveNodePath] = (await runFile(launcher)).stdout.split("\n");
+      expect([path.resolve(entry ?? ""), liveNodePath]).toEqual([recorded, nodePath]);
+    }));
 
   it.each([
     "stage still present",

@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
@@ -310,7 +310,7 @@ export async function createWorkerSessionToolTestFixture(
       assertSourceCurrent,
       undefined,
       options.operatorProfileId
-        ? createAdmittedRunOperatorAuthority({
+        ? createTestOperatorAuthority({
             profileId: options.operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
             assertCurrent: () =>

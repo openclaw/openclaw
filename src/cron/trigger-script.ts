@@ -60,6 +60,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { logWarn } from "../logger.js";
 import {
   capturePluginLifecycleAuthority,
@@ -537,7 +538,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       releaseRuntime = release;
       admission = prepareCronRunAdmission({
-        scheduledExecution: params.occurrence.mint({
+        scheduledExecution: await params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,
           runId,
@@ -660,6 +661,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
+      if (isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
       return scriptFailure(
         formatErrorMessageWithCode(error),
         error instanceof CodeModeHeadlessTimeoutError

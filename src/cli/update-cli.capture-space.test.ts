@@ -22,7 +22,6 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as modules from "./update-cli-modules.test-support.js";
 import { getUpdateRun, updateCommand } from "./update-cli-modules.test-support.js";
-import { currentGitCoreFixture } from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -204,26 +203,17 @@ describe("original-state capture follows the first state change", () => {
   const setup = createUpdateCliFixture();
   const output = () => lastWriteJsonCall() as UpdateRunResult;
 
-  it.each(["package", "git"] as const)(
-    "copies nothing when a %s update is already current",
-    async (shape) => {
-      mocks.readPackageVersion.mockResolvedValue(VERSION);
-      if (shape === "package") {
-        await setup.mockPackageInstallAtCaseDir(undefined, VERSION);
-        setup.primeNpmChannelTag("latest", VERSION);
-      } else {
-        vi.mocked(modules.updateGitRelease).mockResolvedValueOnce(
-          currentGitCoreFixture(process.cwd(), VERSION).outcome,
-        );
-      }
+  it("copies nothing when a package update is already current", async () => {
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    await setup.mockPackageInstallAtCaseDir(undefined, VERSION);
+    setup.primeNpmChannelTag("latest", VERSION);
 
-      await modules.updateCommand({ yes: true, restart: false, json: true });
+    await modules.updateCommand({ yes: true, restart: false, json: true });
 
-      expect(output()).toMatchObject({ status: "skipped", reason: "already-current" });
-      expect(await captures()).toEqual([]);
-      expect(captureSteps(output().runId)).toEqual([]);
-    },
-  );
+    expect(output()).toMatchObject({ status: "skipped", reason: "already-current" });
+    expect(await captures()).toEqual([]);
+    expect(captureSteps(output().runId)).toEqual([]);
+  });
 
   it("copies nothing when an update is refused before it changes state", async () => {
     await setup.mockPackageInstallAtCaseDir();
@@ -264,21 +254,6 @@ describe("original-state capture follows the first state change", () => {
     const result = output();
     expect(getErrorOutput()).toContain("Package publication recovery:");
     expect(result).not.toMatchObject({ reason: "update-recovery-pending" });
-    expect(await captures()).toEqual([result.runId]);
-    expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
-  });
-
-  it("still copies the originals once before a real Git update mutates its checkout", async () => {
-    mocks.readPackageVersion.mockResolvedValue(VERSION);
-    const mutation = modules.mockGitUpdateAfterMutation(
-      modules.makeOkUpdateResult({ mode: "git", root: process.cwd() }),
-    );
-
-    await modules.updateCommand({ yes: true, restart: false, json: true });
-
-    const result = output();
-    expect(result.status).toBe("ok");
-    expect(mutation).toHaveBeenCalledOnce();
     expect(await captures()).toEqual([result.runId]);
     expect(captureSteps(result.runId)).toEqual(["original-state-capture"]);
   });

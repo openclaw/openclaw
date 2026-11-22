@@ -1,4 +1,5 @@
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -218,7 +219,7 @@ export async function launchCronRun(
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)
-    : markServiceCronJobActive(state, entry.job, entry.runReceipt);
+    : markServiceCronJobActive(entry.job, entry.runReceipt);
   const taskRunId = createCronRunHandle({
     state,
     job: entry.job,
@@ -280,6 +281,12 @@ export async function launchCronRun(
     result = authorCronRunCompletion(executionJob, {
       status: "error",
       error: normalizeCronRunErrorText(error),
+      ...(isOperatorAuthorityUnavailable(error)
+        ? {
+            executionStarted: false,
+            errorClassification: { kind: "reason" as const, reason: "server_error" as const },
+          }
+        : {}),
       interruptedByRestart:
         resolveAgentRunErrorLifecycleFields(error, undefined).stopReason === "restart",
     });

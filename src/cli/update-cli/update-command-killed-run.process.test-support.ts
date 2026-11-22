@@ -178,6 +178,8 @@ beforeEach(() => {
   );
 });
 afterEach(async () => {
+  // A refused update sets the CLI's exit code; the forked worker would exit with it.
+  process.exitCode = undefined;
   // The managed Gateway's account home, service state, health and host facts end with their test.
   for (const spied of [
     os.homedir,

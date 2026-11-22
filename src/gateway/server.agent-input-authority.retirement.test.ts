@@ -18,7 +18,7 @@ import { listSessionPendingInputs } from "../config/sessions/session-accessor.pe
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import {
@@ -35,7 +35,7 @@ import {
 
 const { kernel } = installAuthorityProofKernel();
 
-it("rejects retained agent and independent-creation input after acceptance", async ({ signal }) => {
+it("keeps admitted creation alive after Gateway retirement", async ({ signal }) => {
   // Visible creation validates its inherited model against the Gateway catalog.
   await configureProofModelProvider();
   await prepareGatewayReplyRuntimeForTest();
@@ -64,7 +64,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
   const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
   const client = createOperatorClient({ profileName: randomUUID(), scopes: ["operator.admin"] });
   const operator = expectDefined(
-    await captureGatewayOperatorRunAuthority({ client, context }),
+    await prepareGatewayOperatorRunAuthority({ client, context }),
     "creation operator",
   );
   const prepareParent = (creation = false) => {
@@ -201,8 +201,8 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     });
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
 
-    // The synthetic agent source stays live as the control. Creation's real
-    // operator source retires with its Gateway; neither target is cancelled.
+    // The creation already started and keeps its admitted authority. The held
+    // agent has not dispatched yet and still needs an available Gateway.
     expect(runtime.isAvailable()).toBe(true);
     runtime.close();
     expect(runtime.isAvailable()).toBe(false);
@@ -217,7 +217,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
           "accepted creation authority",
         ).assertCurrent();
       }),
-    ).rejects.toThrow();
+    ).resolves.toBeUndefined();
     expect(createdRecorder.getAdmissionReceipt()).toEqual(createdAdmission);
     release();
     await Promise.all([held.resume(), createdWorkReleased]);
