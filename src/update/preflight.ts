@@ -201,7 +201,7 @@ export async function preflight(params: {
     return isContainerEnvironment()
       ? {
           ok: true,
-          warning: `OpenClaw is running in a container. The update continues, but whatever is not on a mounted volume is reset when the container is recreated from its image. Keep this installation and ${params.stateDir} on volumes, or build the new version into the image.`,
+          warning: `OpenClaw is running in a container. The update continues, but whatever is not on a mounted volume is reset when the container is recreated from its image. Keep this installation and ${params.stateDir} on volumes. If only the state directory is on a volume, the image's original build may refuse the upgraded state after a recreate, so build the new version into the image first.`,
         }
       : { ok: true };
   } catch (error) {

@@ -71,6 +71,19 @@ it("refuses before preparing a release when the Gateway may not replace its proc
   expect(prepareUpdate).not.toHaveBeenCalled();
 });
 
+it("leaves an externally supervised Gateway's update to its supervisor", async () => {
+  vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({
+    runId: null,
+    ok: false,
+    code: "external-supervisor-update-required",
+    result: { status: "skipped" },
+  });
+  expect(payload.message).toContain("external supervisor");
+  expect(prepareUpdate).not.toHaveBeenCalled();
+});
+
 it("shows a Control UI update in the app instead of the conversation", async () => {
   const { payload, broadcast } = await invoke(
     { requester: { channel: INTERNAL_MESSAGE_CHANNEL } },

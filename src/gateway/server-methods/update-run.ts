@@ -4,6 +4,10 @@
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
 import { resolveGatewayRestartDecision } from "../../infra/process-respawn.js";
 import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import {
@@ -19,6 +23,7 @@ import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
+import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -68,6 +73,17 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
       });
       return;
     }
+  }
+  // An external supervisor owns runtime replacement, as on the package route and automatic updates.
+  if (isGatewayExternallySupervised()) {
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+      message: UPDATE_INSTALL_SKIP_GUIDANCE[EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON],
+      result: { status: "skipped", reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON },
+    });
+    return;
   }
   // The prepared release starts only in a new process; refuse before anything changes.
   const restart = resolveGatewayRestartDecision();

@@ -1611,7 +1611,8 @@ Gateway on the new release is ready.
 A checkout inside a container that OpenClaw detects (for example Docker or Podman) updates the
 same way. The update records a `warning:preflight` step, which `openclaw update` prints: whatever is not on a mounted
 volume is reset when the container is recreated from its image, so keep the checkout and the state
-directory on volumes, or build the new version into the image. OpenClaw's own image installs a
+directory on volumes. With only the state directory on a volume, the image's original build may
+refuse the upgraded state after a recreate; build the new version into the image first. OpenClaw's own image installs a
 package, not a checkout; `openclaw update` skips it with `container-image-install`.
 
 The launcher knows only its own state directory. A Gateway run for another profile started

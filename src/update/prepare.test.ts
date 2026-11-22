@@ -182,7 +182,12 @@ describe("release preparation", () => {
   });
 
   it("prepares a checkout cloned inside a container and says what recreating it resets", async () => {
+    // Both container signals: the shared detector, and the Docker marker file itself.
     container.detected = true;
+    const access = fs.access.bind(fs);
+    vi.spyOn(fs, "access").mockImplementation(async (file, mode) =>
+      file === "/.dockerenv" ? undefined : access(file, mode),
+    );
     // The release's own `update check-release` and `update plugins` answer as a sound release.
     const { checkout } = await repository(
       false,
