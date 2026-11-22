@@ -29,10 +29,12 @@ export type ReleaseUpdateOptions = {
   sha?: string;
   /** `--timeout`: one overall budget for preparing and following the run. */
   timeoutMs?: number;
+  /** `--accept-capabilities`, for plugin maintenance in this process. */
+  acceptCapabilities?: boolean;
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
-  const { runningRoot, channel } = opts;
+  const { channel } = opts;
   if (channel) {
     await mutateConfigFileWithRetry({
       base: "source",
@@ -59,12 +61,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
   const record = runId
     ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
-    : await updateWithoutGateway(
-        runningRoot,
-        channel ?? opts.storedChannel,
-        opts.sha,
-        opts.timeoutMs,
-      );
+    : await updateWithoutGateway(opts);
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
@@ -141,24 +138,22 @@ async function followRun(
 }
 
 async function updateWithoutGateway(
-  runningRoot: string,
-  configChannel: UpdateChannel | undefined,
-  sha?: string,
-  timeoutMs?: number,
+  opts: ReleaseUpdateOptions,
 ): Promise<UpdateRunRecord | undefined> {
   const run = await createUpdateRunAsync({ trigger: "cli", before: { version: VERSION } });
   const channel = resolveEffectiveUpdateChannel({
-    configChannel,
+    configChannel: opts.channel ?? opts.storedChannel,
     currentVersion: VERSION,
     installKind: "git",
   }).channel;
   const outcome = await prepareUpdate({
     runId: run.runId,
-    runningRoot,
+    runningRoot: opts.runningRoot,
     runningVersion: VERSION,
     channel,
-    sha,
-    timeoutMs,
+    sha: opts.sha,
+    timeoutMs: opts.timeoutMs,
+    acceptCapabilities: opts.acceptCapabilities,
   });
   if (outcome.status === "pending") {
     defaultRuntime.log(
@@ -178,13 +173,17 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;
   }
-  if (isPendingActivation(record)) {
-    return;
-  }
   if (!record) {
     defaultRuntime.error(
       "The update did not finish in time. Run `openclaw update status` to see it.",
     );
+    return;
+  }
+  const plugins = record.steps.find(({ step }) => step === "plugins");
+  if (plugins?.status === "failed") {
+    defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
+  }
+  if (isPendingActivation(record)) {
     return;
   }
   if (record.status === "succeeded") {

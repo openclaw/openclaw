@@ -4,9 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { preflight } from "./preflight.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
+import { prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const exec = promisify(execFile);
@@ -187,6 +195,52 @@ fs.writeFileSync(path.join(root, 'argv.json'), JSON.stringify(args));
         ),
       ).version,
     ).toBe("2026.11.21");
+  });
+});
+
+describe("already-current update", () => {
+  it("still maintains plugins with the serving code and reports that they changed", async () => {
+    const { checkout, sha } = await repository();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    // The serving release's own `update plugins`: records its argv and reports a change.
+    await fs.writeFile(
+      path.join(checkout, "openclaw.mjs"),
+      [
+        "import fs from 'node:fs';",
+        "fs.writeFileSync('plugins-argv.json', JSON.stringify(process.argv.slice(2)));",
+        "console.log(JSON.stringify({ status: 'ok', changed: true }));",
+      ].join("\n"),
+    );
+    try {
+      openOpenClawStateDatabase({ env: process.env });
+      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.21" } });
+      const outcome = await prepareUpdate({
+        runId: run.runId,
+        runningRoot: checkout,
+        runningVersion: "2026.11.21",
+        channel: "dev",
+        sha,
+        node,
+      });
+      expect(outcome).toMatchObject({ status: "current", pluginsChanged: true });
+      expect(
+        JSON.parse(await fs.readFile(path.join(checkout, "plugins-argv.json"), "utf8")),
+      ).toEqual([
+        "update",
+        "plugins",
+        "--json",
+        "--channel",
+        "dev",
+        "--timeout",
+        expect.stringMatching(/^\d+$/),
+      ]);
+      const record = await getUpdateRunAsync(run.runId);
+      expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
+      expect(record?.steps.find(({ step }) => step === "plugins")?.status).toBe("completed");
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 });
 

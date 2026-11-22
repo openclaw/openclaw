@@ -161,6 +161,10 @@ async function runUpdateInBackground(
       sha: options.sha,
       timeoutMs: options.timeoutMs,
     });
+    // Changed plugins of an already-current install load in a new process, as after a core update.
+    if (outcome.status === "current" && outcome.pluginsChanged) {
+      scheduleGatewayRestart({ reason: "update.run", sessionKey: options.sessionKey });
+    }
     if (outcome.status === "pending") {
       await recordUpdateRunPhaseAsync(runId, "restarting");
       // A process-replacing reason: the next process starts through the release launcher.

@@ -104,6 +104,10 @@ export async function runAutoUpdateCommand(
       ...(params.devTarget ? { sha: params.devTarget.upstreamSha } : {}),
     });
     if (outcome.status === "current") {
+      // Changed plugins load in a new process, as after a core update.
+      if (outcome.pluginsChanged) {
+        scheduleGatewayRestart({ reason: "update.auto" });
+      }
       return failure(
         "already-current",
         `OpenClaw ${outcome.version} is already current.`,

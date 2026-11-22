@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -40,7 +41,7 @@ export type InstallKind = { kind: ReleaseKind; checkout?: string };
 
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }
-  | { status: "current"; version: string }
+  | { status: "current"; version: string; pluginsChanged: boolean }
   | { status: "failed"; reason: string; message: string };
 
 /** Where the checkout lives: a Git install runs from a checkout or from a release worktree of one. */
@@ -71,12 +72,33 @@ export async function prepareUpdate(params: {
   env?: NodeJS.ProcessEnv;
   /** The operator's overall budget (`--timeout`); without it, the default preparation deadline. */
   timeoutMs?: number;
+  /** `--accept-capabilities`: plugin maintenance may accept widened plugin capabilities. */
+  acceptCapabilities?: boolean;
 }): Promise<UpdateRunOutcome> {
   const timeoutMs = params.timeoutMs ?? PREPARE_DEADLINE_MS;
   const deadline = Date.now() + timeoutMs;
   const env = params.env ?? process.env;
   const prefix = resolvePrefix(env);
   const node = params.node ?? process.execPath;
+  // Already current: plugins are still maintained, by the running core; the caller restarts
+  // a running Gateway only when they changed.
+  const current = async (version: string): Promise<UpdateRunOutcome> => {
+    const pluginsChanged = await maintainPlugins({
+      runId: params.runId,
+      root: params.runningRoot,
+      node,
+      env,
+      channel: params.channel,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      acceptCapabilities: params.acceptCapabilities,
+    });
+    await finishUpdateRunAsync(
+      params.runId,
+      { status: "skipped", reason: "already-current" },
+      { env },
+    );
+    return { status: "current", version, pluginsChanged };
+  };
   const fail = async (
     reason: string,
     message: string,
@@ -145,12 +167,7 @@ export async function prepareUpdate(params: {
       { env },
     );
     if (target.kind === "package" && target.version === params.runningVersion) {
-      await finishUpdateRunAsync(
-        params.runId,
-        { status: "skipped", reason: "already-current" },
-        { env },
-      );
-      return { status: "current", version: target.version };
+      return await current(target.version);
     }
     if (target.kind === "git") {
       const head = await runCommandWithTimeout(
@@ -158,12 +175,7 @@ export async function prepareUpdate(params: {
         { timeoutMs: 10_000 },
       );
       if (head.code === 0 && head.stdout.trim() === target.sha) {
-        await finishUpdateRunAsync(
-          params.runId,
-          { status: "skipped", reason: "already-current" },
-          { env },
-        );
-        return { status: "current", version: target.version };
+        return await current(target.version);
       }
     }
     const checked = await preflight({
@@ -245,6 +257,16 @@ export async function prepareUpdate(params: {
     }
     const previous = await fs.readlink(slot);
     await markForwarding(install, params.runningRoot, launcher, prefix);
+    // Last before the trial: the restart loads the new core and its plugins together.
+    await maintainPlugins({
+      runId: params.runId,
+      root: releaseRoot,
+      node,
+      env,
+      channel: params.channel,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      acceptCapabilities: params.acceptCapabilities,
+    });
     await createTrialPending(
       {
         runId: params.runId,
@@ -307,22 +329,106 @@ function npmBesideNode(node: string): string {
 
 /** The new code judges itself, at the path it will serve from. */
 async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.ProcessEnv) {
+  const result = await runReleaseCommand(
+    releaseRoot,
+    node,
+    env,
+    ["check-release", "--json"],
+    CHECK_RELEASE_TIMEOUT_MS,
+  );
+  // SAFETY: the child is this release's own `update check-release --json`, which writes checkRelease's result.
+  const parsed = result.parsed as Awaited<ReturnType<typeof checkRelease>> | undefined;
+  if (!parsed) {
+    return {
+      ok: false,
+      reason: result.code === null ? "timed out" : `exited ${result.code}`,
+      detail: result.stderr,
+    };
+  }
+  const failed = parsed.surfaces.filter((surface) => surface.error);
+  return {
+    ok: parsed.ok && result.code === 0,
+    reason: parsed.reason,
+    detail: failed.map((s) => `${s.plugin}/${s.surface}: ${s.error}`).join("\n") || result.stderr,
+  };
+}
+
+/**
+ * Plugins follow the core that will serve, so that core's own code maintains them. A plugin
+ * problem, or a release without `update plugins`, is a recorded warning, never a failed update.
+ */
+async function maintainPlugins(params: {
+  runId: string;
+  root: string;
+  node: string;
+  env: NodeJS.ProcessEnv;
+  channel: UpdateChannel;
+  timeoutMs: number;
+  acceptCapabilities?: boolean;
+}): Promise<boolean> {
+  const startedAtMs = Date.now();
+  const args = [
+    "plugins",
+    "--json",
+    "--channel",
+    params.channel,
+    "--timeout",
+    String(Math.max(1, Math.ceil(params.timeoutMs / 1000))),
+    ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+  ];
+  const result = await runReleaseCommand(
+    params.root,
+    params.node,
+    params.env,
+    args,
+    params.timeoutMs,
+  );
+  // SAFETY: the child is this release's own `update plugins --json`, which writes updatePluginsAfterCoreUpdate's result.
+  const plugins = result.parsed as PostCorePluginUpdateResult | undefined;
+  const ok = result.code === 0 && (plugins?.status === "ok" || plugins?.status === "skipped");
+  const problems = plugins
+    ? [...(plugins.warnings ?? []).map((warning) => warning.message), plugins.reason]
+    : [result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`)];
+  await recordUpdateRunStepAsync(
+    params.runId,
+    {
+      step: "plugins",
+      status: ok ? "completed" : "failed",
+      startedAtMs,
+      endedAtMs: Date.now(),
+      ...(ok
+        ? {}
+        : {
+            detail: [...problems.filter(Boolean), "Run `openclaw plugins update` to retry."].join(
+              "\n",
+            ),
+          }),
+    },
+    { env: params.env },
+  );
+  return plugins?.changed === true;
+}
+
+/** Runs one of the release's own `openclaw update` subcommands; its JSON is the last stdout line. */
+async function runReleaseCommand(
+  root: string,
+  node: string,
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  timeoutMs: number,
+) {
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
     (resolve) => {
-      const child = spawn(
-        node,
-        [path.join(releaseRoot, "openclaw.mjs"), "update", "check-release", "--json"],
-        {
-          cwd: releaseRoot,
-          env: { ...env, OPENCLAW_LAUNCHER_IPC: undefined },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const child = spawn(node, [path.join(root, "openclaw.mjs"), "update", ...args], {
+        cwd: root,
+        env: { ...env, OPENCLAW_LAUNCHER_IPC: undefined },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk) => (stdout += chunk));
       child.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
-      const timer = setTimeout(() => child.kill("SIGKILL"), CHECK_RELEASE_TIMEOUT_MS);
+      const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
       child.on("close", (code) => {
         clearTimeout(timer);
         resolve({ code, stdout, stderr });
@@ -330,22 +436,11 @@ async function runCheckRelease(releaseRoot: string, node: string, env: NodeJS.Pr
       child.on("error", () => resolve({ code: null, stdout, stderr }));
     },
   );
+  let parsed: unknown;
   try {
-    // SAFETY: the child is this release's own `update check-release --json`, which writes checkRelease's result.
-    const parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "") as Awaited<
-      ReturnType<typeof checkRelease>
-    >;
-    const failed = parsed.surfaces.filter((surface) => surface.error);
-    return {
-      ok: parsed.ok && result.code === 0,
-      reason: parsed.reason,
-      detail: failed.map((s) => `${s.plugin}/${s.surface}: ${s.error}`).join("\n") || result.stderr,
-    };
+    parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "");
   } catch {
-    return {
-      ok: false,
-      reason: result.code === null ? "timed out" : `exited ${result.code}`,
-      detail: result.stderr,
-    };
+    parsed = undefined;
   }
+  return { code: result.code, parsed, stderr: result.stderr };
 }
