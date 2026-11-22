@@ -15,9 +15,10 @@ import {
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -499,7 +500,7 @@ ${scriptBlock("cleanup_package_build() {", "merge_framework_machos() {")}
     // Supply the canonical owner's required generated files as fixture inputs;
     // this test proves packaging admission, not the postbuild inventory itself.
     for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
-      writeFiles(root, { [output]: "fixture output\n" });
+      writeFiles(root, { [output]: `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\n` });
     }
     const info = JSON.stringify({
       version: "1.2.3",
@@ -2051,33 +2052,52 @@ try {
     },
   );
 
-  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
-    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
-    const root = tempDirs.make("openclaw-swift-first-resolve-");
-    for (const app of ["macos", "macos-mlx-tts"]) {
-      writeFiles(path.join(root, "apps", app), {
-        "Package.swift": "// fixture\n",
-        "Package.resolved": "locked\n",
-      });
-    }
-    const invocations = path.join(root, "swift-invocations");
-    const result = runHelper(`
+  it.each([false, true])(
+    "stages native inputs before the locked lock-file resolve (native %s)",
+    (native) => {
+      // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+      const root = tempDirs.make("openclaw-swift-first-resolve-");
+      for (const app of ["macos", "macos-mlx-tts"]) {
+        writeFiles(path.join(root, "apps", app), {
+          "Package.swift": "// fixture\n",
+          "Package.resolved": "locked\n",
+        });
+      }
+      if (native) {
+        writeFiles(root, { "crates/openclaw-iroh-ffi/Package.swift": "// native fixture\n" });
+      }
+      const invocations = path.join(root, "swift-invocations");
+      const result = runHelper(`
       set -euo pipefail
+      ${native ? "export OPENCLAW_IROH_NATIVE=1" : "unset OPENCLAW_IROH_NATIVE"}
       source ${JSON.stringify(swiftScriptPath)}
       ROOT_DIR=${JSON.stringify(root)}
       BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
       SWIFT_WORK_ROOT="$ROOT_DIR/work"
       PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
-      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      swift() {
+        printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}
+        ${
+          native
+            ? 'cat "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift" > "$ROOT_DIR/native-at-resolve"'
+            : 'test ! -e "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift"'
+        }
+      }
       create_verified_peekaboo_snapshot() { exit 0; }
       build_swift_architecture arm64
     `);
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(invocations, "utf8")).toBe(
-      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
-    );
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(invocations, "utf8")).toBe(
+        `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+      );
+      if (native) {
+        expect(readFileSync(path.join(root, "native-at-resolve"), "utf8")).toBe(
+          "// native fixture\n",
+        );
+      }
+    },
+  );
 
   it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
     const root = tempDirs.make("openclaw-snapshot-swift-lock-");

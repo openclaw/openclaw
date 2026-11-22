@@ -529,7 +529,7 @@ that evaluation; a thrown authority assertion is terminal. The host remembers
 either observation across provider cleanup, so revocation cannot become a provider
 health failure or a later successful result. Omission preserves explicit
 `decision_evaluate` calls and older-host compatibility; it is not a Labs check for
-explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+explicit calls. The shared Decision HTTP executor makes this check for each request.
 The host still checks before provider dispatch and before returning results, but
 cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
 inference retains its existing signal-controlled worker lifecycle; it does not

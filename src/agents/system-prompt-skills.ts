@@ -1,6 +1,28 @@
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { decodeSkillXml } from "../skills/loading/skill-contract.js";
 import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
+
+// `skills_read(name)` resolves by name, so path-based loading prose and `<location>` only cost context.
+// Matches the one-tag-per-line shape that `formatSkillCatalog` in skill-contract.ts renders.
+const CATALOG_INTRO =
+  /^The following skills provide[^\n]*\n[^\n]*\nWhen a skill file references[^\n]*\n\n/mu;
+const CATALOG_ENTRY =
+  /^ {2}<skill>\n {4}<name>(.*)<\/name>\n(?: {4}<description>([\s\S]*?)<\/description>\n)? {4}<location>.*<\/location>\n(?: {4}<location_note>(.*)<\/location_note>\n)? {2}<\/skill>$/gmu;
+// Names are JSON-quoted and byte-exact: `skills_read` matches them with === and any character
+// (including `: ` or ` (`) may appear in one. Only prose is whitespace-folded.
+const prose = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
+
+/** Idempotent: an already-compact catalog has no XML entries to rewrite. */
+export function compactCatalogForSkillRead(skillsPrompt: string): string {
+  return skillsPrompt
+    .replace(CATALOG_INTRO, "")
+    .replace(
+      CATALOG_ENTRY,
+      (_match, name: string, desc?: string, note?: string) =>
+        `- ${JSON.stringify(decodeSkillXml(name))}${desc ? `: ${prose(desc)}` : ""}${note ? ` (${prose(note)})` : ""}`,
+    );
+}
 
 export function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -27,6 +49,8 @@ export function buildSkillsSection(params: {
   if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }
+  const renderedSkillsPrompt =
+    installedSkillRead && hasListedSkills ? compactCatalogForSkillRead(skillsPrompt) : skillsPrompt;
   const dispatchDeferredSkills =
     !params.deferredToolsDirectlyCallable && visibleTools.has(TOOL_CALL_RAW_TOOL_NAME);
   const readCall =
@@ -39,27 +63,31 @@ export function buildSkillsSection(params: {
       ? `by calling \`${TOOL_CALL_RAW_TOOL_NAME}\` with \`{"id":"skills_search","args":{"query":"<query>"}}\``
       : "with `skills_search`";
   return {
-    skillsPrompt,
+    skillsPrompt: renderedSkillsPrompt,
     section: [
       "## Skills",
       ...(hasListedSkills
-        ? ["Scan <available_skills> for a matching workflow."]
-        : ["No skill entries are listed in this prompt."]),
-      params.codeModeActive && installedSkillRead
-        ? 'Known name or clear match: use `skills.read("<name>")` inside `exec`; read the complete instructions before task actions and follow them.'
-        : installedSkillRead
-          ? `Known name or clear match: ${readCall}; read the complete instructions before task actions and follow them.`
-          : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+        ? [
+            params.codeModeActive && installedSkillRead
+              ? 'Scan `<available_skills>` for a matching workflow; load a known name or clear match with `skills.read("<name>")` inside `exec` before acting.'
+              : installedSkillRead
+                ? `Scan \`<available_skills>\` for a matching workflow; load a known name or clear match by ${readCall} before acting.`
+                : `Scan \`<available_skills>\` for a matching workflow; read exact \`<location>\` with \`${params.readToolName}\` before acting.`,
+          ]
+        : [
+            params.codeModeActive && installedSkillRead
+              ? 'No skills listed here; load a known skill with `skills.read("<name>")` inside `exec`.'
+              : installedSkillRead
+                ? `No skills listed here; load a known skill by ${readCall}.`
+                : "No skills listed here.",
+          ]),
       ...(installedSkillSearch
         ? [
-            `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
-            "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
+            `For specialized, unfamiliar, or reusable workflows, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} (by goal/terms; skip for simple local file work or self-contained answers; searches installed skills only).`,
           ]
         : []),
-      "Several: most specific. No relevant skill: read none.",
-      "Up-front max one. Never invent paths.",
-      "External writes: batch safely; no tight loops; honor 429/Retry-After.",
-      ...(skillsPrompt ? [skillsPrompt] : []),
+      "Pick at most one (most specific) up front; read none if irrelevant; never invent paths. Batch external writes safely and honor 429/Retry-After.",
+      ...(renderedSkillsPrompt ? [renderedSkillsPrompt] : []),
       "",
     ],
   };

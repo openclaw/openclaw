@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -25,7 +25,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
+async function mount(
+  overrides: Partial<PickerParams<PickerOption>> = {},
+  containerTag: "div" | "label" = "div",
+) {
   const params: PickerParams<PickerOption> = {
     label: "Model",
     value: "fixture/anchor",
@@ -34,7 +37,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     onChange: vi.fn(),
     ...overrides,
   };
-  const container = document.createElement("div");
+  const container = document.createElement(containerTag);
   document.body.append(container);
   const mountTarget = document.createElement("div");
   container.append(mountTarget);
@@ -92,6 +95,75 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("Picker", () => {
+  it("aligns flat choices on the icon column without indenting a text-only list", async () => {
+    const p = await mount({ searchable: false, options: options.slice(0, 2) });
+    await p.open();
+    const labelStart = (row: HTMLElement) =>
+      row.querySelector(".picker-select__label")!.getBoundingClientRect().left -
+      row.getBoundingClientRect().left;
+    const [first, second] = p.rows();
+    const plain = labelStart(first!);
+    await p.update({
+      renderLeading: (option) => {
+        if (option.value === options[0]!.value) {
+          return undefined;
+        }
+        const icon = document.createElement("span");
+        icon.style.width = "20px";
+        return icon;
+      },
+    });
+    expect(labelStart(second!)).toBeGreaterThan(plain);
+    expect(labelStart(first!)).toBe(labelStart(second!));
+    await p.update({ renderLeading: undefined });
+    expect(p.rows().map(labelStart)).toEqual([plain, plain]);
+  });
+
+  it("consumes option clicks inside a native label without reactivating its trigger", async () => {
+    const { page } = await import("vitest/browser");
+    const p = await mount({ searchable: false, renderLeading: () => "●" }, "label");
+    const labelText = document.createElement("span");
+    labelText.textContent = "Model field";
+    p.container.prepend(labelText);
+    if (!(p.container instanceof HTMLLabelElement)) {
+      throw new Error("Expected a native field label");
+    }
+    expect(p.container.control).toBe(p.trigger);
+    const bubbled = vi.fn();
+    p.container.addEventListener("click", bubbled);
+    for (const part of [".picker-select__label", ".picker-select__leading"]) {
+      await page.elementLocator(labelText).click();
+      await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+      const row = p.rows().find((option) => option.dataset.value === "fixture/aurora-large")!;
+      await page.elementLocator(row.querySelector<HTMLElement>(part)!).click();
+      await expect.element(p.trigger).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(p.params.onChange).toHaveBeenCalledTimes(2);
+    expect(p.params.onChange).toHaveBeenLastCalledWith("fixture/aurora-large");
+    await page.elementLocator(p.trigger).click();
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+    const disabled = p.rows().find((option) => option.getAttribute("aria-disabled") === "true")!;
+    disabled.click();
+    await p.picker.updateComplete;
+    expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(p.params.onChange).toHaveBeenCalledTimes(2);
+    expect(
+      bubbled.mock.calls.some(([event]) => event.target === disabled && event.defaultPrevented),
+    ).toBe(true);
+  });
+
+  it("commits native keyboard selection once inside a label and retains trigger activation", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const p = await mount({ searchable: false, options: options.slice(0, 3) }, "label");
+    p.trigger.focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "false");
+    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
+    await userEvent.keyboard(" ");
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+    expect(p.params.onChange).toHaveBeenCalledOnce();
+  });
+
   it("opens long lists as a phone sheet and keeps short or opted-out lists anchored", async () => {
     const media = window.matchMedia("(max-width: 640px)");
     const long = Array.from({ length: 9 }, (_, index) => ({
@@ -550,22 +622,57 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(8);
   });
 
-  it("announces no matches and leaves composition and text editing keys alone", async () => {
-    const p = await mount();
-    await p.open();
-    await p.search("not-present");
-    expect(p.rows()).toHaveLength(0);
-    expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
-    expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
-    expect((await p.key(" ")).defaultPrevented).toBe(false);
-    expect((await p.key("Home")).defaultPrevented).toBe(false);
-    expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
-    expect(p.params.onChange).not.toHaveBeenCalled();
-    const shortcut = vi.fn();
-    p.container.addEventListener("keydown", shortcut);
-    await p.key("x");
-    expect(shortcut).not.toHaveBeenCalled();
-  });
+  it.each(["flat", "grouped", "windowed", "page"])(
+    "keeps no-match feedback at the list origin and leaves editing keys alone (%s)",
+    async (presentation) => {
+      const { page } = await import("vitest/browser");
+      const initialViewport = { width: innerWidth, height: innerHeight };
+      onTestFinished(() => page.viewport(initialViewport.width, initialViewport.height));
+      await page.viewport(390, 844);
+      const p = await mount({
+        sheet: presentation === "page",
+        groupBy: presentation === "grouped" ? () => ({ id: "models", label: "Models" }) : undefined,
+        options:
+          presentation === "windowed"
+            ? [
+                ...options,
+                ...Array.from({ length: 101 }, (_, i) => ({
+                  value: `extra-${i}`,
+                  label: `Extra ${i}`,
+                })),
+              ]
+            : options,
+        windowed: presentation === "windowed" ? () => "" : undefined,
+      });
+      p.container.style.cssText = "position:relative;height:700px";
+      await p.open();
+      const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      await expect.element(menu).toBeVisible();
+      await Promise.all(menu.getAnimations().map((animation) => animation.finished));
+      await p.search("Aurora Large");
+      await expect.poll(() => p.rows().length).toBe(1);
+      const resultTop = p.picker
+        .querySelector(".picker-select__options")!
+        .getBoundingClientRect().top;
+      const sheetHeight = menu.getBoundingClientRect().height;
+      await p.search("not-present");
+      expect(p.rows()).toHaveLength(0);
+      expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
+      expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
+      await expect
+        .poll(() => p.picker.querySelector('[role="status"]')!.getBoundingClientRect().top)
+        .toBeCloseTo(resultTop, 0);
+      expect(menu.getBoundingClientRect().height).toBeCloseTo(sheetHeight, 0);
+      expect((await p.key(" ")).defaultPrevented).toBe(false);
+      expect((await p.key("Home")).defaultPrevented).toBe(false);
+      expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
+      expect(p.params.onChange).not.toHaveBeenCalled();
+      const shortcut = vi.fn();
+      p.container.addEventListener("keydown", shortcut);
+      await p.key("x");
+      expect(shortcut).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps short menus compact, supports typeahead, and retains empty/unknown values", async () => {
     const p = await mount({

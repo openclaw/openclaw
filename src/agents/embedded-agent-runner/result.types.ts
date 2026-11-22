@@ -2,6 +2,7 @@
 import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   CliSessionBinding,
   SessionContextBudgetStatus,
@@ -192,6 +193,7 @@ export type EmbeddedAgentRunMeta = {
       | "incomplete_turn"
       | "hook_block";
     message: string;
+    code?: string;
     /** True only when model fallback can retry this terminal error without repeating side effects. */
     fallbackSafe?: boolean;
     /** True when the payload includes a trusted structured terminal tool summary. */
@@ -249,6 +251,9 @@ export type EmbeddedAgentRunMeta = {
 };
 
 export type EmbeddedAgentRunPayload = {
+  presentation?: ReplyPayload["presentation"];
+  interactive?: ReplyPayload["interactive"];
+  btw?: ReplyPayload["btw"];
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];

@@ -16,8 +16,11 @@ import {
 // A shared worker may already hold the identity owner with its real filesystem imports.
 vi.hoisted(() => vi.resetModules());
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, statSync: vi.fn(actual.statSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { statSync: vi.fn(actual.statSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 const directories = createTempDirTracker();
 let databasePath: string;

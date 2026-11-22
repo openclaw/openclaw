@@ -216,14 +216,13 @@ it.each(promptUpdateCases)(
         toolNames,
         runtimeInfo: { channel },
       });
-      const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("For the Gateway hosting this session:")),
-        "hosting Gateway guidance",
-      );
       const action = expectDefined(
-        guidance.match(/perform the work with `gateway`: ([\w.]+)/u)?.[1],
-        "prompt-advertised update action",
+        prompt.match(
+          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
+        )?.[1],
+        "prompt-advertised built-in update action",
       );
+      expect(action).toBe("update.run");
       const result = await tool.execute("update", {
         action,
         requesterSenderId: "model-supplied-sender",
@@ -278,9 +277,6 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("On an explicit owner request");
-      expect(guidance).toContain("Do not redirect the owner to slash commands or a terminal");
-      expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },
 );
@@ -429,7 +425,7 @@ it.each([false, true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       }),
       expect.any(Object),
     );

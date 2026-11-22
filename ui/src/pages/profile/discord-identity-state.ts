@@ -100,7 +100,11 @@ export class DiscordIdentityState {
       }
       this.accounts = result.accounts ?? [];
       if (!this.selected) {
-        this.accountId = this.accounts[0]?.accountId ?? "";
+        this.accountId =
+          this.accounts.find((account) => account.senderIds.length > 0)?.accountId ??
+          this.accounts.find((account) => account.available)?.accountId ??
+          this.accounts[0]?.accountId ??
+          "";
       }
       this.error = null;
     } catch (error) {

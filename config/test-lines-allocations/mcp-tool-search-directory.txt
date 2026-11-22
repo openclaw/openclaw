@@ -1,3 +1,0 @@
-# PR #196252: exact net growth for bounded MCP directory, hostile metadata,
-# selector/collision, late client registration, and prompt stability regressions.
-223

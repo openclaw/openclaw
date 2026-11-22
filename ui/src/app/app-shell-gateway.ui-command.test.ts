@@ -90,7 +90,7 @@ it.each([
   expect(delivered).toHaveBeenCalledTimes(2);
 });
 
-it("opens the current agent GitHub identity panel without exposing authorization data", () => {
+it("opens the current agent GitHub identity panel without exposing authorization data", async () => {
   const { context, owner } = createProfileAppearanceGateway(null);
   const navigate = vi.fn();
   Object.assign(context, { basePath: "", navigate });
@@ -104,7 +104,7 @@ it("opens the current agent GitHub identity panel without exposing authorization
     },
   });
 
-  expect(navigate).toHaveBeenCalledWith("agents", {
-    pathname: "/settings/agents/release/tools",
+  expect(navigate).toHaveBeenCalledWith("profile", {
+    hash: "#settings-profile-github-connections",
   });
 });

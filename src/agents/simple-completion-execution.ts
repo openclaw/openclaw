@@ -92,7 +92,8 @@ export async function completeWithPreparedSimpleCompletionModel(
 
 async function completePreparedModel(params: PreparedCompletionParams): Promise<AssistantMessage> {
   // Direct SDK calls prepare transport hooks before entering the stream facade.
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   params.assertCurrent?.();
   assertProviderAuthAuthority(params.auth);
   params.options?.signal?.throwIfAborted();

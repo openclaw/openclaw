@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -267,7 +268,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
     // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
     if (kind === "queued_followup" && admission.sessionEntry) {
-      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+      run.cyberAccessProgram =
+        run.scheduledAutomation?.job.cyberAccessProgram ??
+        admittedSelectionEntry?.cyberAccessProgram;
     }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
@@ -526,6 +529,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
+        // This same once-only preparation also guards runtime admission below.
+        // Check before maintenance can invoke a model for the queued request.
+        await prepareChildSessionPublication(turn.queued.run);
         await params.signalRunStart?.();
         const resolvedVerboseLevel =
           normalizeVerboseLevel(

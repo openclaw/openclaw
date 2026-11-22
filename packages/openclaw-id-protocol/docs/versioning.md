@@ -8,6 +8,16 @@ this unshipped v1-draft. They do not bump a version. Every consumer updates its 
 and regenerates/re-signs snapshots together; there is no compatibility parser for older draft
 shapes. The rules below apply **after release**, not to revising this draft.
 
+Opaque member role names and exact-role invitations also revise this unshipped v1-draft in
+place: no version bump or compatibility parser. Discovery and the loader must update their
+protocol copies, preserve valid role names and display unknown names without inventing a
+built-in role. Role names are not an enumerated field; new valid names do not change the
+protocol version.
+
+The display-only `member_browser_request` mailbox kind also revises v1-draft in place.
+Consumers update their canonical protocol copies together; this adds no signed statement,
+capability or admission rule. See `discovery.md` for its bounded, non-authoritative contract.
+
 This document says how the protocol changes after release: what carries a version, what a
 reader does with a version it does not implement, which changes need a new version, and how
 long an old version stays supported.
@@ -133,6 +143,16 @@ and a `RootReset` (unknown statement type) as `malformed`; nothing is half-accep
 and the loader must update their vendored protocol before a Gateway publishes a reset. A
 descriptor without `reset` and every other statement are byte-for-byte what they were, so the
 existing v1 vectors are unchanged. After v1 ships, a change like this needs a new version.
+
+### Claw unlink (added to v1-draft in place)
+
+Unlinking (OCF-281) added the `ClawUnlink` statement type to envelope version 1, the
+`unlinkClaw` endpoint with the `statement` auth class, and the `unlinked` error (with its
+`unlink` field) to Discovery API v1. They are added in place for the same reason as owner
+reset: v1-draft has not shipped. A reader built before the change refuses a `ClawUnlink` as
+`malformed` (unknown statement type). Discovery and the loader must update their vendored
+protocol before a Gateway unlinks. Every existing statement, descriptor and vector is
+unchanged. After v1 ships, a change like this needs a new version.
 
 A new envelope version must not change how an existing recovery kit derives its root key:
 the kit format has its own version (`OCK1`).

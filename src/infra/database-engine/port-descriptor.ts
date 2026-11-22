@@ -9,7 +9,11 @@ import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
 import type { PortDescriptor, PortEndpoint } from "./port-types.js";
-import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
+import {
+  hasPostgresCatalogColumn,
+  postgresCatalogQuery,
+  readPostgresCatalog,
+} from "./postgres-catalog.js";
 import { DatabasePortDataError } from "./postgres-store-metadata.js";
 
 export type { PortDescriptor, PortEndpoint, PortRow, PortTable } from "./port-types.js";
@@ -91,20 +95,26 @@ export async function admitDatabasePortDescriptor(
   descriptor: PortDescriptor,
   requiredFragments?: readonly string[],
 ) {
-  const admitted = descriptor.activeFragments
-    ? descriptor
-    : source.engine === "sqlite"
-      ? inspectSqlitePortSchema(source.db, descriptor)
-      : selectFragments(
-          descriptor,
-          new Set(
-            readPostgresCatalog(
-              (await source.db.query(postgresCatalogQuery(source.namespace))).rows[0].catalog,
-            )
-              .filter((fact) => fact.kind === "table")
-              .map((fact) => fact.table),
-          ),
-        );
+  let admitted = descriptor;
+  if (!descriptor.activeFragments) {
+    if (source.engine === "sqlite") {
+      const layout = descriptor.selectSourceLayout?.((table, column) =>
+        readTableColumns(source.db, table).has(column),
+      );
+      admitted = inspectSqlitePortSchema(source.db, layout ?? descriptor);
+    } else {
+      const catalog = readPostgresCatalog(
+        (await source.db.query(postgresCatalogQuery(source.namespace))).rows[0].catalog,
+      );
+      const layout = descriptor.selectSourceLayout?.((table, column) =>
+        hasPostgresCatalogColumn(catalog, table, column),
+      );
+      admitted = selectFragments(
+        layout ?? descriptor,
+        new Set(catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table)),
+      );
+    }
+  }
   if (
     requiredFragments &&
     !isDeepStrictEqual(requiredFragments.toSorted(), admitted.activeFragments!.toSorted())

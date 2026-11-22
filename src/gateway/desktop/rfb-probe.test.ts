@@ -240,9 +240,10 @@ describe("retained RFB connection", () => {
     // when FIN arrives. The same owner must drain both before ending TCP writes.
     expect(stream.writableLength).toBe(first.length + last.length);
     if (ending === "owner-abort") {
-      controller.abort(new Error("desktop owner stopped"));
-      await expect(settled).rejects.toThrow("desktop owner stopped");
-      await vi.waitFor(() => expect(callbacks).toEqual([expect.any(Error), expect.any(Error)]));
+      const cause = new Error("desktop owner stopped");
+      controller.abort(cause);
+      await expect(settled).rejects.toBe(cause);
+      expect(callbacks).toEqual([expect.any(Error), expect.any(Error)]);
       expect(stream.destroyed).toBe(true);
       return;
     }

@@ -371,6 +371,28 @@ describe("qa suite", () => {
     expect(metrics).toEqual(expectedMetrics);
   });
 
+  it.each([
+    [100_000_000, null],
+    [null, 125_000_000],
+    [null, null],
+  ])("retains available RSS evidence with endpoints %s / %s", (start, end) => {
+    const metrics = buildQaSuiteRuntimeMetrics({
+      startedAt: new Date(0),
+      finishedAt: new Date(12_000),
+      gatewayProcessCpuStartMs: null,
+      gatewayProcessCpuEndMs: null,
+      gatewayProcessRssStartBytes: start,
+      gatewayProcessRssEndBytes: end,
+      gatewayProcessRssSamples: rssSamples,
+    });
+    expect(summarize({ metrics }).metrics).toEqual({
+      wallMs: 12_000,
+      ...(start !== null ? { gatewayProcessRssStartBytes: start } : {}),
+      ...(end !== null ? { gatewayProcessRssEndBytes: end } : {}),
+      gatewayProcessRssSamples: rssSamples,
+    });
+  });
+
   it("arms gateway heap checkpoint env only when requested", () => {
     const option = "--heapsnapshot-signal=SIGQUIT";
     expect(

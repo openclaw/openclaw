@@ -52,7 +52,7 @@ export function createGitHubPublicationRecoveryBackoff() {
     },
     async run(
       row: { request_id: string; created_at_ms: number },
-      operation: () => Promise<SessionGitHubPublicationResult | void>,
+      operation: () => Promise<SessionGitHubPublicationResult | void | null>,
       settle: (result: SessionGitHubPublicationResult) => Promise<SessionGitHubPublicationResult>,
     ) {
       const requestId = row.request_id;
@@ -77,7 +77,12 @@ export function createGitHubPublicationRecoveryBackoff() {
         if ((previous?.attempts ?? 0) >= 3) {
           throw new Error(previous?.diagnostic);
         }
-        result = await operation();
+        const attempted = await operation();
+        // A skipped attempt preserves prior failures; a healthy wait clears them.
+        if (attempted === null) {
+          return;
+        }
+        result = attempted;
         if (!result || (result.status !== "requested" && result.status !== "publishing")) {
           failures.delete(requestId);
           return result;
@@ -113,7 +118,7 @@ export function createGitHubPublicationRecoveryBackoff() {
       return failure && (result.status === "requested" || result.status === "publishing")
         ? {
             ...result,
-            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil(Math.min(failure.delayMs, failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
           }
         : result;
     },

@@ -27,7 +27,10 @@ type ModelAgentRuntimeMetadataParams = {
   agentHarnessRuntimeOverride?: string;
 } & (
   | { agentId: string; agentScope?: never }
-  | Extract<AgentRuntimePolicyScope, { agentScope: unknown }>
+  | {
+      agentId?: never;
+      agentScope: Extract<AgentRuntimePolicyScope["agentScope"], { kind: "prepared" }>;
+    }
 );
 
 /** Resolves the runtime id/source that should be reported for a model-backed agent session. */

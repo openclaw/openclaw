@@ -197,7 +197,7 @@ it.each([
   { enabled: true, mutation: "native requester" },
   { enabled: true, mutation: "native trigger state" },
 ] as const)(
-  "retires message access after a service $mutation change from enabled=$enabled without retiring its receipt",
+  "keeps admitted message access after a service $mutation change from enabled=$enabled",
   async ({ enabled, mutation }) => {
     const native = mutation !== "tool policy" && mutation !== "origin";
     const grant = requesterGrant("requester-a");
@@ -281,19 +281,15 @@ it.each([
       await edit(patch, authorization);
     }
     if (native) {
-      // No access check between edits: the committed mutation must latch revocation.
+      // Reverted edits keep the current stored definition and this occurrence's captured grant.
       const restored = (await loadCronStore(storePath)).jobs[0]!;
       expect(restored.toolsAllowProvenance).toEqual(grant);
       expect(restored.name).toBe(job.name);
       expect(restored.delivery).toEqual(job.delivery);
       expect(restored.state.triggerState).toEqual(job.state.triggerState);
     }
-    expect(source).toThrow();
-    if (mutation === "tool policy") {
-      expect(message).toThrow();
-    } else {
-      expect(message).not.toThrow();
-    }
+    expect(source).not.toThrow();
+    expect(message).not.toThrow();
     expect(controller.signal.aborted).toBe(false);
     expect(receipts(storePath, job.id)[0]?.status).toBe("running");
     if (native) {

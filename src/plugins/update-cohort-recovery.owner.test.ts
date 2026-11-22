@@ -6,13 +6,19 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { getUpdateRun, createUpdateRun } from "../infra/update-run-ledger.js";
 import * as recoveryStore from "../infra/update-run-recovery-store.js";
 import { updateRunWarningMessages } from "../infra/update-run-step.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { refreshPersistedInstalledPluginIndexWithReceipt } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
+import type {
+  PluginSourceSnapshotDescriptor,
+  PluginSourceSnapshotIndexChange,
+} from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { readPluginCohortPublishedArtifactIdentity } from "./update-cohort-artifacts.js";
 import { settleUpdatePluginCohort } from "./update-cohort-recovery.js";
@@ -20,6 +26,74 @@ import { config, fence, generation, packageName } from "./update-cohort-recovery
 
 // Install records are keyed by installation owner; snapshots by plugin ID.
 afterEach(() => vi.restoreAllMocks());
+
+function beginOwnerCohortRecovery(
+  state: OpenClawTestState,
+  original: ReturnType<typeof generation>,
+  latest: ReturnType<typeof generation>,
+  sourceSnapshots: PluginSourceSnapshotIndexChange[],
+) {
+  const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+  const transactionId = randomUUID();
+  recoveryStore.beginPluginCohortRecovery(
+    {
+      runId,
+      transactionId,
+      revision: 0,
+      claimId: randomUUID(),
+      claimKind: "initial",
+      handoff: null,
+      source: { stateDir: state.stateDir, configPath: state.configPath },
+      from: { root: state.root, nodePath: process.execPath, version: "1", buildId: "old" },
+      to: { root: state.root, nodePath: process.execPath, version: "2", buildId: "new" },
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      effects: [],
+      restore: null,
+      verification: null,
+      primaryFailure: null,
+    },
+    {
+      runId,
+      transactionId,
+      revision: 0,
+      disposition: "pending",
+      installKey: state.root,
+      // Both payloads are intact, so only the later state can stop the restore.
+      priorArtifacts: [
+        {
+          pluginId: "package-owner",
+          packageDir: original.packageDir,
+          record: original.record,
+          identity: original.identity,
+          markerBefore: null,
+          markerAfter: null,
+        },
+      ],
+      artifacts: [
+        {
+          pluginId: "package-owner",
+          packageName,
+          targetNpmRoot: latest.npmRoot,
+          targetPackageDir: latest.packageDir,
+          stagedIdentity: latest.identity,
+          identity: latest.identity,
+        },
+      ],
+      publications: [
+        {
+          kind: "records",
+          records: [{ pluginId: "package-owner", before: original.record, after: latest.record }],
+          sourceSnapshots,
+        },
+      ],
+      settledPublications: 0,
+    },
+    fence,
+    { env: state.env },
+  );
+  return runId;
+}
 
 it.each(["install record", "source snapshot"] as const)(
   "keeps a later installation %s together with its plugin's other state",
@@ -75,73 +149,13 @@ it.each(["install record", "source snapshot"] as const)(
           installRecordHash: descriptor(installed).installRecordHash,
           sourceSnapshot: { ...descriptor(installed), installedRevision },
         });
-        const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
-        const transactionId = randomUUID();
-        recoveryStore.beginPluginCohortRecovery(
+        const runId = beginOwnerCohortRecovery(state, original, latest, [
           {
-            runId,
-            transactionId,
-            revision: 0,
-            claimId: randomUUID(),
-            claimKind: "initial",
-            handoff: null,
-            source: { stateDir: state.stateDir, configPath: state.configPath },
-            from: { root: state.root, nodePath: process.execPath, version: "1", buildId: "old" },
-            to: { root: state.root, nodePath: process.execPath, version: "2", buildId: "new" },
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            effects: [],
-            restore: null,
-            verification: null,
-            primaryFailure: null,
+            pluginId: "demo",
+            before: snapshot(original, 1),
+            after: snapshot(latest, published.revision),
           },
-          {
-            runId,
-            transactionId,
-            revision: 0,
-            disposition: "pending",
-            installKey: state.root,
-            // Both payloads are intact, so only the later state can stop the restore.
-            priorArtifacts: [
-              {
-                pluginId: "package-owner",
-                packageDir: original.packageDir,
-                record: original.record,
-                identity: original.identity,
-                markerBefore: null,
-                markerAfter: null,
-              },
-            ],
-            artifacts: [
-              {
-                pluginId: "package-owner",
-                packageName,
-                targetNpmRoot: latest.npmRoot,
-                targetPackageDir: latest.packageDir,
-                stagedIdentity: latest.identity,
-                identity: latest.identity,
-              },
-            ],
-            publications: [
-              {
-                kind: "records",
-                records: [
-                  { pluginId: "package-owner", before: original.record, after: latest.record },
-                ],
-                sourceSnapshots: [
-                  {
-                    pluginId: "demo",
-                    before: snapshot(original, 1),
-                    after: snapshot(latest, published.revision),
-                  },
-                ],
-              },
-            ],
-            settledPublications: 0,
-          },
-          fence,
-          { env: state.env },
-        );
+        ]);
         // A later writer replaced the installation, or only refreshed demo's snapshot.
         const current =
           laterChange === "install record"
@@ -254,69 +268,15 @@ it("keeps every plugin snapshot of an installation when one of them changed late
         installRecordHash: recordHash(installed),
         sourceSnapshot: { ...descriptor(installed), installedRevision },
       });
-      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
-      const transactionId = randomUUID();
-      recoveryStore.beginPluginCohortRecovery(
-        {
-          runId,
-          transactionId,
-          revision: 0,
-          claimId: randomUUID(),
-          claimKind: "initial",
-          handoff: null,
-          source: { stateDir: state.stateDir, configPath: state.configPath },
-          from: { root: state.root, nodePath: process.execPath, version: "1", buildId: "old" },
-          to: { root: state.root, nodePath: process.execPath, version: "2", buildId: "new" },
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          effects: [],
-          restore: null,
-          verification: null,
-          primaryFailure: null,
-        },
-        {
-          runId,
-          transactionId,
-          revision: 0,
-          disposition: "pending",
-          installKey: state.root,
-          priorArtifacts: [
-            {
-              pluginId: "package-owner",
-              packageDir: original.packageDir,
-              record: original.record,
-              identity: original.identity,
-              markerBefore: null,
-              markerAfter: null,
-            },
-          ],
-          artifacts: [
-            {
-              pluginId: "package-owner",
-              packageName,
-              targetNpmRoot: latest.npmRoot,
-              targetPackageDir: latest.packageDir,
-              stagedIdentity: latest.identity,
-              identity: latest.identity,
-            },
-          ],
-          publications: [
-            {
-              kind: "records",
-              records: [
-                { pluginId: "package-owner", before: original.record, after: latest.record },
-              ],
-              sourceSnapshots: plugins.map((pluginId) => ({
-                pluginId,
-                before: snapshot(original, 1),
-                after: snapshot(latest, published.revision),
-              })),
-            },
-          ],
-          settledPublications: 0,
-        },
-        fence,
-        { env: state.env },
+      const runId = beginOwnerCohortRecovery(
+        state,
+        original,
+        latest,
+        plugins.map((pluginId) => ({
+          pluginId,
+          before: snapshot(original, 1),
+          after: snapshot(latest, published.revision),
+        })),
       );
       // Only pack/a's snapshot is refreshed later; the installation keeps both plugins.
       await publish(["pack/a"], "independent");

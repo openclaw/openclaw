@@ -4,6 +4,7 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   DecisionModelPicker,
   type DecisionModelEntry,
@@ -16,19 +17,34 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   canonicalModelAuthProviderId,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
-import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
+import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
+import {
+  formatModelRuntimeLabel,
+  formatCompletionRoute,
+  type CompletionRoute,
+} from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
+import type {
+  ModelDefaultsSaveField,
+  ModelProviderRowMessage,
+  ModelRuntimePick,
+} from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
-import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import {
+  modelCatalogRef,
+  type AgentUtilityOverride,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+} from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
 
 export type DefaultModelsViewProps = {
@@ -37,6 +53,10 @@ export type DefaultModelsViewProps = {
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
+  /** Agents with their own utility model settings; the rest use this default. */
+  utilityOverrides?: AgentUtilityOverride[];
+  onOpenAgent: (agentId: string) => void;
+  basePath: string;
   /** Route the utility model in effect (automatic or explicit) runs on. */
   utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
@@ -53,9 +73,11 @@ export type DefaultModelsViewProps = {
   busy: Record<string, boolean>;
   defaultsSaving?: boolean;
   defaultsSavingField?: ModelDefaultsSaveField | null;
+  /** The last defaults write was acknowledged; later discovery runs in the background. */
+  defaultsSaved?: boolean;
   message?: ModelProviderRowMessage;
-  onPrimaryChange: (model: string) => void;
-  onFallbackChange: (model: string | null) => void;
+  onPrimaryChange: (model: string, runtime?: ModelRuntimePick) => void;
+  onFallbackChange: (model: string | null, runtime?: ModelRuntimePick) => void;
   onUtilityChange: (model: string | null) => void;
   onUtilityFallbackChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
@@ -72,8 +94,6 @@ const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
-const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
-
 function modelOption(
   model: ModelPickerEntry,
   authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
@@ -176,30 +196,13 @@ function BehaviorSetting<Value extends string>(props: {
   );
 }
 
-function thinkingLevelLabel(value: string, label?: string): string {
-  return TRANSLATED_THINKING_LEVELS.has(value)
-    ? t(`quickSettings.model.thinkingLevels.${value}`)
-    : formatThinkingOverrideLabel(value, label);
-}
-
 function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
   return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
-// Discovery progress does not change the saved selection or disable known models.
-function CatalogFeedback(props: {
-  discovering: boolean;
-  error?: string;
-  onRetry: () => void;
-}): JSX.Element {
+function CatalogFeedback(props: { error?: string; onRetry: () => void }): JSX.Element {
   return (
     <>
-      {props.discovering ? (
-        <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-          <span class="btn__spinner" aria-hidden="true" />
-          <span>{t("modelProviders.defaults.discoveringMore")}</span>
-        </div>
-      ) : undefined}
       {props.error ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
           <span>{props.error}</span>
@@ -234,9 +237,8 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading fallback={<CatalogFeedback discovering onRetry={retry} />}>
+            <Loading>
               <CatalogFeedback
-                discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
               />
@@ -244,20 +246,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           );
         }}
       >
-        <Loading
-          fallback={
-            <CatalogFeedback
-              discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
-              onRetry={() => props.onCatalogRetry()}
-            />
-          }
-        >
-          {latest(read)}
-          <CatalogFeedback
-            discovering={isPending(read) || Boolean(props.catalogDiscovering)}
-            onRetry={() => props.onCatalogRetry()}
-          />
-        </Loading>
+        <Loading>{latest(read)}</Loading>
       </Errored>
     </div>
   );
@@ -267,7 +256,7 @@ function FallbackModel(props: {
   label: string;
   fallbacks: string[];
   primary: string | undefined;
-  options: ModelPickerOption[];
+  options: (ModelPickerOption & { model?: string })[];
   disabled: boolean;
   title: string;
   onChange: (model: string | null) => void;
@@ -285,7 +274,7 @@ function FallbackModel(props: {
             ? t("modelProviders.defaults.clearFallbacks", { count: String(count()) })
             : t("modelProviders.defaults.noFallback"),
       },
-      ...modelOptions().filter((option) => option.value !== excluded),
+      ...modelOptions().filter((option) => (option.model ?? option.value) !== excluded),
     ];
   });
   return (
@@ -326,7 +315,8 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const title = () => props.mutationBlockedReason ?? "";
   const primaryModel = createMemo(() => {
     const selected = primary();
-    return models().find((model) => modelCatalogRef(model) === selected);
+    const entry = models().find((model) => modelCatalogRef(model) === selected);
+    return resolveModelRuntimeEntry(entry, props.selection.runtimes?.[selected]?.id);
   });
   const thinkingOptions = createMemo(() => {
     const options: { value: string; label: string; disabled?: boolean }[] = dedupeByKey(
@@ -334,14 +324,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       (level) => level.id,
     ).map((level) => ({
       value: level.id,
-      label: thinkingLevelLabel(level.id, level.label),
+      label: thinkingLevelLabel(t, level.id, level.label),
     }));
     // Catalog refreshes and model switches must not rewrite a saved global preference.
     const selected = thinkingLevel();
     if (selected && !options.some((option) => option.value === selected)) {
       options.push({
         value: selected,
-        label: thinkingLevelLabel(selected),
+        label: thinkingLevelLabel(t, selected),
         disabled: true,
       });
     }
@@ -386,19 +376,83 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         ]),
       ),
   );
+  const distinctModels = createMemo(() => dedupeByKey(models(), modelCatalogRef));
   const options = createMemo(() => {
     const providers = authProviders();
-    return dedupeByKey(models(), modelCatalogRef).map((model) => modelOption(model, providers));
+    return distinctModels().map((model) => modelOption(model, providers));
   });
+  const chatChoices = createMemo(() => {
+    const choices = new Map<
+      string,
+      ModelPickerOption & { model: string; runtime?: ModelRuntimePick }
+    >();
+    const rows = options();
+    for (const [index, entry] of distinctModels().entries()) {
+      const row = rows[index]!;
+      const model = row.value;
+      const pin = props.selection.runtimes?.[model]?.id;
+      const runtimes = entry.defaultModelRuntimes;
+      const alternatives =
+        runtimes?.alternatives.filter((choice) => choice.manualSelectionAllowed !== false) ?? [];
+      const base = runtimes?.base.agentRuntime.id ?? entry.agentRuntime?.id;
+      const baseDisabled =
+        (runtimes ? runtimes.base.available === false : row.disabled === true) ||
+        entry.manualSelectionAllowed === false;
+      if (entry.selectionRef || !base || (!alternatives.length && (!pin || pin === base))) {
+        const label =
+          pin && !entry.selectionRef
+            ? formatModelRuntimeLabel(entry.provider, pin)?.label
+            : undefined;
+        choices.set(model, {
+          ...row,
+          ...(label ? { label: `${row.label} · ${label}` } : {}),
+          model,
+          disabled: baseDisabled,
+        });
+        continue;
+      }
+      const selected = pin ?? base;
+      const route = (id: string, disabled: boolean) => {
+        const value = id === selected ? model : JSON.stringify([model, id]);
+        const label = formatModelRuntimeLabel(entry.provider, id)?.label ?? id;
+        choices.set(value, {
+          ...row,
+          value,
+          model,
+          label: `${row.label} · ${label}`,
+          disabled,
+          runtime: { id, base },
+        });
+      };
+      route(base, baseDisabled);
+      for (const choice of alternatives) {
+        route(choice.agentRuntime.id, choice.available === false);
+      }
+      if (!choices.has(model)) {
+        route(selected, true);
+      }
+    }
+    return choices;
+  });
+  function selectChatChoice(value: string, change: DefaultModelsViewProps["onPrimaryChange"]) {
+    const choice = chatChoices().get(value);
+    if (!choice || choice.disabled) {
+      return;
+    }
+    if (choice.runtime) {
+      change(choice.model, choice.runtime);
+    } else {
+      change(choice.model);
+    }
+  }
+  const chatOptions = createMemo(() => [...chatChoices().values()]);
   const primaryOptions = createMemo(() => [
-    {
-      value: "",
-      label: t("modelProviders.defaults.selectModel"),
-      disabled: !canMutate() || Boolean(primary()),
-    },
+    ...(primary()
+      ? []
+      : [{ value: "", label: t("modelProviders.defaults.selectModel"), disabled: true }]),
     ...(canMutate()
-      ? options()
-      : options().map((option) => Object.assign({}, option, { disabled: true }))),
+      ? chatOptions()
+      : chatOptions().map((option) => Object.assign({}, option, { disabled: true }))),
   ]);
   const utilityValue = createMemo(
     () => modelSettingPrimary(props.selection.utilityModel) ?? AUTOMATIC_UTILITY_VALUE,
@@ -469,7 +523,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               options={primaryOptions()}
               disabled={props.models.length === 0 || saving()}
               title={title()}
-              onChange={props.onPrimaryChange}
+              onChange={(value) => selectChatChoice(value, props.onPrimaryChange)}
             />
           }
         />
@@ -477,10 +531,12 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           label={t("modelProviders.defaults.fallback")}
           fallbacks={props.selection.fallbacks}
           primary={props.selection.primary}
-          options={options()}
+          options={chatOptions()}
           disabled={modelControlsDisabled() || saving() || !props.selection.primary}
           title={title()}
-          onChange={props.onFallbackChange}
+          onChange={(value) =>
+            value ? selectChatChoice(value, props.onFallbackChange) : props.onFallbackChange(null)
+          }
         />
         <BehaviorSetting
           field={"thinking"}
@@ -515,6 +571,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
                 t("modelProviders.defaults.utilityHelpAutomatic"),
               ]}
             />
+          }
+          description={
+            props.utilityOverrides?.length ? (
+              <UtilityOverrides
+                overrides={props.utilityOverrides}
+                basePath={props.basePath}
+                onOpen={props.onOpenAgent}
+              />
+            ) : undefined
           }
           control={
             <ModelPicker
@@ -563,5 +628,47 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>
+  );
+}
+
+function UtilityOverrides(props: {
+  overrides: AgentUtilityOverride[];
+  basePath: string;
+  onOpen: (agentId: string) => void;
+}) {
+  const selection = (entry: AgentUtilityOverride) =>
+    [
+      entry.model === undefined
+        ? t("modelProviders.defaults.utilityOverrideDefaultModel")
+        : entry.model || t("modelProviders.defaults.disabled"),
+      ...(entry.fallbacks.length
+        ? [
+            t("modelProviders.defaults.utilityOverrideFallbacks", {
+              models: entry.fallbacks.join(", "),
+            }),
+          ]
+        : []),
+    ].join(" · ");
+  return (
+    <span>
+      {t("modelProviders.defaults.utilityOverridesTitle")}
+      <For each={props.overrides}>
+        {(entry) => (
+          <span data-agent-id={entry.agentId}>
+            <br />
+            <a
+              class="model-providers__agent-link"
+              href={pathForAgentPanel(entry.agentId, null, props.basePath)}
+              onClick={(event) => handleNavigationClick(event, () => props.onOpen(entry.agentId))}
+            >
+              {entry.label}
+            </a>
+            {`: ${selection(entry)}`}
+          </span>
+        )}
+      </For>
+      <br />
+      {t("modelProviders.defaults.utilityOverridesOthers")}
+    </span>
   );
 }

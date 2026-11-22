@@ -414,8 +414,10 @@ export function recordOperationBackendRunId(operation: ReplyOperation, runId: st
   controllerStorage.backendRunIdsByOperation.set(operation, runIds);
 }
 
-export function hasOperationBackendRunId(operation: ReplyOperation, runId: string): boolean {
-  return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
+export function getOperationBackendRunIds(
+  operation: ReplyOperation,
+): ReadonlySet<string> | undefined {
+  return controllerStorage.backendRunIdsByOperation.get(operation);
 }
 
 export function getAttachedBackendAttachment(operation: ReplyOperation) {

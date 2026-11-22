@@ -1,2 +1,0 @@
-# Retain/restore must preserve public npm read/execute modes for non-root services.
-38

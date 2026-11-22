@@ -112,19 +112,30 @@ suite.define(() => {
               expect(overlaps).toBe(false);
             }
           }
+          const access = page.getByRole("heading", { name: "Provider access", exact: true });
+          const section = page.locator(".settings-section").filter({ has: access });
+          const group = section.locator(":scope > .settings-group");
+          expect((await access.boundingBox())!.x).toBe((await group.boundingBox())!.x);
           await primary.scrollIntoViewIfNeeded();
           const beforeDiscovery = await primary.boundingBox();
           await primary.click();
           await page.locator('.model-providers__defaults [role="listbox"]').first().waitFor();
           await gateway.setMethodResponse("models.list", {
             ...catalog,
+            models: [
+              ...models,
+              { id: "published", name: "Published model", provider: "openai", available: true },
+            ],
             pendingProviders: ["openai"],
           });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          await page
+            .locator('.model-providers__defaults [role="option"][data-value="openai/published"]')
+            .first()
+            .waitFor();
           const progress = page.locator('.model-providers__catalog-progress[role="status"]');
-          await progress.waitFor();
+          expect(await progress.count()).toBe(0);
           expect(await primary.boundingBox()).toEqual(beforeDiscovery);
-          expect(await progress.locator('[aria-hidden="true"]').count()).toBe(1);
           await page.keyboard.press("Escape");
         },
       );

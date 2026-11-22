@@ -1,2 +1,0 @@
-96
-# Google Fast mode: request tier mapping, picker eligibility, and fulfilled-tier pricing.

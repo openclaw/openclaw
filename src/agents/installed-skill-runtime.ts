@@ -1,9 +1,9 @@
 import path from "node:path";
-import { root } from "@openclaw/fs-safe/root";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
 } from "../skills/loading/config.js";
+import { prepareSkillResourceRoot } from "../skills/runtime/refresh.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
@@ -19,6 +19,7 @@ export function prepareInstalledSkillCatalog(params: {
   workspaceDir: string;
   sandbox?: SandboxContext | null;
   assertCurrent?: () => void;
+  instructionDelivery?: InstalledSkill["instructionDelivery"];
 }): InstalledSkill[] {
   const { snapshot, sandbox } = params;
   if (!snapshot) {
@@ -109,16 +110,16 @@ export function prepareInstalledSkillCatalog(params: {
         fileHost !== "workspace" &&
         (fileHost === "gateway" || !workspace?.loadSkills) &&
         path.isAbsolute(skill.filePath)
-          ? root(path.dirname(skill.filePath))
+          ? prepareSkillResourceRoot(path.dirname(skill.filePath), skill.resourceRootIdentity)
           : undefined;
-      // A missing directory must not fail preparation or create an unhandled rejection.
-      // The retained promise still reports the original error when a companion is requested.
+      // Missing admission must not create an unhandled rejection before a companion read.
       void resourceRoot?.catch(() => undefined);
       const contentHash =
         sandbox?.enabled && typeof deliveredContent === "string"
           ? resource?.contentHash
           : skill.contentHash;
       return {
+        instructionDelivery: params.instructionDelivery,
         catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),

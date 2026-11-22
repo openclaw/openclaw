@@ -193,7 +193,7 @@ it.each(["src", "dist"] as const)(
            assert.throws(() => lazy.readSdk(), /reloaded or disabled/);
            assert.equal(second.api.read(token), 'plugin-written');
            await assertWorker(second.api);
-           const recovery = withPluginSourceCaptureDirectory(captures, () => second.instance.captureModuleLoaderRecovery());
+           const recovery = await withPluginSourceCaptureDirectory(captures, () => second.instance.captureModuleLoaderRecovery());
            await second.instance.dispose();
            fs.rmSync(${JSON.stringify(plugin)}, { recursive: true });
            const restored = new PluginInstance('generation-fixture');

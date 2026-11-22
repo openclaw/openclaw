@@ -165,6 +165,17 @@ calling, structured outputs, and search grounding. It uses implicit context
 caching only: explicit `cachedContents` handles and the Live API are not
 supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
 
+## Gemini 4 Hydrogen
+
+`google/gemini-4-hydrogen` has a 1,048,576-token context window shared by input
+and output, and up to 65,536 output tokens by default. Google accepts text,
+image, video, audio, and PDF input. Thinking levels are low, medium, and high;
+xhigh currently sends high. Like Argon, it supports implicit context caching only.
+The catalog prices it at Google's paid-tier rates per million tokens: $1.50 input,
+$7.50 output (thinking tokens included), and $0.075 cached input. See
+[Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen)
+and [pricing](https://ai.google.dev/gemini-api/docs/pricing#gemini-4-hydrogen).
+
 The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 1,048,576-token context window and up to 65,536 output tokens. The built-in
 `gemini-flash` alias selects this model; `gemini-flash-lite` selects
@@ -286,12 +297,12 @@ remain omitted.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image`.
+`google/gemini-nano-banana-2.1`.
 
-- Also supports `google/gemini-3-pro-image`
+- Also supports `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
-- Edit mode: enabled, up to 5 input images
-- Geometry controls: `size`, `aspectRatio`, and `resolution`
+- Edit mode: enabled, up to 5 input images (up to 14 reference images on `google/gemini-nano-banana-2.1`)
+- Geometry controls: `size`, `aspectRatio` (including `1:4`, `4:1`, `1:8`, and `8:1` on `google/gemini-nano-banana-2.1`), and `resolution` (`1K`, `2K`, `4K`)
 
 To use Google as the default image provider:
 
@@ -301,7 +312,7 @@ To use Google as the default image provider:
     defaults: {
       mediaModels: {
         image: {
-          primary: "google/gemini-3.1-flash-image",
+          primary: "google/gemini-nano-banana-2.1",
         },
       },
     },

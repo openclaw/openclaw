@@ -13,6 +13,7 @@ import {
   AuthProfileMigrationRequiredError,
   clearAuthProfileMigrationDiagnostics,
   markAuthProfileMigrationRequired,
+  readLegacyAuthProfileProviders,
 } from "./legacy-source-diagnostic.js";
 import { closeAuthProfileReadPool, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 
@@ -43,6 +44,9 @@ describe("assertAuthProfileMigrationReady", () => {
           new AuthProfileMigrationRequiredError({
             agentDir,
             sources: [{ kind: "auth-profiles", path: legacyPath }],
+            affectedProviders: readLegacyAuthProfileProviders([
+              { kind: "auth-profiles", path: legacyPath },
+            ]),
           }),
         );
       }
