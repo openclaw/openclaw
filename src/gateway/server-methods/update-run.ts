@@ -5,7 +5,7 @@ import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { resolveGatewayRestartDecision } from "../../infra/process-respawn.js";
-import { scheduleGatewayRestart } from "../../infra/restart.js";
+import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -157,6 +157,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     git: installed.status.git,
     sha,
     timeoutMs: params.timeoutMs,
+    restartDelayMs: params.restartDelayMs,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),
   });
@@ -172,6 +173,8 @@ async function runUpdateInBackground(
     sha?: string;
     /** The requester's overall budget (`timeoutMs`). */
     timeoutMs?: number;
+    /** The requester's `restartDelayMs`, as the package route honors it. */
+    restartDelayMs?: number;
     sessionKey?: string;
     warn: (message: string) => void;
   },
@@ -191,14 +194,19 @@ async function runUpdateInBackground(
       sha: options.sha,
       timeoutMs: options.timeoutMs,
     });
+    const restart = {
+      reason: "update.run",
+      sessionKey: options.sessionKey,
+      delayMs: normalizeGatewayRestartDelayMs(options.restartDelayMs),
+    };
     // Changed plugins of an already-current install load in a new process, as after a core update.
     if (outcome.status === "current" && outcome.pluginsChanged) {
-      scheduleGatewayRestart({ reason: "update.run", sessionKey: options.sessionKey });
+      scheduleGatewayRestart(restart);
     }
     if (outcome.status === "pending") {
       await recordUpdateRunPhaseAsync(runId, "restarting");
       // A process-replacing reason: the next process starts through the release launcher.
-      scheduleGatewayRestart({ reason: "update.run", sessionKey: options.sessionKey });
+      scheduleGatewayRestart(restart);
     }
   } catch (error) {
     options.warn(`update.run ${runId} failed: ${String(error)}`);

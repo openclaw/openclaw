@@ -17,6 +17,11 @@ vi.mock("../../update/run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../update/run.js")>()),
   prepareUpdate,
 }));
+const scheduleGatewayRestart = vi.hoisted(() => vi.fn());
+vi.mock("../../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart.js")>()),
+  scheduleGatewayRestart,
+}));
 vi.mock("../../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
@@ -107,5 +112,20 @@ it("applies the commit a scheduled campaign pinned instead of the moving upstrea
   expect(bindRun).toHaveBeenCalledWith("campaign-1", payload.runId);
   await vi.waitFor(() =>
     expect(prepareUpdate).toHaveBeenCalledWith(expect.objectContaining({ sha })),
+  );
+});
+
+it("restarts into the prepared release after the requested delay", async () => {
+  prepareUpdate.mockResolvedValueOnce({
+    status: "pending",
+    target: { version: "2.0.0" },
+    releaseRoot: "/tmp/release",
+  } as never);
+  const { payload } = await invoke({ restartDelayMs: 7000 });
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(scheduleGatewayRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "update.run", delayMs: 7000 }),
+    ),
   );
 });
