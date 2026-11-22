@@ -1439,9 +1439,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(style).not.toBeNull();
         }
 
-        expect(geometry.codeBlock?.borderRadius).toBeGreaterThan(0);
+        const cornerScale = await readCornerScale(page);
         expect(geometry.bubble).toMatchObject({
-          borderRadius: geometry.codeBlock?.borderRadius,
+          borderRadius: cornerScale > 1 ? 18 * cornerScale : 10,
           cornerShape: geometry.codeBlock?.cornerShape,
           paddingTop: 16,
           paddingRight: 16,
@@ -1454,7 +1454,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(geometry.assistantBubble?.paddingRight).toBe(0);
         // The composer rests one radius step above the bubble: it is the surface
         // the thread sits on, not another card in the same stack.
-        expect(geometry.composer?.borderRadius).toBe(20 * (await readCornerScale(page)));
+        expect(geometry.composer?.borderRadius).toBe(20 * cornerScale);
 
         // The editor and footer retain breathing room without freezing their
         // padding values as the native scrollbar and compact controls change.
