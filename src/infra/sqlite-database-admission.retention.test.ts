@@ -273,8 +273,7 @@ it.each(["host", "worker"])(
   async (owner) => {
     const location = path.join(tempDirs.make("sqlite-admission-async-custody-"), "proof.sqlite");
     fs.writeFileSync(location, "");
-    const entered = createDeferred();
-    const resume = createDeferred();
+    const { entered, resume } = { entered: createDeferred(), resume: createDeferred() };
     const fstat = fs.fstat;
     // Pause after open but before custody publication; a native opener can win this interval.
     using stat = vi.spyOn(fs, "fstat").mockImplementationOnce((descriptor, options, callback) => {
@@ -283,6 +282,7 @@ it.each(["host", "worker"])(
         void resume.promise.then(() => callback(error, value));
       });
     });
+    using close = vi.spyOn(fs, "closeSync"); // Worker termination can allow descriptor-number reuse.
     const pending = prepareAdmissionAsync({ location, assertCurrent() {} });
     await entered.promise;
     const extraDescriptor = stat.mock.calls[0]![0];
@@ -318,7 +318,7 @@ it.each(["host", "worker"])(
       }
     }
     expect(() => fstatSync(original.descriptor)).toThrow();
-    expect(() => fstatSync(extraDescriptor)).toThrow();
+    expect(close.mock.calls.map(([descriptor]) => descriptor)).toContain(extraDescriptor);
   },
 );
 
