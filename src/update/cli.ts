@@ -182,6 +182,8 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
   const plugins = record.steps.find(({ step }) => step === "plugins");
   if (plugins?.status === "failed") {
     defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
+  } else if (plugins?.detail) {
+    defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
   }
   if (isPendingActivation(record)) {
     return;

@@ -386,24 +386,36 @@ async function maintainPlugins(params: {
   );
   // SAFETY: the child is this release's own `update plugins --json`, which writes updatePluginsAfterCoreUpdate's result.
   const plugins = result.parsed as PostCorePluginUpdateResult | undefined;
-  const ok = result.code === 0 && (plugins?.status === "ok" || plugins?.status === "skipped");
-  const problems = plugins
-    ? [...(plugins.warnings ?? []).map((warning) => warning.message), plugins.reason]
-    : [result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`)];
+  // As the existing updater: only an error result fails the step; warnings are notes.
+  const failed = result.code !== 0 || !plugins || plugins.status === "error";
+  const messages = plugins
+    ? [
+        ...(plugins.warnings ?? []).map((warning) => warning.message),
+        ...plugins.sync.warnings,
+        ...plugins.sync.errors,
+        ...plugins.npm.outcomes
+          .filter((outcome) => outcome.status === "error")
+          .map((outcome) => outcome.message),
+        ...(plugins.reason ? [plugins.reason] : []),
+      ]
+    : [];
+  if (failed && messages.length === 0) {
+    messages.push(
+      result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`),
+    );
+  }
   await recordUpdateRunStepAsync(
     params.runId,
     {
       step: "plugins",
-      status: ok ? "completed" : "failed",
+      status: failed ? "failed" : "completed",
       startedAtMs,
       endedAtMs: Date.now(),
-      ...(ok
-        ? {}
-        : {
-            detail: [...problems.filter(Boolean), "Run `openclaw plugins update` to retry."].join(
-              "\n",
-            ),
-          }),
+      ...(failed
+        ? { detail: [...messages, "Run `openclaw plugins update` to retry."].join("\n") }
+        : messages.length > 0
+          ? { detail: messages.join("\n") }
+          : {}),
     },
     { env: params.env },
   );

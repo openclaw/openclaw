@@ -199,16 +199,51 @@ fs.writeFileSync(path.join(root, 'argv.json'), JSON.stringify(args));
 });
 
 describe("already-current update", () => {
-  it("still maintains plugins with the serving code and reports that they changed", async () => {
+  const pluginResult = (overrides: object) => ({
+    status: "ok",
+    changed: false,
+    warnings: [],
+    sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+    npm: { changed: false, outcomes: [] },
+    integrityDrifts: [],
+    ...overrides,
+  });
+  const linked =
+    'Retained linked plugin "irc" at extensions/irc; update this plugin at its source.';
+
+  it.each([
+    {
+      name: "a change",
+      result: pluginResult({ changed: true }),
+      changed: true,
+      detail: undefined,
+    },
+    {
+      // The existing updater's warning result is a note, not a failed step.
+      name: "a warning note",
+      result: pluginResult({
+        status: "warning",
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [linked],
+          errors: [],
+        },
+      }),
+      changed: false,
+      detail: linked,
+    },
+  ])("still maintains plugins with the serving code and records $name", async (expected) => {
     const { checkout, sha } = await repository();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    // The serving release's own `update plugins`: records its argv and reports a change.
+    // The serving release's own `update plugins`: records its argv and prints its result.
     await fs.writeFile(
       path.join(checkout, "openclaw.mjs"),
       [
         "import fs from 'node:fs';",
         "fs.writeFileSync('plugins-argv.json', JSON.stringify(process.argv.slice(2)));",
-        "console.log(JSON.stringify({ status: 'ok', changed: true }));",
+        `console.log(${JSON.stringify(JSON.stringify(expected.result))});`,
       ].join("\n"),
     );
     try {
@@ -222,7 +257,7 @@ describe("already-current update", () => {
         sha,
         node,
       });
-      expect(outcome).toMatchObject({ status: "current", pluginsChanged: true });
+      expect(outcome).toMatchObject({ status: "current", pluginsChanged: expected.changed });
       expect(
         JSON.parse(await fs.readFile(path.join(checkout, "plugins-argv.json"), "utf8")),
       ).toEqual([
@@ -236,7 +271,9 @@ describe("already-current update", () => {
       ]);
       const record = await getUpdateRunAsync(run.runId);
       expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
-      expect(record?.steps.find(({ step }) => step === "plugins")?.status).toBe("completed");
+      const plugins = record?.steps.find(({ step }) => step === "plugins");
+      expect(plugins?.status).toBe("completed");
+      expect(plugins?.detail).toBe(expected.detail);
     } finally {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
