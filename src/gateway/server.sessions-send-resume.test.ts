@@ -274,7 +274,7 @@ it.for([
       expect(result.details).toMatchObject({
         status: "error",
         error: expect.stringContaining(
-          revokeParent ? "This operation was aborted" : "Gateway did not confirm the task resume",
+          revokeParent ? "operation was aborted" : "Gateway did not confirm the task resume",
         ),
       });
       proof.expectUnadopted();

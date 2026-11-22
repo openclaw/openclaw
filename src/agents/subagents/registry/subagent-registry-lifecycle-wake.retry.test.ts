@@ -125,7 +125,7 @@ describe("requester settle retry lifetime", () => {
         origin.abort();
         await withGatewayToolCallerIdentity(caller, () => {
           expect(() => captureGatewayToolCallerAssertion()?.("agent")).toThrow(
-            "This operation was aborted",
+            "operation was aborted",
           );
         });
         release.resolve();
