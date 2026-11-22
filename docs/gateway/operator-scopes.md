@@ -301,6 +301,11 @@ an access policy supplied by a plugin.
 }
 ```
 
+Administrators can also manage roles in the Control UI under **Settings → Team →
+Roles**: create, duplicate, edit and delete definitions, choose the default
+role, and assign people. Edits use `config.patch` against the loaded
+configuration, so a concurrent change is reported instead of overwritten.
+
 Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role while named-role enforcement is
 enabled. Set `role: null` to clear an assignment, even when enforcement is disabled. Assignment changes immediately invalidate and close that profile's

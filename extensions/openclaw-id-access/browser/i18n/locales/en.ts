@@ -46,6 +46,8 @@ const en = {
   adminInvite: "Confirm administrator invite",
   cancel: "Cancel",
   changeRole: "Change role",
+  manageRoles: "What each role allows",
+  openRole: "Open role",
   saveRole: "Save role",
   saveAdminRole: "Confirm administrator role",
   roleChanged: "Role changed. Their devices reconnect with the new access.",

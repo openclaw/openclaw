@@ -33,6 +33,12 @@ export function grantableRoles(roles: Role[]) {
   return definedRoles(roles).filter((role) => role.sandbox?.ready !== false);
 }
 
+/** The Control UI's Settings → Team → Roles page, optionally opened on one role. */
+export function rolesPageHref(basePath: string, role?: string): string {
+  const base = basePath.replace(/\/+$/u, "") + "/settings/roles";
+  return role ? base + "?" + new URLSearchParams({ role }).toString() : base;
+}
+
 export function administratorWarning(role: string | undefined, locale: string) {
   return roleText(locale, "adminConfirm", { role: roleName(role ?? "") });
 }

@@ -27,6 +27,8 @@ export function InviteForm(props: {
   locale: string;
   error?: PeopleError | null;
   existingProfiles?: ExistingProfile[];
+  /** Settings → Team → Roles, for administrators. */
+  rolesHref?: string;
   onCreate: (
     email: string,
     role: MemberRole,
@@ -265,6 +267,16 @@ export function InviteForm(props: {
       </div>
       <p class="ocid-access__hint" id="ocid-access-role-hint">
         Invites cannot grant owner access. Connected services keep their own permissions.
+        <Show when={props.rolesHref}>
+          {(href) => (
+            <>
+              {" "}
+              <a class="ocid-access__link-inline" href={href()}>
+                {roleText(props.locale, "manageRoles")}
+              </a>
+            </>
+          )}
+        </Show>
       </p>
     </section>
   );

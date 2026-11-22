@@ -37,6 +37,7 @@ import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
+import { rolesPageHref } from "./people-roles.js";
 import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
 import { RecoveryUses } from "./recovery-uses.js";
 import type { SandboxSetup } from "./sandbox-role-notice.js";
@@ -282,6 +283,8 @@ export function PeoplePage(props: {
 
   const canManage = () =>
     Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
+  // Role definitions are Gateway config, so any administrator connection can open them.
+  const canManageRoles = () => host.connection.canAdmin;
 
   return (
     <section class="ocid-access">
@@ -346,6 +349,7 @@ export function PeoplePage(props: {
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
                       existingProfiles={current().link.existingProfiles ?? []}
+                      rolesHref={canManageRoles() ? rolesPageHref(host.basePath) : undefined}
                       onCreate={(email, role: MemberRole, confirmedAdmin, existingProfileId) =>
                         run("invite", (link) =>
                           createInvite(
@@ -395,6 +399,9 @@ export function PeoplePage(props: {
                     error={latest(error)}
                     notice={latest(notice)}
                     readOnly={!latest(ownDevicePub)}
+                    roleHref={
+                      canManageRoles() ? (role) => rolesPageHref(host.basePath, role) : undefined
+                    }
                     invites={current().link.invites ?? []}
                     ownerDevices={current().link.ownerDevices ?? []}
                     disabled={!canManage()}

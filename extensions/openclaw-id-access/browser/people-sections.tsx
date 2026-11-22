@@ -198,6 +198,7 @@ function MemberRow(props: {
   error?: PeopleOperationError | null;
   readOnly?: boolean;
   selectedDevice?: string;
+  roleHref?: (role: string) => string;
 }) {
   const [confirming, setConfirming] = createSignal(false);
   const [editing, setEditing] = createSignal(false);
@@ -284,6 +285,15 @@ function MemberRow(props: {
           <span class="chip ocid-access__kit-badge">Recovery kit saved</span>
         </Show>
         <span class="chip">{roleName(props.member.role)}</span>
+        <Show
+          when={props.roleHref && props.member.roleDefined !== false ? props.roleHref : undefined}
+        >
+          {(href) => (
+            <a class="btn btn--sm" href={href()(props.member.role)}>
+              {roleText(props.locale, "openRole")}
+            </a>
+          )}
+        </Show>
       </div>
       <Show when={props.member.roleDefined === false}>
         <p class="ocid-access__role-notice" role="status">
@@ -405,6 +415,7 @@ export function Members(props: {
   onRemove: (member: Member) => void;
   error?: PeopleOperationError | null;
   readOnly?: boolean;
+  roleHref?: (role: string) => string;
 }) {
   const open = () =>
     props.selectedMember ? [] : props.invites.filter((invite) => invite.status === "open");
@@ -506,6 +517,7 @@ export function Members(props: {
                   onChangeRole={props.onChangeRole}
                   error={props.error}
                   readOnly={props.readOnly}
+                  roleHref={props.roleHref}
                   disabled={props.disabled}
                   nowMs={props.nowMs}
                   sessionTitle={props.sessionTitle}
