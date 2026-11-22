@@ -73,5 +73,6 @@ export function resolvePlaceBrowserView(params: {
         entries.length === 0 && !loading ? (split.prefix ? "no-matches" : "no-subfolders") : "none",
     };
   }
-  return { entries: [], empty: loading ? "none" : "no-matches" };
+  // Without a loaded listing (still loading, or the read failed) there is nothing to match against.
+  return { entries: [], empty: loading || !listing ? "none" : "no-matches" };
 }

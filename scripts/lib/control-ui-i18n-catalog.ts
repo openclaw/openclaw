@@ -612,6 +612,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       aboutPage: registerAboutEnglish.catalog.aboutPage,
       dashboardsPage: registerDashboardsEnglish.catalog.dashboardsPage,
       worktrees: registerSessionOrganizationEnglish.catalog.worktrees,
+      projectsPage: registerSessionOrganizationEnglish.catalog.projectsPage,
       configForm: registerSettingsEnglish.catalog.configForm,
       configView: registerSettingsEnglish.catalog.configView,
       quickSettings: registerPreferencesEnglish.catalog.quickSettings,

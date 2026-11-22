@@ -47,6 +47,13 @@ describe("resolvePlaceBrowserView", () => {
     });
   });
 
+  it("claims no search miss when no listing loaded", () => {
+    // A refused read (for example a role without write access) leaves only its error.
+    expect(
+      resolvePlaceBrowserView({ listing: null, draft: "/workspace/project", loading: false }),
+    ).toEqual({ entries: [], empty: "none" });
+  });
+
   it("matches Windows directory spellings before filtering", () => {
     const windowsListing = { path: "C:\\Workspace\\", home: "C:\\", entries };
     expect(

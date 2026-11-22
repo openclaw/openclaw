@@ -195,6 +195,8 @@ const enNewSessionSetup = {
     localProjects: "Local projects",
     noLocalProjects: "No local projects registered",
     noLocalProjectMatches: "No local projects match",
+    noSharedProjects: "No projects are shared with your role. Ask an admin to share one.",
+    manageProjects: "Manage projects",
     noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",

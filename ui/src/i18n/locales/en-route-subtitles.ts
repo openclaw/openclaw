@@ -14,6 +14,7 @@ const enRouteSubtitles = {
     approvals: "Recent exec, plugin, and system-agent approvals.",
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
+    projects: "Repositories and workspaces people can start sessions in.",
     channels: "Channels and settings.",
     connection: "Manage how this browser connects to the Gateway.",
     sessions: "Active sessions and defaults.",

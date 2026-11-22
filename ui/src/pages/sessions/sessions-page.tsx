@@ -14,7 +14,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
-import { sessionHubTabs } from "./session-hub-tabs.ts";
+import { sessionHubTabs, type SessionHubTab } from "./session-hub-tabs.ts";
 import { SessionManagementMenu } from "./session-menu.tsx";
 import { createSessionsPage, type SessionsPageOwner } from "./sessions-page-state.ts";
 import { SessionsView } from "./view.tsx";
@@ -49,7 +49,7 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
   }
   return (
     <>
-      <HubPageHeader<"sessions" | "worktrees">
+      <HubPageHeader<SessionHubTab>
         active="sessions"
         tabs={sessionHubTabs("sessions", (tab) => context.navigate(tab))}
         docsUrl="https://docs.openclaw.ai/concepts/session"

@@ -59,6 +59,24 @@ suite.define(() => {
     }
   });
 
+  it("tells a restricted role that no projects are shared with it", async () => {
+    const page = await openPage();
+    await installMockGateway(page, {
+      workspace: WORKSPACE,
+      operatorScopes: ["operator.sessions.write"],
+      featureMethods: ["projects.list", "sessions.create"],
+      methodResponses: { "projects.list": { projects: [], recents: [] } },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await page.locator("#new-session-project-trigger").click();
+    const picker = page.locator("#new-session-project-popover");
+    await pollLocatorText(picker).toContain(
+      "No projects are shared with your role. Ask an admin to share one.",
+    );
+    expect(await picker.getByRole("link", { name: "Manage projects" }).count()).toBe(0);
+    await captureProjectUiProof(suite, page, "project-access-restricted-empty.png");
+  });
+
   it.each(ROLES)(
     "restores and offers repositories the $role may open",
     async ({ role, scopes, projects }) => {
