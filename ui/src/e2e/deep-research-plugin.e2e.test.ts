@@ -6,6 +6,7 @@ import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -211,6 +212,49 @@ suite.define(() => {
       expect(await gateway.getRequests(method("start"))).toHaveLength(3);
     });
   }, 90_000);
+
+  it("honors the Control UI text scale in research prose and controls", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installNativePluginMockGateway(
+        page,
+        {
+          nativePlugins: [
+            {
+              pluginId: "deep-research",
+              rootDir: resolve("extensions/deep-research"),
+              source: "./browser/index.tsx",
+            },
+          ],
+          featureMethods: [...defaultControlUiFeatureMethods, method("list")],
+          methodResponses: { [method("list")]: list() },
+        },
+        {
+          afterInitScript:
+            ";localStorage.setItem(" +
+            JSON.stringify(controlUiBundledSettingsStorageKey(suite.server.baseUrl)) +
+            "," +
+            JSON.stringify(JSON.stringify({ textScale: 140 })) +
+            ");",
+        },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await openResearchPanel(page);
+      const pane = page.locator(".deep-research-pane");
+      await pane.getByLabel("Research question").waitFor();
+      const sizes = await pane.evaluate((el) => ({
+        scale: Number(
+          getComputedStyle(document.documentElement).getPropertyValue("--control-ui-text-scale"),
+        ),
+        body: parseFloat(getComputedStyle(el).fontSize),
+        input: parseFloat(getComputedStyle(el.querySelector("textarea")!).fontSize),
+        hint: parseFloat(getComputedStyle(el.querySelector("header p")!).fontSize),
+      }));
+      expect(sizes.scale).toBe(1.4);
+      expect(sizes.body).toBeCloseTo(14 * sizes.scale);
+      expect(sizes.input).toBeCloseTo(sizes.body);
+      expect(sizes.hint).toBeCloseTo(16 * 0.85 * sizes.scale);
+    });
+  });
 
   it("opens native pane, safely navigates citations, handles cancellation/offline/reconnect and clears denied data", async () => {
     await suite.withPage(
