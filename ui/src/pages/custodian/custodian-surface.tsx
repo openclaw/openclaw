@@ -314,25 +314,30 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     },
   });
   let revealedMessages = false;
-  createScrollPosition(() => {
-    const initialMessageId = store().messages.at(-1)?.id ?? null;
-    return {
-      reveal: {
-        identity: [initialMessageId],
-        target: () => {
-          // Initial empty chrome does not reveal; clearing an existing transcript still does.
-          if (initialMessageId === null && !revealedMessages) {
-            return undefined;
-          }
-          revealedMessages = true;
-          const lastMessage = host.contains(transcriptNode)
-            ? transcriptNode?.lastElementChild
-            : undefined;
-          return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+  // Only a new message schedules a reveal; drafts and status updates must not cancel it.
+  const latestMessageId = createMemo(() => store().messages.at(-1)?.id ?? null);
+  createScrollPosition(
+    () => {
+      const initialMessageId = latestMessageId();
+      return {
+        reveal: {
+          identity: [initialMessageId],
+          target: () => {
+            // Initial empty chrome does not reveal; clearing an existing transcript still does.
+            if (initialMessageId === null && !revealedMessages) {
+              return undefined;
+            }
+            revealedMessages = true;
+            const lastMessage = host.contains(transcriptNode)
+              ? transcriptNode?.lastElementChild
+              : undefined;
+            return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    { revealTiming: "animation-frame" },
+  );
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key !== "Enter" || event.shiftKey || isComposingKeyboardEvent(event)) {
       return;
