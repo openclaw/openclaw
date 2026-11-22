@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   getSubagentRunsForRequesterSession,
   subagentRuns,
@@ -82,6 +83,7 @@ export async function prepareRestartCompletionCustody(
           entry,
           agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
           assertCurrent,
+          log,
         })),
       );
     } catch (error) {
@@ -111,8 +113,9 @@ async function recoverRequesterCompletionCustody(params: {
   env?: NodeJS.ProcessEnv;
   entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt">;
   assertCurrent: () => void;
+  log: RestartResumeParams["log"];
 }): Promise<string[]> {
-  const { context, entry, agentId, sessionKey, storePath, assertCurrent } = params;
+  const { context, entry, agentId, sessionKey, storePath, assertCurrent, log } = params;
   if (entry.archivedAt !== undefined) {
     return [];
   }
@@ -129,6 +132,7 @@ async function recoverRequesterCompletionCustody(params: {
   if (!pending.length) {
     return [];
   }
+  const recovered: string[] = [];
   let target: TranscriptLease | undefined;
   try {
     target = await acquireTranscriptLease(
@@ -138,21 +142,22 @@ async function recoverRequesterCompletionCustody(params: {
     );
     const requester = target;
     for (const child of pending) {
-      // Re-admit the spawning requester's saved source; the woken turn checks session access
-      // when it starts. Older rows use the session principal, else the System write baseline.
-      const source = child.requesterOperatorSource;
-      const authority = source
-        ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
-        : await prepareSessionSystemTurnAuthority({
-            context,
-            agentId,
-            sessionKey,
-            storePath,
-            sessionId: entry.sessionId,
-            preserveRecordedSource: true,
-            assertCurrent,
-          });
+      let authority: { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined;
       try {
+        // Re-admit the spawning requester's saved source; the woken turn checks session access
+        // when it starts. Older rows use the session principal, else the System write baseline.
+        const source = child.requesterOperatorSource;
+        authority = source
+          ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
+          : await prepareSessionSystemTurnAuthority({
+              context,
+              agentId,
+              sessionKey,
+              storePath,
+              sessionId: entry.sessionId,
+              preserveRecordedSource: true,
+              assertCurrent,
+            });
         await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
           withOperatorToolGatewayAuthority(
             {
@@ -181,6 +186,14 @@ async function recoverRequesterCompletionCustody(params: {
             },
           ),
         );
+        recovered.push(child.runId);
+      } catch (error) {
+        // Shutdown or a changed requester chat stops every child; one refused source stops one.
+        assertCurrent();
+        requester.assertCurrent();
+        log.warn(
+          `Restart completion recovery failed for ${child.runId} in ${sessionKey}: ${String(error)}`,
+        );
       } finally {
         authority?.release();
       }
@@ -188,5 +201,5 @@ async function recoverRequesterCompletionCustody(params: {
   } finally {
     target?.release();
   }
-  return pending.map((child) => child.runId);
+  return recovered;
 }

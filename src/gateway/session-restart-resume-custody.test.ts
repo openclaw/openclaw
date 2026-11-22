@@ -206,6 +206,56 @@ it.each([
     }),
 );
 
+it("recovers a sibling child when another child's saved requester is refused", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      physicalAgentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const sessionKey = "agent:main:dashboard:two-children";
+    const entry = { sessionId: "two-children", lifecycleRevision: "rev", updatedAt: 1 };
+    replaceSessionEntrySync({ ...target, sessionKey }, entry);
+    const [refused, legacy] = (["refused", "legacy"] as const).map((name) =>
+      createSubagentRunRecord({
+        runId: `${name}-child`,
+        childSessionKey: `agent:main:subagent:${name}`,
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        requesterStorePath: target.storePath,
+        completionRequesterSessionId: entry.sessionId,
+        completionRequesterLifecycleRevision: entry.lifecycleRevision,
+        expectsCompletionMessage: true,
+        spawnMode: "session",
+        completionTarget: "parent",
+        endedAt: 1,
+        delivery: { status: "pending" },
+        // A source that current policy refuses, for example a revoked device.
+        ...(name === "refused" ? { requesterOperatorSource: { kind: "unavailable" } } : {}),
+      }),
+    );
+    for (const child of [refused!, legacy!]) {
+      subagentRuns.set(child.runId, child);
+      subagentRuns.retireCompletionAuthority(child);
+    }
+    try {
+      const context = createContext();
+      context.resolveGatewayContext = () => context;
+      const restart = { context, signal: new AbortController().signal, log: { warn: vi.fn() } };
+      const stores = await prepareRestartStores(restart, [target]);
+      await prepareRestartCompletionCustody(restart, stores![0]!);
+      expect(subagentRuns.isCompletionAuthorityRetired(refused!)).toBe(true);
+      expect(subagentRuns.isCompletionAuthorityRetired(legacy!)).toBe(false);
+      expect(restart.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Restart completion recovery failed for refused-child"),
+      );
+    } finally {
+      subagentRuns.delete(refused!.runId);
+      subagentRuns.delete(legacy!.runId);
+    }
+  }));
+
 it.for(["archived", "replaced", "reset"] as const)(
   "does not recover completion custody from a stale %s requester snapshot",
   (change) =>
