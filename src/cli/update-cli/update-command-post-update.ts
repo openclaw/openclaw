@@ -60,7 +60,7 @@ import {
   deferUpdateCommandTerminalPreparation,
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
-import { releaseLaunchedMigration } from "./update-command-verification.js";
+import { releaseLaunchedState } from "./update-command-verification.js";
 
 export async function finishUpdate(
   params: FinishUpdateParams,
@@ -591,11 +591,9 @@ async function finishSettledUpdate(
           throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
         // A launched candidate owns the state it migrated; rollback stays unattempted.
-        const launched = await releaseLaunchedMigration(params, restarted, resultWithPostUpdate);
-        rollbackAttempted ||= launched !== undefined;
+        rollbackAttempted ||= await releaseLaunchedState(params, restarted, resultWithPostUpdate);
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,
-          ...launched,
           status: "error",
           reason: verificationFailure,
           recovery: unsafeUpdateRecovery(resultWithPostUpdate.recovery),

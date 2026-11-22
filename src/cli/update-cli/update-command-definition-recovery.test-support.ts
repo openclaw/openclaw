@@ -15,7 +15,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
-import { releaseLaunchedMigration } from "./update-command-verification.js";
+import { releaseLaunchedState } from "./update-command-verification.js";
 
 export function registerUnverifiedDefinitionRecoveryTests({
   fixture,
@@ -366,11 +366,13 @@ export function registerUnverifiedDefinitionRecoveryTests({
     useLiveRuntime({ status: "running", pid: 4321 });
     const released: FinishUpdateParams = { ...params, rollbackBlockedReason: migrated };
     await expect(
-      releaseLaunchedMigration(released, "restart-health-failed", params.result),
-    ).resolves.toEqual({
-      rollbackOutcome: { status: "not-attempted", reason: migrated },
-    });
+      releaseLaunchedState(released, "restart-health-failed", params.result),
+    ).resolves.toBe(true);
     expect(released.rollbackBlockedReason).toBeUndefined();
+    expect(getUpdateRun(run.runId, { env: run.env })?.verification.rollbackOutcome).toEqual({
+      status: "not-attempted",
+      reason: migrated,
+    });
     const splitRoot: FinishUpdateParams = {
       ...params,
       rollbackBlockedReason: migrated,
@@ -380,8 +382,8 @@ export function registerUnverifiedDefinitionRecoveryTests({
       >,
     };
     await expect(
-      releaseLaunchedMigration(splitRoot, "restart-health-failed", params.result),
-    ).resolves.toBeUndefined();
+      releaseLaunchedState(splitRoot, "restart-health-failed", params.result),
+    ).resolves.toBe(false);
     expect(splitRoot.rollbackBlockedReason).toBe(migrated);
   });
   it("preserves a named Doctor risk when rollback adds a generic migration refusal", async () => {

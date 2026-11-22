@@ -179,29 +179,45 @@ async function hasObservedGatewayLaunch(
 /**
  * A migrated-state rollback block marks data at risk because no build may own that state.
  * When the expected build is observed still running on it after a failed health check, that
- * build owns it: the failure is restart health, not data risk. Releases the block and returns
- * the rollback outcome to record; rollback stays unattempted, since it would hand the
+ * build owns it: the failure is restart health, not data risk. Releases the block and
+ * records the rollback outcome; rollback stays unattempted, since it would hand the
  * migrated state to a build that cannot read it. A split-root update keeps its
  * original-service compensation and the block.
  */
-export async function releaseLaunchedMigration(
+export async function releaseLaunchedState(
   params: Pick<
     FinishUpdateParams,
     "opts" | "rollbackBlockedReason" | "originalManagedServiceRuntime" | "preManagedServiceStop"
   >,
   restarted: string,
   result: UpdateRunResult,
-): Promise<Pick<UpdateRunResult, "rollbackOutcome"> | undefined> {
+): Promise<boolean> {
+  const run = params.opts.run;
   if (
+    !run ||
     restarted !== "restart-health-failed" ||
     params.rollbackBlockedReason !== "state-migrated-no-rollback" ||
     params.originalManagedServiceRuntime ||
     !(await hasObservedGatewayLaunch(params, result))
   ) {
-    return undefined;
+    return false;
+  }
+  // The run keeps the migration fact for status and final recovery; an unrecorded fact keeps
+  // the block instead.
+  try {
+    recordUpdateRunVerification(
+      run.runId,
+      { rollbackOutcome: { status: "not-attempted", reason: "state-migrated-no-rollback" } },
+      run,
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false;
   }
   params.rollbackBlockedReason = undefined;
-  return { rollbackOutcome: { status: "not-attempted", reason: "state-migrated-no-rollback" } };
+  return true;
 }
 
 export async function recordFailedUpdateGatewayState(
