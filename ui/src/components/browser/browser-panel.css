@@ -143,6 +143,7 @@ openclaw-browser-panel {
     color: var(--text);
     font-size: 12px;
     line-height: 16px;
+    overflow-wrap: anywhere;
     text-align: start;
   }
   /* The "Go to" option belongs to the address being typed: hidden once focus leaves it. */

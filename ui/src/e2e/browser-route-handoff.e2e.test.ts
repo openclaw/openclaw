@@ -105,6 +105,44 @@ suite.define(() => {
     );
   });
 
+  it("keeps a long alternative address inside its button on a phone", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        const tab = makeTab("existing", "Design review", "https://design.invalid/");
+        await routeMedia(page);
+        await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.admin"],
+          methodResponses: browserResponses(
+            ...browserCases(tab, {
+              targetId: tab.targetId,
+              path: "/fixture/design.png",
+              url: tab.url,
+            }),
+            browserCase("/screencast", {
+              __mockError: { code: "UNAVAILABLE", message: "Still only" },
+            }),
+          ),
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+        );
+        const panel = page.locator("openclaw-browser-panel");
+        await panel.locator('.bp-shot[alt="Design review"]').waitFor();
+        const draft = "studio/assets/56f03e68c20240a98eeff51dfa791bc9";
+        await panel.getByRole("textbox", { name: "Page address" }).fill(draft);
+        const option = panel.getByRole("button", { name: "Go to https://" + draft, exact: true });
+        const overflow = await option.evaluate((button) => {
+          const text = document.createRange();
+          text.selectNodeContents(button);
+          return text.getBoundingClientRect().right - button.getBoundingClientRect().right;
+        });
+        expect(overflow).toBeLessThanOrEqual(0);
+      },
+    );
+  });
+
   it("shows browser access unavailability without opening another surface", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
