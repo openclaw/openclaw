@@ -466,9 +466,10 @@ describe("Model setup account connections", () => {
   const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
   const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
-        "Waiting for " + labelFor(operation) + "…",
-      ),
+      expect(
+        page.querySelector(":is(.wizard-sign-in, .wizard-sign-in--paste) [role=status]")
+          ?.textContent,
+      ).toBe("Waiting for " + labelFor(operation) + "…"),
     );
 
   async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
