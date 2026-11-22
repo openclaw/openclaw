@@ -18,6 +18,8 @@ import {
   publishSessionEntryCacheParticipantUpdate,
   prepareSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -28,6 +30,7 @@ import {
   readSessionActorParticipants,
 } from "./session-actor-entry-publication.worker.js";
 import { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+import { mergeChannelParticipantDisplay } from "./session-participant-display.js";
 import {
   participantIdentityNamespace,
   mergeParticipantAggregate,
@@ -42,6 +45,7 @@ export type { RecordSessionParticipantResult } from "./session-sharing-store.typ
 type SessionParticipantWriteResult = {
   value: RecordSessionParticipantResult | null;
   projectionChanged: boolean;
+  displayChanged?: true;
 };
 
 export function recordSessionParticipant(
@@ -179,12 +183,39 @@ function recordSessionParticipantWithAliasRead(
     if (result.numAffectedRows === 0n) {
       return { value: "capped", projectionChanged: false };
     }
+    let displayChanged = false;
+    if (params.identity.type === "remote" || params.identity.type === "observation") {
+      const current = prepareExactSessionEntryRowReads(
+        database,
+        [resolved.sessionKey],
+        "full",
+        undefined,
+        { projectParticipants: false },
+      )(resolved.sessionKey)?.entry;
+      const display =
+        current &&
+        mergeChannelParticipantDisplay(
+          current.participantDisplay,
+          params.identity,
+          params.display,
+          promptedAt,
+          existing && { lastPromptedAt: existing.last_prompted_at },
+        );
+      if (current && display) {
+        writeSessionEntry(database, resolved.sessionKey, current, {
+          canonicalPreviousEntry: current,
+          participantDisplay: display,
+        });
+        displayChanged = true;
+      }
+    }
     const writeGeneration = completeCacheWrite();
     const projectionChanged =
+      displayChanged ||
       !existing ||
       existing.actor_id !== actorId ||
       aggregate.first_prompted_at !== existing.first_prompted_at;
-    if (participants && publishActor) {
+    if (participants && publishActor && !displayChanged) {
       const identity = readParticipantIdentity(
         namespace,
         existing?.actor_id ?? actorId.toWellFormed(),
@@ -217,7 +248,11 @@ function recordSessionParticipantWithAliasRead(
         }),
       );
     }
-    return { value: existing ? "updated" : "inserted", projectionChanged };
+    return {
+      value: existing ? "updated" : "inserted",
+      projectionChanged,
+      ...(displayChanged && { displayChanged: true as const }),
+    };
   };
   if (transaction) {
     assertTransactionUsable(transaction.db);

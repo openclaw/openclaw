@@ -20,6 +20,7 @@ export type ChannelParticipantInput = {
   binding: ChannelIngressContextBinding;
   childSessionPublication?: ResolveChannelMessageIngressParams["childSessionPublication"];
   promptedAt: number;
+  displayName?: string;
   owner: ChannelIngressHostOwner;
   gatewayContext: ReturnType<GatewayContextResolver>;
   verifiedPrincipal?: UserChannelIdentity;

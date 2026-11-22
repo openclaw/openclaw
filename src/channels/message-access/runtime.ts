@@ -420,6 +420,7 @@ async function resolveChannelMessageIngressForOwner(
           })
         : undefined;
     participantInput = {
+      displayName: params.subject.displayName,
       identity: participant
         ? {
             type: "remote",

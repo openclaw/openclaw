@@ -43,6 +43,7 @@ function createDiscordDmIngressSubject(
 ): ChannelIngressIdentitySubjectInput {
   return {
     stableId: sender.id,
+    displayName: sender.name ?? sender.tag,
     aliases: {
       discordUserName: sender.name,
       discordUserTag: sender.tag,

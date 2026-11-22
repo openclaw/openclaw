@@ -41,6 +41,7 @@ import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { channelParticipantDisplayKey } from "./session-participant-display.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
 import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 
@@ -560,6 +561,64 @@ describe("SQLite session participants", () => {
         aggregate({ type: "agent", id: "same-id" }, 1, 40),
       ]),
     );
+  });
+
+  it("persists scoped names and only groups sources with an unbroken verified link", async () => {
+    const scope = await makeSession("display");
+    const first = remote("123");
+    const other = remote("123", "another-workspace");
+    const key = channelParticipantDisplayKey(first);
+    const otherKey = channelParticipantDisplayKey(other);
+    {
+      await using worker = participantWorker(
+        openOpenClawAgentDatabase({ agentId: "main", env: state.env }),
+        scope,
+      );
+      const record = (
+        identity: SessionParticipantIdentity,
+        promptedAt: number,
+        label: string,
+        profileId?: string,
+      ) => worker.record({ identity, promptedAt, display: { label, profileId } });
+      record(first, 10, "Ada", "profile-ada");
+      record(other, 12, "Ben");
+      record(first, 30, "Ada renamed", "profile-ada");
+      record(first, 20, "Old name", "profile-ada");
+      expect(loadSessionEntry(scope)?.participantDisplay).toEqual({
+        [key]: { label: "Ada renamed", profileId: "profile-ada" },
+        [otherKey]: { label: "Ben" },
+      });
+      worker.assertSettled();
+    }
+    await closeOpenClawAgentDatabasesAsync();
+    expect(loadSessionEntry(scope)?.participantDisplay?.[key]).toEqual({
+      label: "Ada renamed",
+      profileId: "profile-ada",
+    });
+    // An account reassignment does not rewrite the attribution of earlier turns.
+    recordSessionParticipant(scope, {
+      identity: first,
+      promptedAt: 40,
+      display: { label: "New sender", profileId: "profile-other" },
+    });
+    recordSessionParticipant(scope, {
+      identity: first,
+      promptedAt: 50,
+      display: { label: "New sender", profileId: "profile-other" },
+    });
+    expect(loadSessionEntry(scope)?.participantDisplay?.[key]).toEqual({ label: "New sender" });
+    expect(readParticipants(scope)).toHaveLength(2);
+    // Previously recorded bare contributions gain a name, but not a retroactive link.
+    const historic = remote("456");
+    contribute(scope, historic, 1);
+    recordSessionParticipant(scope, {
+      identity: historic,
+      promptedAt: 2,
+      display: { label: "Pat", profileId: "profile-pat" },
+    });
+    expect(
+      loadSessionEntry(scope)?.participantDisplay?.[channelParticipantDisplayKey(historic)],
+    ).toEqual({ label: "Pat" });
   });
 
   it("keeps count-only worker contributions out of the participant projection and publishes reordered facts", async () => {

@@ -13,6 +13,7 @@ import {
   readSessionActorMemorySuggestions,
 } from "./session-actor-memory-suggestions.js";
 import { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+import { mergeChannelParticipantDisplay } from "./session-participant-display.js";
 import {
   participantIdentityNamespace,
   mergeParticipantAggregate,
@@ -214,13 +215,26 @@ export function mutateSessionActorMemoryCollaboration(
             Buffer.from(participantIdentityNamespace(right.identity)),
           ),
       );
+      const display =
+        entry &&
+        mergeChannelParticipantDisplay(
+          entry.participantDisplay,
+          identity,
+          params.display,
+          promptedAt,
+          previous,
+        );
       const participants = projection();
+      if (entry && display) {
+        entry.participantDisplay = display;
+      }
       if (entry) {
         Object.assign(entry, participants);
       }
       return {
         value: previous ? ("updated" as const) : ("inserted" as const),
         projectionChanged:
+          Boolean(display) ||
           !previous ||
           previous.identity.id !== identity.id ||
           previous.firstPromptedAt !== next.firstPromptedAt,

@@ -39,6 +39,7 @@ export async function waitForSessionParticipantRecording(
 /** Defers participant history persistence so it can never delay or abort an admitted turn. */
 export function recordSessionParticipantBestEffort(params: {
   identity: SessionParticipantIdentity;
+  display?: import("../config/sessions/session-participant-display.js").ChannelParticipantDisplayInput;
   agentId: string;
   sessionKey: string;
   storePath: string;
@@ -65,6 +66,7 @@ export function recordSessionParticipantBestEffort(params: {
           },
           {
             identity: params.identity,
+            ...(params.display && { display: params.display }),
             promptedAt,
             sessionAgentId: params.agentId,
           },

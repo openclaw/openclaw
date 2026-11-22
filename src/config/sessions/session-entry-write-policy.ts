@@ -15,6 +15,7 @@ export function applySessionEntryWritePolicy(
     allowStoredAliases?: boolean;
     providerReviewMutation?: boolean;
     profileInvolvement?: SessionEntry["profileInvolvement"];
+    participantDisplay?: SessionEntry["participantDisplay"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
     preserveVisibility?: boolean;
@@ -98,6 +99,11 @@ export function applySessionEntryWritePolicy(
       ...normalizedEntry,
       createdAt: canonicalPreviousEntry?.updatedAt ?? Date.now(),
     };
+  }
+  // The participant writer owns display facts. Stale snapshots and forks cannot import them.
+  const display = options.participantDisplay ?? canonicalPreviousEntry?.participantDisplay;
+  if (display !== normalizedEntry.participantDisplay) {
+    normalizedEntry = { ...normalizedEntry, participantDisplay: display };
   }
   // Personal choices follow the logical node through reset and relocation. A
   // fork has a different key; stale entry writers cannot replace committed choices.

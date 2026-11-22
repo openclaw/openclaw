@@ -58,6 +58,7 @@ it.each([
       ingress.push(
         await host.ingress.resolveStable(
           ingressInput(messageFor(sender), {
+            subject: { stableId: sender, displayName: `Name ${sender}` },
             identity: { resolveParticipant },
             dmPolicy: scenario === "gateway-replaced-during-ingress" ? "pairing" : "open",
             allowFrom: scenario === "denied" ? [] : ["*"],
@@ -102,9 +103,14 @@ it.each([
     recordAcceptedSessionParticipantInput(context, target);
     if (scenario === "qualified" || scenario === "mixed") {
       expect(recordParticipant.mock.calls).toEqual(
-        identities
-          .slice(0, sources.length)
-          .map((identity) => [{ ...target, identity, promptedAt: expect.any(Number) }]),
+        identities.slice(0, sources.length).map((identity, i) => [
+          {
+            ...target,
+            identity,
+            display: { label: `Name ${sources[i]}` },
+            promptedAt: expect.any(Number),
+          },
+        ]),
       );
       expect(recordParticipant.mock.calls[0]?.[0].promptedAt).toBeGreaterThanOrEqual(startedAt);
     } else {

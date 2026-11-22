@@ -252,13 +252,11 @@ export async function runSessionCollaborationWrite<
                           }
                         }
                       }
-                      if (
-                        capturedCommand.type === "participant" &&
-                        fact.kind === "postimage" &&
-                        fact.value[0]?.kind === "participants" &&
-                        fact.value[0].projection
-                      ) {
-                        participantProjections.set(key, fact.value[0].projection);
+                      if (capturedCommand.type === "participant" && fact.kind === "postimage") {
+                        const change = fact.value.find((item) => item.kind === "participants");
+                        if (change?.projection) {
+                          participantProjections.set(key, change.projection);
+                        }
                       } else if (
                         capturedCommand.type === "participant" &&
                         fact.kind === "unchanged"

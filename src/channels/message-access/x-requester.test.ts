@@ -4,6 +4,7 @@ import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-me
 import { initSessionState } from "../../auto-reply/reply/test/session.test-support.js";
 import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { channelParticipantDisplayKey } from "../../config/sessions/session-participant-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -120,6 +121,17 @@ it("resolves X API senders through account-scoped profile links, never asserted 
         snapshotFields: [],
       });
       expect(stored.entries).toHaveLength(1);
+      const sourceKey = channelParticipantDisplayKey({
+        type: "remote",
+        pluginId: "x",
+        domain: "x",
+        idKind: "user-id",
+        id: senderId,
+      });
+      expect(stored.entries[0]?.entry.participantDisplay?.[sourceKey]).toEqual({
+        label: "Ada Lovelace",
+        ...(linked && { profileId: profile.id }),
+      });
       expect(stored.participantRecords?.[sessionKey]?.map(({ identity }) => identity)).toEqual(
         expect.arrayContaining([
           { type: "remote", pluginId: "x", domain: "x", idKind: "user-id", id: senderId },

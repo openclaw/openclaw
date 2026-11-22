@@ -4,6 +4,8 @@ import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../config/sessions/session-entry-provenance.js";
+import { channelParticipantDisplayKey } from "../config/sessions/session-participant-display.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -339,6 +341,45 @@ it("serializes an owner-only row without participant metadata", async () => {
   expect(wire).not.toContain('"participants":');
   expect(wire).not.toContain('"expandedParticipants":');
   expect(wire).not.toContain('"participantCount":');
+});
+
+it("uses verified channel links and names for both the People list and its count", async () => {
+  const ada = {
+    type: "remote",
+    pluginId: "discord",
+    domain: "discord",
+    idKind: "user",
+    id: "123",
+  } as const;
+  const sam = { ...ada, domain: "other" };
+  const legacy = { type: "legacy", id: ada.id, actorType: "human", source: "channel" } as const;
+  const entry: InternalSessionEntry = {
+    ...ownedSession("roster", 1, "profile-bob"),
+    participants: [
+      { identity: ada },
+      profileParticipant("profile-ada"),
+      { identity: sam },
+      { identity: legacy },
+    ],
+    participantDisplay: {
+      [channelParticipantDisplayKey(ada)]: { label: "Ada on Discord", profileId: "profile-ada" },
+      [channelParticipantDisplayKey(sam)]: { label: "Sam" },
+    },
+  };
+  const result = await listSessionFixture(
+    queryFor("/tmp/openclaw-people-display", { "agent:main:roster": entry }),
+  );
+  const expected = [
+    { ...profileParticipant("profile-ada"), label: "Ada" },
+    { identity: sam, label: "Sam" },
+    { identity: legacy },
+  ];
+  expect(result.sessions[0]).toMatchObject({
+    participantCount: 3,
+    participants: expected,
+    expandedParticipants: expected,
+  });
+  expect(result.sessions[0]).not.toHaveProperty("participantDisplay");
 });
 
 it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", async () => {

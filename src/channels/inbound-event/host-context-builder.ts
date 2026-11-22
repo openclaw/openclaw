@@ -85,9 +85,41 @@ export function createHostChannelInboundEventContextBuilder<
           ) {
             return;
           }
+          const principal = batch.at(-1)?.verifiedPrincipal;
+          const principalKey = principal && JSON.stringify(principal);
+          const gateway = owner.resolveGatewayContext?.();
+          const requester = batch.at(-1)?.requesterProfile;
+          const linked =
+            gateway &&
+            principal &&
+            requester &&
+            built.SenderId === principal.senderId &&
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
+            built.OriginatingChannel === principal.channelId &&
+            batch.every(
+              (input) =>
+                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
+                input?.requesterProfile?.id === requester.id &&
+                input.requesterProfile.isCurrent(),
+            );
           for (const input of batch) {
             if (input) {
-              prepareSessionParticipantInput(built, input.identity, input.promptedAt);
+              // The final context only describes its own sender. Other batched messages
+              // carry their own channel-owned name, never the final message’s name.
+              const label =
+                (input === batch.at(-1) && built.SenderId === input.identity.id
+                  ? built.SenderName || built.SenderUsername
+                  : undefined) || input.displayName;
+              const profileId =
+                linked && input.identity.id === principal?.senderId ? requester?.id : undefined;
+              prepareSessionParticipantInput(
+                built,
+                input.identity,
+                input.promptedAt,
+                label || profileId
+                  ? { ...(label && { label }), ...(profileId && { profileId }) }
+                  : undefined,
+              );
             }
           }
           // Public intent is stricter than ordinary attribution: no mixed/batched context.
@@ -126,13 +158,9 @@ export function createHostChannelInboundEventContextBuilder<
                 : undefined,
             );
           }
-          const principal = batch.at(-1)?.verifiedPrincipal;
-          const principalKey = principal && JSON.stringify(principal);
-          const gateway = owner.resolveGatewayContext?.();
           if (!gateway) {
             return;
           }
-          const requester = batch.at(-1)?.requesterProfile;
           // Retain an actual absent linkage result, not the later absence of a live grant.
           // Mixed/batched ingress keeps ordinary explicit-user validation.
           if (
@@ -151,19 +179,7 @@ export function createHostChannelInboundEventContextBuilder<
             );
           }
           let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
-          if (
-            principal &&
-            requester &&
-            built.SenderId === principal.senderId &&
-            (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
-            built.OriginatingChannel === principal.channelId &&
-            batch.every(
-              (input) =>
-                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
-                input?.requesterProfile?.id === requester.id &&
-                input.requesterProfile.isCurrent(),
-            )
-          ) {
+          if (linked) {
             // Retain the remote provenance and record the attested human contribution too.
             for (const input of batch) {
               if (input) {

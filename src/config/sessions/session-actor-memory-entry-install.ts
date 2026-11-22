@@ -42,6 +42,11 @@ export function installSessionActorMemoryEntry(
   if (sameLifecycle && previous?.compactionQualityDegraded) {
     next.compactionQualityDegraded = true;
   }
+  if (previous?.participantDisplay) {
+    next.participantDisplay = previous.participantDisplay;
+  } else {
+    delete next.participantDisplay;
+  }
   const involvement =
     previous?.profileInvolvement ??
     (entry.profileInvolvement?.key === state.hot.target.sessionKey

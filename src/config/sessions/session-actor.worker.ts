@@ -238,7 +238,7 @@ export function createSessionActorWorker(
   };
   const registerParticipantOwner = (database: OpenClawAgentDatabase) =>
     registerSessionActorParticipantOwner(database, {
-      read: (opened, sessionKey) => retainedState(opened, sessionKey)?.hot.participants,
+      read: (opened, sessionKey) => retainedState(opened, sessionKey)?.hot,
       prepare: prepareParticipantUpdate,
     });
   const prepareEntryPatch = (database: OpenClawAgentDatabase, sessionKey: string) => {

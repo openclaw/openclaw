@@ -199,6 +199,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "communication",
   "publicShare",
   "profileInvolvement",
+  "participantDisplay",
   "priorWorkspace",
   "scheduledMemoryParent",
 ] as const satisfies ReadonlyArray<

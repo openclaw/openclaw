@@ -283,7 +283,10 @@ export function bindSqliteWorkerBackend(
                   sessionId: facts.sessionId,
                   category: facts.category,
                 });
-              } else if (command.type === "involvement" && facts.kind === "entry") {
+              } else if (
+                (command.type === "involvement" || participantResult?.displayChanged) &&
+                facts.kind === "entry"
+              ) {
                 recordFact(change.sessionKey, { kind: "unchanged" });
               }
             }
@@ -304,7 +307,7 @@ export function bindSqliteWorkerBackend(
                 },
               });
               const entryMetadata =
-                command.type === "involvement"
+                command.type === "involvement" || participantResult?.displayChanged
                   ? captureSessionEntryMetadataReceipts(captured.changes)
                   : undefined;
               candidate = {

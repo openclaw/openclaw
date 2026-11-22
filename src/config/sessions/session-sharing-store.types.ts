@@ -68,6 +68,7 @@ export type SessionMemberAdd = {
   expectedEntry?: SessionSharingExpectedEntry;
 };
 export type SessionParticipantRecordInput = {
+  display?: import("./session-participant-display.js").ChannelParticipantDisplayInput;
   identity: SessionParticipantIdentity;
   promptedAt?: number;
   sessionAgentId?: string;
@@ -75,6 +76,7 @@ export type SessionParticipantRecordInput = {
 export type RecordSessionParticipantResult = "inserted" | "updated" | "capped";
 export type MembershipPublication = { facts?: Extract<SessionRowFacts, { kind: "member" }> };
 type ParticipantPublication = {
+  displayChanged?: true;
   projectionChanged: boolean;
   participants: Pick<SessionEntry, "participants" | "participantCount">;
   records?: SessionParticipantRecord[];

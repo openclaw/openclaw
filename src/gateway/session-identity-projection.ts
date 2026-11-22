@@ -17,6 +17,7 @@ import {
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionProfileInvolvement } from "../config/sessions/session-involvement.js";
+import { channelParticipantDisplayKey } from "../config/sessions/session-participant-display.js";
 import type {
   InternalSessionEntry as SessionEntry,
   SessionProfileInvolvement,
@@ -299,8 +300,30 @@ export function projectSessionParticipants(
 ): Map<string, SessionParticipant> {
   const identities = userProfileIdentityById ?? new Map();
   const participants = new Map<string, SessionParticipant>();
-  for (const { identity } of entry?.participants ?? []) {
+  const recorded = entry?.participants ?? [];
+  const profileIds = new Set(
+    recorded.flatMap(({ identity }) =>
+      identity.type === "profile" ? [resolveSessionProfileId(identity.id, identities)] : [],
+    ),
+  );
+  for (const { identity } of recorded) {
+    const display =
+      entry?.participantDisplay && (identity.type === "remote" || identity.type === "observation")
+        ? entry.participantDisplay[channelParticipantDisplayKey(identity)]
+        : undefined;
+    // Never synthesize membership from a presentation hint. Use the separate profile
+    // contribution only when every retained contribution for this source attests it.
+    if (
+      display?.profileId &&
+      profileIds.has(resolveSessionProfileId(display.profileId, identities)) &&
+      identities.get(display.profileId)
+    ) {
+      continue;
+    }
     const participant = projectSessionParticipant(identity, identities, cfg);
+    if (display?.label) {
+      participant.label = display.label;
+    }
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;

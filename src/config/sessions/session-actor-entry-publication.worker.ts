@@ -1,7 +1,7 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionActorVersion } from "./session-actor-state.types.js";
+import type { SessionActorHotState, SessionActorVersion } from "./session-actor-state.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type {
   SessionEntryPatchCommitted,
@@ -33,7 +33,7 @@ type ParticipantOwner = {
   read: (
     database: ParticipantDatabase,
     sessionKey: string,
-  ) => readonly SessionParticipantRecord[] | undefined;
+  ) => Pick<SessionActorHotState, "entry" | "participants"> | undefined;
   prepare: (
     database: ParticipantDatabase,
     sessionKey: string,
@@ -63,8 +63,19 @@ export function readSessionActorParticipants(
   const participants =
     transaction?.hot.target.sessionKey === sessionKey
       ? transaction.hot.participants
-      : participantOwners.get(database.db)?.read(database, sessionKey);
+      : participantOwners.get(database.db)?.read(database, sessionKey)?.participants;
   return participants && structuredClone([...participants]);
+}
+
+/** Non-mutating read paired with the resident aggregate used by the count-only fast path. */
+export function readSessionActorParticipantDisplay(
+  database: ParticipantDatabase,
+  sessionKey: string,
+) {
+  const transaction = readSessionActorTransactionState(database, { sessionKey });
+  return transaction?.hot.target.sessionKey === sessionKey
+    ? transaction.hot.entry?.participantDisplay
+    : participantOwners.get(database.db)?.read(database, sessionKey)?.entry?.participantDisplay;
 }
 
 export function prepareSessionActorParticipantUpdate(

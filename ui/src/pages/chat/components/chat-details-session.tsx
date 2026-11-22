@@ -6,6 +6,7 @@ import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
+import { withParticipantHistoryLabels } from "../../../lib/chat/participant-history-labels.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
@@ -223,7 +224,12 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               </span>
             </div>
           );
-          const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
+          const people = createMemo(() =>
+            withParticipantHistoryLabels(
+              session()?.expandedParticipants ?? session()?.participants ?? [],
+              () => props.props?.messages ?? [],
+            ),
+          );
           const count = () => session()?.participantCount ?? people().length;
           // The Gateway omits the count when the owner-excluded participant list is empty.
           const partialPeople = () => count() > people().length;

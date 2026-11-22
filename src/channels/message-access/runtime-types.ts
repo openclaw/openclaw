@@ -82,6 +82,8 @@ export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
 export type ChannelIngressIdentitySubjectInput = {
   /** Stable sender id appended to effective allowlists when access groups matched. */
   stableId?: string | number | null;
+  /** Transport-supplied display text for this message. Never used for identity matching. */
+  displayName?: string;
   /** Optional identity aliases keyed by `ChannelIngressIdentityAlias.key`. */
   aliases?: Record<string, string | number | null | undefined>;
   /** Per-message claims keyed by the exact identity field key. */

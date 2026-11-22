@@ -11,8 +11,10 @@ import {
 import { getSessionKysely, resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   prepareSessionActorParticipantUpdate,
+  readSessionActorParticipantDisplay,
   readSessionActorParticipants,
 } from "./session-actor-entry-publication.worker.js";
+import { mergeChannelParticipantDisplay } from "./session-participant-display.js";
 import {
   mergeParticipantAggregate,
   participantIdentityNamespace,
@@ -41,6 +43,15 @@ export function prepareSessionParticipantContribution(
     return undefined;
   }
   const promptedAt = params.promptedAt ?? Date.now();
+  if (params.identity.type === "remote" || params.identity.type === "observation") {
+    const display = readSessionActorParticipantDisplay(database, resolved.sessionKey);
+    if (
+      mergeChannelParticipantDisplay(display, params.identity, params.display, promptedAt, existing)
+    ) {
+      // Changed display and aggregate must use the same transaction.
+      return undefined;
+    }
+  }
   const aggregate = mergeParticipantAggregate(
     {
       contribution_count: existing.contributionCount,

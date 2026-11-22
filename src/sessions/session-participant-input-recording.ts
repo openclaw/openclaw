@@ -16,6 +16,7 @@ export function recordAcceptedSessionParticipantInput(
         ...target,
         identity: input.identity,
         promptedAt: input.promptedAt,
+        ...(input.display && { display: input.display }),
       });
     }
   }

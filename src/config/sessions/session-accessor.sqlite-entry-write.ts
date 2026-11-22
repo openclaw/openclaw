@@ -82,6 +82,7 @@ type SessionEntryWriteOptions = {
   allowStoredAliases?: boolean;
   /** Only the personal involvement owner may replace this logical-node state. */
   profileInvolvement?: SessionEntry["profileInvolvement"];
+  participantDisplay?: SessionEntry["participantDisplay"];
   /** Only the provider review owner may replace a generation-bound pause. */
   providerReviewMutation?: boolean;
   /** Canonical row revalidated in this write transaction; null proves absence. */

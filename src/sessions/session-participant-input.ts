@@ -5,11 +5,14 @@ import { isCronSessionKey } from "./session-key-utils.js";
 
 // Core and SDK chunks share one private key; context spreads retain the same consumed fact.
 export const sessionParticipantInput = Symbol.for("openclaw.sessionParticipantInput");
+type Display =
+  import("../config/sessions/session-participant-display.js").ChannelParticipantDisplayInput;
 export type SessionParticipantInputContext = MsgContext & {
   [sessionParticipantInput]?: Array<{
     identity: SessionParticipantIdentity;
     promptedAt: number;
     recorded: boolean;
+    display?: Display;
   }>;
 };
 
@@ -18,8 +21,14 @@ export function prepareSessionParticipantInput(
   ctx: SessionParticipantInputContext,
   identity: SessionParticipantIdentity,
   promptedAt = Date.now(),
+  display?: Display,
 ): void {
-  (ctx[sessionParticipantInput] ??= []).push({ identity, promptedAt, recorded: false });
+  (ctx[sessionParticipantInput] ??= []).push({
+    identity,
+    promptedAt,
+    recorded: false,
+    ...(display && { display }),
+  });
 }
 
 export function readSessionInputProfileId(ctx: SessionParticipantInputContext): string | undefined {
@@ -77,11 +86,19 @@ export function prepareChannelParticipantObservation(ctx: SessionParticipantInpu
   ) {
     return;
   }
-  prepareSessionParticipantInput(ctx, {
-    type: "observation",
-    pluginId: channel ?? null,
-    accountId: ctx.AccountId ?? null,
-    senderKind: ctx.SenderIsBot === true ? "bot" : ctx.SenderIsBot === false ? "human" : "unknown",
-    id: ctx.SenderId,
-  });
+  prepareSessionParticipantInput(
+    ctx,
+    {
+      type: "observation",
+      pluginId: channel ?? null,
+      accountId: ctx.AccountId ?? null,
+      senderKind:
+        ctx.SenderIsBot === true ? "bot" : ctx.SenderIsBot === false ? "human" : "unknown",
+      id: ctx.SenderId,
+    },
+    Date.now(),
+    ctx.SenderName || ctx.SenderUsername
+      ? { label: ctx.SenderName || ctx.SenderUsername }
+      : undefined,
+  );
 }
