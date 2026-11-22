@@ -232,7 +232,7 @@ it("filters discovery and exact-id deferred dispatch without invoking forbidden 
     .current!.entries.filter((entry) => entry.name !== "read" && entry.name !== "sessions_spawn")
     .map((entry) => entry.id);
   const runtime = new ToolSearchRuntime(
-    { catalogRef, participationCeiling: ceiling },
+    { catalogRef, participationCeiling: { ...ceiling, tools: ["read", "sessions_spawn"] } },
     resolveToolSearchConfig(),
   );
   expect(runtime.all().map((entry) => entry.name)).toEqual(["read", "sessions_spawn"]);
@@ -279,7 +279,7 @@ it("narrows retained core tools without granting unsafe, plugin or MCP names", a
     "plugins",
     "nodes",
     "computer",
-    "github_publish",
+    "sessions_create",
   ].map(createStubTool);
   for (const tool of [core, plugin, mcp, ...unsafe]) {
     tool.execute = vi.fn(async () => ({ content: [], details: {} }));

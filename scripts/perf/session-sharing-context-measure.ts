@@ -88,7 +88,7 @@ const { bindHarnessMedia } = await import("../../src/agents/harness/host-media.j
 const { makeProviderModelFixture } =
   await import("../../src/agents/test-helpers/provider-model-fixture.js");
 const { prepareSessionPrincipalRunAuthority } =
-  await import("../../src/gateway/session-sharing-authorization-async.js");
+  await import("../../src/gateway/session-principal-run-authority.js");
 const { ensureProfileForEmail } = await import("../../src/state/user-profiles.js");
 const { setUserProfileRole } = await import("../../src/state/user-profile-writes.worker.js");
 const { runOpenClawStateWriteTransaction } = await import("../../src/state/openclaw-state-db.js");

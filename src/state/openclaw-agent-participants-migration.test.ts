@@ -34,6 +34,7 @@ async function historicalStore(
   const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   const native = requireNativeSqliteDatabase(initial.db);
   restoreEmptyV21StorageForHistoricalFixture(native);
+  native.exec("ALTER TABLE session_members DROP COLUMN access");
   removeCanonicalValidationFromHistoricalAgentFixture(native);
   initial.db.exec(
     `DROP TABLE session_participants; PRAGMA user_version = ${version}; UPDATE schema_meta SET schema_version = ${version};`,

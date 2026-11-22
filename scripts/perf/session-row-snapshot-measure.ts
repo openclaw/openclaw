@@ -188,6 +188,7 @@ const read: SessionRowReadView = {
   describe: (query) => rows.get(query.key),
   readSource: () => undefined,
   readMembership: () => undefined,
+  memberAccess: () => undefined,
   readChildVisibility: (...args) => visibility.read(...args),
   readChildActivity: (record, clock, excluded, revision) =>
     activity.read(record, metadata.current, clock, excluded, revision),

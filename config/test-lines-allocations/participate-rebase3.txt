@@ -1,0 +1,6 @@
+1
+# Rebase onto af7c2407 retains the existing v17 migration proof and restores its
+# historical session_members shape before testing migration through new agent44.
+# The new current access column must not leak into the simulated old database.
+# rebase3-native-fixture-tests.log proves all11 existing identity migration cases
+# plus the5 member-access migration cases; no existing assertion was removed.

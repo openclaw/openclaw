@@ -9,6 +9,7 @@ import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { insertChatItemsByTimestamp } from "./chat-thread-items.ts";
 
 registerChatSessionEnglish();
 
@@ -138,4 +139,17 @@ export function projectChatSharingNotice(
       actor: notice.actorLabel ?? "",
     }),
   };
+}
+
+/** Live sharing events split display groups at their event time, never stored history. */
+export function insertChatSharingNotices(
+  items: ChatItem[],
+  notices?: readonly ChatSharingNotice[],
+): void {
+  if (notices?.length) {
+    insertChatItemsByTimestamp(
+      items,
+      notices.map((notice) => ({ item: projectChatSharingNotice(notice) })),
+    );
+  }
 }
