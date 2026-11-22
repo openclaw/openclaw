@@ -449,8 +449,12 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
 ): Promise<FailureAlertTransportResult> {
   let mayHaveReachedRecipient = false;
+  /** A webhook attempt whose outcome was observed as indeterminate before it threw. */
+  let webhookOutcomeUnknown = false;
   let providerHandoff = false;
   let payloadDelivered = false;
+  /** Set only by the announce deadline path; the webhook path never declares it. */
+  let deadlineError: Error | undefined;
   const onDeliveryAttempt = (reachedRecipient: boolean) => {
     mayHaveReachedRecipient ||= reachedRecipient;
   };
@@ -474,6 +478,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         ssrfPolicy: params.ssrfPolicy,
         onDeliveryState: (outcome) => {
           mayHaveReachedRecipient = outcome.status !== "not-delivered";
+          webhookOutcomeUnknown = outcome.status === "unknown";
         },
         payload: {
           jobId: params.job.id,
@@ -487,6 +492,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
 
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    deadlineError = deliveryTimeoutError;
     const sessionKey = resolveCronDeliverySessionKey(params.job);
     const payload = {
       ...params.payload,
@@ -588,15 +594,17 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     };
   } catch (err) {
     const error = formatErrorMessage(err);
-    // Deadline classification: once the durable batch has been handed off, the
-    // provider may still complete the delivery after the abort, so the deadline
-    // can no longer prove non-delivery. The complete payload set being acked
-    // settles it as delivered (the history write failing afterwards is a
-    // diagnostic, not a delivery failure); a handoff or any recipient-reached
-    // attempt without the delivered payload leaves the outcome unknown and skips
-    // the in-app fallback. Only a deadline that proves nothing reached the
-    // destination reports non-delivery.
-    const reachedUnconfirmed = !payloadDelivered && (providerHandoff || mayHaveReachedRecipient);
+    // A deadline is the only interruption where the abort can hide a delivery
+    // that the provider still completes: past the transport handoff the outcome
+    // is unknown unless the complete payload was already acked, which settles it
+    // as delivered (a later history failure stays a diagnostic). Ordinary
+    // failures are authoritative, so they keep their definitive non-delivery and
+    // its in-app fallback even after a handoff.
+    const deadlineHit = deadlineError !== undefined && err === deadlineError;
+    const reachedUnconfirmed =
+      (deadlineHit || webhookOutcomeUnknown) &&
+      !payloadDelivered &&
+      (providerHandoff || mayHaveReachedRecipient);
     return {
       kind: "failed",
       error: err,

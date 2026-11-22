@@ -152,10 +152,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
-      // The durable batch handoff is the point after which the provider may
-      // still complete the delivery even if this call is interrupted, so the
-      // deadline classifier can no longer prove non-delivery past it.
-      params.onProviderHandoff?.();
       const result = await sendDurableMessageBatchCore(
         {
           cfg: params.cfg,
@@ -191,6 +187,13 @@ export async function sendCronAnnouncePayloadStrict(params: {
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           assertDirectAdapterHandoff: fence?.assertCurrent,
+          // The platform dispatch callback is the real transport boundary: it
+          // fires after admission, hooks and durable queue staging, immediately
+          // before the adapter sends. Past it the provider may complete the
+          // delivery even if this call is interrupted.
+          onPlatformSendDispatch: async () => {
+            params.onProviderHandoff?.();
+          },
           onDeliveredPayload: ({ hookContent, ...payload }) => {
             deliveredPayloads.push({ ...payload, spokenText: hookContent });
             params.onPayloadDelivered?.();

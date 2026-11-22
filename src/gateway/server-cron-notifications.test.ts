@@ -641,6 +641,23 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expectSettlement("unknown", "cron: failure alert announcement timed out");
   });
 
+  it("keeps definitive non-delivery for an ordinary send failure after handoff", async () => {
+    const senderEntered = createVoidDeferred();
+    mocks.sendCronAnnouncePayloadStrict.mockImplementationOnce(
+      ({ onProviderHandoff }: { onProviderHandoff?: () => void }) => {
+        // Handed off, then the transport rejected outright: no deadline, so the
+        // failure is authoritative and the in-app fallback must survive.
+        onProviderHandoff?.();
+        senderEntered.resolve();
+        return Promise.reject(new Error("adapter refused the alert"));
+      },
+    );
+    await expect(sendGatewayCronFailureAlert({ job: announceJob() })).rejects.toThrow(
+      "adapter refused the alert",
+    );
+    expectSettlement("not-delivered", "adapter refused the alert");
+  });
+
   it("defers detached completion delivery while suspension is prepared", async () => {
     const job = createCompletionWebhookJob();
     const suspensionAdmission = tryBeginGatewaySuspendAdmission(() => {});
