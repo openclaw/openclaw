@@ -1,7 +1,13 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION } from "./constants.js";
+import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 import type { CloseTab } from "./session-tab-registry.sqlite.test-helpers.js";
 
 const closeClient = vi.hoisted(() => vi.fn(async () => {}));
@@ -316,6 +322,25 @@ describe("session tab registry", () => {
     });
     await expectClosed(1, { sessionKeys: ["agent:main:subagent:child"], closeTab: async () => {} });
   });
+
+  it("periodic cleanup applies the per-session tab cap to subagent sessions", async () => {
+    const config = { browser: { tabCleanup: { enabled: true } } };
+    setRuntimeConfigSnapshot(config, config);
+    const subagent = "agent:main:subagent:child";
+    const cap = DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION;
+    for (let index = 0; index < cap + 2; index += 1) {
+      await track(`s-${index}`, { sessionKey: subagent, now: Date.now() + index });
+    }
+    const stop = startTrackedBrowserTabCleanupTimer({ onWarn: vi.fn() });
+    try {
+      await vi.advanceTimersByTimeAsync(300_000);
+      await vi.waitFor(() => expect(closeClient).toHaveBeenCalledTimes(2));
+    } finally {
+      await stop();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
 });
 
 function clearProcessLocalTabState(): void {

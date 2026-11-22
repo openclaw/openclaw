@@ -56,6 +56,7 @@ function selectStaleTrackedTabs(params: {
   idleMs?: number;
   maxTabsPerSession?: number;
   sessionFilter?: (sessionKey: string) => boolean;
+  capSessionFilter?: (sessionKey: string) => boolean;
 }): TrackedTab[] {
   const selected = new Map<string, TrackedTab>();
   const activeBySession = new Map<string, TrackedTab[]>();
@@ -103,7 +104,11 @@ function selectStaleTrackedTabs(params: {
       }
       continue;
     }
-    if (params.sessionFilter && !params.sessionFilter(tab.sessionKey)) {
+    const idleEligible = !params.sessionFilter || params.sessionFilter(tab.sessionKey);
+    const capEligible = params.capSessionFilter
+      ? params.capSessionFilter(tab.sessionKey)
+      : idleEligible;
+    if (!idleEligible && !capEligible) {
       continue;
     }
     // Process-scoped handles and ambiguous native ids cannot prove which durable
@@ -125,7 +130,11 @@ function selectStaleTrackedTabs(params: {
       (left, right) =>
         effectiveLastUsedAt(left) - effectiveLastUsedAt(right) || left.trackedAt - right.trackedAt,
     );
-    if (params.idleMs && params.idleMs > 0) {
+    const first = tabs[0];
+    const sessionIdle = !first || !params.sessionFilter || params.sessionFilter(first.sessionKey);
+    const sessionCap =
+      !first || (params.capSessionFilter ? params.capSessionFilter(first.sessionKey) : sessionIdle);
+    if (sessionIdle && params.idleMs && params.idleMs > 0) {
       for (const tab of tabs) {
         if (params.now - effectiveLastUsedAt(tab) >= params.idleMs) {
           selected.set(trackedTabIdentity(tab), tab);
@@ -134,6 +143,7 @@ function selectStaleTrackedTabs(params: {
     }
     const remaining = tabs.filter((tab) => !selected.has(trackedTabIdentity(tab)));
     if (
+      sessionCap &&
       params.maxTabsPerSession &&
       params.maxTabsPerSession > 0 &&
       remaining.length > params.maxTabsPerSession
@@ -366,6 +376,8 @@ export async function sweepTrackedBrowserTabs(
     maxTabsPerSession?: number;
     ordinaryCleanup?: boolean;
     sessionFilter?: (sessionKey: string) => boolean;
+    /** Overrides sessionFilter for the per-session tab cap only. */
+    capSessionFilter?: (sessionKey: string) => boolean;
   },
 ): Promise<number> {
   const params = {
@@ -391,6 +403,7 @@ export async function sweepTrackedBrowserTabs(
           idleMs: params.idleMs,
           maxTabsPerSession: params.maxTabsPerSession,
           sessionFilter: params.sessionFilter,
+          capSessionFilter: params.capSessionFilter,
         });
     return (
       dashboardClosed +
