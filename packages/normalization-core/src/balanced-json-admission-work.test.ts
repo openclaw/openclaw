@@ -540,7 +540,7 @@ describe("balanced JSON extraction", () => {
     for (const [opener, closer, after] of [
       ["[", "]", "[1]"],
       ["{", "}", '{"after":1}'],
-    ]) {
+    ] as const) {
       for (const newline of ["", "\n", "\r\n", "\r"]) {
         for (const child of [
           `[${newline}"x"${newline}]`,
@@ -586,6 +586,64 @@ describe("balanced JSON extraction", () => {
                           : [],
                       );
                     }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("retires matcher context on every lexical exit before consuming its delimiter", () => {
+    for (const [outer, end, after] of [
+      ["[", "]", "[1]"],
+      ["{", "}", '{"after":1}'],
+    ] as const) {
+      for (const [inner, close] of [
+        ["[", "]"],
+        ["{", "}"],
+      ] as const) {
+        for (const newline of ["\n", "\r\n", "\r"]) {
+          const children = [
+            `${inner}"unfinished${newline}${close}`,
+            `${inner}"closed" invalid${close}`,
+            `${inner}"unfinished${newline}${inner === "[" ? "{" : "["}broken${newline}${close}`,
+            `${inner}"unfinished${newline}[broken]${newline}last line"${close}`,
+            `${inner}${close}`,
+          ];
+          for (const child of children) {
+            for (const closed of [false, true]) {
+              for (const frame of ["", '\u001b]0;"title\u0007']) {
+                const prefix = `warning: ${outer}${newline}${child}${newline}`;
+                const source =
+                  prefix + frame + `"expected ${end}${end} here" ${closed ? end : ""} ${after}`;
+                const opaqueSpans = frame
+                  ? [{ startIndex: prefix.length, endIndex: prefix.length + frame.length - 1 }]
+                  : [];
+                for (const openers of [undefined, [outer]]) {
+                  const records = [
+                    ...(child === `${inner}${close}` && (!openers || openers.includes(inner))
+                      ? [child]
+                      : []),
+                    ...(closed ? [after] : []),
+                  ];
+                  for (const raw of [source, source.replaceAll('"', " ")]) {
+                    expect(
+                      extractBalancedJsonFragments(raw, {
+                        openers,
+                        recoverAtLineStart: true,
+                        strictJson: { source, opaqueSpans },
+                      }),
+                      JSON.stringify({ source, openers }),
+                    ).toEqual(
+                      records.map((json) => ({
+                        json,
+                        startIndex: source.indexOf(json),
+                        endIndex: source.indexOf(json) + json.length - 1,
+                      })),
+                    );
                   }
                 }
               }
@@ -648,7 +706,7 @@ describe("balanced JSON extraction", () => {
     for (const [opener, crossing] of [
       ["[", '{"]":1}'],
       ["{", '["}",1]'],
-    ]) {
+    ] as const) {
       for (const newline of ["\n", "\r\n", "\r"]) {
         for (const closeQuote of [false, true]) {
           const prefix = `${opener}"${newline}${crossing}${closeQuote ? ' "' : ""} `;
@@ -679,12 +737,15 @@ describe("balanced JSON extraction", () => {
 
   it("bounds original string work and actual deeply nested dangling-owner retirement", () => {
     for (const depth of [256, 1024, 4096]) {
-      for (const kind of ["string", "dangling", "framed-dangling"]) {
+      for (const kind of ["string", "dangling", "framed-dangling", "recovering-dangling"]) {
         const dangling = kind !== "string";
         const framing = kind === "framed-dangling" ? '\u009d0;"\\[]\u0007' : "";
-        const parent = dangling
-          ? `warning: [${framing}${"{".repeat(depth)}]`
-          : `[${JSON.stringify("[".repeat(depth))},{}]`;
+        const parent =
+          kind === "recovering-dangling"
+            ? `warning: [\n["unfinished\n${"{".repeat(depth)}]\n"expected ]] here" ]`
+            : dangling
+              ? `warning: [${framing}${"{".repeat(depth)}]`
+              : `[${JSON.stringify("[".repeat(depth))},{}]`;
         const suffix = '{"after":true}';
         const source = parent + (dangling ? "\n" : " ") + suffix;
         const stringEnd = parent.lastIndexOf('"');
