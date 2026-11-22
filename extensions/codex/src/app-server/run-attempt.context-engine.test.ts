@@ -276,6 +276,39 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await finish();
   });
 
+  it.each([
+    { inputProvenance: undefined, expected: { kind: "external_user", sourceChannel: "webchat" } },
+    { inputProvenance: { kind: "internal_system" }, expected: { kind: "internal_system" } },
+  ] as const)(
+    "exposes current prompt-hook provenance with run input $inputProvenance",
+    async ({ inputProvenance, expected }) => {
+      const beforePromptBuild = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
+      promptHook(beforePromptBuild);
+      const { harness, params } = attempt({ inputProvenance });
+      const messageId = "admitted-webchat:user";
+      params.userTurnTranscriptRecorder = createSteeringRecorder(
+        {
+          ...userMessage(params.prompt, 10),
+          idempotencyKey: messageId,
+          provenance: { kind: "external_user", sourceChannel: "webchat" },
+        },
+        async () => undefined,
+        () => false,
+      );
+
+      const finish = await startAttempt(params, harness);
+      await finish();
+
+      expect(beforePromptBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentUserMessage: params.prompt,
+          currentUserMessageId: messageId,
+        }),
+        expect.objectContaining({ inputProvenance: expected }),
+      );
+    },
+  );
+
   it("keeps current image-only input stable through continuity projection", async () => {
     const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
     promptHook(beforePromptBuild);

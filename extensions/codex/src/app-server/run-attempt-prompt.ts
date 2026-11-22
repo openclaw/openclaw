@@ -46,7 +46,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     runtime,
     attemptTools,
     historyState,
-    hookContext,
+    hookContext: { inputProvenance, ...hookContext },
     workspaceBootstrapContext,
     buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
@@ -376,7 +376,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         },
       },
       messages: historyState.messages,
-      ctx: hookContext,
+      ctx: { ...hookContext, inputProvenance: inputProvenance ?? admittedMessage?.provenance },
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
         fingerprint: params.toolAuthorityFingerprint,
