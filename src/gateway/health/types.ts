@@ -2,6 +2,7 @@ import type { Snapshot } from "../../../packages/gateway-protocol/src/schema/sna
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseCleanupFailure } from "../../state/openclaw-agent-execution.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
@@ -59,6 +60,7 @@ export type ReadinessResult = {
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
   agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
+  agentCleanup?: readonly AgentDatabaseCleanupFailure[];
   stateDatabase?: { reason: string };
 };
 

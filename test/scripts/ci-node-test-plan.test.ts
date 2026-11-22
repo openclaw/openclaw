@@ -3338,8 +3338,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
         ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
         ["src/infra/provider-usage.load.test.ts", "core-runtime-infra-provider-push", 160],
-        ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
-        ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],
+        ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 120],
+        ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 120],
       ] as const;
       const files = entries.map(([file]) => file);
       const targets = files.slice(0, 3);
@@ -3394,8 +3394,60 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ]);
       expect(sumSeconds(selected)).toBe(500);
       expectPlanFiles(selected, targets, requiredPatterns);
+
+      for (const overlappingTargets of [files.slice(2, 4), [files[2]!, ...files.slice(4)]]) {
+        const parallel = only(required(createSelected(overlappingTargets, { runnerBackend })));
+        expect(parallel.planConcurrency).toBe(2);
+        expect(parallel.groups).toHaveLength(overlappingTargets.length);
+        const isolated = required(
+          createSelected(overlappingTargets, { runnerBackend, isolateSystemRuntime: true }),
+        );
+        const runtime = isolated.filter((job) =>
+          job.groups.some((group) => group.shard_name === "core-runtime-infra-system-runtime"),
+        );
+        expect(runtime).toHaveLength(1);
+        expect(runtime[0]?.planConcurrency).toBe(1);
+        expect(Number(runtime[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(2);
+        expect(runtime[0]?.predictedTestSeconds).toBe(160);
+        expect(runtime[0]?.predictedSeconds).toBe(160);
+        expect(isolated).toHaveLength(2);
+        const siblings = isolated.find((job) => job !== runtime[0]);
+        expect(siblings?.planConcurrency).toBe(overlappingTargets.length === 2 ? 1 : 2);
+        expect(Number(siblings?.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)).toBe(2);
+        expect(new Set(isolated.map((job) => job.checkName)).size).toBe(isolated.length);
+        expect(new Set(isolated.map((job) => job.shardName)).size).toBe(isolated.length);
+        expectEvery(isolated, (job) => job.predictedTestSeconds! <= 210);
+        expect(sumSeconds(isolated)).toBe(overlappingTargets.length === 2 ? 320 : 400);
+        expectPlanFiles(isolated, overlappingTargets, requiredPatterns);
+      }
     },
   );
+
+  it("preserves the worker allocation and timing of already-serial hosted selections", async () => {
+    const target = "src/infra/ports-probe.test.ts";
+    mockProject("core-runtime", configPath("infra"), "src/infra", [target], {
+      "core-runtime-infra-system-runtime": 160,
+    });
+    mockOriginal("database", {
+      databaseWorkerCoreTestFiles: [],
+      isDatabaseWorkerCoreTestFile: () => false,
+    });
+    await mockFastPaths();
+    mockUnbuiltRuntime();
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "build",
+      "database",
+    ]);
+    const original = only(required(select([target], { runnerBackend: "github" })));
+    expect(original.planConcurrency).toBe(1);
+    // Hosted serial rows inherit the workflow's three-worker allocation unless explicitly capped.
+    expect(Number(original.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 3)).toBe(3);
+    const isolated = only(
+      required(select([target], { runnerBackend: "github", isolateSystemRuntime: true })),
+    );
+    expect(Number(isolated.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 3)).toBe(3);
+    expect(isolated).toEqual(original);
+  });
 
   async function createToolingFixturePlan(params: {
     files: string[];

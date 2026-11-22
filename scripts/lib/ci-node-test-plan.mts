@@ -4457,6 +4457,7 @@ export function createSelectedNodeTestShardBundles(
     RuntimeTestSelection & {
       onFallback?: (reason: string) => void;
       preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
+      isolateSystemRuntime?: boolean;
       volumeContext?: NodeTestVolumeContext;
       onVolumePrepared?: (describe: ReturnType<typeof prepareNodeTestVolumes>) => void;
     } = {},
@@ -4652,6 +4653,9 @@ export function createSelectedNodeTestShardBundles(
       canonicalFamilies.set(projectedGroup, compactStripeFamily(group));
       return [projectedGroup];
     });
+    if (groups.length === 0) {
+      return [];
+    }
     // A full-plan default is redundant only when every selected child is already as narrow.
     const env = { ...shard.env };
     if (
@@ -4663,21 +4667,46 @@ export function createSelectedNodeTestShardBundles(
     ) {
       delete env.OPENCLAW_VITEST_MAX_WORKERS;
     }
-    return groups.length
-      ? [
-          {
-            ...shard,
-            env: Object.keys(env).length > 0 ? env : undefined,
-            checkName: `checks-node-changed-${shard.shardName}`,
-            shardName: `changed-${shard.shardName}`,
-            groups,
-            predictedSeconds: Math.ceil(
-              retainedSeconds +
-                compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
-            ),
-          },
-        ]
-      : [];
+    const job: CompactNodeTestShard = {
+      ...shard,
+      env: Object.keys(env).length > 0 ? env : undefined,
+      checkName: `checks-node-changed-${shard.shardName}`,
+      shardName: `changed-${shard.shardName}`,
+      groups,
+      predictedSeconds: Math.ceil(
+        retainedSeconds + compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+      ),
+    };
+    const isSystemRuntime = (group: NodeTestShardGroup) =>
+      /^core-runtime-infra-system-runtime(?:-hosted-\d+)?$/u.test(group.shard_name);
+    if (options.isolateSystemRuntime && job.planConcurrency === 2 && groups.some(isSystemRuntime)) {
+      const serialEnv = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", job.env ?? {}, 2)),
+        ),
+      };
+      const siblings = groups.filter((group) => !isSystemRuntime(group));
+      // Isolate only runtime children; unrelated siblings keep their shared parallel envelope.
+      return [
+        ...groups.filter(isSystemRuntime).map((group) => [group]),
+        ...(siblings.length ? [siblings] : []),
+      ].map((children, index) => {
+        const serial = isSystemRuntime(children[0]!);
+        return Object.assign({}, job, {
+          checkName: `${job.checkName}-isolated-${index + 1}`,
+          shardName: `${job.shardName}-isolated-${index + 1}`,
+          planConcurrency: serial ? (1 as const) : job.planConcurrency,
+          env: serial ? serialEnv : job.env,
+          groups: children,
+          predictedSeconds: Math.ceil(
+            children.reduce((total, group) => total + groupSeconds.get(group)!, 0) +
+              compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+          ),
+        });
+      });
+    }
+    return [job];
   });
   const selectedJobs = [
     ...(tooling.size

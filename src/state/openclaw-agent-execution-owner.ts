@@ -109,14 +109,6 @@ export function createAgentDatabaseExecution(
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
-  const reportCleanupFailure = (error: unknown) => {
-    // Diagnostic failures cannot turn a committed command into a replayable failure.
-    try {
-      log.warn(`Agent database cleanup failed: ${formatErrorMessage(error)}`);
-    } catch {
-      // The resource owner still retains the cleanup failure.
-    }
-  };
   const finishRetirement = () => {
     lifetime.retire();
     if (executions.get(pathname) !== owner) {
@@ -163,6 +155,12 @@ export function createAgentDatabaseExecution(
         (error: unknown) => {
           materializeErrorStack(error);
           cleanupFailure = { error };
+          executionState.idle.delete(owner);
+          try {
+            log.warn(`Agent ${agentId} database cleanup failed: ${formatErrorMessage(error)}`);
+          } catch {
+            // Diagnostic delivery cannot release the failed owner's cleanup custody.
+          }
           throw error;
         },
       )
@@ -273,7 +271,7 @@ export function createAgentDatabaseExecution(
         !nativeClosing &&
         (current.failure() || (!fileIdentity && !current.getPendingPreparation()))
       ) {
-        await closeNative(current).catch(reportCleanupFailure);
+        await closeNative(current).catch(() => undefined);
       }
       return result;
     } catch (error) {
@@ -290,7 +288,6 @@ export function createAgentDatabaseExecution(
             await closeNative(current);
           }
         } catch (cleanupError) {
-          reportCleanupFailure(cleanupError);
           const primary = error instanceof Error ? error : new Error(String(error));
           const failure = Object.assign(
             new Error(primary.message, {
@@ -346,6 +343,9 @@ export function createAgentDatabaseExecution(
   const owner: AgentDatabaseFileExecutionOwner = {
     kind: "file",
     agentId,
+    stateDatabasePath: context.admission.databasePath,
+    getCleanupFailure: () =>
+      cleanupFailure ? { error: cleanupFailure.error, retryable: lifetime.open } : undefined,
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
@@ -568,7 +568,7 @@ export function createAgentDatabaseExecution(
             ) {
               if (generation) {
                 // Source refusal can leave an unaccepted generation allocated before native open.
-                await closeNative(generation).catch(reportCleanupFailure);
+                await closeNative(generation).catch(() => undefined);
               }
               if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
                 creationIdentity = undefined;
@@ -592,8 +592,8 @@ export function createAgentDatabaseExecution(
                 }
                 await idle.closeIdle();
               }
-            } catch (error) {
-              reportCleanupFailure(error);
+            } catch {
+              // The failed owner recorded its diagnostic and retained cleanup custody.
             }
             if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
               return;
@@ -605,7 +605,7 @@ export function createAgentDatabaseExecution(
                   if (idleTimer !== timer || !executionState.idle.has(owner)) {
                     return;
                   }
-                  void owner.closeIdle().catch(reportCleanupFailure);
+                  void owner.closeIdle().catch(() => undefined);
                 }, resolveAgentDatabaseIdleHandleTtlMs()),
               );
               idleTimer = timer;
@@ -613,7 +613,7 @@ export function createAgentDatabaseExecution(
               return;
             }
             // The completed command stays acknowledged; the resource owner retains cleanup.
-            await owner.closeIdle().catch(reportCleanupFailure);
+            await owner.closeIdle().catch(() => undefined);
           })());
         },
       };
