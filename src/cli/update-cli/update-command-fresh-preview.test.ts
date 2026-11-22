@@ -2,11 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import * as oneShotExit from "../one-shot-exit.js";
 import { invokeUpdateCli } from "../update-cli-invocation.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import {
@@ -15,12 +13,6 @@ import {
   writeFreshJson,
 } from "./update-command-fresh.test-support.js";
 import { updateCommand } from "./update-command.js";
-
-const promptConfirm = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("@clack/prompts", async (original) => ({
-  ...(await original<typeof import("@clack/prompts")>()),
-  confirm: promptConfirm,
-}));
 
 const { fixture } = installFreshUpdateFixture();
 const inheritedRunIds = ["  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ", " \t "] as const;
@@ -40,35 +32,6 @@ function expectJson(result: unknown) {
 }
 
 describe("update command admission with fresh state", () => {
-  it("requires fresh downgrade confirmation without creating a run or exiting before release", async () => {
-    await expect(
-      updateCommand({ admission: "installed", tag: "2026.9.2", json: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
-    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    expectJson({ status: "skipped", reason: "downgrade-confirmation-required" });
-    expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
-    expectFreshStatePreserved(fixture);
-  });
-
-  it("cancels a fresh downgrade without a ledger and exits only after release", async () => {
-    promptConfirm.mockResolvedValue(false);
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    const exitAfterOutput = oneShotExit.exitCliAfterOutput;
-    const leases: string[] = [];
-    vi.spyOn(oneShotExit, "exitCliAfterOutput").mockImplementation((...args) => {
-      leases.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
-      return exitAfterOutput(...args);
-    });
-    await withTriageTerminal(true, async () => {
-      await expect(
-        updateCommand({ admission: "installed", tag: "2026.9.2", restart: false }),
-      ).rejects.toMatchObject({ code: 0 });
-    });
-    expect(leases).toEqual(["absent"]);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expectFreshStatePreserved(fixture);
-  });
-
   it("reports an invalid dev preview without creating runtime state", async () => {
     const config = writeStoredChannel("dev");
     const configBytes = fs.readFileSync(config, "utf8");

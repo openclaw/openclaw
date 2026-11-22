@@ -1,9 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import type * as UpdateCliShared from "../cli/update-cli/shared.js";
+import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import { defaultRuntime } from "../runtime.js";
 
 const sent = vi.hoisted(() => [] as unknown[]);
+const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
 const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
 const packageTarget = vi.hoisted(() => ({ version: "2026.11.6" }));
@@ -70,6 +72,12 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
       return { ok: true };
     }
     if (request.method === "update.run") {
+      if (missingCredentials.enabled) {
+        throw new GatewayCredentialsRequiredError({
+          method: "update.run",
+          configPath: "/tmp/openclaw-package/openclaw.json",
+        });
+      }
       sent.push(request.params);
       return runsGet.length
         ? { runId: "run-1", ok: true }
@@ -84,6 +92,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 
 afterEach(() => {
   install.kind = "git";
+  missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
   packageTarget.version = "2026.11.6";
@@ -159,7 +168,6 @@ it("keeps following the run while the restarting Gateway refuses connections", a
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {
-  const { defaultRuntime } = await import("../runtime.js");
   const { runReleaseUpdateCli } = await import("./cli.js");
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -260,3 +268,17 @@ it.each([
     }
   },
 );
+
+it("prepares locally when the local Gateway has no usable credentials", async () => {
+  missingCredentials.enabled = true;
+  install.kind = "package";
+  const { runReleaseUpdateCli } = await import("./cli.js");
+  await runReleaseUpdateCli({
+    json: true,
+    restart: true,
+    runningRoot: "/tmp/openclaw-package",
+    yes: true,
+  });
+  expect(prepared).toEqual([expect.objectContaining({ runningRoot: "/tmp/openclaw-package" })]);
+  expect(process.exitCode).toBe(0);
+});

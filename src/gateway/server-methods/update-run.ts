@@ -24,6 +24,7 @@ import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
+import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -53,6 +54,21 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
       message:
         "Use the external supervisor's update workflow to stop, update, and restart the Gateway.",
       result: { status: "skipped", reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON },
+    });
+    return;
+  }
+  const root = installed.root ?? installed.status.root;
+  if (
+    !root ||
+    (installed.status.installKind !== "git" && installed.status.installKind !== "package")
+  ) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: reason,
+      message: "Update this installation with its original installation method.",
+      result: { status: "skipped", reason },
     });
     return;
   }
@@ -166,7 +182,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
   });
   wakeUpdateRunWatcher();
   void runUpdateInBackground(run.runId, {
-    root: installed.root ?? installed.status.root ?? "",
+    root,
     installKind: installed.status.installKind,
     channel: normalizeUpdateChannel(config.update?.channel),
     git: installed.status.git,

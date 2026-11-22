@@ -6,6 +6,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { resolveGlobalInstallSpec } from "../../infra/update-global.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -18,6 +19,7 @@ import type { createUpdateProgress } from "./progress.js";
 import { confirmUpdateDowngrade, normalizeTag, type UpdateCommandOptions } from "./shared.js";
 import {
   reportPreMutationUpdateResult,
+  assertReleaseInstallOwner,
   withUpdateAdmissionReporting,
 } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
@@ -100,7 +102,19 @@ async function updateCommandWithRuntime(
   // Package installs and Git installs staying on Git prepare releases after the owner refusals.
   // Channel switches from Git and dry runs retain the existing flow.
   const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
-  if ((prepared.installKind !== "git" || staysGit) && !inputOpts.dryRun) {
+  if (
+    (prepared.installKind === "package" || (prepared.installKind === "git" && staysGit)) &&
+    !inputOpts.dryRun
+  ) {
+    await assertReleaseInstallOwner({
+      root: prepared.discoveredRoot,
+      installKind: prepared.installKind,
+      timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+      pkgOwnership: prepared.pkgOwnership,
+      opts: inputOpts,
+      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+    });
+    await assertUpdateRecoveryAdmission();
     const [{ runReleaseUpdateCli }, { readUpdateChannelConfig }] = await Promise.all([
       import("../../update/cli.js"),
       import("./update-command-config.js"),

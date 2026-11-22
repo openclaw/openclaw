@@ -32,7 +32,6 @@ describe("update-cli", () => {
   const {
     createCaseDir,
     mockPackageInstallAtCaseDir,
-    profileStateDir,
     setTty,
     setupNonInteractiveDowngrade,
     tempDirs,
@@ -298,39 +297,14 @@ describe("update-cli", () => {
     );
   });
 
-  it.each([
-    {
-      name: "requires confirmation without --yes",
-      options: {},
-      shouldExit: true,
-    },
-    {
-      name: "allows downgrade with --yes",
-      options: { yes: true },
-      shouldExit: false,
-    },
-  ])("$name in non-interactive mode", async ({ options, shouldExit }) => {
+  it.each([false, true])("passes downgrade consent to the release owner (yes=%s)", async (yes) => {
     await setupNonInteractiveDowngrade();
     const runsBefore = cli.listUpdateRuns();
     const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
-    if (shouldExit) {
-      await expect(runUpdate(options)).rejects.toEqual(new cli.ExitError(1));
-      expect(cli.listUpdateRuns()).toEqual(runsBefore);
-      await expect(fs.stat(`${profileStateDir()}.update-captures`)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      check.expectNoSideEffects(
-        cli.replaceConfigFile,
-        cli.mutateConfigFileWithRetry,
-        cli.runDaemonInstall,
-        cli.runDaemonRestart,
-      );
-    } else {
-      await runUpdate(options);
-    }
-    expect(check.getLogOutput().includes("Downgrade confirmation required.")).toBe(shouldExit);
-    check.expectNoSideEffects(runtime.exit, gitUpdate);
-    expect(runRelease).toHaveBeenCalledTimes(shouldExit ? 0 : 1);
+    await runUpdate({ yes });
+    expect(runRelease).toHaveBeenCalledWith(expect.objectContaining({ yes }));
+    expect(cli.listUpdateRuns()).toEqual(runsBefore);
+    check.expectNoSideEffects(runtime.exit, gitUpdate, cli.runDaemonInstall, cli.runDaemonRestart);
   });
 
   it.each(["channel", "restart"])(

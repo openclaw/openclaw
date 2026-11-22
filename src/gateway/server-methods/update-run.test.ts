@@ -153,3 +153,14 @@ it("prepares package installs through the release path on the stable channel", a
     ),
   );
 });
+
+it("refuses an unrecognized installation before recording or preparing an update", async () => {
+  install.kind = "unknown";
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({
+    ok: false,
+    runId: null,
+    code: "unmanaged-package-install",
+  });
+  expect(prepareUpdate).not.toHaveBeenCalled();
+});

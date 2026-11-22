@@ -4,6 +4,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertGlobalUpdateOwner, UpdatePreMutationError } from "../cli/update-cli/shared.js";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -11,15 +12,13 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
+import { assertUpdateRecoveryAdmission } from "../infra/update-run-recovery-admission.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
   recordUpdateRunStepAsync,
 } from "../infra/update-run-write.async.js";
-import {
-  createSystemPackageOwnershipInspection,
-  SystemPackageOwnershipError,
-} from "../infra/update-system-package-ownership.js";
+import { SystemPackageOwnershipError } from "../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
@@ -147,19 +146,22 @@ export async function prepareUpdate(params: {
         { env },
       );
     }
+    await assertUpdateRecoveryAdmission({ env });
+    const install = await detectInstall(params.runningRoot);
     try {
-      await createSystemPackageOwnershipInspection(
-        Math.max(1, deadline - Date.now()),
-      ).assertUnowned(params.runningRoot);
+      await assertGlobalUpdateOwner({
+        root: params.runningRoot,
+        installKind: install.kind,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+      });
     } catch (error) {
-      if (error instanceof SystemPackageOwnershipError) {
+      if (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError) {
         return await fail(error.reason, error.message);
       }
       throw error;
     }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
-    const install = await detectInstall(params.runningRoot);
     let target;
     try {
       target = await resolveTarget({

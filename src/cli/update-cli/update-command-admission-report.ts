@@ -15,6 +15,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
 import {
+  assertGlobalUpdateOwner,
   parseUpdateTimeoutMs,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -36,6 +37,33 @@ import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
+
+/** Keep unowned-install refusals read-only before a release client delegates to the Gateway. */
+export async function assertReleaseInstallOwner(
+  params: Parameters<typeof assertGlobalUpdateOwner>[0] &
+    Pick<UpdateAdmissionReportParams, "opts" | "controlPlaneUpdateSentinelMeta">,
+): Promise<void> {
+  try {
+    await assertGlobalUpdateOwner(params);
+  } catch (error) {
+    if (!(error instanceof UpdatePreMutationError)) {
+      throw error;
+    }
+    return await reportUnreportedUpdateAdmissionOutcome(
+      new UnreportedUpdateAdmissionOutcome(
+        {
+          root: params.root,
+          installKind: params.installKind,
+          reason: error.reason,
+          message: error.message,
+          opts: params.opts,
+          controlPlaneUpdateSentinelMeta: params.controlPlaneUpdateSentinelMeta,
+        },
+        { exitCode: 0 },
+      ),
+    );
+  }
+}
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(

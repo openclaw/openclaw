@@ -5,6 +5,7 @@ import { requestUpdateDowngradeConfirmation } from "../cli/update-cli/shared.js"
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import {
   callGateway,
+  isGatewayCredentialsRequiredError,
   isGatewayTransportError,
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
@@ -156,7 +157,7 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
     }
     return true;
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
       return false;
     }
     throw error;
@@ -183,7 +184,7 @@ async function requestGatewayUpdate(
     }
     return response.runId;
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
       return null;
     }
     throw error;

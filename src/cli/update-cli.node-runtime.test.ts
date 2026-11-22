@@ -1,4 +1,3 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as proof from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";

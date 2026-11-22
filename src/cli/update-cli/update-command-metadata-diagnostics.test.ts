@@ -15,7 +15,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";
 import * as shared from "./shared.js";
-import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";

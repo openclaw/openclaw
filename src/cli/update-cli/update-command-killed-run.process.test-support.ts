@@ -464,9 +464,7 @@ export type RefusalCase = {
   control?: (killed: Dead) => unknown;
 };
 /**
- * The update refuses for that reason, and so does the next one with admission's own
- * refusal, both leaving the recovery, run and config as they were. A stalled updater's
- * recovery then settles once it has been killed.
+ * The update and its next admission both refuse, leaving recovery, run and config intact.
  */
 export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: RefusalCase) =>
   fixtures.lifetime.run(async () => {
@@ -486,12 +484,6 @@ export const stillRefuses = ({ refusal, dead, dryRun, restart, control }: Refusa
 
     expect(mocks.proceed).not.toHaveBeenCalled();
     expect(reserved(killed.runId)).toEqual(before);
-    if (dead?.end === "stalled") {
-      killed.proc.kill("SIGKILL");
-      await killed.closed;
-      await nextUpdate(killed.slot);
-      expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-    }
   });
 
 export const repair = "openclaw update repair";

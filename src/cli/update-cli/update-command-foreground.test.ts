@@ -19,6 +19,7 @@ import {
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { updateConfigSource } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import { expectNoCalls as expectNotCalled } from "./update-boundary.test-support.js";
@@ -28,7 +29,6 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as managedContext from "./update-command-managed-context.js";
 import { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 import type { RefuseUpdate } from "./update-command-result.js";
-import * as commandRun from "./update-command-run.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";

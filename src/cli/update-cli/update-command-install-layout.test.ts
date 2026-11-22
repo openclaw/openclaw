@@ -131,7 +131,7 @@ it.each(["missing", "invalid"])(
 );
 
 it.skipIf(process.platform === "win32").each([false, true])(
-  "reports Homebrew guidance across output and existing history (database: %s)",
+  "reports Homebrew guidance without changing profile history (database: %s)",
   async (existingDatabase) => {
     vi.spyOn(container, "isContainerEnvironment").mockReturnValue(false);
     if (existingDatabase) {
@@ -161,11 +161,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
     });
     expect(lines.join("\n")).toContain("brew upgrade openclaw-cli");
     if (existingDatabase) {
-      const run = listUpdateRuns({ limit: 1 })[0]!;
-      expect(run).toMatchObject({
-        status: "skipped",
-        origin: { nextAction: expect.stringContaining("brew upgrade openclaw-cli") },
-      });
+      expect(listUpdateRuns({ limit: 1 })).toEqual([]);
     } else {
       expect(output[0]).not.toHaveProperty("runId");
       await expectNoDatabase();
