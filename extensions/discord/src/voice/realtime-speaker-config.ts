@@ -173,6 +173,7 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     bootstrapContextInstructions: params.bootstrapContextInstructions,
     toolPolicy,
     consultPolicy,
+    handlesAgentConsult: sessionPolicy.handlesAgentConsult,
   });
   return {
     resolved,

@@ -13,6 +13,7 @@ import {
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
+  buildRealtimeVoiceAgentConsultPolicyInstructions,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
@@ -41,6 +42,7 @@ import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import { resolveVoiceCallBaseInstructions } from "../realtime-defaults.js";
 import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { createRealtimeCallPlayback } from "./realtime-call-playback.js";
@@ -642,18 +644,20 @@ export class RealtimeCallHandler {
 
     let registration: RealtimeCallRegistration;
     let sessionPolicy: ReturnType<typeof resolveRealtimeVoiceSessionPolicy>;
+    let consultPolicyInstructions: string | undefined;
     try {
       registration = await this.resolveCallRegistration(callRecord);
       sessionPolicy = resolveRealtimeVoiceSessionPolicy({
         isAgentProxy: false,
         capabilities: registration.capabilities,
         configuredToolPolicy: this.config.toolPolicy,
-        configuredConsultPolicy: this.config.consultPolicy === "always" ? "always" : "auto",
+        configuredConsultPolicy: this.config.consultPolicy,
         requireWakeName: undefined,
         configuredWakeNames: undefined,
         cfg: this.coreConfig ?? {},
         agentId: registration.agentId,
       });
+      consultPolicyInstructions = buildRealtimeVoiceAgentConsultPolicyInstructions(sessionPolicy);
     } catch (error) {
       console.error(
         `[voice-call] Failed to resolve realtime call registration callId=${callId} providerCallId=${callSid}: ${formatErrorMessage(error)}`,
@@ -692,12 +696,21 @@ export class RealtimeCallHandler {
     const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
     const {
       agentId,
-      instructions,
+      instructions: registrationInstructions,
       provider: realtimeProvider,
       providerConfig,
       capabilities,
     } = registration;
     const { handlesAgentConsult, toolPolicy } = sessionPolicy;
+    const instructions = [
+      resolveVoiceCallBaseInstructions(registrationInstructions, {
+        handlesAgentConsult,
+        configuredInstructions: this.config.instructions,
+      }),
+      consultPolicyInstructions,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     if (handlesAgentConsult) {
       console.warn(
         "[voice-call] This realtime model uses native agent delegation; hang-up is available through the call-scoped OpenClaw agent, while other custom realtime function tools remain unavailable.",

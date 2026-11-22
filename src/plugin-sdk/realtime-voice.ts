@@ -92,6 +92,7 @@ export {
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
+  type RealtimeVoiceConsultPolicy,
 } from "../talk/agent-consult-tool.js";
 export {
   buildRealtimeVoiceSpeakExactMessage,

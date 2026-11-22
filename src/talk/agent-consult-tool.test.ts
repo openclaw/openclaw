@@ -98,6 +98,21 @@ describe("realtime voice agent consult tool", () => {
     );
   });
 
+  it("words substantive guidance for the model's delegation path", () => {
+    const live = { isAgentProxy: false, handlesAgentConsult: true } as const;
+    const liveInstructions = sessionInstructions({ ...live, consultPolicy: "substantive" });
+    expect(liveInstructions).toContain(
+      "Delegation policy:\n- Delegate every request that needs facts, memory, current information, tools, workspace state, or the user's own context, even if you think you know the answer.",
+    );
+    expect(liveInstructions).not.toContain(consultName);
+    expect(sessionInstructions({ ...live, consultPolicy: "auto" })).toBe(
+      `Voice base.\n\n${backchannel}`,
+    );
+    expect(sessionInstructions({ ...live, consultPolicy: "substantive", toolPolicy: "none" })).toBe(
+      `Voice base.\n\n${backchannel}`,
+    );
+  });
+
   it("filters empty optional blocks from non-proxy session instructions", () => {
     expect(
       sessionInstructions({

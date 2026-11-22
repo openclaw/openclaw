@@ -79,10 +79,16 @@ export function makeHandler(params: {
   endCall?: CallManager["endCall"];
   idleHangupMs?: number;
   nativeConsult?: boolean;
+  consultPolicy?: ReturnType<typeof createRealtimeConfig>["consultPolicy"];
+  instructions?: string;
+  /** Instructions the routed registration returns (base plus agent context). */
+  registrationInstructions?: string;
 }) {
   const config = {
     ...createRealtimeConfig(),
+    ...(params.instructions ? { instructions: params.instructions } : {}),
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
+    ...(params.consultPolicy ? { consultPolicy: params.consultPolicy } : {}),
   };
   const provider = makeRealtimeProvider(params.createBridge, {
     capabilities: {
@@ -104,7 +110,7 @@ export function makeHandler(params: {
   } as unknown as CallManager;
   const handler = managedHandler(config, manager, () => ({
     agentId: "main",
-    instructions: config.instructions,
+    instructions: params.registrationInstructions ?? config.instructions,
     provider,
     providerConfig: { apiKey: "test-key" },
     capabilities: provider.capabilities,

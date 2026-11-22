@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "../realtime-defaults.js";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { makeBridge, makeCall, makeHandler } from "./realtime-call-control.test-helpers.js";
@@ -221,6 +222,50 @@ it.each(["extended outbound", "inbound"])(
       await vi.advanceTimersByTimeAsync(1_000);
     }
     expect(endCall).not.toHaveBeenCalled();
+  },
+);
+it.each([false, true])(
+  "words substantive consult guidance for the routed model (native consult=%s)",
+  async (nativeConsult) => {
+    const { request } = await connectCall("CA-substantive", {
+      nativeConsult,
+      consultPolicy: "substantive",
+    });
+    if (nativeConsult) {
+      expect(request.instructions).toMatch(/^Be helpful\.\n\nDelegation policy:\n- Delegate every/);
+      expect(request.instructions).not.toContain("openclaw_agent_consult");
+    } else {
+      expect(request.instructions).toMatch(/^Be helpful\.\n\nConsult behavior:\n/);
+      expect(request.instructions).toContain(
+        "- Call openclaw_agent_consult before answering requests that need facts",
+      );
+    }
+  },
+);
+it.each([
+  ["default", false],
+  ["default", true],
+  ["customized default", true],
+] as const)(
+  "words the %s base prompt for the routed model (native consult=%s)",
+  async (base, nativeConsult) => {
+    const configured =
+      base === "default"
+        ? DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS
+        : `${DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS} Always speak Spanish.`;
+    const { request } = await connectCall("CA-default-base", {
+      nativeConsult,
+      instructions: configured,
+      registrationInstructions: `${configured}\n\nAgent context.`,
+    });
+    if (nativeConsult && base === "default") {
+      expect(request.instructions).toMatch(
+        /delegate it to OpenClaw before answering\.\n\nAgent context\./,
+      );
+      expect(request.instructions).not.toMatch(/openclaw_agent_consult|openclaw_end_call/);
+    } else {
+      expect(request.instructions?.startsWith(`${configured}\n\nAgent context.`)).toBe(true);
+    }
   },
 );
 it.each([false, true])(
