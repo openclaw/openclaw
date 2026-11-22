@@ -3,6 +3,7 @@ import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { parseProjectGitUrl } from "../projects/project-git-url.js";
+import { selectStoredProjectRegistry } from "../projects/project-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -19,7 +20,7 @@ import {
   prepareGitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { SESSION_WRITE_SCOPE } from "./operator-scopes.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { canRequesterUseProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 /** Issue filing uses the registered project, never a checkout remote or a tool-supplied URL. */
@@ -65,53 +66,82 @@ export async function createSessionGitHubIssue(
   ) {
     throw new Error("Filing a GitHub issue requires write access to this conversation.");
   }
-  const cfg = getConfig();
-  const host = resolveConfiguredGitHubHost(cfg);
-  const project = await resolveRequesterProject(
-    cfg,
-    entry.projectId,
-    { kind: "operator", scopes: authority.scopes },
-    { fresh: true },
+  const host = resolveConfiguredGitHubHost(getConfig());
+  const unavailable = new Error(
+    "This conversation has no registered GitHub repository available to this requester. Nothing was filed.",
   );
-  const origin = project?.originUrl;
+  const registry = await selectStoredProjectRegistry(entry.projectId);
+  const origin = registry?.project.originUrl;
   const target = origin && !URL.parse(origin)?.port && parseProjectGitUrl(origin, host);
-  if (!target || project?.source === "workspace") {
-    throw new Error(
-      "This conversation has no registered GitHub repository available to this requester. Nothing was filed.",
-    );
+  if (!registry || !target) {
+    throw unavailable;
   }
   const repository = new URL(target.url).pathname.slice(1, -4);
-  const assertCurrent = () => {
+  const assertSessionCurrent = () => {
     authority.assertCurrent();
-    selected.readCurrent();
+    const latest = selected.readCurrent().entry;
+    if (
+      !latest ||
+      latest.sessionId !== entry.sessionId ||
+      latest.lifecycleRevision !== entry.lifecycleRevision ||
+      latest.projectId !== entry.projectId ||
+      latest.archivedAt !== undefined
+    ) {
+      throw unavailable;
+    }
   };
-  const identity = await prepareCurrentGitHubPublicationIdentity(agentId, assertCurrent);
-  if (
-    (identity.host ?? "github.com") !== host ||
-    !matchesCurrentGitHubPublicationIdentity({ agentId, identity })
-  ) {
-    throw new Error(
-      "The selected GitHub account does not match the project's GitHub host. Nothing was filed.",
-    );
-  }
+  const identity = await prepareCurrentGitHubPublicationIdentity(agentId, assertSessionCurrent);
   // No browser/native fallback and no retry: a lost POST response may hide a created issue.
   const unconfirmed = new Error(
     `GitHub issue creation is unconfirmed. Check https://${host}/${repository}/issues before submitting again.`,
   );
-  assertCurrent();
-  const result = await runPublicationCommand(
-    [
-      ...githubPublicationApiArgs(`repos/${repository}/issues`, "POST", host),
-      "--jq",
-      "{number, url: .html_url, authorId: .user.id}",
-    ],
-    {
-      env: identity.env,
-      input: JSON.stringify({ title: params.title, body: params.body ?? "" }),
-    },
-  ).catch(() => {
-    throw unconfirmed;
-  });
+  let dispatched = false;
+  const result = await registry
+    .withCurrent(async (current) => {
+      const project = current.project;
+      if (
+        !project ||
+        project.originUrl !== origin ||
+        project.repoRoot !== registry.project.repoRoot ||
+        project.source !== registry.project.source ||
+        !(await canRequesterUseProject(
+          getConfig(),
+          project,
+          { kind: "operator", scopes: authority.scopes },
+          { fresh: true },
+        ))
+      ) {
+        throw unavailable;
+      }
+      return await runPublicationCommand(
+        [
+          ...githubPublicationApiArgs(`repos/${repository}/issues`, "POST", host),
+          "--jq",
+          "{number, url: .html_url, authorId: .user.id}",
+        ],
+        {
+          env: identity.env,
+          input: JSON.stringify({ title: params.title, body: params.body ?? "" }),
+          beforeRun: () => {
+            current.assertCurrent();
+            assertSessionCurrent();
+            if (
+              resolveConfiguredGitHubHost(getConfig()) !== host ||
+              (identity.host ?? "github.com") !== host ||
+              !matchesCurrentGitHubPublicationIdentity({ agentId, identity })
+            ) {
+              throw new Error(
+                "The selected GitHub account does not match the project's GitHub host. Nothing was filed.",
+              );
+            }
+            dispatched = true;
+          },
+        },
+      );
+    })
+    .catch((error: unknown) => {
+      throw dispatched ? unconfirmed : error;
+    });
   if (result.code !== 0 || result.error) {
     const status = /\(HTTP (4\d{2})\)/u.exec(result.stderr.toString("utf8"))?.[1];
     if (status && status !== "408" && status !== "499") {

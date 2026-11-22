@@ -17,6 +17,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { removeProjectRegistry } from "../projects/project-registry.js";
 import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
@@ -417,7 +418,7 @@ describe("project issue creation through the guest tool and registered Gateway m
         operator?.release();
       }
     };
-    return { f, invoke, visibility };
+    return { f, invoke, project, visibility };
   }
 
   installGitHubPublicationTestHarness({ creatorEmail: publicationGuestEmail, sandbox: "required" });
@@ -446,6 +447,22 @@ describe("project issue creation through the guest tool and registered Gateway m
     visibility.mockImplementation(async () => Response.json({ visibility: "private" }));
     await expect(invoke(input)).rejects.toThrow(/no registered GitHub repository available/);
     expect(mocks.runCommand).toHaveBeenCalledTimes(1);
+  });
+  it("does not file after the project is unregistered while preparing the GitHub account", async () => {
+    const { f, invoke, project } = await fixture();
+    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
+    const pending = invoke(input);
+    const settled = pending.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered.promise, pending]);
+      expect(await removeProjectRegistry(project)).toBe(true);
+      expect(loadSessionEntryReadOnly(f.guestSource.session)?.projectId).toBe(project.id);
+    } finally {
+      release.resolve();
+      await settled;
+    }
+    await expect(pending).rejects.toThrow(/no registered GitHub repository available/);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
   });
   it("rejects read-only callers and foreign targets before any write", async () => {
     const { f, invoke } = await fixture();
