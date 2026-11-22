@@ -76,7 +76,12 @@ export async function prepareGit(params: {
     if (!fetched.ok) {
       throw new Error(steps.at(-1)?.stderrTail || "Could not fetch the selected Git revision.");
     }
-    const run = async (name: string, argv: string[], cwd: string, commandEnv = env) => {
+    const run = async (
+      name: string,
+      argv: string[],
+      cwd: string,
+      commandEnv: NodeJS.ProcessEnv = env,
+    ) => {
       reason = `${name}-failed`;
       await params.onStep?.(name);
       const result = await runCommand(argv, { cwd, env: commandEnv, timeoutMs: remaining() });
