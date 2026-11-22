@@ -1,11 +1,7 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  exchangeFastTrackApproval,
-  verifyFastTrackApproval,
-} from "../scripts/lib/release-fast-track-approval.mts";
 import {
   collectFastTrackEligibility,
   fastTrackRequestDigest,
@@ -212,7 +208,7 @@ it("rejects non-ancestor reference commits", () => {
   expect(() => eligibility(h.root, request(candidate, unrelated))).toThrow("must be an ancestor");
 });
 
-it("uses the same lowercase UUIDv4 request identity as the independent approval service", () => {
+it("requires a lowercase UUIDv4 immutable request identity", () => {
   for (const requestId of [
     "019a8248-1234-7123-8123-123456789abc",
     "A83B87DC-4738-471E-AAF4-B59D89D35523",
@@ -221,172 +217,37 @@ it("uses the same lowercase UUIDv4 request identity as the independent approval 
   }
 });
 
-it("requires live exact approval after recomputing the publisher delta, not a GitHub actor", async () => {
-  const repo = history();
-  const candidate = repo.commit("fix.txt", "fix\n");
-  const value = {
-    ...request(candidate, repo.anchor),
-    expiresAt: new Date(Date.now() + 3600000).toISOString(),
-  };
-  const approval = {
-    state: "approved",
-    requestId: value.requestId,
-    digest: fastTrackRequestDigest(value),
-    payload: serializeFastTrackRequest(value),
-    expiresAt: value.expiresAt,
-    approver: "users/12345",
-    approverEmail: "dallin@openclaw.org",
-    decidedAt: new Date(Date.now() - 1000).toISOString(),
-  };
-  let response = approval;
-  const fetchApproval = vi.fn(async () => new Response(JSON.stringify(response)));
-  vi.stubGlobal("fetch", fetchApproval);
-  const input = {
-    serviceOrigin: "https://approval.example",
-    identityToken: "synthetic-request-only-token",
-    request: value,
-    repositoryRoot: repo.root,
-    validatedReference: {
-      repository: value.repository,
-      ...value.reference,
-      validationMode: "full-release-validation" as const,
-      published: true as const,
-    },
-  };
-  try {
-    await expect(verifyFastTrackApproval(input)).resolves.toMatchObject({
-      validation: "validation skipped by approved fast-track",
-      approver: "users/12345",
-    });
-    expect(fetchApproval).toHaveBeenCalledWith(
-      `https://approval.example/requests/${value.requestId}`,
-      expect.objectContaining({ redirect: "error" }),
-    );
-    for (const changed of [
-      { state: "pending" },
-      { state: "rejected" },
-      { digest: `sha256:${"0".repeat(64)}` },
-      { payload: serializeFastTrackRequest({ ...value, run: { ...value.run, attempt: "2" } }) },
-      { approverEmail: "services@openclaw.org" },
-      { approver: "github-user" },
-      { expiresAt: "2000-01-01T00:00:00Z" },
-      { decidedAt: value.expiresAt },
-    ]) {
-      response = { ...approval, ...changed };
-      await expect(verifyFastTrackApproval(input)).rejects.toThrow(
-        /mismatched Google Chat approval/u,
-      );
-    }
-    await expect(
-      verifyFastTrackApproval({ ...input, serviceOrigin: "http://approval.example" }),
-    ).rejects.toThrow(/pinned HTTPS/u);
-    await expect(
-      verifyFastTrackApproval({
-        ...input,
-        request: { ...value, delta: { ...value.delta, commits: 2 } },
-      }),
-    ).rejects.toThrow(/computed delta/u);
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
-
-it("submits canonical review bytes and reads only the bound result without any machine approval operation", async () => {
+it("prepares an exact local packet without credentials, network access or approval authority", async () => {
   const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
-  const payload = serializeFastTrackRequest(value);
-  const result = {
-    requestId: value.requestId,
-    payload,
-    digest: fastTrackRequestDigest(value),
-    expiresAt: value.expiresAt,
-    state: "pending",
-  };
-  const fetchApproval = vi.fn(async () => new Response(JSON.stringify(result)));
-  vi.stubGlobal("fetch", fetchApproval);
-  const input = {
-    serviceOrigin: "https://approval.example",
-    identityToken: "synthetic-request-only",
-    request: value,
-  };
-  try {
-    await expect(
-      exchangeFastTrackApproval({ ...input, operation: "request" }),
-    ).resolves.toMatchObject({ state: "pending" });
-    expect(fetchApproval).toHaveBeenLastCalledWith(
-      "https://approval.example/requests",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ payload }),
-        redirect: "error",
-      }),
-    );
-    await expect(
-      exchangeFastTrackApproval({ ...input, operation: "status" }),
-    ).resolves.toMatchObject({ state: "pending" });
-    expect(fetchApproval).toHaveBeenLastCalledWith(
-      `https://approval.example/requests/${value.requestId}`,
-      expect.objectContaining({ method: "GET", redirect: "error" }),
-    );
-    await expect(
-      exchangeFastTrackApproval({ ...input, identityToken: "", operation: "request" }),
-    ).rejects.toThrow(/identity token/u);
-    await expect(
-      exchangeFastTrackApproval({
-        ...input,
-        serviceOrigin: "https://evil.example/path",
-        operation: "request",
-      }),
-    ).rejects.toThrow(/pinned HTTPS/u);
-    fetchApproval.mockImplementationOnce(async () => new Response("{}", { status: 403 }));
-    await expect(exchangeFastTrackApproval({ ...input, operation: "request" })).rejects.toThrow(
-      /HTTP 403/u,
-    );
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
-
-it("exposes request/status CLI without token disclosure or a machine approval verb", async () => {
-  await expect(
-    runReleasePublishPreflightCommand(["approval", "approve", "--request", "unused.json"]),
-  ).rejects.toThrow(/no machine approval/u);
-  const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
-  const directory = roots.make("release-fast-track-cli-");
-  const file = join(directory, "request.json");
+  const file = join(roots.make("release-fast-track-cli-"), "request.json");
   writeFileSync(file, JSON.stringify(value));
-  const result = {
-    requestId: value.requestId,
-    payload: serializeFastTrackRequest(value),
-    digest: fastTrackRequestDigest(value),
-    expiresAt: value.expiresAt,
-    state: "pending",
-    delivery: {
-      delivered: 1,
-      failed: [{ approverEmail: "vincent@openclaw.org", recovery: "reenroll" }],
-    },
-  };
-  vi.stubEnv("FAST_TRACK_APPROVAL_SERVICE_ORIGIN", "https://approval.example");
-  vi.stubEnv("FAST_TRACK_APPROVAL_ID_TOKEN", "synthetic-secret-never-printed");
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify(result))),
-  );
+  const network = vi.fn(() => {
+    throw new Error("Must not call a service");
+  });
+  vi.stubGlobal("fetch", network);
   const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
-    for (const operation of ["request", "status"]) {
-      await runReleasePublishPreflightCommand(["approval", operation, "--request", file]);
-    }
-    const text = String(output.mock.calls.at(-1)?.[0]);
-    expect(JSON.parse(text)).toMatchObject({
-      state: "pending",
+    await runReleasePublishPreflightCommand(["approval", "request", "--request", file]);
+    expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
+      requestId: value.requestId,
+      digest: fastTrackRequestDigest(value),
+      payload: serializeFastTrackRequest(value),
+      state: "awaiting-explicit-maintainer-approval",
       publicationAuthorized: false,
-      delivery: result.delivery,
     });
-    expect(text).not.toContain("synthetic-secret-never-printed");
+    expect(network).not.toHaveBeenCalled();
+    for (const operation of ["approve", "status", "reject"]) {
+      await expect(
+        runReleasePublishPreflightCommand(["approval", operation, "--request", file]),
+      ).rejects.toThrow(/no machine approval/u);
+    }
+    writeFileSync(file, JSON.stringify({ ...value, expiresAt: "2000-01-01T00:00:00.000Z" }));
+    await expect(
+      runReleasePublishPreflightCommand(["approval", "request", "--request", file]),
+    ).rejects.toThrow(/fresh expiry/u);
   } finally {
     output.mockRestore();
     vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
   }
 });
 
@@ -400,58 +261,6 @@ it("does not allow Git submodule-ignore configuration to hide an ineligible gitl
     delta: { commits: 1, added: 0, deleted: 0 },
   };
   expect(() => eligibility(repo.root, value)).toThrow(/unmeasurable/u);
-});
-
-it("never prints a malformed identity token when Node rejects an Authorization header", () => {
-  const directory = roots.make("release-fast-track-token-");
-  const file = join(directory, "request.json");
-  writeFileSync(file, JSON.stringify(request()));
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/release-publish-preflight.mts",
-      "approval",
-      "status",
-      "--request",
-      file,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAST_TRACK_APPROVAL_SERVICE_ORIGIN: "https://approval.example",
-        FAST_TRACK_APPROVAL_ID_TOKEN: "DO-NOT-PRINT-THIS-SYNTHETIC-CREDENTIAL\ninvalid",
-      },
-    },
-  );
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("well-formed request-only or read-only Google identity token");
-  expect(result.stderr).not.toContain("DO-NOT-PRINT-THIS-SYNTHETIC-CREDENTIAL");
-  expect(result.stdout).not.toContain("DO-NOT-PRINT-THIS-SYNTHETIC-CREDENTIAL");
-});
-
-it("does not propagate HTTP-client errors that echo Authorization credentials", async () => {
-  const token = "synthetic.header.signature";
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => {
-      throw new TypeError(`Invalid Authorization header: Bearer ${token}`);
-    }),
-  );
-  try {
-    await expect(
-      exchangeFastTrackApproval({
-        serviceOrigin: "https://approval.example",
-        identityToken: token,
-        request: request(),
-        operation: "status",
-      }),
-    ).rejects.toThrow("Approval service transport failed.");
-  } finally {
-    vi.unstubAllGlobals();
-  }
 });
 
 it("binds a separate partial-FRV approval to retained results without relaxing small-delta admission", async () => {
@@ -510,10 +319,8 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
   expect(fastTrackRequestDigest({ ...partial, validationSnapshot: changedSnapshot })).not.toBe(
     fastTrackRequestDigest(partial),
   );
-  await expect(
-    verifyFastTrackApproval({
-      serviceOrigin: "https://approval.example",
-      identityToken: "synthetic-token",
+  expect(() =>
+    collectFastTrackEligibility({
       request: parseFastTrackRequest(partial),
       repositoryRoot: "unused",
       validatedReference: {
@@ -523,38 +330,8 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
         published: true,
       },
     }),
-  ).rejects.toThrow(/authenticated partial-FRV evidence/u);
+  ).toThrow(/authenticated partial-FRV evidence/u);
   expect(() =>
     parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
   ).toThrow();
-});
-
-it("preserves permanent refusal recovery without echoing service text", async () => {
-  const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
-  try {
-    for (const [code, status, guidance] of [
-      ["REQUEST_EXPIRED", 410, /new request ID.*fresh expiry/u],
-      ["REQUEST_ID_CONFLICT", 409, /new request ID/u],
-      ["DELIVERY_FAILED", 503, /same still-valid immutable request/u],
-      ["NO_APPROVERS", 409, /private Google Chat DM/u],
-    ] as const) {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(JSON.stringify({ code, error: "synthetic-provider-secret" }), { status }),
-        ),
-      );
-      const result = exchangeFastTrackApproval({
-        request: value,
-        operation: "request",
-        serviceOrigin: "https://approval.example",
-        identityToken: "synthetic.token",
-      });
-      await expect(result).rejects.toThrow(guidance);
-      await expect(result).rejects.not.toThrow(/synthetic-provider-secret/u);
-    }
-  } finally {
-    vi.unstubAllGlobals();
-  }
 });
