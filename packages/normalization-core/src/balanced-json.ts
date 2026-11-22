@@ -25,15 +25,12 @@ type BalancedJsonFragmentOptions = BalancedJsonOptions & {
       };
 };
 
-type JsonContainer = {
+type StrictJsonOwner = {
   opener: JsonOpeningDelimiter;
-  start: number;
   end: number;
   stackIndex: number;
-  phase: boolean;
-  eligible: boolean;
-  valid: boolean;
-  quote?: QuoteState;
+  warning: boolean;
+  quote?: QuoteState & { visible: boolean };
 };
 
 type QuoteState = { quoted: boolean; escaped: boolean; damaged: boolean };
@@ -83,7 +80,8 @@ function advanceQuotedText(
   return "consumed";
 }
 
-function indexOriginalJsonContainers(source: string): Map<number, number> {
+function indexOriginalJsonContainers(source: string) {
+  const structuralEnds = new Map<number, number>();
   const validEnds = new Map<number, number>();
   const stacks: [OriginalJsonContainer[], OriginalJsonContainer[]] = [[], []];
   const nodes: OriginalJsonContainer[] = [];
@@ -110,7 +108,9 @@ function indexOriginalJsonContainers(source: string): Map<number, number> {
     } else if (char === "}" || char === "]") {
       const stack = stacks[phase];
       if (stack.at(-1)?.opener === (char === "}" ? "{" : "[")) {
-        stack.pop()!.end = index;
+        const closed = stack.pop()!;
+        closed.end = index;
+        structuralEnds.set(closed.start, index);
       } else {
         // A mismatched closer invalidates every enclosing original container;
         // later candidates begin a fresh forest without an ancestry search.
@@ -138,7 +138,7 @@ function indexOriginalJsonContainers(source: string): Map<number, number> {
       // Original syntax alone owns admission; discovery only chooses candidates.
     }
   }
-  return validEnds;
+  return { validEnds, structuralEnds };
 }
 
 function extractStrictJsonFragments(
@@ -165,86 +165,64 @@ function extractStrictJsonFragments(
     previousEnd = span.endIndex;
   }
   const openers = opts.openers ?? (["{", "["] as const);
-  const validEnds = indexOriginalJsonContainers(source);
-  const candidates: JsonContainer[] = [];
-  const stack: JsonContainer[] = [];
-  const indexedClosures = new Map<number, JsonContainer>();
+  const { validEnds, structuralEnds } = indexOriginalJsonContainers(source);
+  const candidates: (JsonSpan & { visible: boolean })[] = [];
+  const candidateClosures = new Map<number, (typeof candidates)[number]>();
+  const owners: StrictJsonOwner[] = [];
+  const ownerClosures = new Map<number, StrictJsonOwner>();
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
-  let selectedDepth = 0;
-  const rootQuote: QuoteState = { quoted: false, escaped: false, damaged: false };
+  const rootQuote = { quoted: false, escaped: false, damaged: false, visible: false };
+  let warningDepth = 0;
   let lineStart = true;
   let opaqueIndex = 0;
   let spanEnd = -1;
   let spanOpaque = false;
-  let originalPhase = false;
-  let originalEscaped = false;
-  let lexicalIndex = 0;
   const pop = () => {
-    const node = stack.pop()!;
-    activeOpeners[node.opener] -= 1;
-    selectedDepth -= Number(openers.includes(node.opener));
-    return node;
+    const owner = owners.pop()!;
+    activeOpeners[owner.opener] -= 1;
+    warningDepth -= Number(owner.warning);
+    if (owner.end >= 0) ownerClosures.delete(owner.end);
   };
   for (let index = 0; index < source.length; index += 1) {
-    const parent = stack.at(-1);
+    const parent = owners.at(-1);
     const quote = parent ? parent.quote : rootQuote;
-    const atLineStart = lineStart;
     const char = source[index];
-    const phaseAtEntry = originalPhase;
-    if (char === '"' && !originalEscaped) originalPhase = !originalPhase;
-    originalEscaped = char === "\\" && !originalEscaped;
-    while (candidates[lexicalIndex] && candidates[lexicalIndex]!.end < index) lexicalIndex++;
-    const lexicalOwner = candidates[lexicalIndex];
+    const atLineStart = lineStart;
     const entering = opaqueSpans[opaqueIndex];
     if (entering?.startIndex === index) {
-      // Decide at entry: a span inside a string cannot become framing after
-      // that string closes, including in the caller's masked discovery view.
+      // Original lexical ownership survives hidden openers and rejected syntax.
+      // An inside-string entry is ignored through the entire declared span.
       spanEnd = entering.endIndex;
-      // A valid original container owns its strings even when framing hides
-      // their opening quote from discovery. Relative parity also tolerates
-      // unmatched quotes in external framing before that container.
-      spanOpaque = lexicalOwner ? phaseAtEntry === lexicalOwner.phase : !quote?.quoted;
+      spanOpaque = !quote?.quoted;
       opaqueIndex++;
     }
     const inSpan = index <= spanEnd;
     const opaque = inSpan && spanOpaque;
-    // Discovery selects openers, not record boundaries. Only accepted framing
-    // acts as whitespace; original line breaks and indentation own recovery.
     lineStart =
       char === "\n" ||
       (opts.recoverAtLineStart === true && char === "\r") ||
       (lineStart && (opaque || char === " " || char === "\t" || char === "\r"));
-    if (opaque) {
-      indexedClosures.delete(index);
+
+    // Candidate completion and source ownership are independent events. Hidden
+    // endpoints suppress emission, but still retire the original source owner.
+    const candidate = candidateClosures.get(index);
+    if (candidate) {
+      candidate.visible = !opaque;
+      candidateClosures.delete(index);
+    }
+    const closingOwner = ownerClosures.get(index);
+    if (closingOwner && owners[closingOwner.stackIndex] === closingOwner) {
+      while (owners.length > closingOwner.stackIndex) pop();
       continue;
     }
-    // Completion belongs to the indexed interval, not discovery ancestry.
-    // A crossing candidate survives retirement by an earlier-ending owner.
-    const indexed = indexedClosures.get(index);
-    if (indexed) {
-      indexedClosures.delete(index);
-      if (stack[indexed.stackIndex] === indexed) {
-        while (stack.length > indexed.stackIndex) pop();
-      }
-      indexed.valid = true;
-      continue;
-    }
-    const discovery = inSpan ? char : raw[index];
-    if (char === '"' && lexicalOwner) {
-      // A hidden opening quote must not turn its original closing quote into
-      // a new discovery string, including after an artificial frame retires.
-      const state = {
-        quoted: originalPhase !== lexicalOwner.phase,
-        escaped: false,
-        damaged: false,
-      };
-      if (parent) parent.quote = state;
-      else Object.assign(rootQuote, state);
-      continue;
-    }
-    // Except for declared framing, original text owns structure and strings.
-    // Hidden discovery quotes must not turn string interiors into child records.
+
+    // A quote belongs to its original owner, never an apparent candidate inside
+    // it. Hidden quotes still establish lexical ownership; only visible quotes
+    // hide candidates. This preserves explicitly exposed string-interior JSON.
+    let consumed = false;
+    let hidesCandidates = false;
     if (quote?.quoted) {
+      hidesCandidates = quote.visible;
       const transition = advanceQuotedText(
         quote,
         char,
@@ -252,58 +230,67 @@ function extractStrictJsonFragments(
         atLineStart,
         activeOpeners,
       );
-      if (transition === "consumed" || transition === "invalidated") continue;
+      consumed = transition === "consumed" || transition === "invalidated";
+      if (!consumed) hidesCandidates = false;
     }
-    if (char === '"') {
-      if (parent) parent.quote = { quoted: true, escaped: false, damaged: false };
-      else rootQuote.quoted = true;
-    } else if (char === "{" || char === "[") {
-      const selected = discovery === char && openers.includes(char);
-      const node: JsonContainer = {
-        opener: char,
-        start: index,
-        end: validEnds.get(index) ?? -1,
-        stackIndex: stack.length,
-        phase: phaseAtEntry,
-        eligible: selected && (selectedDepth === 0 || (!!opts.recoverAtLineStart && atLineStart)),
-        valid: false,
-      };
-      candidates.push(node);
-      stack.push(node);
-      if (node.end >= 0) {
-        indexedClosures.set(node.end, node);
+    const discovery = inSpan ? char : raw[index];
+    if (
+      !opaque &&
+      !hidesCandidates &&
+      (char === "{" || char === "[") &&
+      discovery === char &&
+      openers.includes(char) &&
+      (warningDepth === 0 || (!!opts.recoverAtLineStart && atLineStart))
+    ) {
+      const endIndex = validEnds.get(index);
+      if (endIndex !== undefined) {
+        const record = { startIndex: index, endIndex, visible: false };
+        candidates.push(record);
+        candidateClosures.set(endIndex, record);
       }
-      activeOpeners[char] += 1;
-      // Discovery controls emission, not ownership by original selected kinds.
-      selectedDepth += Number(openers.includes(char));
+    }
+    if (consumed) continue;
+    // Complete original containers retain lexical ownership even when framing
+    // covers their opener. Unowned external framing must not create a prose quote.
+    if (opaque && !parent && !structuralEnds.has(index)) continue;
+    if (char === '"') {
+      const state = { quoted: true, escaped: false, damaged: false, visible: !opaque };
+      if (parent) parent.quote = state;
+      else Object.assign(rootQuote, state);
+    } else if (char === "{" || char === "[") {
+      const end = validEnds.get(index) ?? -1;
+      const owner: StrictJsonOwner = {
+        opener: char,
+        end,
+        stackIndex: owners.length,
+        // Valid containers are resolved by final emitted containment. Malformed
+        // warnings still restrict inline recovery, including filtered kinds.
+        warning: end < 0 && openers.includes(char),
+      };
+      owners.push(owner);
+      activeOpeners[char]++;
+      warningDepth += Number(owner.warning);
+      if (end >= 0) ownerClosures.set(end, owner);
     } else if (char === "}" || char === "]") {
       const opener = char === "}" ? "{" : "[";
-      // A stray closer cannot release its enclosing warning. Counts avoid
-      // rescanning that same ancestry for each repeated unmatched closer.
-      if (activeOpeners[opener] === 0) {
-        continue;
-      }
-      while (stack.at(-1)!.opener !== opener && stack.at(-1)!.end < index) {
-        pop();
-      }
-      // Protect an indexed owner only until its original endpoint. A hidden
-      // endpoint cannot admit it or prevent subsequent visible recovery.
-      if (stack.at(-1)!.end >= index) continue;
+      if (activeOpeners[opener] === 0) continue;
+      while (owners.at(-1)!.opener !== opener && owners.at(-1)!.end < index) pop();
+      if (owners.at(-1)!.end >= index) continue;
       pop();
     }
   }
   const fragments: BalancedJsonFragment[] = [];
   let emittedEnd = -1;
-  // Candidates are already ordered by start. Only an emitted containing
-  // interval suppresses a child; a later-ending crossing interval is retained.
-  for (const node of candidates) {
-    if (node.valid && node.eligible && node.end > emittedEnd) {
+  // Start order is stable. Crossing intervals survive; only a genuinely emitted
+  // containing interval suppresses a descendant, regardless of apparent frames.
+  for (const candidate of candidates) {
+    if (candidate.visible && candidate.endIndex > emittedEnd) {
       fragments.push({
-        json: source.slice(node.start, node.end + 1),
-        startIndex: node.start,
-        endIndex: node.end,
+        json: source.slice(candidate.startIndex, candidate.endIndex + 1),
+        startIndex: candidate.startIndex,
+        endIndex: candidate.endIndex,
       });
-      emittedEnd = node.end;
+      emittedEnd = candidate.endIndex;
     }
   }
   return fragments;

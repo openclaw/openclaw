@@ -140,6 +140,118 @@ describe("balanced JSON extraction", () => {
     }
   });
 
+  it("separates original lexical owners from crossing emission candidates", () => {
+    const cases = [
+      { source: '["{",{}]', quotes: [1, 3], intervals: [[5, 6]] },
+      {
+        source: '["{",{":1}":true}]',
+        quotes: [1, 3],
+        intervals: [
+          [2, 9],
+          [5, 16],
+        ],
+      },
+      {
+        source: '["{",{":0}":1}]',
+        quotes: [1],
+        intervals: [
+          [2, 9],
+          [5, 13],
+        ],
+      },
+      { source: '["[","]{}"]', quotes: [1], intervals: [] },
+    ];
+    for (const { source, quotes, intervals } of cases) {
+      const opaqueSpans = quotes.map((index) => ({ startIndex: index, endIndex: index }));
+      for (const raw of [source, source.replaceAll('"', " ")]) {
+        for (const recoverAtLineStart of [false, true]) {
+          expect(
+            extractBalancedJsonFragments(raw, {
+              openers: ["{"],
+              recoverAtLineStart,
+              strictJson: { source, opaqueSpans },
+            }),
+          ).toEqual(
+            intervals.map(([startIndex, endIndex]) => ({
+              json: source.slice(startIndex!, endIndex! + 1),
+              startIndex,
+              endIndex,
+            })),
+          );
+        }
+      }
+    }
+  });
+
+  it("retains original string entry ownership for malformed and hidden containers", () => {
+    const suffix = '{"after":true}';
+    for (const newline of ["\n", "\r\n", "\r"]) {
+      for (const prefix of ['["text",]', `["line one${newline}line two"]`]) {
+        const source = prefix + newline + suffix;
+        const opaqueSpans = [
+          { startIndex: 1, endIndex: 1 },
+          { startIndex: 3, endIndex: source.length - 1 },
+        ];
+        for (const raw of [source, source.replaceAll('"', " ")]) {
+          for (const recoverAtLineStart of [false, true]) {
+            expect(
+              extractBalancedJsonFragments(raw, {
+                recoverAtLineStart,
+                strictJson: { source, opaqueSpans },
+              }),
+            ).toEqual([
+              {
+                json: suffix,
+                startIndex: prefix.length + newline.length,
+                endIndex: source.length - 1,
+              },
+            ]);
+          }
+        }
+      }
+    }
+    const source = '["text"]{}';
+    for (const recoverAtLineStart of [false, true]) {
+      expect(
+        extractBalancedJsonFragments(source, {
+          recoverAtLineStart,
+          strictJson: {
+            source,
+            opaqueSpans: [
+              { startIndex: 0, endIndex: 1 },
+              { startIndex: 2, endIndex: source.length - 1 },
+            ],
+          },
+        }),
+      ).toEqual([{ json: "{}", startIndex: 8, endIndex: 9 }]);
+    }
+  });
+
+  it("retires hidden endpoints before adjacent records or multiline prose quotes", () => {
+    const suffix = '{"after":true}';
+    for (const parent of ["[]", "{}"]) {
+      for (const separator of [" ", "\n", "\r\n", "\r"]) {
+        for (const prose of ["", '\"line one\n[0] line two\" ']) {
+          const source = parent + separator + prose + suffix;
+          for (const recoverAtLineStart of [false, true]) {
+            expect(
+              extractBalancedJsonFragments(source, {
+                recoverAtLineStart,
+                strictJson: { source, opaqueSpans: [{ startIndex: 1, endIndex: 1 }] },
+              }),
+            ).toEqual([
+              {
+                json: suffix,
+                startIndex: source.length - suffix.length,
+                endIndex: source.length - 1,
+              },
+            ]);
+          }
+        }
+      }
+    }
+  });
+
   it("bounds indexed retirement work when artificial descendants cross the original endpoint", () => {
     for (const depth of [256, 1024, 4096]) {
       const parent = `[${JSON.stringify("[".repeat(depth))},{}]`;
