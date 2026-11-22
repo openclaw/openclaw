@@ -288,7 +288,7 @@ export function readShellView(host: ShellViewHost) {
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
-    firstUse: host.firstUse,
+    communityInviteAllowed: host.shellNavigation.communityInviteAllowed,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,

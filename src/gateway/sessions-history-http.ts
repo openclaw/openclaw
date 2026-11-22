@@ -364,7 +364,7 @@ async function serveAuthorizedSessionHistory(
       allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
       cfg: cfgLocal,
     });
-    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
+    if (!currentRequestAuth.ok) {
       return false;
     }
     if (
