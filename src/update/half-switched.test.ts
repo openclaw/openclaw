@@ -51,6 +51,17 @@ let root: string;
 let stateDir: string;
 
 beforeEach(async () => {
+  // Preflight on main also reads the Docker marker and container variables itself.
+  const access = fs.access.bind(fs);
+  vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+    if (file === "/.dockerenv") {
+      throw Object.assign(new Error("No container marker in this fixture"), { code: "ENOENT" });
+    }
+    return access(file, mode);
+  });
+  for (const key of ["container", "DOCKER_CONTAINER", "OPENCLAW_CONTAINER"]) {
+    vi.stubEnv(key, "");
+  }
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-half-switched-"));
   stateDir = path.join(root, "state");
   const bin = path.join(root, "bin");
@@ -72,6 +83,7 @@ afterEach(async () => {
   staging.repoint = true;
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -190,6 +202,21 @@ it("restarts nothing and keeps the earlier updater's trial when the service cann
   // So the next update converts again instead of asking the old Gateway.
   expect(await needsCheckoutConversion()).toBe(true);
   await expect(fs.access(path.join(stateDir, "state"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("keeps the published trial for the launcher once the restart was attempted", async () => {
+  const { dir } = await checkout();
+  await writeTrial(LEGACY_TRIAL);
+  service.entry = path.join(dir, "dist", "index.js");
+  service.restart = async () => {
+    throw new Error("systemctl timed out");
+  };
+  await expect(convertHalfSwitchedCheckout({ runningRoot: dir, channel: "dev" })).rejects.toThrow(
+    /restart did not complete[\s\S]*rolls back on its own/u,
+  );
+  // The launcher may already be booting the release and needs this trial to roll it back.
+  const trial = path.join(stateDir, "git-install", "releases", ".trial");
+  expect(JSON.parse(await fs.readFile(trial, "utf8"))).toMatchObject({ v: 2, phase: "pending" });
 });
 
 it("prepares the release beside a serving checkout without touching the state database", async () => {

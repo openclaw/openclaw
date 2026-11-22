@@ -63,7 +63,12 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
   // A half-switched checkout's Gateway runs the updater that left it so; this process finishes.
-  if (opts.restart && (await needsCheckoutConversion())) {
+  // Only the configured local Gateway serves this checkout; an override targets another install.
+  if (
+    opts.restart &&
+    (await isImplicitLocalGatewayTarget({})) &&
+    (await needsCheckoutConversion())
+  ) {
     const runId = await convertHalfSwitchedCheckout({
       runningRoot: opts.runningRoot,
       channel: opts.channel ?? opts.storedChannel ?? "dev",

@@ -9,7 +9,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
-import { resolveManagedGatewayServiceCommand } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
@@ -112,11 +111,11 @@ async function restoreTrial(prefix: string, raw: string | null) {
   await fs.rename(temporary, file);
 }
 
+/** What the service manager actually starts, drop-in overrides included. */
 async function serviceStarts(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   const command = await resolveGatewayService().readCommand(env, { requireEffective: true });
-  const managed = command ? resolveManagedGatewayServiceCommand(command) : undefined;
-  const entry = managed ? resolveServiceEntrypointIndex(managed.programArguments) : undefined;
-  return entry === undefined ? undefined : managed?.programArguments[entry];
+  const entry = command ? resolveServiceEntrypointIndex(command.programArguments) : undefined;
+  return entry === undefined ? undefined : command?.programArguments[entry];
 }
 
 /**
@@ -194,17 +193,33 @@ export async function convertHalfSwitchedCheckout(opts: {
         `The Gateway service starts ${entry ?? "an entry OpenClaw cannot read"}, not the release launcher, and could not be repointed. Point it at ${launcher}, then run this update again.`,
       );
     }
-    // The launcher starts the pending release; its boot migrates state and keeps the originals
-    // the launcher restores if the release does not become ready.
-    await resolveGatewayService().restart({ env, stdout: createNullWriter() });
   } catch (error) {
+    // Nothing restarted yet: put the earlier updater's trial back so a retry converts again.
     await restoreTrial(prefix, earlierTrial);
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}\nThe current version is still running.`,
       { cause: error },
     );
   }
-  const budget = Math.min(TRIAL_BUDGET_MS + 60_000, opts.timeoutMs ?? Number.POSITIVE_INFINITY);
+  const statusCommand = `node ${path.join(prefix, "openclaw", "openclaw.mjs")} update status`;
+  // From here the launcher owns the trial: it may already have switched and begun the boot
+  // migration, and it needs this trial to roll back. Never restore the earlier record after this.
+  try {
+    await resolveGatewayService().restart({ env, stdout: createNullWriter() });
+  } catch (error) {
+    throw new Error(
+      `The Gateway service restart did not complete (${error instanceof Error ? error.message : String(error)}). If it started, the launcher starts OpenClaw ${outcome.target.version} on trial and rolls back on its own if it does not become ready; check with \`${statusCommand}\`.`,
+      { cause: error },
+    );
+  }
+  // The launcher's own trial budget, from the restart, within what remains of --timeout.
+  const restartedAt = Date.now();
+  const budget = Math.min(
+    TRIAL_BUDGET_MS + 60_000,
+    opts.timeoutMs === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, opts.timeoutMs - (restartedAt - started)),
+  );
   // This conversion's trial names its release; a later update's trial would not.
   const ours = (trial: Awaited<ReturnType<typeof readTrial>>) =>
     trial !== null && path.resolve(prefix, trial.target) === outcome.releaseRoot;
@@ -218,9 +233,9 @@ export async function convertHalfSwitchedCheckout(opts: {
         `OpenClaw ${outcome.target.version} did not start (${trial.outcome?.reason ?? "unknown reason"}). The launcher restored the checkout's build and its state, and the next \`openclaw update\` tries again. Run \`openclaw triage\` with this message to find out why it did not start.`,
       );
     }
-    if (Date.now() - started >= budget) {
+    if (Date.now() - restartedAt >= budget) {
       throw new Error(
-        `OpenClaw ${outcome.target.version} has not finished starting. Run \`openclaw update status\` once the Gateway answers.`,
+        `OpenClaw ${outcome.target.version} is still starting on trial; the launcher commits it once it is ready or rolls back on its own. Check with \`${statusCommand}\`.`,
       );
     }
     await sleep(POLL_MS);
