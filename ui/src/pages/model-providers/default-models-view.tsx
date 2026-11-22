@@ -391,17 +391,26 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       const row = rows[index]!;
       const model = row.value;
       const pin = props.selection.runtimes?.[model]?.id;
+      const runtimes = entry.defaultModelRuntimes;
       const alternatives =
-        entry.runtimeChoices?.filter((choice) => choice.manualSelectionAllowed !== false) ?? [];
-      if (entry.selectionRef || (!alternatives.length && !pin)) {
+        runtimes?.alternatives.filter((choice) => choice.manualSelectionAllowed !== false) ?? [];
+      const base = runtimes?.base.agentRuntime.id ?? entry.agentRuntime?.id;
+      const baseDisabled =
+        (runtimes ? runtimes.base.available === false : row.disabled === true) ||
+        entry.manualSelectionAllowed === false;
+      if (entry.selectionRef || !base || (!alternatives.length && (!pin || pin === base))) {
+        const label =
+          pin && !entry.selectionRef
+            ? formatModelRuntimeLabel(entry.provider, pin)?.label
+            : undefined;
         choices.set(model, {
           ...row,
+          ...(label ? { label: `${row.label} · ${label}` } : {}),
           model,
-          disabled: row.disabled || entry.manualSelectionAllowed === false,
+          disabled: baseDisabled,
         });
         continue;
       }
-      const base = entry.agentRuntime?.id ?? "openclaw";
       const selected = pin ?? base;
       const route = (id: string, disabled: boolean) => {
         const value = id === selected ? model : JSON.stringify([model, id]);
@@ -415,9 +424,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           runtime: { id, base },
         });
       };
-      if (entry.agentRuntime || alternatives.length) {
-        route(base, entry.available === false || entry.manualSelectionAllowed === false);
-      }
+      route(base, baseDisabled);
       for (const choice of alternatives) {
         route(choice.agentRuntime.id, choice.available === false);
       }

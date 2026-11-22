@@ -482,9 +482,9 @@ export function resolveDefaultModelPresentation(
   for (let index = 0; index < source.length; index++) {
     const model = source[index]!;
     if (
-      model.available === false &&
+      (model.defaultModelRuntimes?.base.available ?? model.available) === false &&
       !selected.has(modelCatalogRef(model)) &&
-      !model.runtimeChoices?.some(
+      !model.defaultModelRuntimes?.alternatives.some(
         (choice) => choice.available && choice.manualSelectionAllowed !== false,
       )
     ) {
@@ -518,6 +518,7 @@ export function resolveDefaultModelPresentation(
           serviceTierObservation: _observation,
           serviceTierObservations: _observations,
           runtimeChoices: _runtimes,
+          defaultModelRuntimes: _defaultRuntimes,
           ...unscoped
         } = match;
         selectable.push({ ...unscoped, selectionRef: ref });

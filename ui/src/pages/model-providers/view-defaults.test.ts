@@ -97,12 +97,16 @@ it("chooses a harness for the primary or fallback without offering the primary a
         name,
         provider: "openai",
         available: true,
-        agentRuntime: { id: "openclaw", source: "model" },
-        runtimeChoices: [
-          { agentRuntime: { id: "codex", source: "model" }, available: true },
-          { agentRuntime: { id: "hidden", source: "model" }, manualSelectionAllowed: false },
-          { agentRuntime: { id: "offline", source: "model" }, available: false },
-        ],
+        agentRuntime: { id: "codex", source: "model" },
+        runtimeChoices: [{ agentRuntime: { id: "agent-only", source: "model" }, available: true }],
+        defaultModelRuntimes: {
+          base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+          alternatives: [
+            { agentRuntime: { id: "codex", source: "model" }, available: true },
+            { agentRuntime: { id: "hidden", source: "model" }, manualSelectionAllowed: false },
+            { agentRuntime: { id: "offline", source: "model" }, available: false },
+          ],
+        },
       })),
       defaultModels: {
         primary: "openai/first",
@@ -128,6 +132,7 @@ it("chooses a harness for the primary or fallback without offering the primary a
       row.textContent?.includes(label),
     );
   expect(option(menu, "Hidden")).toBeUndefined();
+  expect(option(menu, "Agent Only")).toBeUndefined();
   expect(option(menu, "First · Offline")?.getAttribute("aria-disabled")).toBe("true");
   option(menu, "First · OpenClaw")!.click();
   expect(onPrimaryChange).toHaveBeenCalledWith("openai/first", {
@@ -138,6 +143,45 @@ it("chooses a harness for the primary or fallback without offering the primary a
   expect(option(backup, "First")).toBeUndefined();
   option(backup, "Second · Codex")!.click();
   expect(onFallbackChange).toHaveBeenCalledWith("openai/second", { id: "codex", base: "openclaw" });
+});
+
+it("can return a saved harness pin to the ordinary base when the defaults preview is omitted", async () => {
+  const onPrimaryChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: [
+        {
+          provider: "openai",
+          id: "current",
+          name: "Current",
+          available: true,
+          agentRuntime: { id: "openclaw", source: "model" },
+          runtimeChoices: [{ agentRuntime: { id: "agentsapi", source: "model" }, available: true }],
+        },
+      ],
+      defaultModels: {
+        primary: "openai/current",
+        fallbacks: [],
+        utilityModel: null,
+        runtimes: { "openai/current": { id: "codex" } },
+      },
+      onPrimaryChange,
+    }),
+  );
+  await updatePickers(container);
+  const picker = settingsRow(container, "Model").querySelector<HTMLButtonElement>(
+    ".picker-select__trigger",
+  )!;
+  expect(picker.textContent).toContain("Current · Codex");
+  const menu = await openPicker(picker);
+  expect(
+    [...menu.querySelectorAll<HTMLElement>('[role="option"]')].map(({ dataset }) => dataset.value),
+  ).not.toContain(JSON.stringify(["openai/current", "agentsapi"]));
+  await choosePickerValue(picker, JSON.stringify(["openai/current", "openclaw"]));
+  expect(onPrimaryChange).toHaveBeenCalledExactlyOnceWith("openai/current", {
+    id: "openclaw",
+    base: "openclaw",
+  });
 });
 
 it("names agents with their own utility settings and opens their Overview", async () => {
