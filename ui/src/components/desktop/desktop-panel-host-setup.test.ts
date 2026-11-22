@@ -188,6 +188,48 @@ describe("Desktop host setup guidance", () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
+  it("keeps the unavailable message and Retry in the same status", async () => {
+    const { panel, button } = await mount(gatewayHost, new Error("setup check failed"), true);
+    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
+    expect(button("Retry")?.closest('[role="status"]')?.textContent).toContain(UNAVAILABLE);
+    expect(panel.querySelectorAll(".desktop-note")).toHaveLength(0);
+  });
+
+  it("checks the session source before showing connection controls", async () => {
+    const { panel, request, connect, button, enable } = await mount(
+      gatewayHost,
+      new Error("setup check failed"),
+      true,
+    );
+    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
+    const pending = Promise.withResolvers<typeof gatewayHost>();
+    request.mockImplementationOnce(async () => pending.promise);
+    const retry = button("Retry")!;
+    retry.focus();
+    retry.click();
+    await waitForSolid(() => expect(panel.textContent).toContain("Loading desktop sources"));
+    expect(panel.textContent).not.toContain(UNAVAILABLE);
+    expect(panel.textContent).not.toContain("Connecting to desktop");
+    expect(button("Retry")).toBeUndefined();
+    expect(button("Disconnect")).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+    pending.reject(new Error("Synthetic inventory interruption"));
+    await waitForSolid(() =>
+      expect(button("Retry")?.closest('[role="status"]')?.textContent).toContain(
+        "Synthetic inventory interruption",
+      ),
+    );
+    expect(button("Retry")).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+    expect(panel.textContent).not.toContain("Desktop disconnected");
+    expect(connect).not.toHaveBeenCalled();
+    enable();
+    button("Retry")?.click();
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    expect(observeHost(request)[0]?.[1]).toMatchObject({ control: false });
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("keeps the generic notice when the setup check fails", async () => {
     const { panel, button } = await mount(gatewayHost, new Error("setup check failed"), true);
     await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));

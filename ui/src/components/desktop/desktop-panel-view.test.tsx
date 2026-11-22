@@ -16,9 +16,11 @@ it.each([false, true])(
       return (
         <DesktopPicker
           automatic={automatic}
+          notice={automatic ? "The assigned desktop is unavailable." : null}
           environments={[]}
           loading={false}
           onConnect={() => {}}
+          onDisconnect={() => {}}
           onRefresh={callbacks().refresh}
         />
       );
