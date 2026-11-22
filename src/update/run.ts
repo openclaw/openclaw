@@ -11,6 +11,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
+import type { UpdateRunPhasePatch } from "../infra/update-run-mutation.types.js";
+import type {
+  FinishUpdateRunInput,
+  UpdateRunPhase,
+  UpdateRunStep,
+} from "../infra/update-run-record.js";
 import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
@@ -42,13 +48,31 @@ const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
 export type InstallKind = { kind: ReleaseKind; checkout?: string };
 
+/**
+ * Where a run's progress goes. Normally the state database; a caller that cannot write it yet
+ * (another Gateway build owns it) collects the writes and records them later.
+ */
+export type UpdateRunLedger = {
+  phase: (runId: string, phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<unknown>;
+  step: (runId: string, step: UpdateRunStep) => Promise<unknown>;
+  finish: (runId: string, result: FinishUpdateRunInput) => Promise<unknown>;
+};
+
+export function stateUpdateRunLedger(env: NodeJS.ProcessEnv): UpdateRunLedger {
+  return {
+    phase: (runId, phase, patch) => recordUpdateRunPhaseAsync(runId, phase, patch, { env }),
+    step: (runId, step) => recordUpdateRunStepAsync(runId, step, { env }),
+    finish: (runId, result) => finishUpdateRunAsync(runId, result, { env }),
+  };
+}
+
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }
   | { status: "current"; version: string; pluginsChanged: boolean }
   | { status: "failed"; reason: string; message: string };
 
 /** Where the checkout lives: a Git install runs from a checkout or from a release worktree of one. */
-async function detectInstall(runningRoot: string): Promise<InstallKind> {
+export async function detectInstall(runningRoot: string): Promise<InstallKind> {
   const common = await runCommandWithTimeout(
     ["git", "-C", runningRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"],
     { timeoutMs: 10_000 },
@@ -77,29 +101,34 @@ export async function prepareUpdate(params: {
   timeoutMs?: number;
   /** `--accept-capabilities`: plugin maintenance may accept widened plugin capabilities. */
   acceptCapabilities?: boolean;
+  /** The commit the Gateway serves, when it is not this process's build; null when unknown. */
+  servingCommit?: string | null;
+  /** Leave plugins to the next update: this process cannot write the state they live in. */
+  deferPlugins?: boolean;
+  ledger?: UpdateRunLedger;
 }): Promise<UpdateRunOutcome> {
   const timeoutMs = params.timeoutMs ?? PREPARE_DEADLINE_MS;
   const deadline = Date.now() + timeoutMs;
   const env = params.env ?? process.env;
   const prefix = resolvePrefix(env);
   const node = params.node ?? process.execPath;
+  const ledger = params.ledger ?? stateUpdateRunLedger(env);
   // Already current: plugins are still maintained, by the running core; the caller restarts
   // a running Gateway only when they changed.
   const current = async (version: string): Promise<UpdateRunOutcome> => {
-    const pluginsChanged = await maintainPlugins({
-      runId: params.runId,
-      root: params.runningRoot,
-      node,
-      env,
-      channel: params.channel,
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      acceptCapabilities: params.acceptCapabilities,
-    });
-    await finishUpdateRunAsync(
-      params.runId,
-      { status: "skipped", reason: "already-current" },
-      { env },
-    );
+    const pluginsChanged =
+      !params.deferPlugins &&
+      (await maintainPlugins({
+        runId: params.runId,
+        root: params.runningRoot,
+        node,
+        env,
+        channel: params.channel,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        acceptCapabilities: params.acceptCapabilities,
+        ledger,
+      }));
+    await ledger.finish(params.runId, { status: "skipped", reason: "already-current" });
     return { status: "current", version, pluginsChanged };
   };
   const fail = async (
@@ -111,16 +140,12 @@ export async function prepareUpdate(params: {
     const detail = output
       ? sliceUtf16Safe(stripAnsi(output).trim(), -UPDATE_RUN_TEXT_LIMIT)
       : undefined;
-    await finishUpdateRunAsync(
-      params.runId,
-      {
-        status: "failed",
-        reason,
-        nextAction: message,
-        ...(detail ? { diagnostics: { failure: { step: "outcome", detail } } } : {}),
-      },
-      { env },
-    );
+    await ledger.finish(params.runId, {
+      status: "failed",
+      reason,
+      nextAction: message,
+      ...(detail ? { diagnostics: { failure: { step: "outcome", detail } } } : {}),
+    });
     return { status: "failed", reason, message };
   };
   const trial = await readTrial(prefix);
@@ -140,11 +165,7 @@ export async function prepareUpdate(params: {
   let staging: Awaited<ReturnType<typeof allocateStaging>> | undefined;
   try {
     if (lock.previous) {
-      await finishUpdateRunAsync(
-        lock.previous.runId,
-        { status: "failed", reason: "interrupted" },
-        { env },
-      );
+      await ledger.finish(lock.previous.runId, { status: "failed", reason: "interrupted" });
     }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
@@ -162,24 +183,24 @@ export async function prepareUpdate(params: {
     } catch (error) {
       return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
     }
-    await recordUpdateRunPhaseAsync(
-      params.runId,
-      "staging",
-      {
-        target: {
-          kind: install.kind,
-          version: target.version,
-          ...(target.kind === "git" ? { sha: target.sha } : {}),
-        },
+    await ledger.phase(params.runId, "staging", {
+      target: {
+        kind: install.kind,
+        version: target.version,
+        ...(target.kind === "git" ? { sha: target.sha } : {}),
       },
-      { env },
-    );
+    });
     if (target.kind === "package" && target.version === params.runningVersion) {
       return await current(target.version);
     }
     // The serving build decides, not the checkout HEAD: a pull without a rebuild still runs the
     // old code. An unknown build commit prepares a release.
-    const loaded = target.kind === "git" ? resolveLoadedCommitHash() : null;
+    const loaded =
+      target.kind === "git"
+        ? params.servingCommit === undefined
+          ? resolveLoadedCommitHash()
+          : params.servingCommit
+        : null;
     if (target.kind === "git" && loaded && gitCommitPrefixesMatch(loaded, target.sha)) {
       return await current(target.version);
     }
@@ -196,11 +217,11 @@ export async function prepareUpdate(params: {
     }
     staging = await allocateStaging({ kind: install.kind }, prefix);
     const onStep = async (name: string) => {
-      await recordUpdateRunStepAsync(
-        params.runId,
-        { step: `prepare:${name}`, status: "in_progress", startedAtMs: Date.now() },
-        { env },
-      );
+      await ledger.step(params.runId, {
+        step: `prepare:${name}`,
+        status: "in_progress",
+        startedAtMs: Date.now(),
+      });
     };
     const prepared: PrepareResult =
       target.kind === "git"
@@ -227,7 +248,7 @@ export async function prepareUpdate(params: {
         prepared.stderrTail,
       );
     }
-    await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
+    await ledger.phase(params.runId, "validating", {});
     const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
     if (!verdict.ok) {
       return await fail(
@@ -263,15 +284,25 @@ export async function prepareUpdate(params: {
     const previous = await fs.readlink(slot);
     await markForwarding(params.runningRoot, launcher, prefix);
     // Last before the trial: the restart loads the new core and its plugins together.
-    await maintainPlugins({
-      runId: params.runId,
-      root: releaseRoot,
-      node,
-      env,
-      channel: params.channel,
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      acceptCapabilities: params.acceptCapabilities,
-    });
+    if (params.deferPlugins) {
+      await ledger.step(params.runId, {
+        step: "plugins",
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: "Plugins are maintained by the next update, once this release serves.",
+      });
+    } else {
+      await maintainPlugins({
+        runId: params.runId,
+        root: releaseRoot,
+        node,
+        env,
+        channel: params.channel,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        acceptCapabilities: params.acceptCapabilities,
+        ledger,
+      });
+    }
     await createTrialPending(
       {
         runId: params.runId,
@@ -282,17 +313,12 @@ export async function prepareUpdate(params: {
       },
       prefix,
     );
-    await recordUpdateRunPhaseAsync(
-      params.runId,
-      "activating",
-      {
-        after: {
-          version: prepared.version,
-          ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
-        },
+    await ledger.phase(params.runId, "activating", {
+      after: {
+        version: prepared.version,
+        ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
       },
-      { env },
-    );
+    });
     return { status: "pending", target: { version: prepared.version }, releaseRoot };
   } catch (error) {
     return await fail(
@@ -367,6 +393,7 @@ async function maintainPlugins(params: {
   channel: UpdateChannel;
   timeoutMs: number;
   acceptCapabilities?: boolean;
+  ledger: UpdateRunLedger;
 }): Promise<boolean> {
   const startedAtMs = Date.now();
   const args = [
@@ -405,21 +432,17 @@ async function maintainPlugins(params: {
       result.stderr.trim() || (result.code === null ? "timed out" : `exited ${result.code}`),
     );
   }
-  await recordUpdateRunStepAsync(
-    params.runId,
-    {
-      step: "plugins",
-      status: failed ? "failed" : "completed",
-      startedAtMs,
-      endedAtMs: Date.now(),
-      ...(failed
-        ? { detail: [...messages, "Run `openclaw plugins update` to retry."].join("\n") }
-        : messages.length > 0
-          ? { detail: messages.join("\n") }
-          : {}),
-    },
-    { env: params.env },
-  );
+  await params.ledger.step(params.runId, {
+    step: "plugins",
+    status: failed ? "failed" : "completed",
+    startedAtMs,
+    endedAtMs: Date.now(),
+    ...(failed
+      ? { detail: [...messages, "Run `openclaw plugins update` to retry."].join("\n") }
+      : messages.length > 0
+        ? { detail: messages.join("\n") }
+        : {}),
+  });
   return plugins?.changed === true;
 }
 

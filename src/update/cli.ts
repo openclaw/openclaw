@@ -15,6 +15,7 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { convertHalfSwitchedCheckout, needsCheckoutConversion } from "./half-switched.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 
 const POLL_MS = 2_000;
@@ -61,6 +62,20 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
+  // A half-switched checkout's Gateway runs the updater that left it so; this process finishes.
+  if (opts.restart && (await needsCheckoutConversion())) {
+    const runId = await convertHalfSwitchedCheckout({
+      runningRoot: opts.runningRoot,
+      channel: opts.channel ?? opts.storedChannel ?? "dev",
+      sha: opts.sha,
+      timeoutMs: opts.timeoutMs,
+      acceptCapabilities: opts.acceptCapabilities,
+    });
+    const record = await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS);
+    report(record, opts.json);
+    process.exitCode = record?.status === "succeeded" ? 0 : 1;
+    return;
+  }
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
   const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
   const record = runId
@@ -191,6 +206,10 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
       "The update did not finish in time. Run `openclaw update status` to see it.",
     );
     return;
+  }
+  const checkoutCli = record.steps.find(({ step }) => step === "warning:checkout-cli")?.detail;
+  if (checkoutCli) {
+    defaultRuntime.log(`Note: ${checkoutCli}`);
   }
   const plugins = record.steps.find(({ step }) => step === "plugins");
   if (plugins?.status === "failed") {
