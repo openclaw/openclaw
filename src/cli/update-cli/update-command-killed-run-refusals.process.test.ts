@@ -34,7 +34,7 @@ import { updateRepairCommand } from "./update-repair-command.js";
 // The restart rule's controls are in the restart suite, a source checkout's in its own.
 describe.skipIf(process.platform === "win32")("next update after a killed update run", () => {
   const otherHistory = new RegExp(
-    `Other update history also needs repair \\(.+\\)\\. Run ${repair}`,
+    `Other update history also needs repair \\(.+\\)\\. .* By hand: Run ${repair}`,
     "u",
   );
   it.each<RefusalCase>([
@@ -74,7 +74,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       // History cannot tell that update's stop from an operator's deliberate one.
       name: "the dead update had stopped the Gateway and this update will not restart it",
       refusal: new RegExp(
-        `stopped the Gateway.*asked not to restart it\\. Run ${repair} to settle it and restart`,
+        `stopped the Gateway.*asked not to restart it\\. .* By hand: Run ${repair} to settle it and restart`,
         "u",
       ),
       dead: { gateway: "stopped", installed: "candidate" },
@@ -114,7 +114,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     },
     {
       name: "the update is a dry run",
-      refusal: /A dry run changes nothing\. Run openclaw update to settle it/u,
+      refusal: /A dry run changes nothing\. .* By hand: Run openclaw update to settle it/u,
       dryRun: true,
     },
     {
@@ -142,7 +142,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     {
       // Repair's own history rule: a full page ending after the killed run hides what is older.
       name: "an unverified candidate is installed and a full history page ends after the killed run",
-      refusal: /Other update history also needs repair\. Run openclaw update repair/u,
+      refusal: /Other update history also needs repair\. .* By hand: Run openclaw update repair/u,
       dead: { installed: "candidate" },
       control: () => settledHistory(100, "after"),
     },

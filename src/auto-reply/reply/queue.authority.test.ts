@@ -41,10 +41,14 @@ import {
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryStorageKey,
+} from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
@@ -566,47 +570,69 @@ describe("followup queue authority", () => {
     },
   );
 
-  it("retains an independent operator source hold for a stranded delivery retry", async () => {
-    const key = queueKey("test-operator-delivery-retry");
-    const source = createOperatorAuthority();
-    const parent = createRun({ prompt: "original request" });
-    parent.operatorAuthority = source.authority;
-    parent.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: source.releaseRequest };
-    const recovery = resolveStrandedReplyRecovery({
-      base: parent,
-      payloads: [],
-      finalText: "The answer is ready.",
-      terminalReply: { disposition: "visible", text: "The answer is ready." },
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
+  it.each([false, true])(
+    "retains independent operator and callback holds for a stranded delivery retry (compacted=%s)",
+    async (compacted) => {
+      const key = queueKey("test-operator-delivery-retry");
+      const source = createOperatorAuthority();
+      const parent = createRun({ prompt: "original request" });
+      parent.operatorAuthority = source.authority;
+      let callbackReferences = 1;
+      parent[replyCallbackCustody] = {
+        retain: () => {
+          callbackReferences++;
+          return () => {
+            callbackReferences--;
+          };
+        },
+      };
+      parent.turnAdoptionLifecycle = {
+        onAdopted: () => {},
+        onSettled: () => {
+          source.releaseRequest();
+          callbackReferences--;
+        },
+      };
+      const recovery = resolveStrandedReplyRecovery({
+        base: compacted ? createOverflowSummaryRetrySource(parent) : parent,
+        payloads: [],
+        finalText: "The answer is ready.",
+        terminalReply: { disposition: "visible", text: "The answer is ready." },
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
 
-      isRoomEvent: false,
-    });
-    if (recovery.kind !== "retry") {
-      throw new Error("expected source delivery recovery");
-    }
-    let delivered = false;
-    const failures: unknown[] = [];
-    enqueueFollowupRun(key, recovery.run, createQueueSettings());
-    completeFollowupRunLifecycle(parent);
-    await parent.controllerInput!.settlement.promise;
-    expect(source.references()).toBe(1);
-    scheduleFollowupDrain(key, async (run) => {
-      try {
-        run.operatorAuthority?.assertCurrent();
-        delivered = run.operatorAuthority?.profileId === "guest";
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        completeFollowupRunLifecycle(run);
+        isRoomEvent: false,
+      });
+      if (recovery.kind !== "retry") {
+        throw new Error("expected source delivery recovery");
       }
-    });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    expect(failures).toEqual([]);
-    expect(delivered).toBe(true);
-    expect(source.references()).toBe(0);
-  });
+      let delivered = false;
+      const failures: unknown[] = [];
+      enqueueFollowupRun(key, recovery.run, createQueueSettings());
+      completeFollowupRunLifecycle(parent);
+      await parent.controllerInput!.settlement.promise;
+      expect(source.references()).toBe(1);
+      expect(callbackReferences).toBe(1);
+      expect(recovery.run.turnAdoptionLifecycle).toBeUndefined();
+      scheduleFollowupDrain(key, async (run) => {
+        try {
+          run.operatorAuthority?.assertCurrent();
+          expect(callbackReferences).toBe(1);
+          delivered = run.operatorAuthority?.profileId === "guest";
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          completeFollowupRunLifecycle(run);
+        }
+      });
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+      expect(failures).toEqual([]);
+      expect(delivered).toBe(true);
+      expect(source.references()).toBe(0);
+      expect(callbackReferences).toBe(0);
+    },
+  );
 
   it("splits collect batches when queued authority facts change", async () => {
     const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);

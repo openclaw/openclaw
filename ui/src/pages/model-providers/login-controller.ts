@@ -87,8 +87,17 @@ export function createModelProviderLogin(options: {
     onBackgroundCompletion: (completion) => run(() => Promise.resolve(completion), true),
     requestFailedMessage: () => t("modelProviders.requestFailed"),
     sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
+    recovery: {
+      onRetry: () => restartSignIn?.(),
+      onOpenSettings: () => {
+        reset();
+        options.getScope().context.navigate("connection");
+      },
+    },
   });
   const runner = wizard.runner;
+  // The last started sign-in, so a typed failure can offer to start it again.
+  let restartSignIn: (() => void) | undefined;
   const modelSelection = createProviderModelSelection({
     canChoose: () => !chat.busy && runner.state.phase === "done" && options.canContinue(),
     getModel: () => completionModel,
@@ -454,14 +463,14 @@ export function createModelProviderLogin(options: {
         const selectingModel = picker.allowSetup && selected.kind !== "secret";
         loginMode = selected.requiresSetup ? (selectingModel ? "activate" : "access") : "auth";
         refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
-        void run(() =>
-          runner.start(
-            selected.id,
-            "models.authLogin",
-            selectingModel ? { selectModel: true } : {},
-          ),
-        );
+        const { id, kind, label, brandId } = selected;
+        restartSignIn = () => {
+          runner.prepareSignIn(kind, label, brandId);
+          void run(() =>
+            runner.start(id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
+          );
+        };
+        restartSignIn();
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {

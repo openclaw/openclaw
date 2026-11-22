@@ -513,8 +513,9 @@ to restart the Gateway to finish turning on member roles. See [Named operator ro
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
-  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
-  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**,
+  **Unlink from OpenClaw ID** and **Sign out of OpenClaw ID**, depending on your
+  connection and setup state.
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). Turning OpenClaw ID on through
   Labs, the config CLI, or setup adds this plugin to an existing nonempty
@@ -562,6 +563,14 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
+- **Unlink from OpenClaw ID**, in the account menu on the computer that runs the
+  claw (never over the tunnel), or `openclaw id unlink`, takes the claw off
+  OpenClaw ID for good. The confirmation shows how many people and devices lose
+  access, and warns that the address stops working at once and that the claw's
+  name can never be used again, by any account. Every member and device is
+  removed; conversations and everything else on the computer stay. If Discovery
+  can't be reached, the claw is unlinked on the computer anyway and the Gateway
+  sends the unlink when Discovery answers ([CLI](/cli/id#unlink)).
 - To move a claw to new connection keys (a lost or leaked key file, a new computer
   without the key files, or routine rotation), run `openclaw id rebind` on the
   computer that runs it, with its recovery kit. Devices, people, nodes and invites

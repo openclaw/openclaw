@@ -87,6 +87,7 @@ export function createAdmittedRunOperatorAuthority(
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
+    clientId: source.clientId,
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,

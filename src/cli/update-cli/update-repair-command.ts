@@ -35,6 +35,7 @@ import {
   recordedUpdateRunDrivers,
   inspectUpdateRunAbandonment,
 } from "../../infra/update-run-activity.js";
+import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
@@ -427,7 +428,9 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
-    history.incomplete
+    history.incomplete ||
+    // Finalization verifies a recorded data-at-risk mark before acknowledging it.
+    listUnverifiedDataAtRisk(recentRuns).length > 0
   ) {
     return await finalizeRepair();
   }
@@ -484,7 +487,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     currentHistory.incomplete
   ) {
     throw new Error(
-      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop --force", env)} first.`,
     );
   }
   const reconciled = activeRuns.length

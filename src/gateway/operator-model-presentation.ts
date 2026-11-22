@@ -251,9 +251,23 @@ export function prepareOperatorModelPolicyPresentation(params: {
         continue;
       }
       const projected = projectRuntime(model);
+      const defaults = model.defaultModelRuntimes;
       visible.push(
-        model.runtimeChoices
-          ? { ...projected, runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+        model.runtimeChoices || defaults
+          ? {
+              ...projected,
+              ...(model.runtimeChoices
+                ? { runtimeChoices: model.runtimeChoices.map(projectRuntime) }
+                : {}),
+              ...(defaults
+                ? {
+                    defaultModelRuntimes: {
+                      base: projectRuntime(defaults.base),
+                      alternatives: defaults.alternatives.map(projectRuntime),
+                    },
+                  }
+                : {}),
+            }
           : projected,
       );
     }

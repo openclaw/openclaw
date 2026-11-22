@@ -19,7 +19,10 @@ const resolveManifestProviderAuthChoices = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoices>(() => []),
 );
 // mock-isolation: Supply manifest auth choices without loading provider artifacts.
-vi.mock("./provider-auth-choices.js", () => ({ resolveManifestProviderAuthChoices }));
+vi.mock("./provider-auth-choices.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-auth-choices.js")>()),
+  resolveManifestProviderAuthChoices,
+}));
 
 const listOfficialExternalProviderCatalogEntries = vi.hoisted(() =>
   vi.fn<ListOfficialExternalProviderCatalogEntries>(() => []),

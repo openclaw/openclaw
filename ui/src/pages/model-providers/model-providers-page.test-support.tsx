@@ -574,11 +574,6 @@ export async function startSelectedLogin(page: ModelProvidersPageTestElement, la
 }
 
 export async function submitCredential(page: ModelProvidersPageTestElement) {
-  const manual = page.querySelector<HTMLDetailsElement>(".wizard-step__manual-entry");
-  if (manual && !manual.open) {
-    manual.querySelector<HTMLElement>("summary")!.click();
-    expect(manual.open).toBe(true);
-  }
   const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
   input.value = "synthetic-test-credential";
   input.dispatchEvent(new Event("input", { bubbles: true }));

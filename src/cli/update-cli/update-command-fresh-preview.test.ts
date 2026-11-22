@@ -13,7 +13,6 @@ import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import * as recoveryBaseline from "../../infra/update-recovery-baseline-capture.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as history from "../../infra/update-run-reader.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -608,49 +607,6 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
 
 registerOriginalCaptureTests({ fixture, dirs });
 
-it.each([
-  "SQLite file generation changed while reading",
-  "State schema inventory failed (output-limit)",
-])(
-  "reports a warning and continues a completed update after capture failure: %s",
-  async (failure) => {
-    try {
-      prepareCurrentUpdate();
-      const cause = `${failure}: /fixture/state/openclaw.sqlite`;
-      vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
-        new Error("Original update capture failed; evidence retained at /fixture/capture", {
-          cause: new Error(cause),
-        }),
-      );
-
-      await expect(runUpdate()).resolves.toBeUndefined();
-
-      const [finished] = history.listUpdateRuns();
-      expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
-      const warning = finished?.steps.find(
-        (step) => step.step === "warning:original-state-capture:1",
-      )?.detail;
-      assert(warning);
-      expect(warning).toMatch(
-        /^NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable\. The update continues without a complete pre-update recovery copy\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
-      );
-      expect(warning).toContain(cause);
-      expectJson({
-        status: "skipped",
-        run: expect.objectContaining({
-          steps: expect.arrayContaining([
-            expect.objectContaining({ step: "warning:original-state-capture:1", detail: warning }),
-          ]),
-        }),
-      });
-      expect(warning).not.toContain("retry");
-      expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-  },
-);
-
 it.skipIf(process.platform === "win32").each([true, false])(
   "uses the operator's agent after candidate admission fails (repair consent=%s)",
   async (consent) => {
@@ -729,7 +685,7 @@ it.skipIf(process.platform === "win32").each([true, false])(
   },
 );
 
-it("Doctor sees an already-current update's completed history after original-state capture", async () => {
+it("Doctor sees an already-current update's completed history, which copied nothing", async () => {
   try {
     prepareCurrentUpdate();
     let running: Awaited<ReturnType<typeof history.getUpdateRunAsync>>;
@@ -756,10 +712,9 @@ it("Doctor sees an already-current update's completed history after original-sta
       status: "skipped",
       reason: "already-current",
       finishedAtMs: expect.any(Number),
-      steps: expect.arrayContaining([
-        expect.objectContaining({ step: "original-state-capture", status: "completed" }),
-      ]),
     });
+    // A version read never copies: the no-op run took no original-state capture.
+    expect(finished.steps.map((step) => step.step)).not.toContain("original-state-capture");
     // Drain the fixture's writers so the independent Doctor capture has a quiescent source.
     await closeOpenClawStateDatabaseAsync();
     const readHistory = vi.spyOn(history, "listUpdateRunsAsync");
