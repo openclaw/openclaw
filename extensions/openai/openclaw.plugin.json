@@ -127,7 +127,6 @@
               "max": "max"
             },
             "compat": {
-              "defaultThinkingLevel": "medium",
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,
@@ -171,7 +170,6 @@
               "max": "max"
             },
             "compat": {
-              "defaultThinkingLevel": "medium",
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,

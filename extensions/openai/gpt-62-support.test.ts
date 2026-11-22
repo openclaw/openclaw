@@ -159,7 +159,6 @@ it.each(
       compat: {
         supportsTemperature: false,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-        defaultThinkingLevel: "medium",
       },
       thinkingLevelMap: { off: null, minimal: "low" },
     });
