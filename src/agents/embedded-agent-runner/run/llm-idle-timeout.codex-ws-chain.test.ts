@@ -1,5 +1,9 @@
 import { createLlmRuntime } from "@openclaw/ai";
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import {
+  claimConversationProviderState,
+  cleanupSessionResources,
+} from "@openclaw/ai/internal/runtime";
+import { PROVIDER_STATE_SCOPE } from "@openclaw/ai/provider-types";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -96,7 +100,7 @@ function startWatchdog(label: string) {
   const runAbort = new AbortController();
   const runId = `run-${label}`;
   const sessionId = `session-${label}`;
-  const { streamFn: base, strategy } = resolveEmbeddedAgentStream({
+  const { streamFn: resolved, strategy } = resolveEmbeddedAgentStream({
     llmRuntime,
     currentStreamFn: undefined,
     sessionId,
@@ -105,6 +109,12 @@ function startWatchdog(label: string) {
     resolvedApiKey: apiKey,
     authProfileId: "openai:default",
   });
+  // The writer's attempt owns the session socket, as attempt-stream-settle supplies in a run.
+  const base: StreamFn = (streamModel, streamContext, options) =>
+    resolved(streamModel, streamContext, {
+      ...options,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+    } as Parameters<StreamFn>[2]);
   const allowed = new Set(["exec", "read"]);
   const promoted = wrapStreamFnPromoteStandaloneTextToolCalls(base, allowed);
   const trimmed = wrapStreamFnTrimToolCallNames(promoted, allowed, {

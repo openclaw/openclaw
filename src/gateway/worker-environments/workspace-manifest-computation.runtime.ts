@@ -109,7 +109,7 @@ export async function executeWorkspaceManifestComputation(
       const { rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
         { ...input, buildCacheInputs: new Set(input.buildCacheInputs) },
         previous
-          ? (relative, _identity, stats) => {
+          ? (relative, stats) => {
               const entry = entries.get(relative);
               return !changed.has(relative) &&
                 // Installer-owned bytes can be retained by a staged-input marker.

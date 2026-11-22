@@ -1,10 +1,8 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import {
   createCatalogCodeModeHarness,
@@ -563,7 +561,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     async (cause) => {
       const revocation = new AbortController();
       let refused = false;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.write"],
         signal: revocation.signal,

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -58,7 +58,7 @@ describe("guest session rename through the agent catalog", () => {
       const beforeRename = sessionToolsEntry(sessionKey)!;
       expect(beforeRename.createdActor).toEqual(original.createdActor);
       const controller = new AbortController();
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
+      const operatorAuthority = createTestOperatorAuthority({
         profileId,
         scopes: ["operator.sessions.write"],
         signal: controller.signal,
@@ -185,7 +185,7 @@ describe("guest session rename through the agent catalog", () => {
         const scopes = [scope];
         cfg.gateway!.roles!.definitions.view!.scopes = scopes;
         const canRename = scopes[0] !== "operator.read";
-        const operatorAuthority = createAdmittedRunOperatorAuthority({
+        const operatorAuthority = createTestOperatorAuthority({
           profileId,
           scopes,
           signal: new AbortController().signal,

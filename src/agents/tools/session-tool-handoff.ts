@@ -23,6 +23,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsidePluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { registerReplyOperationSuccessorBarrier } from "../../sessions/session-controller.barriers.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
@@ -36,12 +37,17 @@ import { runInDetachedAsyncContext } from "../../shared/detached-async-context.j
 import { isInternalRouteContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { createToolTurnHandoff } from "../agent-tools.abort.js";
+import { buildSessionToolHandoffNotice } from "../sessions-yield-context.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const log = createSubsystemLogger("agent/tool-handoff");
 const pending = new WeakSet<object>();
+
+export function hasPendingSessionToolHandoff(operation: ReplyOperation | undefined): boolean {
+  return operation !== undefined && pending.has(operation);
+}
 
 type HandoffScope = { assertCurrent: () => void; signal: AbortSignal };
 type HandoffWork =
@@ -67,6 +73,7 @@ export async function handoffSessionTool(
     /** The yielding turn was admitted as an owner; its resume keeps that decision. */
     senderIsOwner?: boolean;
     formatResult: (payload: Record<string, unknown>) => string;
+    completedToolCall?: (payload: Record<string, unknown>) => InputProvenance["completedToolCall"];
   },
 ) {
   if (
@@ -128,15 +135,10 @@ export async function handoffSessionTool(
       );
       const run = params.run;
       continuation = captured;
-      runDeferred = captured
-        ? (scope) =>
-            params.retainRequester
-              ? captured.runWithRequester(() => run(scope))
-              : captured.run(() => run(scope))
-        : undefined;
+      runDeferred = captured ? (scope) => captured.runWithRequester(() => run(scope)) : undefined;
       enqueueDeferred = captured
         ? (text, options) =>
-            captured.run(() =>
+            captured.runWithRequester(async () =>
               runOutsidePluginRuntimeRegistryScope(() => enqueueSessionEventForHost(text, options)),
             )
         : undefined;
@@ -179,7 +181,7 @@ export async function handoffSessionTool(
       message: `${params.name} will run after turn cleanup. Started is not success: its result, which may be a refusal, resumes this session as the next turn.`,
     } as const;
     const handoffResult = jsonResult(handoffReceipt);
-    const message = params.name + " handed off; resume with its result in this same conversation.";
+    const message = buildSessionToolHandoffNotice(params.name);
     if (params.terminal) {
       await params.onYield(message, undefined, undefined, {
         terminal: createToolTurnHandoff(
@@ -277,6 +279,7 @@ export async function handoffSessionTool(
                 " result: " +
                 params.formatResult(result) +
                 "\nContinue the original task in this conversation. Do not repeat a completed operation.";
+              const completedToolCall = params.completedToolCall?.(result);
               // Retain the admitted Gateway, but let resume select the replacement plugin registry.
               const receipt = await enqueue(
                 eventText,
@@ -286,6 +289,7 @@ export async function handoffSessionTool(
                     sessionKey: caller.sessionKey,
                     source: "tool_handoff",
                     contextKey,
+                    ...(completedToolCall ? { completedToolCall } : {}),
                     expectedTarget: target,
                     ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),
                     assertCurrent: retained.assertCurrent,
@@ -337,6 +341,7 @@ export async function handoffSessionTool(
         })
         .finally(() => {
           handoffSettled.resolve(undefined);
+          pending.delete(operation);
           retained.release();
         }),
     );

@@ -631,24 +631,15 @@ export function createChatSendPendingInputAdmission({
   assertCustodyLifetimeCurrent: () => void;
   assertClientUploadAllowed?: () => void;
 }) {
-  const assertCustodyCurrent = () => {
-    assertCustodyLifetimeCurrent();
-    if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
-      sessionMutationAuthorization.assertAdmittedInputCurrent();
-    } else {
-      sessionMutationCommitGuard?.();
-      sessionMutationAuthorization?.assertCurrent();
-    }
-  };
   let preparationFailure: { cause: unknown } | undefined;
   const assertAdmittedCurrent =
     expectedProfileId === undefined
-      ? assertCustodyCurrent
+      ? assertCustodyLifetimeCurrent
       : createMessageInjectionAuthority(() => {
           if (preparationFailure) {
             throw preparationFailure.cause;
           }
-          assertCustodyCurrent();
+          assertCustodyLifetimeCurrent();
           return true;
         });
   return {
@@ -669,7 +660,7 @@ export function createChatSendPendingInputAdmission({
     assertCurrent: () => {
       assertClientUploadAllowed?.();
       sessionMutationCommitGuard?.();
-      assertCustodyCurrent();
+      assertCustodyLifetimeCurrent();
     },
     assertAdmittedCurrent,
   };

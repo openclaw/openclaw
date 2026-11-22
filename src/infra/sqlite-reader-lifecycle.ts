@@ -7,6 +7,7 @@ import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sqliteReaderCounter } from "./sqlite-reader-metrics.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+import { currentWorkerDiagnosticIdentity } from "./worker-diagnostic-script.js";
 
 const HEAVY_READ_BYTES = 64 * 1024 * 1024;
 
@@ -163,6 +164,7 @@ export function withSqliteReaderOwner<T>(
             },
             pid: process.pid,
             threadId,
+            ...currentWorkerDiagnosticIdentity(),
             thresholdBytes: HEAVY_READ_BYTES,
           });
         } catch {

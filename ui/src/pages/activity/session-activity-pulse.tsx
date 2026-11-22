@@ -27,11 +27,13 @@ export function renderSessionActivityPulse(props: {
     const period = new Intl.DateTimeFormat(undefined, formats[time]);
     // Few wide buckets (7 days, months) leave room for only three labels.
     const labels = pulse.buckets.length > 12 ? 4 : 2;
+    const peak = Math.max(...pulse.buckets);
     return {
       label: (index: number) => period.format(activityPulseBucketStart(time, pulse.since, index)),
       windowLabel: time === "all" ? t("activity.pulse.lastYear") : t(TIME_LABELS[time]),
       sessions: pulse.buckets.reduce((sum, count) => sum + count, 0),
-      peak: Math.max(...pulse.buckets),
+      peak,
+      peakIndex: pulse.buckets.indexOf(peak),
       axis: new Set(
         Array.from({ length: labels + 1 }, (_, index) =>
           Math.round((index * (pulse.buckets.length - 1)) / labels),
@@ -91,7 +93,7 @@ export function renderSessionActivityPulse(props: {
           {
             window: chart().windowLabel,
             count: String(chart().sessions),
-            period: chart().label(props.pulse.buckets.indexOf(chart().peak)),
+            period: chart().label(chart().peakIndex),
           },
         )}
       >
@@ -108,7 +110,7 @@ export function renderSessionActivityPulse(props: {
                 count: String(count()),
               })}
             >
-              <Show when={count() > 0 && count() === chart().peak}>
+              <Show when={count() > 0 && index === chart().peakIndex}>
                 <span class="activity-pulse__count">
                   {formatNumber(count(), { notation: "compact", maximumFractionDigits: 1 })}
                 </span>

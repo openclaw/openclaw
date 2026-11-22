@@ -183,6 +183,60 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   });
 
+  it.each(["tool result", "thought", "noise"] as const)(
+    "tracks ACP reply progress when the backend emits %s",
+    async (activity) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const start = Date.now();
+      const observed = createDispatchGate();
+      const runtime = createAcpRuntime([]);
+      const completed: AcpRuntimeEvent = {
+        type: "tool_call",
+        toolCallId: "tool-1",
+        status: "completed",
+        text: "fixture result",
+      };
+      runtime.runTurn.mockImplementation(async function* () {
+        vi.setSystemTime(start + 60_000);
+        yield completed;
+        vi.setSystemTime(start + 300_000);
+        if (activity === "tool result") {
+          yield { ...completed, toolCallId: "tool-2" };
+        } else if (activity === "thought") {
+          yield { type: "text_delta", text: "Working in ACP", stream: "thought" };
+        } else {
+          yield completed;
+          yield { ...completed, toolCallId: "tool-2", status: "in_progress" };
+          yield { type: "text_delta", text: " " };
+          yield { type: "status", text: "usage update", tag: "usage_update" };
+        }
+        await observed.wait();
+        yield { type: "done" };
+      });
+      mockAcpSession(acpKey);
+      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+      let source: SessionControllerInput | undefined;
+      const turn = dispatchTo(acpKey, activity, (input) => {
+        source = input;
+      });
+      try {
+        await awaitGateBeforeSettlement(observed.started, turn, "ACP output was not consumed");
+        const watchdog = source?.claim?.operation?.watchdog;
+        expect(watchdog?.snapshot().semanticProgressAtMs).toBe(
+          start + (activity === "noise" ? 60_000 : 300_000),
+        );
+        vi.setSystemTime(start + 435_000);
+        expect(watchdog?.decide().action).toBe(activity === "noise" ? "stop" : "observe");
+        observed.resolve();
+        await turn;
+      } finally {
+        observed.resolve();
+        await Promise.allSettled([turn]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["agent", "bound"] as const)(
     "serializes channel dispatch behind a %s ACP turn",
     async (first) => {

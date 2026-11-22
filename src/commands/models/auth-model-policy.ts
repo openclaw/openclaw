@@ -111,48 +111,11 @@ export function allowProviderModelsInConfig(
 
 export type ProviderModelAccess = { message: string; applied: boolean };
 
-/** Applies {@link allowProviderModelsInConfig} after a sign-in saved provider credentials. */
-async function allowProviderModels(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  provider: string;
-  runtime: RuntimeEnv;
-  assertCurrent?: (config?: OpenClawConfig) => void;
-}): Promise<ProviderModelAccess | undefined> {
-  if (
-    !allowProviderModelsInConfig(structuredClone(params.config), params.agentId, params.provider)
-  ) {
-    return undefined;
-  }
-  const application = createRuntimeConfigWriteApplication(
-    captureGatewayRootWorkAdmissionContinuationScope()?.run,
-  );
-  let notice: string | undefined;
-  await updateConfig(
-    (config) => {
-      params.assertCurrent?.(config);
-      resolveModelsTargetAgent(config, params.agentId, { kind: "mutation" });
-      notice = allowProviderModelsInConfig(config, params.agentId, params.provider);
-      return config;
-    },
-    undefined,
-    undefined,
-    attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),
-  );
-  if (!notice) {
-    return undefined;
-  }
-  const applied = application.claimed && (await application.result) === "applied";
-  const message = applied
-    ? notice
-    : `${notice} OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.`;
-  logConfigUpdated(params.runtime);
-  params.runtime.log(message);
-  return { message, applied };
-}
-
-/** Sign-in variant: a failed policy write is reported as saved credentials with unapplied settings. */
-export function allowLoginProviderModels(
+/**
+ * Applies {@link allowProviderModelsInConfig} after a sign-in saved provider credentials. A failed
+ * policy write is reported as saved credentials with unapplied settings.
+ */
+export async function allowLoginProviderModels(
   params: {
     config: OpenClawConfig;
     runtime: RuntimeEnv;
@@ -162,16 +125,40 @@ export function allowLoginProviderModels(
   agentId: string,
   provider: string,
 ): Promise<ProviderModelAccess | undefined> {
-  return allowProviderModels({
-    config: params.config,
-    agentId,
-    provider,
-    runtime: params.runtime,
-    assertCurrent: () => {
-      params.signal?.throwIfAborted();
-      params.assertCurrent?.();
-    },
-  }).catch((error: unknown) => {
+  if (!allowProviderModelsInConfig(structuredClone(params.config), agentId, provider)) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  };
+  const application = createRuntimeConfigWriteApplication(
+    captureGatewayRootWorkAdmissionContinuationScope()?.run,
+  );
+  let notice: string | undefined;
+  try {
+    await updateConfig(
+      (config) => {
+        assertCurrent();
+        resolveModelsTargetAgent(config, agentId, { kind: "mutation" });
+        notice = allowProviderModelsInConfig(config, agentId, provider);
+        return config;
+      },
+      undefined,
+      undefined,
+      attachRuntimeConfigWriteApplication({ assertCurrent }, application),
+    );
+    if (!notice) {
+      return undefined;
+    }
+    const applied = application.claimed && (await application.result) === "applied";
+    const message = applied
+      ? notice
+      : `${notice} OpenClaw has not confirmed it is active. Open Settings and select Apply changes.`;
+    logConfigUpdated(params.runtime);
+    params.runtime.log(message);
+    return { message, applied };
+  } catch (error) {
     throw new ProviderAuthConfigApplyError(error);
-  });
+  }
 }

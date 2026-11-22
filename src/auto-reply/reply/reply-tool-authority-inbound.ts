@@ -49,6 +49,15 @@ import {
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
+export function assertCurrentOperatorAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): void {
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+}
+
 /** Classify ordinary guidance without changing the selected execution's authority. */
 export function captureReplyToolAuthorityContinuation({
   snapshot,

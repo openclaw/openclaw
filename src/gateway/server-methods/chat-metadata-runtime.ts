@@ -33,6 +33,7 @@ import {
   authStoresCurrent,
   captureGenerationFacts,
   ChatMetadataSnapshotUnavailableError,
+  ChatMetadataStartingError,
   generationFactsMatch,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
@@ -110,6 +111,7 @@ export function createGatewayChatMetadataRuntime(params: {
   ) => Promise<ChatStartupProjectionResult | undefined>;
 } {
   let current: PreparedMetadataGeneration | undefined;
+  let hasPublished = false;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
   let failed = false;
@@ -329,6 +331,7 @@ export function createGatewayChatMetadataRuntime(params: {
       assertOpen();
       // Mid-refresh config changes are best effort; the next publication refreshes these facts.
       current = generation;
+      hasPublished ||= facts.agents.length > 0;
       notifyChanged(facts, options.notifyIfUnchanged);
     } else if (options.notifyIfUnchanged) {
       notifyChanged(facts, true);
@@ -377,6 +380,10 @@ export function createGatewayChatMetadataRuntime(params: {
     project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
     assertOpen();
+    // Empty startup catch-up is not a publication; terminal failures and retired owners stay errors.
+    if (!hasPublished && !lastError) {
+      throw new ChatMetadataStartingError("Chat metadata is starting; retry shortly.");
+    }
     await pending;
     if (!current && replacement) {
       await replacement.promise;

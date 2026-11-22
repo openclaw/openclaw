@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -273,7 +274,7 @@ export async function handleFeishuCardAction(params: {
           await sendInvalidInteractionNotice("malformed");
           return;
         }
-        await dispatchSyntheticCommand(command, envelope.c?.t);
+        await dispatchSyntheticCommand(agentControlText(command) ?? command, envelope.c?.t);
         return;
       }
 

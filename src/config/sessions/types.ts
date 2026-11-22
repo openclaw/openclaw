@@ -710,6 +710,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Restart resume scope the latest run started under; see session-restart-resume-scope. */
+  lifecycleRestartScope?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
@@ -728,6 +730,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Running root-session resume only; accepted queued input owns its own durable row. */
   resumeAfterRestart?: {
+    /** A direct chat turn in a visible spawned session, not its original delegated run. */
+    directChat?: true;
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: QueuedOperatorRecoverySource;
     /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */

@@ -6,6 +6,7 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import { withSnapshotFrameGuard } from "./pw-snapshot-page.js";
 import { awaitActionWithAbort } from "./pw-tools-core.interactions.navigation.js";
 
 /** Returns visible page text without evaluating caller-provided JavaScript. */
@@ -29,21 +30,33 @@ export async function getPageTextViaPlaywright(opts: {
   const read = async () => {
     signal.throwIfAborted();
     const page = await getPageForTargetId(opts);
-    signal.throwIfAborted();
-    let locator = page.locator(opts.selector ?? "body").first();
-    if (!opts.selector) {
-      for (const selector of ["article", "main"]) {
-        const candidate = page.locator(selector).first();
-        const count = await candidate.count();
-        signal.throwIfAborted();
-        if (count) {
-          locator = candidate;
-          break;
+    // Locators re-resolve after a navigation, so text read across one belongs to another document.
+    return await withSnapshotFrameGuard({
+      page,
+      frame: page.mainFrame(),
+      signal,
+      run: async (assertCurrent) => {
+        let locator = page.locator(opts.selector ?? "body").first();
+        if (!opts.selector) {
+          for (const selector of ["article", "main"]) {
+            const candidate = page.locator(selector).first();
+            const count = await candidate.count();
+            signal.throwIfAborted();
+            if (count) {
+              locator = candidate;
+              break;
+            }
+          }
         }
-      }
-    }
-    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-    return await locator.innerText({ timeout: Math.max(1, deadline - performance.now()), signal });
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
+        const text = await locator.innerText({
+          timeout: Math.max(1, deadline - performance.now()),
+          signal,
+        });
+        assertCurrent();
+        return text;
+      },
+    });
   };
   const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
     createError: () => {

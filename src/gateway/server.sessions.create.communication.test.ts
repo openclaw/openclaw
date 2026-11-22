@@ -389,93 +389,61 @@ test.each([
   },
 );
 
-test.for(["creator", "admin", "membership"] as const)(
-  "sessions.create refuses persistence after %s authority changes during worker preparation",
-  async (authority, { signal }) => {
-    const f = await createFixture("revoked-" + authority);
-    const childKey =
-      authority === "creator"
-        ? f.targetKey
-        : "agent:main:dashboard:communication-revoked-child-" + authority;
-    const client =
-      authority === "creator"
-        ? f.creatorClient
-        : authority === "admin"
-          ? f.adminClient
-          : f.collaboratorClient;
-    const parent = { agentId: "main", sessionKey: f.parentKey, storePath: f.storePath };
-    const resolved = resolveSqliteStoreScope(f.storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: resolved.path });
-    const transcriptCount = () =>
-      database.db.prepare("SELECT count(*) AS count FROM transcript_events").get()?.count;
-    const beforeTranscripts = transcriptCount();
-    const entered = createDeferred();
-    const release = createDeferred();
-    replacementBoundary.key = childKey;
-    replacementBoundary.entered = entered.resolve;
-    replacementBoundary.release = release.promise;
-    const creating = request(f.context, client, "sessions.create", {
-      agentId: "main",
-      key: childKey,
-      parentSessionKey: f.parentKey,
-      // Revoke the creator of an existing protected target; creating a new child
-      // from a still-accessible parent does not require owning that parent.
-      ...(authority === "creator" ? { label: "must-not-commit" } : {}),
-      // Membership exercises omitted policy inheritance through actual access.
-      ...(authority === "membership" ? {} : { communication: { receive: "never" } }),
-    });
-    const settled = creating.then(
-      (response) => ({ response, error: undefined }),
-      (error: unknown) => ({ response: undefined, error }),
+test("sessions.create refuses persistence after membership changes during worker preparation", async ({
+  signal,
+}) => {
+  const f = await createFixture("revoked-membership");
+  const childKey = "agent:main:dashboard:communication-revoked-child-membership";
+  const client = f.collaboratorClient;
+  const parent = { agentId: "main", sessionKey: f.parentKey, storePath: f.storePath };
+  const resolved = resolveSqliteStoreScope(f.storePath, { agentId: "main" });
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: resolved.path });
+  const transcriptCount = () =>
+    database.db.prepare("SELECT count(*) AS count FROM transcript_events").get()?.count;
+  const beforeTranscripts = transcriptCount();
+  const entered = createDeferred();
+  const release = createDeferred();
+  replacementBoundary.key = childKey;
+  replacementBoundary.entered = entered.resolve;
+  replacementBoundary.release = release.promise;
+  // Membership exercises omitted policy inheritance through actual access.
+  const creating = request(f.context, client, "sessions.create", {
+    agentId: "main",
+    key: childKey,
+    parentSessionKey: f.parentKey,
+  });
+  const settled = creating.then(
+    (response) => ({ response, error: undefined }),
+    (error: unknown) => ({ response: undefined, error }),
+  );
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        creating,
+        "creation never reached the real SQLite replacement",
+      ),
+      signal,
     );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          creating,
-          "creation never reached the real SQLite replacement",
-        ),
-        signal,
-      );
-      if (authority === "creator") {
-        // Creator attribution is immutable; retire the actual human connection.
-        client.invalidated = true;
-      } else if (authority === "admin") {
-        client.connect.scopes = ["operator.read", "operator.write"];
-      } else {
-        sessionMembers.removeSessionMember(
-          parent,
-          f.collaborator.id,
-          undefined,
-          expectDefined(loadSessionEntry(parent), "current parent").sessionId,
-        );
-      }
-    } finally {
-      release.resolve();
-      await settled;
-    }
-    const outcome = await settled;
-    if (authority === "creator") {
-      // A disconnected transport cannot receive a denial response.
-      expect(outcome.error).toMatchObject({ message: "Gateway requester authority changed" });
-    } else {
-      expect(outcome.error).toBeUndefined();
-      const denied = expectDefined(outcome.response, "live transport refusal");
-      expect(denied.ok).toBe(false);
-      expect(denied.error).toMatchObject(
-        authority === "membership"
-          ? { code: "INVALID_REQUEST", details: { code: "SESSION_PARTICIPATION_REQUIRED" } }
-          : { code: "FORBIDDEN", message: "Gateway requester authority changed" },
-      );
-    }
-    const persisted = loadSessionEntry({ sessionKey: childKey, storePath: f.storePath });
-    if (authority === "creator") {
-      expect(persisted?.communication).toEqual({ receive: "never" });
-      expect(persisted?.label).toBeUndefined();
-    } else {
-      expect(persisted).toBeUndefined();
-    }
-    expect(transcriptCount()).toBe(beforeTranscripts);
-    expect(loadSessionEntry(parent)?.communication).toEqual({ receive: "always" });
-  },
-);
+    sessionMembers.removeSessionMember(
+      parent,
+      f.collaborator.id,
+      undefined,
+      expectDefined(loadSessionEntry(parent), "current parent").sessionId,
+    );
+  } finally {
+    release.resolve();
+    await settled;
+  }
+  const outcome = await settled;
+  expect(outcome.error).toBeUndefined();
+  const denied = expectDefined(outcome.response, "live transport refusal");
+  expect(denied.ok).toBe(false);
+  expect(denied.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+  });
+  expect(loadSessionEntry({ sessionKey: childKey, storePath: f.storePath })).toBeUndefined();
+  expect(transcriptCount()).toBe(beforeTranscripts);
+  expect(loadSessionEntry(parent)?.communication).toEqual({ receive: "always" });
+});

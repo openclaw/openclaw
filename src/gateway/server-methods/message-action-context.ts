@@ -7,26 +7,22 @@ import {
 import {
   isFencedProviderReadAction,
   isScheduledMessageWriteAction,
-  prepareExternalMessageActionTargetForResolution,
 } from "../../channels/plugins/message-action-dispatch.js";
-import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveBareTargetChannelNamespace } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
-import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   readMessageActionInvocationConfig,
   resolveMessageActionTurnAuthorization,
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureAgentRuntimeTurnAssertion } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 /** Redeem host-only message authority from a trusted local agent runtime. */
@@ -56,55 +52,22 @@ export function resolveAgentRuntimeMessageActionConfig(
     : undefined;
 }
 
-/** Resolve an inferred namespace without changing dispatch or authenticated caller context. */
-export async function resolveMessageActionNamespace(
-  context: ChannelMessageActionContext & {
-    messageActionAuthorization?: MessageActionAuthorization;
-  },
-  plugin: ChannelPlugin,
-  channelInferred?: true,
-): Promise<void> {
-  if (
-    !channelInferred ||
-    !["to", "channelId"].some((key) =>
-      resolveBareTargetChannelNamespace({
-        raw: normalizeOptionalString(context.params[key]),
-        plugin,
-      }),
-    )
-  ) {
-    return;
-  }
-  const prepared = await prepareExternalMessageActionTargetForResolution(context);
-  context.params = prepared.params;
-  context.accountId = prepared.accountId ?? context.accountId;
-  context.assertDirectAdapterHandoff =
-    prepared.assertTargetAuthorityCurrent ??
-    prepared.assertReadAuthorityCurrent ??
-    context.assertDirectAdapterHandoff;
-  context.assertDirectAdapterHandoff?.();
-  const { resolveMessageTarget } = await import("../../infra/outbound/message-action-routing.js");
-  await withChannelReadAuthority(context.assertDirectAdapterHandoff, () =>
-    resolveMessageTarget({
-      ...context,
-      args: context.params,
-      channelInferred: true,
-      plugin,
-    }),
-  );
-}
+export type MessageActionCallerAuthority = {
+  authorize: () => boolean;
+};
 
 /** Retain the live caller and scheduled source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
-    "client" | "context" | "respond" | "sessionMutationCommitGuard"
+    "client" | "sessionMutationCommitGuard"
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
     assertClientUploadAllowed?: () => void;
   },
 ) {
+  const assertTurnCurrent = captureAgentRuntimeTurnAssertion(params.client);
   const assertScheduledSourceCurrent =
     params.authorization?.scheduled?.assertSourceCurrent ??
     params.authorization?.scheduled?.assertCurrent;
@@ -125,29 +88,37 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
       : undefined;
-  const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
-    params.client,
-    params.context,
-    params.respond,
-    assertActionCurrent || assertDeliveryCurrent
+  const assertAdmissionCurrent =
+    assertTurnCurrent || assertActionCurrent || assertDeliveryCurrent
       ? () => {
+          assertTurnCurrent?.();
           params.sessionMutationCommitGuard?.();
           assertActionCurrent?.();
           assertDeliveryCurrent?.();
         }
-      : params.sessionMutationCommitGuard,
-  );
+      : params.sessionMutationCommitGuard;
   const assertDirectAdapterHandoff = params.assertClientUploadAllowed
     ? () => {
-        agentRuntimeAuthority.commitGuard?.();
+        assertAdmissionCurrent?.();
         params.assertClientUploadAllowed?.();
       }
-    : agentRuntimeAuthority.commitGuard;
+    : assertAdmissionCurrent;
   const beforeDeliveryAttempt = () =>
     isFencedProviderReadAction(params.request.action)
       ? undefined
       : params.authorization?.deliveryAttempt?.beforeAttempt();
   return {
+    authorize(): boolean {
+      try {
+        assertAdmissionCurrent?.();
+        return true;
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
+        return false;
+      }
+    },
     assertReadCurrent,
     assertScheduledWriteCurrent,
     beforeDeliveryAttempt,
@@ -158,7 +129,6 @@ export function createMessageActionRuntimeAuthority(
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??
       (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
-    agentRuntimeAuthority,
     assertDirectAdapterHandoff,
   };
 }

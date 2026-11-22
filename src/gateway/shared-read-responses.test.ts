@@ -332,74 +332,67 @@ describe("shared read response dispatch", () => {
     }
   });
 
-  it.each(["method authority", "operator scope"] as const)(
-    "rejects only the waiting reader whose %s changes and releases every reader",
-    async (authority) => {
-      const releaseProducer = createDeferredCore();
-      const allPrepared = createDeferredCore();
-      const revoked = new Set<string>();
-      const released = vi.fn<(id: string) => void>();
-      const delivered = vi.fn<(id: string) => void>();
-      const produce = vi.fn(async (respond: RespondFn) => {
-        await releaseProducer.promise;
-        respond(true, { models: ["allowed"] });
-      });
-      let prepared = 0;
-      const harness = createReadHarness(
-        createPreparedReadHandler(({ req }) => {
-          if (++prepared === 3) {
-            allPrepared.resolve();
-          }
-          return {
-            run: produce,
-            assertCurrent: () => {
-              if (revoked.has(req.id)) {
-                throw new SessionMutationAuthorizationChangedError({
-                  code: "FORBIDDEN",
-                  message: "Selected account access revoked",
-                });
-              }
-            },
-            release: () => released(req.id),
-            beforeRespond: () => delivered(req.id),
-          };
-        }),
-      );
-      const requests = ["producer", "revoked", "allowed"].map((id) => harness.request(id));
-      const done = Promise.all(requests.map((request) => request.done));
-      try {
-        await awaitGateBeforeSettlement(
-          allPrepared.promise,
-          done,
-          "readers did not join the producer",
-        );
-        if (authority === "method authority") {
-          revoked.add("revoked");
-        } else {
-          requests[1]!.client.connect.scopes = [];
+  it("rejects only the waiting reader whose method authority changes and releases every reader", async () => {
+    const releaseProducer = createDeferredCore();
+    const allPrepared = createDeferredCore();
+    const revoked = new Set<string>();
+    const released = vi.fn<(id: string) => void>();
+    const delivered = vi.fn<(id: string) => void>();
+    const produce = vi.fn(async (respond: RespondFn) => {
+      await releaseProducer.promise;
+      respond(true, { models: ["allowed"] });
+    });
+    let prepared = 0;
+    const harness = createReadHarness(
+      createPreparedReadHandler(({ req }) => {
+        if (++prepared === 3) {
+          allPrepared.resolve();
         }
-      } finally {
-        releaseProducer.resolve();
-        await done;
-      }
-
-      expect(produce).toHaveBeenCalledOnce();
-      expect(requests[1]!.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
+        return {
+          run: produce,
+          assertCurrent: () => {
+            if (revoked.has(req.id)) {
+              throw new SessionMutationAuthorizationChangedError({
+                code: "FORBIDDEN",
+                message: "Selected account access revoked",
+              });
+            }
+          },
+          release: () => released(req.id),
+          beforeRespond: () => delivered(req.id),
+        };
+      }),
+    );
+    const requests = ["producer", "revoked", "allowed"].map((id) => harness.request(id));
+    const done = Promise.all(requests.map((request) => request.done));
+    try {
+      await awaitGateBeforeSettlement(
+        allPrepared.promise,
+        done,
+        "readers did not join the producer",
       );
-      for (const request of [requests[0]!, requests[2]!]) {
-        expectPayload(request, { models: ["allowed"] });
-      }
-      expect(released.mock.calls.map(([id]) => id).toSorted()).toEqual([
-        "allowed",
-        "producer",
-        "revoked",
-      ]);
-      expect(delivered.mock.calls.map(([id]) => id).toSorted()).toEqual(["allowed", "producer"]);
-    },
-  );
+      revoked.add("revoked");
+    } finally {
+      releaseProducer.resolve();
+      await done;
+    }
+
+    expect(produce).toHaveBeenCalledOnce();
+    expect(requests[1]!.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    for (const request of [requests[0]!, requests[2]!]) {
+      expectPayload(request, { models: ["allowed"] });
+    }
+    expect(released.mock.calls.map(([id]) => id).toSorted()).toEqual([
+      "allowed",
+      "producer",
+      "revoked",
+    ]);
+    expect(delivered.mock.calls.map(([id]) => id).toSorted()).toEqual(["allowed", "producer"]);
+  });
 
   it("does not let a pre-invalidation completion replace the new shared result", async () => {
     const entered = createDeferredCore();

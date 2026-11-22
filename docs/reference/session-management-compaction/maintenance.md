@@ -240,6 +240,9 @@ it does not guarantee that total disk usage shrinks on every pass. Background
 maintenance checkpoints SQLite and reclaims free pages in bounded worker
 passes, including later passes with no new archive candidates. Physical
 database size therefore shrinks gradually; readers can delay reclamation.
+Archive-pruning free-page passes wait for queued foreground writes before
+reserving the writer. A pass that has already started finishes before the next
+write; slow storage commits and checkpoints can still delay that write.
 Use Doctor's offline `compact` operation when a full rewrite is needed.
 
 If any archive chunk is missing or its recorded size or hash does not match, reading

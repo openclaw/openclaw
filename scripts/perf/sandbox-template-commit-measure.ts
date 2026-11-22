@@ -9,6 +9,7 @@
  * plus same-commit reuse, recording the existing owner diagnostic spans.
  * --registry uses is-number@7.0.0 and bridge networking to exercise pnpm repeat-install
  * behavior without local dependencies. --files may shrink this correctness-only fixture.
+ * --lock-change measures a three-file dependency/lockfile advance and same-commit reuse.
  * --contract also checks concurrent source changes and lockfile invalidation;
  * --seed-only followed by --resume --burst 20 in another process checks restart reuse.
  * --alternate [--burst 20] seeds three commits, then measures concurrent A/B/C waves.
@@ -18,8 +19,8 @@
  * Create them with git show <base>:src/gateway/worker-environments/<name>.ts.
  * Run two baseline A/A controls, then five counterbalanced baseline/candidate pairs.
  * Acceptance: same exact source and source-dependent install output; one refresh for
- * concurrent consumers, lock changes rebuild. For attribution-only changes, owner
- * medians must remain within ±10%. Inclusive child phases must not be added twice.
+ * concurrent consumers, lock changes install the selected dependency version.
+ * For attribution-only changes, owner medians must remain within ±10%. Inclusive child phases must not be added twice.
  * Main-thread CPU/allocation exclude workers, Git, Docker, and guest processes.
  * Process CPU includes JS workers but excludes Git, Docker, and guest processes.
  * Prepare the local image from node:26.12.1-bookworm with
@@ -56,6 +57,7 @@ const { values } = parseArgs({
     burst: { type: "string" },
     alternate: { type: "boolean" },
     divergent: { type: "boolean" },
+    "lock-change": { type: "boolean" },
     "baseline-dir": { type: "string" },
   },
 });
@@ -159,7 +161,7 @@ if (values.fixture) {
     git("commit", "--allow-empty", "-qm", "seed sibling");
   }
   git("tag", "fixture-initial");
-  for (const label of ["source-one", "source-two"]) {
+  for (const label of values["lock-change"] ? [] : ["source-one", "source-two"]) {
     if (values.divergent) {
       git("checkout", "--quiet", "--detach", "fixture-base");
       for (let i = 0; i < (label === "source-one" ? 20 : Math.min(6000, payloadFiles)); i++) {
@@ -176,6 +178,17 @@ if (values.fixture) {
     );
     git("commit", "-qam", label);
     git("tag", `fixture-${label}`);
+  }
+  if (values["lock-change"]) {
+    assert(!values.registry && !values.divergent);
+    await fs.writeFile(
+      path.join(repo, "vendor/dependency/package.json"),
+      JSON.stringify({ name: "fixture-dependency", version: "2.0.0" }),
+    );
+    await fs.writeFile(
+      path.join(repo, "vendor/dependency/index.js"),
+      "module.exports = 'updated dependency';\n",
+    );
   }
   await fs.appendFile(path.join(repo, "pnpm-lock.yaml"), "\n# changed lockfile generation\n");
   git("commit", "-qam", "lock update");
@@ -413,6 +426,9 @@ try {
     const before = installs;
     await burst("burst", "fixture-initial", count);
     assert.equal(installs - before, 0, "Restart with unchanged template inputs must not reinstall");
+  } else if (values["lock-change"]) {
+    await clone("lock-change", "fixture-lock");
+    await clone("same-commit", "fixture-lock");
   } else if (!values["seed-only"]) {
     await clone("source-change", "fixture-source-one");
     if (values.divergent) {
