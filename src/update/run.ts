@@ -69,7 +69,10 @@ export async function prepareUpdate(params: {
   sha?: string;
   node?: string;
   env?: NodeJS.ProcessEnv;
+  /** The operator's overall budget (`--timeout`); without it, the default preparation deadline. */
+  timeoutMs?: number;
 }): Promise<UpdateRunOutcome> {
+  const timeoutMs = params.timeoutMs ?? PREPARE_DEADLINE_MS;
   const env = params.env ?? process.env;
   const prefix = resolvePrefix(env);
   const node = params.node ?? process.execPath;
@@ -98,7 +101,7 @@ export async function prepareUpdate(params: {
     );
   }
   const lock = await acquireUpdateLock(
-    { runId: params.runId, pid: process.pid, deadlineMs: PREPARE_DEADLINE_MS },
+    { runId: params.runId, pid: process.pid, deadlineMs: timeoutMs },
     prefix,
   );
   if (!lock.acquired) {
@@ -188,7 +191,7 @@ export async function prepareUpdate(params: {
             sha: target.sha,
             staging: staging.path,
             node,
-            timeoutMs: PREPARE_DEADLINE_MS,
+            timeoutMs,
             onStep,
           })
         : await preparePackage({
@@ -196,7 +199,7 @@ export async function prepareUpdate(params: {
             staging: staging.path,
             npm: npmBesideNode(node),
             node,
-            timeoutMs: PREPARE_DEADLINE_MS,
+            timeoutMs,
             onStep,
           });
     if (!prepared.ok) {

@@ -111,6 +111,7 @@ async function updateCommandWithRuntime(
       channel: prepared.requestedChannel ?? undefined,
       storedChannel: (await readUpdateChannelConfig(false)).storedChannel ?? undefined,
       sha: inputOpts.sha,
+      timeoutMs: prepared.timeoutMs,
     });
   }
   const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};

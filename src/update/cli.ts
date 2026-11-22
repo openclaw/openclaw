@@ -27,6 +27,8 @@ export type ReleaseUpdateOptions = {
   /** The saved `update.channel`, used when nothing was requested. */
   storedChannel?: UpdateChannel;
   sha?: string;
+  /** `--timeout`: one overall budget for preparing and following the run. */
+  timeoutMs?: number;
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
@@ -54,10 +56,15 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const runId = opts.restart ? await requestGatewayUpdate(target) : null;
+  const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
   const record = runId
-    ? await followRun(runId, opts.json)
-    : await updateWithoutGateway(runningRoot, channel ?? opts.storedChannel, opts.sha);
+    ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
+    : await updateWithoutGateway(
+        runningRoot,
+        channel ?? opts.storedChannel,
+        opts.sha,
+        opts.timeoutMs,
+      );
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
@@ -65,15 +72,14 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : 1;
 }
 
-async function requestGatewayUpdate(target?: {
-  kind: "git";
-  upstreamRef: string;
-  upstreamSha: string;
-}): Promise<string | null> {
+async function requestGatewayUpdate(
+  target: { kind: "git"; upstreamRef: string; upstreamSha: string } | undefined,
+  timeoutMs: number | undefined,
+): Promise<string | null> {
   try {
     const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
       method: "update.run",
-      params: target ? { target } : {},
+      params: { ...(target ? { target } : {}), ...(timeoutMs ? { timeoutMs } : {}) },
       timeoutMs: 30_000,
     });
     if (!response.runId) {
@@ -89,8 +95,12 @@ async function requestGatewayUpdate(target?: {
 }
 
 /** The Gateway restarts during a run; until the deadline, its unavailability is expected. */
-async function followRun(runId: string, json: boolean): Promise<UpdateRunRecord | undefined> {
-  const deadline = Date.now() + RUN_DEADLINE_MS;
+async function followRun(
+  runId: string,
+  json: boolean,
+  budgetMs: number,
+): Promise<UpdateRunRecord | undefined> {
+  const deadline = Date.now() + budgetMs;
   let lastLine = "";
   let record: UpdateRunRecord | undefined;
   while (Date.now() < deadline) {
@@ -134,6 +144,7 @@ async function updateWithoutGateway(
   runningRoot: string,
   configChannel: UpdateChannel | undefined,
   sha?: string,
+  timeoutMs?: number,
 ): Promise<UpdateRunRecord | undefined> {
   const run = await createUpdateRunAsync({ trigger: "cli", before: { version: VERSION } });
   const channel = resolveEffectiveUpdateChannel({
@@ -147,6 +158,7 @@ async function updateWithoutGateway(
     runningVersion: VERSION,
     channel,
     sha,
+    timeoutMs,
   });
   if (outcome.status === "pending") {
     defaultRuntime.log(

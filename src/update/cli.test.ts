@@ -38,13 +38,21 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
-it("sends a pinned commit that the Gateway protocol accepts", async () => {
+it("sends a pinned commit and the --timeout budget that the Gateway protocol accepts", async () => {
   const { runReleaseUpdateCli } = await import("./cli.js");
   const sha = "a".repeat(40);
   await expect(
-    runReleaseUpdateCli({ json: true, restart: true, runningRoot: "/tmp/openclaw-checkout", sha }),
+    runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: "/tmp/openclaw-checkout",
+      sha,
+      timeoutMs: 5_000,
+    }),
   ).rejects.toThrow("refused for the test");
-  expect(sent).toEqual([{ target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha } }]);
+  expect(sent).toEqual([
+    { target: { kind: "git", upstreamRef: "origin/main", upstreamSha: sha }, timeoutMs: 5_000 },
+  ]);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
 });
 

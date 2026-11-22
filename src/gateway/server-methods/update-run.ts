@@ -4,6 +4,7 @@
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { resolveGatewayRestartDecision } from "../../infra/process-respawn.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
 import {
   normalizeUpdateChannel,
@@ -66,6 +67,19 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
       return;
     }
   }
+  // The prepared release starts only in a new process; refuse before anything changes.
+  const restart = resolveGatewayRestartDecision();
+  if (restart.mode === "disabled" && restart.reason === "no-respawn") {
+    respond(true, {
+      runId: null,
+      ok: false,
+      code: "restart-unavailable",
+      message:
+        "This Gateway cannot restart because OPENCLAW_NO_RESPAWN is enabled. Stop the Gateway, run openclaw update, then start it again. To allow updates from the Gateway, relaunch it without OPENCLAW_NO_RESPAWN.",
+      result: { status: "skipped", reason: "restart-unavailable" },
+    });
+    return;
+  }
   const trigger = fromChat
     ? "chat"
     : isBrowserOperatorUiClient(client?.connect.client) || params.sessionKey
@@ -102,6 +116,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     channel: normalizeUpdateChannel(config.update?.channel),
     git: installed.status.git,
     sha: params.target?.upstreamSha,
+    timeoutMs: params.timeoutMs,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),
   });
@@ -115,6 +130,8 @@ async function runUpdateInBackground(
     /** The checkout's tag and branch facts; a stable tag keeps a configless checkout on stable. */
     git?: { tag?: string | null; branch?: string | null };
     sha?: string;
+    /** The requester's overall budget (`timeoutMs`). */
+    timeoutMs?: number;
     sessionKey?: string;
     warn: (message: string) => void;
   },
@@ -132,6 +149,7 @@ async function runUpdateInBackground(
       runningVersion: VERSION,
       channel,
       sha: options.sha,
+      timeoutMs: options.timeoutMs,
     });
     if (outcome.status === "pending") {
       await recordUpdateRunPhaseAsync(runId, "restarting");
