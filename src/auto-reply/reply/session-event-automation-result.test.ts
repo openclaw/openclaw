@@ -535,7 +535,8 @@ it.for([
             expect(job.state.nextRunAtMs).toBe(endedAt + (reason === "restart" ? 2_000 : 30_000));
             expect(job.state.autoDisabled).toBeUndefined();
           }
-          expect(deferredNotifications).toHaveLength(reason === "auth-revoked" ? 1 : 0);
+          // A run failure records no auto-disable notice; this job has no alert route.
+          expect(deferredNotifications).toEqual([]);
         } finally {
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();
