@@ -356,6 +356,28 @@ describe("provider-owned memory flush", () => {
     expect(requireEmbeddedAgentCall(3).memoryFlushTools?.flushId).not.toBe(firstId);
   });
 
+  it("runs the memory flush on the fallback model, not the primary", async () => {
+    const { entry, overrides } = await createToolsFlushFixture();
+    runEmbeddedAgentMock.mockImplementation(persist);
+    runWithModelFallbackMock.mockImplementationOnce(async (params: ModelFallbackParams) => ({
+      result: await params.run("llama-cpp", "qwen3.6-35b-a3b", {
+        modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude-opus-4-6", "fallback"),
+      }),
+      provider: "llama-cpp",
+      model: "qwen3.6-35b-a3b",
+      attempts: [],
+    }));
+
+    const result = await runDefaultMemoryFlush(entry, overrides);
+
+    expect(result.outcome).toBe("completed");
+    const call = requireEmbeddedAgentCall(0);
+    expect({ provider: call.provider, model: call.model }).toEqual({
+      provider: "llama-cpp",
+      model: "qwen3.6-35b-a3b",
+    });
+  });
+
   it.each([
     ["direct", false],
     ["group", true],
