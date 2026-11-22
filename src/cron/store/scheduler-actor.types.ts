@@ -2,7 +2,11 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJob } from "../types.js";
-import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
+import type {
+  CronProviderBackoffSnapshot,
+  CronRunQueueOperations,
+  CronRunRequestContext,
+} from "./run-queue.types.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -21,6 +25,8 @@ export type CronSchedulerConfig = {
   busyConversationJobIds?: string[];
   /** See `cron.drainQueue`. */
   memoryAllowsExtraRun?: boolean;
+  /** See `cron.drainQueue`. */
+  providerBackoff?: CronProviderBackoffSnapshot;
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
