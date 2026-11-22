@@ -241,7 +241,12 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
   }
   return {
     kind: "leaf",
-    valueText: value.kind === "null" ? "null" : String(value.value),
+    valueText:
+      value.kind === "null"
+        ? "null"
+        : value.kind === "number"
+          ? (value.raw ?? String(value.value))
+          : String(value.value),
     leafType: value.kind,
     line,
   };

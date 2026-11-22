@@ -724,7 +724,11 @@ function jsoncChildFieldText(
   if (v.kind === "string") {
     return v.value;
   }
-  if (v.kind === "number" || v.kind === "boolean") {
+  if (v.kind === "number") {
+    // Exact literal: JSON integers past 2^53 collide as doubles.
+    return v.raw ?? String(v.value);
+  }
+  if (v.kind === "boolean") {
     return String(v.value);
   }
   return v.kind === "null" ? nullText : null;

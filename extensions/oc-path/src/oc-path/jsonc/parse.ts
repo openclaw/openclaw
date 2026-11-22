@@ -61,7 +61,7 @@ export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: numb
     })
   ) {
     try {
-      root = nodeToJsoncValue(tree, lineForOffset, 0);
+      root = nodeToJsoncValue(tree, lineForOffset, 0, parseSource);
     } catch {
       // Depth-limited values remain unaddressable; raw bytes are retained.
     }
@@ -74,6 +74,7 @@ function nodeToJsoncValue(
   node: JsoncParserNode,
   lineForOffset: LineForOffset,
   depth: number,
+  source: string,
 ): JsoncValue {
   if (depth > MAX_PARSE_DEPTH) {
     throw new Error(`structural depth exceeded MAX_PARSE_DEPTH (${MAX_PARSE_DEPTH})`);
@@ -97,7 +98,7 @@ function nodeToJsoncValue(
             {
               key: String(keyNode.value),
               line: lineForOffset(keyNode.offset),
-              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1),
+              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1, source),
             },
           ];
         }),
@@ -107,13 +108,18 @@ function nodeToJsoncValue(
         kind: "array",
         line,
         items: (node.children ?? []).map((child) =>
-          nodeToJsoncValue(child, lineForOffset, depth + 1),
+          nodeToJsoncValue(child, lineForOffset, depth + 1, source),
         ),
       };
     case "string":
       return { kind: "string", value: String(node.value), line };
     case "number":
-      return { kind: "number", value: Number(node.value), line };
+      return {
+        kind: "number",
+        value: Number(node.value),
+        raw: source.slice(node.offset, node.offset + node.length),
+        line,
+      };
     case "boolean":
       return { kind: "boolean", value: Boolean(node.value), line };
     case "null":
