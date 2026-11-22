@@ -36,9 +36,11 @@ final class OnboardingFinishState {
     var connectionCompletion: ConnectionCompletion?
 }
 
-/// Dashboard surface opened when onboarding finishes with working inference.
+/// Surface opened when onboarding finishes with working inference.
 enum OnboardingDashboardHandoff: Equatable {
-    /// Fresh activation: the custodian flow owns the remaining first-run steps.
+    /// Fresh primary activation: the default agent's conversation, ready for input.
+    case chat
+    /// Utility-only activation cannot run the agent; OpenClaw help adds a primary model.
     case custodianOnboarding
     /// Live-verified pre-existing setup: reopen the normal dashboard.
     case dashboard
@@ -927,6 +929,7 @@ struct OnboardingView: View {
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
         dashboardHandoffOpener: @escaping @MainActor (OnboardingDashboardHandoff) -> Void = {
             switch $0 {
+            case .chat: AppNavigationActions.openChat(focusComposer: true)
             case .custodianOnboarding: AppNavigationActions.openDashboardOnboarding()
             case .dashboard: AppNavigationActions.openDashboard()
             }

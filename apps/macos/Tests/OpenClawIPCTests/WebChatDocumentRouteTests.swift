@@ -50,6 +50,8 @@ struct WebChatDocumentRouteTests {
             .init(name: "draft", value: "Keep this draft"),
             .init(name: "__openclawComposerFocus", value: "1"),
         ])
+        #expect(WebChatRoute.dashboardSearch(draft: nil) == nil)
+        #expect(WebChatRoute.dashboardSearch(draft: "", focusComposer: true) == "?__openclawComposerFocus=1")
     }
 
     @Test func `global aliases and qualified exact sessions retain their canonical destinations`() throws {

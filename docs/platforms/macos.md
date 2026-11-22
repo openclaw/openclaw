@@ -85,8 +85,10 @@ installation step from the flow.
 
 Existing installations and remote connections keep their saved setup. Native AI
 detection only presents available connections; it checks and activates one after
-you select it. A verified existing model opens the normal dashboard without
-replacing the configured route.
+you select it. A newly verified primary model opens the agent chat with the
+composer ready, in the chat surface you use (native or dashboard). A
+utility-only model opens OpenClaw help to add a primary model. A verified
+existing model opens the normal dashboard without replacing the configured route.
 
 Automatic setup preserves an existing configured model. Otherwise it tries saved
 OpenClaw auth profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,

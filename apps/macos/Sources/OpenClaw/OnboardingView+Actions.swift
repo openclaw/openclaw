@@ -107,11 +107,18 @@ extension OnboardingView {
         OnboardingController.shared.close()
         guard openPrimaryDashboard, finishState.connectionCompletion == nil,
               state.connectionMode != .unconfigured else { return true }
-        // Fresh activation hands off to the dashboard's custodian onboarding, which
-        // owns the remaining first-run steps (memory import, channels, permissions,
-        // hatch). A live-verified pre-existing setup reopens the normal dashboard.
-        dashboardHandoffOpener(
-            aiSetup.verifiedExistingInference || primaryIsJoinedClaw ? .dashboard : .custodianOnboarding)
+        // The verified completion owns its destination: a fresh primary model opens
+        // the agent chat, a utility-only model opens OpenClaw help, and a verified
+        // pre-existing setup reopens the normal dashboard. Optional setup (channels,
+        // memory import, permissions) stays available from Settings.
+        let handoff: OnboardingDashboardHandoff = if primaryIsJoinedClaw {
+            .dashboard
+        } else if case let .connected(handoff) = aiSetup.phase {
+            handoff
+        } else {
+            .custodianOnboarding
+        }
+        dashboardHandoffOpener(handoff)
         return true
     }
 }
