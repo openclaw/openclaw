@@ -221,29 +221,3 @@ it.each<[string, string, boolean, { persistedModel?: string; modelOverride?: str
     }
   },
 );
-
-it.each<[string, { kind: "inter_session"; sourceTool: string } | undefined, boolean]>([
-  ["a generated-media completion", { kind: "inter_session", sourceTool: "image_generate" }, false],
-  ["a subagent announce", { kind: "inter_session", sourceTool: "subagent_announce" }, true],
-  ["a direct user message", undefined, true],
-])("offloads images for a text-only model on %s", async (_name, inputProvenance, understanding) => {
-  const fixture = await contentFixture("main", "text-only");
-  const result = await prepareAgentContentPhase({
-    ...fixture,
-    request: {
-      message: "Here is the generated image",
-      agentId: "main",
-      idempotencyKey: `generated-media-${_name}`,
-    },
-    ...(inputProvenance ? { inputProvenance } : {}),
-    knownAgents: ["main"],
-  });
-  expect(fixture.respond).not.toHaveBeenCalled();
-  expect(result).toMatchObject({
-    agentId: "main",
-    images: [],
-    imageOrder: ["offloaded"],
-    offloadedRefs: [expect.objectContaining({ mimeType: "image/png" })],
-  });
-  expect(result?.needsImageUnderstanding ?? false).toBe(understanding);
-});

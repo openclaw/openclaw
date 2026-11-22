@@ -3,6 +3,18 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaExecutionContext } from "../../media-understanding/provider-execution.js";
 import type { MediaFact } from "../../media/media-facts.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+
+const GENERATED_IMAGE_UNINSPECTED_NOTE =
+  "[Generated image not inspected: no vision model produced a description. Do not claim to have inspected its content; refer to it only by what was requested.]";
+
+/** Only image_generate attaches its produced files to the completion turn it wakes. */
+function isGeneratedImageCompletion(provenance: InputProvenance | undefined): boolean {
+  return (
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool?.trim().toLowerCase() === "image_generate"
+  );
+}
 
 /** Text-only agent turns share chat's image preparation while retaining their primary model. */
 export async function prepareAgentImageUnderstanding(params: {
@@ -17,8 +29,9 @@ export async function prepareAgentImageUnderstanding(params: {
   chatType?: string;
   activeModel: ActiveMediaModel;
   execution?: MediaExecutionContext;
+  inputProvenance?: InputProvenance;
 }): Promise<{ message: string; media: MediaFact[] }> {
-  const { message, media, sessionKey, channel, chatType, ...runtime } = params;
+  const { message, media, sessionKey, channel, chatType, inputProvenance, ...runtime } = params;
   const ctx: MsgContext = {
     Body: message,
     media,
@@ -35,6 +48,14 @@ export async function prepareAgentImageUnderstanding(params: {
       (output) => output.kind === "image.description" && output.text.trim(),
     )
   ) {
+    // The agent produced these files itself; a missing description must not wedge the
+    // completion turn. Continue without pixels and tell the agent it has not seen them.
+    if (isGeneratedImageCompletion(inputProvenance)) {
+      return {
+        message: `${message}\n\n${GENERATED_IMAGE_UNINSPECTED_NOTE}`,
+        media: media.map((fact) => Object.assign({}, fact, { hydrationSuppressed: true })),
+      };
+    }
     throw new Error(
       "Image attachments could not be analyzed. Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
     );
