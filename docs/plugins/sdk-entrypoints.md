@@ -552,7 +552,8 @@ Set `capture: false` to skip application HTTP debug capture for the request.
 For a resource-bound API key, supply `isBoundResourceCurrent` and validate the
 resource before constructing the URL. The executor requires HTTPS, restricts
 requests to the resource hostname under the strict address policy, and checks
-admission and the binding again just before dispatch. It uses the
+admission and the binding once when each request starts. A request that passes
+these checks may finish; subsequent requests check both again. It uses
 provider-owned auth headers instead of prepared model headers or auth overrides;
 prepared proxy and TLS policy still apply.
 

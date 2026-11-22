@@ -257,16 +257,11 @@ it("keeps the admitted route through DNS and refuses a later request with the ol
   expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
 });
 
-it.each([
-  [401, "authentication"],
-  [415, "unsupported-input"],
-  [429, "rate-limited"],
-  [503, "transport"],
-] as const)("classifies HTTP %s without retry or raw diagnostics", async (status, reason) => {
-  respond({ message: key }, status);
+it("classifies Foundry HTTP 415 as unsupported input without retry or raw diagnostics", async () => {
+  respond({ message: key }, 415);
   expect(await buildFoundryDecisionProvider(() => cfg).evaluate(batch, context())).toEqual({
     status: "unavailable",
-    reason,
+    reason: "unsupported-input",
   });
   expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
 });
@@ -288,19 +283,4 @@ it.each([
     status: "unavailable",
     reason: "invalid-response",
   });
-});
-
-it("propagates caller cancellation to the admitted HTTP request", async () => {
-  const provider = buildFoundryDecisionProvider(() => cfg);
-  const controller = new AbortController();
-  const cancelled = new Error("fixture cancellation");
-  vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async ({ signal, url }) => {
-    controller.abort(cancelled);
-    signal?.throwIfAborted();
-    return { response: Response.json(reply), finalUrl: url, release: async () => {} };
-  });
-  await expect(provider.evaluate(batch, context({ signal: controller.signal }))).rejects.toBe(
-    cancelled,
-  );
-  expect(vi.mocked(fetchWithProviderHttpGuard).mock.calls[0]?.[0].signal?.reason).toBe(cancelled);
 });

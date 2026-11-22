@@ -230,11 +230,13 @@ it("checks admission once when the request starts and passes authority errors th
 
 it("passes caller cancellation through instead of reporting transport failure", async () => {
   const controller = new AbortController();
+  const cancelled = new Error("caller cancelled");
   mocks.fetch.mockImplementation(async () => {
-    controller.abort(new Error("caller cancelled"));
+    controller.abort(cancelled);
     throw new Error("socket closed");
   });
-  await expect(evaluate({ signal: controller.signal })).rejects.toThrow("caller cancelled");
+  await expect(evaluate({ signal: controller.signal })).rejects.toBe(cancelled);
+  expect(request().signal.reason).toBe(cancelled);
   mocks.fetch.mockRejectedValue(new Error("socket closed"));
   await expect(evaluate()).resolves.toEqual({ status: "unavailable", reason: "transport" });
 });
