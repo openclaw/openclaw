@@ -189,22 +189,16 @@ function IdentityHeader(props: {
           prop:markAsViewer={false}
           variant="profile"
         />
-        <div class="activity-feed__identity-heading">
-          <div class="activity-feed__identity-copy">
-            <h2>{presenceViewerLabel(props.identity)}</h2>
-            {props.identity.email ? <p>{props.identity.email}</p> : undefined}
-          </div>
-          <SettingsStatus
-            kind={
-              online() && activity() !== "unknown"
-                ? activity() === "idle"
-                  ? "warn"
-                  : "ok"
-                : "muted"
-            }
-            label={status()}
-          />
+        <div class="activity-feed__identity-copy">
+          <h2>{presenceViewerLabel(props.identity)}</h2>
+          {props.identity.email ? <p>{props.identity.email}</p> : undefined}
         </div>
+        <SettingsStatus
+          kind={
+            online() && activity() !== "unknown" ? (activity() === "idle" ? "warn" : "ok") : "muted"
+          }
+          label={status()}
+        />
       </div>
       {descriptions().length ? (
         <div class="activity-feed__connection-summary">

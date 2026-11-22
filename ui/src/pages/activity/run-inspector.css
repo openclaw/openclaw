@@ -17,7 +17,6 @@
 }
 
 .run-inspector {
-  font-size: var(--control-ui-text-md);
   display: grid;
   gap: var(--space-4);
   min-width: 0;

@@ -74,17 +74,16 @@ a.activity-current-work__row:hover {
   min-width: 0;
 }
 
-.activity-current-work__copy,
-.activity-feed__identity-copy {
-  overflow-wrap: anywhere;
+.activity-current-work__title {
+  color: var(--text-strong);
+  font-weight: var(--list-row-title-weight);
 }
 
 .activity-current-work__title,
-.activity-feed__session-title {
-  font-size: var(--control-ui-text-md);
-}
-
-.activity-feed__session-scope {
+.activity-current-work__agent,
+.activity-feed__session-scope,
+.activity-feed__identity-copy h2,
+.activity-feed__identity-copy p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -717,9 +716,11 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__session-title {
+  overflow: hidden;
   color: var(--text-strong);
   font-weight: var(--list-row-title-weight);
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activity-feed__session-meta,
@@ -784,20 +785,10 @@ a.activity-current-work__row:hover {
   width: 44px;
   height: 44px;
   flex: none;
-  align-self: flex-start;
-}
-
-.activity-feed__identity-heading {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-3);
-  min-width: 0;
 }
 
 .activity-feed__identity-copy {
-  flex: 1 1 auto;
+  flex: 1;
   min-width: 0;
 }
 
