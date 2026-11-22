@@ -13,7 +13,7 @@ export function buildStatusResourceRows(resources: StatusSummary["resources"]) {
     },
     ...resources.workerCensus.map((row) => ({
       Item: `Worker ${row.kind}${row.poolId === undefined ? "" : ` #${row.poolId}`}`,
-      Value: `${row.count} ${row.workerClass} · floor ${row.floor ?? "unknown"} · cap ${row.cap ?? "unknown"}${row.pointReadCap === undefined ? "" : ` (point reads ${row.pointReadCap})`} · idle ${row.idlePolicy}${row.idleTimeoutMs === undefined ? "" : ` ${row.idleTimeoutMs}ms`}${row.burstIdleTimeoutMs === undefined ? "" : ` / burst ${row.burstIdleTimeoutMs}ms`} · heap ${row.heapUsedBytes === null ? "unavailable" : mib(row.heapUsedBytes)} (${row.heapSampledCount}/${row.count} sampled)`,
+      Value: `${row.count} ${row.workerClass} · floor ${row.floor ?? "unknown"} · cap ${row.cap ?? "unknown"}${row.pointReadCap === undefined ? "" : ` (point reads ${row.pointReadCap})`} · idle ${row.idlePolicy}${row.idleTimeoutMs === undefined ? "" : ` ${row.idleTimeoutMs}ms`}${row.burstIdleTimeoutMs === undefined ? "" : ` / burst ${row.burstIdleTimeoutMs}ms`}${row.hostedEndpoints === undefined ? "" : ` · hosts ${row.hostedEndpoints} endpoints`} · heap ${row.heapUsedBytes === null ? "unavailable" : mib(row.heapUsedBytes)} (${row.heapSampledCount}/${row.count} sampled)`,
     })),
   ];
 }
