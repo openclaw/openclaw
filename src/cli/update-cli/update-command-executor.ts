@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
-import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
+import { isGitReleaseForwardingPackage } from "../../infra/git-release-paths.js";
+import {
+  readPackageReleaseSlotSync,
+  resolvePackageReleaseSlotForRootSync,
+} from "../../infra/package-release-slot-path.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -49,6 +53,7 @@ import {
   admittedAuthorities,
   preflightReleases,
   slotReservations,
+  reservedSlots,
   occupiedSlotKey,
   childOwners,
   terminalPreparations,
@@ -149,6 +154,7 @@ export async function withUpdateCommandExecutor<T>(
         preflightReleases.delete(fence);
         childOwners.delete(fence);
         slotReservations.delete(fence);
+        reservedSlots.delete(fence);
         admittedAuthorities.delete(fence);
         terminalPreparations.delete(fence);
       };
@@ -224,9 +230,14 @@ export async function withUpdateCommandExecutor<T>(
           }
           return;
         }
-        // Reserve the spelling before publication moves the symlink. A live
-        // original owner cannot use this to acquire an unrelated installation.
-        if (fs.realpathSync.native(key) !== installLease.key) {
+        // Reserve the spelling before publication moves the symlink, or the npm package this
+        // Git release install's npm-to-Git switch left forwarding to its launcher (#200578). A
+        // live original owner cannot use this to acquire an unrelated installation.
+        const gitPrefix = readPackageReleaseSlotSync(installLease.key)?.prefix;
+        if (
+          fs.realpathSync.native(key) !== installLease.key &&
+          !(gitPrefix && isGitReleaseForwardingPackage(key, gitPrefix))
+        ) {
           throw new UpdateCommandRecoveryPendingError(
             "Occupied slot does not resolve to its original installation.",
           );
@@ -235,6 +246,7 @@ export async function withUpdateCommandExecutor<T>(
           store.acquire(key, lease.owner, { kind: "update" }, false, undefined, lease),
           "Another update executor owns the occupied slot.",
         ).lease;
+        reservedSlots.set(fence, key);
         preflightReleases.delete(fence);
         assertCurrent();
       });

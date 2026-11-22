@@ -16,6 +16,7 @@ import {
 import {
   admittedAuthorities,
   slotReservations,
+  reservedSlots,
   occupiedSlotKey,
   childOwners,
   terminalPreparations,
@@ -139,6 +140,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
             "Candidate cannot reserve an ungranted installation slot.",
           );
         }
+        if (key === slot?.parent.key) {
+          reservedSlots.set(fence, key);
+        }
       });
       const meta = await readControlPlaneUpdateSentinelMeta();
       assertBase();
@@ -222,6 +226,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         active = false;
         childOwners.delete(fence);
         slotReservations.delete(fence);
+        reservedSlots.delete(fence);
         admittedAuthorities.delete(fence);
         terminalPreparations.delete(fence);
       }

@@ -7,6 +7,7 @@ import {
   admittedAuthorities,
   preflightReleases,
   slotReservations,
+  reservedSlots,
   childOwners,
   terminalPreparations,
   type ManagedUpdateLeaseAuthority,
@@ -103,6 +104,14 @@ export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root
 // a saved fence nor a borrowed helper lease grants this one-way transition.
 export function releaseUpdateCommandPreflightForHandoff(fence: UpdateRecoveryFence): void {
   requireCapability(preflightReleases.get(fence), "Update preflight handoff is not current.")();
+}
+
+/** The occupied slot this live executor reserved, if any, by its slot key. */
+export function readUpdateCommandExecutorReservedSlot(
+  fence: UpdateRecoveryFence,
+): string | undefined {
+  captureUpdateCommandExecutorAuthority(fence);
+  return reservedSlots.get(fence);
 }
 
 /** Reserve a prospective package slot without replacing the original domain. */

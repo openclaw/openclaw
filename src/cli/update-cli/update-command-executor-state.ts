@@ -19,6 +19,8 @@ export const admittedAuthorities = new WeakMap<
 
 export const preflightReleases = new WeakMap<UpdateRecoveryFence, () => void>();
 export const slotReservations = new WeakMap<UpdateRecoveryFence, (root: string) => void>();
+/** The occupied slot key an executor holds a lease for, which its package publication may write. */
+export const reservedSlots = new WeakMap<UpdateRecoveryFence, string>();
 export function occupiedSlotKey(root: string): string {
   const absolute = path.resolve(root);
   return path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));

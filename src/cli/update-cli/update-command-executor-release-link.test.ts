@@ -1,15 +1,20 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { GIT_RELEASE_LAUNCHER, gitReleaseForwardingEntry } from "../../infra/git-release-paths.js";
 import {
   capturePackageReleaseSlot,
   switchPackageReleaseLink,
 } from "../../infra/package-release-slot.js";
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import { reserveUpdateCommandExecutorSlot } from "./update-command-executor-capabilities.js";
+import {
+  readUpdateCommandExecutorReservedSlot,
+  reserveUpdateCommandExecutorSlot,
+} from "./update-command-executor-capabilities.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
@@ -81,5 +86,51 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
 
     expect(outcome.releaseLease).toBe("absent");
     expect(outcome.deselected).toMatch(/does not resolve to its original installation/u);
+  });
+
+  it("reserves the npm package a Git release install left forwarding to its own launcher", async () => {
+    const { root } = fixture();
+    // `<state>/git-install/openclaw -> releases/<id>/openclaw`, as a Git release install keeps it.
+    const prefix = path.join(root, "git-install");
+    fs.mkdirSync(path.join(prefix, "releases", "r1", "openclaw"), { recursive: true });
+    const slot = path.join(prefix, "openclaw");
+    fs.symlinkSync(path.join("releases", "r1", "openclaw"), slot);
+    const writePackage = (dir: string, launcherPrefix: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "openclaw.mjs"),
+        gitReleaseForwardingEntry(path.join(launcherPrefix, GIT_RELEASE_LAUNCHER)),
+      );
+      return dir;
+    };
+    // The npm package an npm-to-Git switch left forwarding to this install's launcher (#200578).
+    const forwarding = writePackage(
+      path.join(root, "npm", "lib", "node_modules", "openclaw"),
+      prefix,
+    );
+    const foreign = writePackage(
+      path.join(root, "other-npm", "lib", "node_modules", "openclaw"),
+      path.join(root, "other-git-install"),
+    );
+    const store = createManagedHandoffLeaseStore();
+    const outcome: { lease?: string; reserved?: string; foreign?: string } = {};
+
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(slot);
+      try {
+        reserveUpdateCommandExecutorSlot(fence, foreign);
+      } catch (error) {
+        outcome.foreign = (error as Error).message;
+      }
+      reserveUpdateCommandExecutorSlot(fence, forwarding);
+      outcome.lease = store.read(forwarding).kind;
+      outcome.reserved = readUpdateCommandExecutorReservedSlot(fence);
+    });
+
+    expect(outcome).toEqual({
+      foreign: expect.stringMatching(/does not resolve to its original installation/u),
+      lease: "current",
+      reserved: forwarding,
+    });
   });
 });

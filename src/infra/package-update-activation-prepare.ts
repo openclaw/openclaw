@@ -4,7 +4,10 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  readUpdateCommandExecutorReservedSlot,
+} from "../cli/update-cli/update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
@@ -228,12 +231,19 @@ export async function preparePackageActivationJournal(
 ) {
   const assertCurrent = retainMutationAuthority(assertion);
   assertCurrent();
-  const authority = captureUpdateCommandExecutorAuthority(params.options.fence);
+  const executorAuthority = captureUpdateCommandExecutorAuthority(params.options.fence);
   assertCurrent();
   const liveRoot = resolveUpdateInstallRoot(params.liveRoot);
-  if (process.platform === "win32" || authority.installKey !== liveRoot) {
+  // A switch back to npm publishes into the package slot its executor reserved: the npm
+  // package this Git install left forwarding to its launcher. Recovery is keyed by that package.
+  if (
+    process.platform === "win32" ||
+    (executorAuthority.installKey !== liveRoot &&
+      readUpdateCommandExecutorReservedSlot(params.options.fence) !== liveRoot)
+  ) {
     throw new Error("Package publication recovery requires its original POSIX npm directory.");
   }
+  const authority = { ...executorAuthority, installKey: liveRoot };
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   const parent = path.dirname(anchor);
   if (fs.realpathSync(parent) !== parent) {
