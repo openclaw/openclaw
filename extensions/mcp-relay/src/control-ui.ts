@@ -127,10 +127,11 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     return group;
   }
 
-  async function run(action: (id: number) => Promise<void>) {
+  async function run(action: (id: number) => Promise<void>, focusAfter?: string) {
     if (busy || !current(generation)) {
       return;
     }
+    const restoreFocus = focusAfter && page.querySelector(focusAfter) === document.activeElement;
     const id = ++generation;
     busy = true;
     error = "";
@@ -159,6 +160,9 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       if (current(id)) {
         busy = false;
         render();
+        if (restoreFocus && document.activeElement === document.body) {
+          page.querySelector<HTMLButtonElement>(focusAfter)?.focus({ preventScroll: true });
+        }
       }
     }
   }
@@ -180,7 +184,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
           consent = description;
         }
       }
-    });
+    }, "header button");
   }
 
   function showPairing(returnFocusTarget: HTMLElement, pairingCaller: RelayCaller) {
@@ -197,6 +201,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         return;
       }
       const id = generation;
+      const hadFocus = content.contains(document.activeElement);
       pairingBusy = true;
       pairingError = "";
       draw();
@@ -212,6 +217,9 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       if (current(id) && dialog) {
         pairingBusy = false;
         draw();
+        if (hadFocus && document.activeElement === document.body) {
+          content.querySelector<HTMLButtonElement>(pairing ? "button" : "button.primary")?.focus();
+        }
       }
     };
     const draw = () => {
@@ -234,22 +242,22 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         url.append(element("strong", "MCP URL: "), element("code", pairing.mcpUrl));
         content.append(url);
       } else {
-        content.append(
-          accessPicker(
-            pairingFull,
-            (full) => {
-              pairingFull = full;
-              draw();
-            },
-            "mcp-relay-pair-access",
-          ),
-        );
         const create = button(
           pairingBusy ? "Creating code…" : "Create pairing code",
           () => void createPairing(),
           true,
         );
         create.disabled = pairingBusy || !chosenCeiling(pairingFull).length;
+        content.append(
+          accessPicker(
+            pairingFull,
+            (full) => {
+              pairingFull = full;
+              create.disabled = pairingBusy || !chosenCeiling(full).length;
+            },
+            "mcp-relay-pair-access",
+          ),
+        );
         actions.append(create);
         for (const input of content.querySelectorAll("input")) {
           input.disabled = pairingBusy;
@@ -285,6 +293,9 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
       return;
     }
     const ceiling = chosenCeiling();
+    const focusAfter = allow
+      ? ".mcp-connected-apps__actions .primary"
+      : ".mcp-connected-apps__actions .btn:not(.primary)";
     void run(async (id) => {
       const result = await host.request<{ continueUrl: string }>(
         allow ? "mcp-relay.authorize.approve" : "mcp-relay.authorize.deny",
@@ -307,7 +318,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         );
       }
       window.location.assign(url.href);
-    });
+    }, focusAfter);
   }
 
   function render() {

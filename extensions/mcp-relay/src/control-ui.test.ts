@@ -172,11 +172,54 @@ it("empties retained view roots and ignores detached controls and pending replie
   expect(request).toHaveBeenCalledTimes(2);
 });
 
+it.each(["Allow", "Deny"])(
+  "returns a failed %s decision to its button without stealing focus",
+  async (label) => {
+    const first = Promise.withResolvers<unknown>();
+    const second = Promise.withResolvers<unknown>();
+    fixture(
+      [grants, { ...consent, clientName: "Studio notebook" }, first.promise, second.promise],
+      { request: "studio" },
+    );
+    await shows("Connect Studio notebook?");
+    button(label)!.focus();
+    click(label);
+    first.reject(new Error("Please try again"));
+    await shows("Please try again");
+    expect(document.activeElement).toBe(button(label));
+    click(label);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    second.reject(new Error("Still unavailable"));
+    await shows("Still unavailable");
+    expect(document.activeElement).toBe(outside);
+  },
+);
+
+it("keeps pairing focus on the chosen access and then on Done when the code arrives", async () => {
+  const admin = { ...caller, ceiling: [...caller.ceiling, "operator.admin"], canAdmin: true };
+  const { request } = fixture([{ ...grants, caller: admin }, pairing]);
+  await shows("No connected apps yet");
+  click("Pair with code");
+  const full = document.querySelector<HTMLInputElement>('input[value="full"]')!;
+  full.focus();
+  full.click();
+  expect(document.activeElement).toBe(full);
+  expect(full.checked).toBe(true);
+  button("Create pairing code")!.focus();
+  click("Create pairing code");
+  await shows("PAIR-CODE");
+  expect(document.activeElement).toBe(button("Done"));
+  expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", { ceiling: admin.ceiling });
+});
+
 it("retains rows while refreshing and renders the authoritative reply on settlement", async () => {
   const pending = Promise.withResolvers<unknown>();
   const { request } = fixture([ownedGrants, pending.promise, grants]);
   await shows("Personal app");
   const row = document.querySelector(".mcp-connected-apps__grant");
+  button("Refresh")!.focus();
   click("Refresh");
   expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
   expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading connected apps…");
@@ -185,6 +228,7 @@ it("retains rows while refreshing and renders the authoritative reply on settlem
   expect(request).toHaveBeenCalledTimes(2);
   pending.reject(new Error("Try again"));
   await shows("Try again");
+  expect(document.activeElement).toBe(button("Refresh"));
   click("Refresh");
   expect(document.querySelector('[role="alert"]')).toBeNull();
   await shows("No connected apps yet");
