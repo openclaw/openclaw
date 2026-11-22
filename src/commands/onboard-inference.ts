@@ -94,11 +94,13 @@ export function resolveConfiguredModelCandidate(
     ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
   });
   const profileId = splitTrailingAuthProfile(existingModel).profile;
-  const modelRef = resolveConfiguredRouteModelLabel({
-    configuredRef: existingModel,
-    resolved,
-    ...(profileId ? { profileId } : {}),
-  });
+  const modelRef = resolved
+    ? resolveConfiguredRouteModelLabel({
+        configuredRef: existingModel,
+        resolved,
+        ...(profileId ? { profileId } : {}),
+      })
+    : existingModel;
   return {
     kind: "existing-model",
     // Approval and activation bind to the executable target, not a mutable

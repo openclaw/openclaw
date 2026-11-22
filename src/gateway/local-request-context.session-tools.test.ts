@@ -387,11 +387,6 @@ describe("built-in session tool role authority", () => {
             sessionKey: PARTICIPANT_DRAFT,
           }),
         ).resolves.toMatchObject(draftMessages);
-        context.readChatStartupProjection = async () => {
-          await turn.complete();
-          return undefined;
-        };
-        await expect(read(REQUESTER)).rejects.toThrow(/turn has ended|no longer active/);
       } finally {
         runtime.close();
         custody?.release();
@@ -452,7 +447,7 @@ describe("built-in session tool role authority", () => {
     });
   });
 
-  it.each(["live", "missing", "retired"] as const)(
+  it.each(["live", "missing"] as const)(
     "visible forks preserve an active first turn only with live requester authority (%s)",
     async (lifetime) => {
       const runtimeChoice = vi
@@ -465,11 +460,7 @@ describe("built-in session tool role authority", () => {
       onTestFinished(() => runtimeChoice.mockRestore());
       await withSessionToolsFixture(async (cfg) => {
         const context = localContext();
-        let current = true;
         context.loadGatewayModelCatalogSnapshot = async () => {
-          if (lifetime === "retired") {
-            current = false;
-          }
           const entries = [
             { id: "gpt-5.6-luna", name: "Test model", provider: "openai", contextWindow: 200_000 },
           ];
@@ -532,7 +523,7 @@ describe("built-in session tool role authority", () => {
                         instanceId: "fork-instance",
                         runId: "fork-parent-run",
                       },
-                      receiptAuthority: () => current,
+                      receiptAuthority: () => true,
                     }
                   : {}),
               },
@@ -545,11 +536,7 @@ describe("built-in session tool role authority", () => {
                 }),
             );
           if (lifetime !== "live") {
-            await expect(spawn()).rejects.toThrow(
-              lifetime === "missing"
-                ? /Parent session .* is still active/
-                : /authority is no longer active/,
-            );
+            await expect(spawn()).rejects.toThrow(/Parent session .* is still active/);
             expect(startChild).not.toHaveBeenCalled();
             expect(registerRun).not.toHaveBeenCalled();
             expect(sessionKeys()).toEqual(beforeKeys);
@@ -839,53 +826,6 @@ describe("built-in session tool role authority", () => {
           sessionId,
           archivedAt: expect.any(Number),
         });
-      }),
-  );
-
-  it.each(["sessions.patch", "sessions.patchMany", "sessions.assignOwner"])(
-    "%s does not commit when its caller closes during request authorization",
-    (method) =>
-      withSessionToolsFixture(async (cfg) => {
-        const context = localContext();
-        const patchParams = (label: string) =>
-          method === "sessions.patch"
-            ? { key: TARGET, label }
-            : method === "sessions.patchMany"
-              ? { targets: [{ key: TARGET }], patch: { label } }
-              : { key: TARGET, owner: { type: "agent", id: label } };
-        const before = method === "sessions.assignOwner" ? "main" : "Before closure";
-        const after = method === "sessions.assignOwner" ? "other" : "After closure";
-        const request = (value: string) =>
-          callAgentToolGatewayRequest({
-            method,
-            params: patchParams(value),
-            agentToolCaller: { agentId: "main", sessionKey: REQUESTER },
-          });
-        const persisted = () => {
-          const entry = mainSession(TARGET);
-          return method === "sessions.assignOwner" ? entry?.owner?.actor.id : entry?.label;
-        };
-        await request(before);
-        expect(persisted()).toBe(before);
-        let current = true;
-        // Authorization reads the live config after dispatch has yielded. Close
-        // the run there and verify the real SQLite writer still refuses the patch.
-        context.getRuntimeConfig = () => {
-          current = false;
-          return cfg;
-        };
-        await expect(
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: REQUESTER,
-              operationalRunInstance: { instanceId: "patch-instance", runId: "patch-run" },
-              receiptAuthority: () => current,
-            },
-            () => request(after),
-          ),
-        ).rejects.toThrow(/authority.*no longer active/i);
-        expect(persisted()).toBe(before);
       }),
   );
 

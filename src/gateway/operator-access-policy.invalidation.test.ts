@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
 import {
-  createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { bindPluginGatewayAccessPolicy } from "../plugins/gateway-access-policy-registration.js";
 import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -62,7 +62,7 @@ it("checks each person's original grant once through deep lineage and again befo
         },
         config,
       )!;
-      const operator = createAdmittedRunOperatorAuthority({
+      const operator = createTestOperatorAuthority({
         profileId,
         scopes: ["operator.write"],
         signal: access.signal,

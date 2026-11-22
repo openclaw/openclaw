@@ -47,8 +47,8 @@ export class StorageBase {
     git?: GitHistory,
   ) {
     this.git = git ?? new GitHistory(config.root);
-    this.real = new RealVault(config, store, (records, access, evidence) =>
-      this.observe(records, access, evidence),
+    this.real = new RealVault(config, store, (records, access, evidence, manifest) =>
+      this.observe(records, access, evidence, manifest),
     );
   }
   async run<T>(access: VaultAccess, operation: (vault: SampleVault) => Promise<T>): Promise<T> {
@@ -358,11 +358,21 @@ export class StorageBase {
     }
     return sources;
   }
-  private observe(records: LoadedRecord[], access: VaultAccess, evidence: EvidenceInspector) {
+  private observe(
+    records: LoadedRecord[],
+    access: VaultAccess,
+    evidence: EvidenceInspector,
+    manifest: Manifest,
+  ) {
     const scope = access.scope;
     access.assertCurrent();
     this.store.withDatabase((db) => {
       const before = this.identity(db, new PublicationFiles(this.config.root));
+      // A scan can see a publisher's displaced file before observation starts.
+      // Reject that stale scan before it records a false deletion.
+      if (canonical(before) !== canonical(manifest)) {
+        throw new Error("Knowledge vault identity changed during scan; retry the read.");
+      }
       if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
         throw blocked();
       }

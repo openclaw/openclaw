@@ -559,6 +559,37 @@ test "$LIVE_GEMINI_API_KEY" = fixture-google
   },
 );
 
+it("keeps legacy mock auth out of provider discovery and persists it for restarts", () => {
+  const root = tempDirs.make("upgrade-survivor-legacy-env-");
+  const result = runInner(
+    root,
+    `
+trap - ERR EXIT HUP INT TERM
+test -z "\${OPENAI_API_KEY+x}"
+test -z "\${ANTHROPIC_API_KEY+x}"
+test -z "\${GEMINI_API_KEY+x}"
+test -n "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY"
+mkdir -p "$OPENCLAW_STATE_DIR"
+printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=stale\nPRESERVED_FIXTURE=value\n' >"$OPENCLAW_STATE_DIR/.env"
+write_update_restart_service_env
+write_update_restart_service_env
+test "$(grep -c '^OPENCLAW_UPGRADE_SURVIVOR_API_KEY=' "$OPENCLAW_STATE_DIR/.env")" = 1
+grep -qx "OPENCLAW_UPGRADE_SURVIVOR_API_KEY=$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" "$OPENCLAW_STATE_DIR/.env"
+grep -qx 'PRESERVED_FIXTURE=value' "$OPENCLAW_STATE_DIR/.env"
+`,
+    {
+      PATH: process.env.PATH,
+      HOME: root,
+      OPENAI_API_KEY: "fixture-openai",
+      ANTHROPIC_API_KEY: "fixture-anthropic",
+      GEMINI_API_KEY: "fixture-google",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+      OPENCLAW_STATE_DIR: join(root, "state"),
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
+
 it("fails closed before Docker when the opted-in key is missing", () => {
   const { captureDir, result } = runSurvivor({
     OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1",

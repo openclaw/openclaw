@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { execContainerRaw, type ExecContainerRawOptions } from "./container-engine.js";
@@ -183,7 +183,7 @@ function source(params: SourceOptions = {}) {
     references++;
     return release;
   };
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: params.profileId ?? "guest",
     scopes: ["operator.write"],
     gatewayAccessGrant: { pluginId: "fixture-access", grantId: params.grantId ?? "original" },
@@ -393,7 +393,7 @@ it.each([
       const other = source({ grantId: kind === "different-grant" ? "other" : "original" });
       reuse.operatorAuthority =
         kind === "staff"
-          ? createAdmittedRunOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
+          ? createTestOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
           : other.authority;
     }
     if (mixed) {

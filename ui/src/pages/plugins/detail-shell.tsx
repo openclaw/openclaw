@@ -1,9 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createSignal, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
@@ -32,8 +33,66 @@ export function renderPluginDetailBreadcrumb(props: {
   );
 }
 
+/**
+ * Plugin and skill pages clamp a long README inside its surface, with the chat message's Show
+ * more toggle. `expanded` sets how it first shows; the toggle then owns it.
+ */
+export function PluginReadmeWell(props: {
+  children: JSX.Element;
+  expanded?: boolean;
+  /** The toggle stays available when opening loads a separate full document. */
+  alwaysExpandable?: boolean;
+  /** Called after the reader opens or closes the whole text. */
+  onToggle?: (expanded: boolean) => void;
+}): JSX.Element {
+  let body!: HTMLDivElement;
+  let well!: HTMLDivElement;
+  const [toggled, setExpanded] = createSignal<boolean>();
+  const expanded = () => toggled() ?? Boolean(props.expanded);
+  const [overflows, setOverflows] = createSignal(false);
+  const bodyId = `plugin-readme-${createUniqueId()}`;
+  createResizeObserver(
+    () => [body],
+    () => {
+      const limit = Number.parseFloat(
+        getComputedStyle(well).getPropertyValue("--plugin-readme-clamp"),
+      );
+      setOverflows(body.scrollHeight > limit + 24);
+    },
+  );
+  return (
+    <div
+      ref={(element) => (well = element)}
+      class={["plugin-catalog-detail__readme-well", { "is-clamped": overflows() && !expanded() }]}
+    >
+      <div
+        id={bodyId}
+        ref={(element) => (body = element)}
+        class="plugin-catalog-detail__readme-body"
+      >
+        {props.children}
+      </div>
+      <button
+        type="button"
+        class="plugin-catalog-detail__readme-toggle"
+        hidden={!expanded() && !overflows() && !props.alwaysExpandable}
+        aria-expanded={expanded() ? "true" : "false"}
+        aria-controls={bodyId}
+        onClick={() => {
+          const next = !expanded();
+          setExpanded(next);
+          props.onToggle?.(next);
+        }}
+      >
+        {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}
+        <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
+      </button>
+    </div>
+  );
+}
+
 export function renderPluginDetailShell(props: {
-  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerHeading?: (heading: HTMLHeadingElement) => void | (() => void);
   id: string;
   name: string;
   summary?: string;
@@ -47,13 +106,28 @@ export function renderPluginDetailShell(props: {
   sidebar?: JSX.Element;
   recommendations?: JSX.Element;
   panel: JSX.Element;
+  /** Status about the whole plugin (errors, pending reads); opens the reading column. */
+  notices?: JSX.Element;
+  /** Plugin pages: actions beside the name, the summary opens the reading column, facts in a rail. */
+  rail?: boolean;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
-  onSettled(() => props.registerRemovalHeading?.(heading));
+  onSettled(() => props.registerHeading?.(heading));
   const titleId = () => `${props.id}-title`;
+  const summary = () =>
+    props.summary ? <p class="plugin-catalog-detail__summary">{props.summary}</p> : undefined;
+  const actions = () => (
+    <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
+  );
   return (
     <section
-      class={["plugin-catalog-detail", { "plugin-catalog-detail--no-sidebar": !props.sidebar }]}
+      class={[
+        "plugin-catalog-detail",
+        {
+          "plugin-catalog-detail--no-sidebar": !props.sidebar,
+          "plugin-catalog-detail--rail": props.rail,
+        },
+      ]}
       aria-labelledby={titleId()}
     >
       {renderPluginDetailBreadcrumb(props)}
@@ -72,14 +146,17 @@ export function renderPluginDetailShell(props: {
             </div>
             {props.identity}
           </div>
-          {props.summary ? (
-            <p class="plugin-catalog-detail__summary">{props.summary}</p>
-          ) : undefined}
-          <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
+          {props.rail ? undefined : summary()}
+          {props.rail ? undefined : actions()}
         </div>
+        {props.rail ? actions() : undefined}
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
+          {props.notices ? (
+            <div class="plugin-catalog-detail__notices">{props.notices}</div>
+          ) : undefined}
+          {props.rail ? summary() : undefined}
           {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
@@ -87,7 +164,7 @@ export function renderPluginDetailShell(props: {
               <h2 class="settings-section__heading oc-settings-section-title">
                 {t("pluginsPage.detailTabs.readme")}
               </h2>
-              {props.readme}
+              {props.rail ? <PluginReadmeWell>{props.readme}</PluginReadmeWell> : props.readme}
             </section>
           ) : undefined}
         </div>

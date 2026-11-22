@@ -5,6 +5,7 @@ import {
   createPendingPromptHarness,
   DEFAULT_SESSION_KEY,
 } from "./translator.prompt-harness.test-support.js";
+import { createPromptScenario } from "./translator.scenario.test-support.js";
 
 describe("acp final chat snapshots", () => {
   it.each(["Hello", "A rewritten snapshot that is longer"])(
@@ -75,6 +76,37 @@ describe("acp final chat snapshots", () => {
       ]);
     },
   );
+
+  it("streams the committed remainder when a queued final carries no message", async () => {
+    const { chat, active, sessionUpdate } = createPromptScenario({
+      request: (method, params) =>
+        method === "chat.history" && params?.sessionKey === DEFAULT_SESSION_KEY
+          ? {
+              sessionId: "session-id",
+              messages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "BRAVO" }],
+                  __openclaw: { runId },
+                },
+              ],
+            }
+          : {},
+    });
+    const { result, runId } = await active();
+    await chat(runId, { state: "delta", message: { content: [{ type: "text", text: "BRA" }] } });
+    // The live tail was retracted for the transcript; the queued final omits the message.
+    await chat(runId, { state: "delta", replace: true, deltaText: "", message: { content: [] } });
+    await chat(runId);
+    await expect(result).resolves.toEqual({ stopReason: "end_turn" });
+    expect(
+      sessionUpdate.mock.calls.flatMap(([{ update }]) =>
+        update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+          ? [update.content.text]
+          : [],
+      ),
+    ).toEqual(["BRA", "VO"]);
+  });
 });
 
 describe("acp prompt size hardening", () => {

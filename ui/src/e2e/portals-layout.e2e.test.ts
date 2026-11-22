@@ -55,13 +55,14 @@ suite.define(() => {
             throw new DOMException("Incomplete Portal layout", "DataError");
           }
           const box = (element: Element) => {
-            const { top, bottom, right, height: boxHeight } = element.getBoundingClientRect();
-            return { top, bottom, right, height: boxHeight };
+            const { top, bottom, left, right, height: boxHeight } = element.getBoundingClientRect();
+            return { top, bottom, left, right, height: boxHeight };
           };
           const bounds = content.getBoundingClientRect(),
             style = getComputedStyle(content);
           return {
             contentInnerBottom: bounds.bottom - Number.parseFloat(style.paddingBottom),
+            contentInnerLeft: bounds.left + Number.parseFloat(style.paddingLeft),
             contentInnerRight: bounds.right - Number.parseFloat(style.paddingRight),
             contentScrollHeight: content.scrollHeight,
             contentClientHeight: content.clientHeight,
@@ -90,7 +91,10 @@ suite.define(() => {
           expect(geometry.gridTemplateColumns.split(" ")).toHaveLength(1);
           expect(rail.bottom).toBeLessThanOrEqual(preview.top);
           expect(preview.height).toBeGreaterThanOrEqual(560);
-          expect(preview.right).toBeLessThanOrEqual(geometry.contentInnerRight + 1);
+          for (const panel of [rail, preview]) {
+            expect(Math.abs(panel.left - geometry.contentInnerLeft)).toBeLessThanOrEqual(1);
+            expect(Math.abs(panel.right - geometry.contentInnerRight)).toBeLessThanOrEqual(1);
+          }
         }
       },
     );

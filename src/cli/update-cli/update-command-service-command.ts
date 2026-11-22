@@ -1,20 +1,35 @@
+import path from "node:path";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import {
+  readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration,
+} from "../../daemon/runtime-pin-state.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
-import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import {
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceRestartResult,
+} from "../../daemon/service-types.js";
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 import type { DaemonActionResponse } from "../daemon-cli/response.js";
 import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.types.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -23,11 +38,13 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
+import { oweServiceDefinitionRefresh } from "./update-command-owed.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import type {
   OriginalManagedServiceRuntime,
   UpdateServiceDefinitionRecovery,
+  UpdateServiceRestartParams,
 } from "./update-command-service-context-types.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -45,6 +62,88 @@ export function isPackageManagerUpdateMode(
   mode: UpdateRunResult["mode"],
 ): mode is "npm" | "pnpm" | "bun" {
   return mode === "npm" || mode === "pnpm" || mode === "bun";
+}
+
+/** Stage without activation; ordinary publication failures leave the definition refresh owed. */
+export async function stageUpdatedInstallGatewayService(
+  params: Pick<
+    UpdateServiceRestartParams,
+    "result" | "opts" | "serviceInstallEnv" | "gatewayPort" | "nodeRunner" | "invocationCwd"
+  > & {
+    serviceEnv: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+    onWarnings: (warnings: string[]) => void;
+  },
+  preserveDefinition: boolean,
+): Promise<void> {
+  const { assertCurrent, onWarnings } = params;
+  try {
+    const service = resolveGatewayService();
+    const command = await service.readCommand(params.serviceEnv, { requireEffective: true });
+    // A definition that names the launcher already starts the release the link selects.
+    if (command?.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER)) {
+      return;
+    }
+    if (preserveDefinition || params.serviceInstallEnv === null) {
+      throw new Error("The managed service definition cannot be rewritten.");
+    }
+    const managed = resolveManagedGatewayServiceCommand(command);
+    if (!managed) {
+      throw new Error("The managed service command is unavailable.");
+    }
+    // Use the install command's environment and planner, but publish through stage only.
+    const env = stripGatewayServiceMarkerEnv(
+      resolveUpdatedInstallCommandEnv({
+        processEnv: params.serviceInstallEnv ?? params.serviceEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    );
+    const pin = await withDaemonRuntimePinMigration(env, () =>
+      readDaemonRuntimePinForInstall({ kind: "gateway", env }, command, false),
+    );
+    const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+    if (!entrypoint) {
+      throw new Error("The updated Gateway entrypoint is unavailable.");
+    }
+    const executable = pin.pin?.path ?? params.nodeRunner ?? resolveNodeRunner();
+    const plan = await buildGatewayInstallPlan({
+      env,
+      port: params.gatewayPort,
+      runtime: pin.pin?.runtime ?? "node",
+      runtimePath: executable,
+      serviceCli: { executable, entrypoint },
+      existingCommand: command,
+      existingEnvironment: managed.environment,
+      existingEnvironmentValueSources: managed.environmentValueSources,
+      warn: (warning) => onWarnings([warning]),
+    });
+    assertCurrent();
+    await service.stage({
+      ...plan,
+      env,
+      stdout: params.opts.json ? createNullWriter() : process.stdout,
+      preserveAutoStart: true,
+      runtimePinUpdate: { expected: pin, pin: pin.pin, requireDefinitionMatch: true },
+      assertCurrent,
+      warn: (warning) => onWarnings([warning]),
+    });
+    assertCurrent();
+  } catch (error) {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      error instanceof UpdateCommandRecoveryPendingError
+    ) {
+      throw error;
+    }
+    assertCurrent();
+    oweServiceDefinitionRefresh(
+      params.opts.run,
+      params.result,
+      params.serviceEnv,
+      assertCurrent,
+      formatErrorMessage(error),
+    );
+  }
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {

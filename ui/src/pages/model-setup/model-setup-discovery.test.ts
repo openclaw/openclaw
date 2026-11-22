@@ -67,28 +67,35 @@ const lateDiscovery = {
 describe("Model Setup known choices during discovery", () => {
   useFirstRunFixtures("test-device-key");
 
-  it("keeps the person's provider, draft, and focus when discovery finishes", async () => {
-    const { page, request, discovery } = mountDuringSlowDiscovery();
-    await waitForFast(() => expect(authButton(page, "provider-login")?.disabled).toBe(false));
-    await selectManualProvider(page, "provider-key");
-    const input = page.querySelector<HTMLInputElement>(".model-setup__manual input")!;
-    setInput(page, ".model-setup__manual input", "synthetic-draft");
-    input.focus();
-    expect(page.querySelector('[data-candidate-kind="codex-cli"]')).toBeNull();
-    expect(
-      page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.disabled,
-    ).toBe(false);
+  it.each(["no receipt", "provider-login"] as const)(
+    "keeps the person's provider, draft, and focus when discovery finishes (%s)",
+    async (receipt) => {
+      const { page, request, discovery } = mountDuringSlowDiscovery({}, (context) => {
+        if (receipt === "provider-login") {
+          persistFirstRunActivationReceipt(context, { kind: "provider-login" });
+        }
+      });
+      await waitForFast(() => expect(authButton(page, "provider-login")?.disabled).toBe(false));
+      await selectManualProvider(page, "provider-key");
+      const input = page.querySelector<HTMLInputElement>(".model-setup__manual input")!;
+      setInput(page, ".model-setup__manual input", "synthetic-draft");
+      input.focus();
+      expect(page.querySelector('[data-candidate-kind="codex-cli"]')).toBeNull();
+      expect(
+        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.disabled,
+      ).toBe(false);
 
-    discovery.resolve(lateDiscovery);
-    await waitForElement(page, '[data-candidate-kind="codex-cli"]');
-    expect(page.querySelector(".model-setup__manual input")).toBe(input);
-    expect(input.value).toBe("synthetic-draft");
-    expect(document.activeElement).toBe(input);
-    expect(page.querySelector(".model-setup-provider-select__trigger")?.textContent).toContain(
-      "API provider",
-    );
-    expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(1);
-  });
+      discovery.resolve(lateDiscovery);
+      await waitForElement(page, '[data-candidate-kind="codex-cli"]');
+      expect(page.querySelector(".model-setup__manual input")).toBe(input);
+      expect(input.value).toBe("synthetic-draft");
+      expect(document.activeElement).toBe(input);
+      expect(page.querySelector(".model-setup-provider-select__trigger")?.textContent).toContain(
+        "API provider",
+      );
+      expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(1);
+    },
+  );
 
   it("keeps a browser sign-in started before discovery finishes", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);

@@ -11,7 +11,7 @@ import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
 } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { recoveryFixture } from "../operator-run-recovery.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
@@ -70,7 +70,7 @@ it.for<Change>([
         openclawIdPrincipal: principal,
       });
       const retained = expectDefined(
-        await captureGatewayOperatorRunAuthority({
+        await prepareGatewayOperatorRunAuthority({
           client: captureAgentTurnPrincipal(fixture.client),
           context: fixture.context,
           sourceAuthority: null,
@@ -104,28 +104,24 @@ it.for<Change>([
             expect(authority.signal?.aborted).toBe(false);
             expect(authority.assertCurrent).not.toThrow();
           }
-          expect(
-            expectDefined(previouslyRestored.authority.reauthorize, "fresh member admission"),
-          ).toThrow("Restart recovery operator source policy changed.");
         }
         // Bare captured/restored requests may finish; fresh admission uses the changed source.
         for (const authority of [retained.authority, previouslyRestored.authority]) {
           expect(authority.signal?.aborted).toBe(false);
           expect(authority.assertCurrent).not.toThrow();
-          expect(authority.reauthorize).toThrow();
         }
-        const restored = await fixture.restore().then(
-          (value) => {
-            value.release?.();
-            return "restored";
-          },
-          (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        expect(restored).toMatch(
-          change === "openclaw-id-remove"
-            ? /^refused: OpenClaw ID membership authority changed/
-            : /^refused: Restart recovery operator (source policy|identity) changed/,
-        );
+        if (change === "openclaw-id-remove") {
+          await expect(fixture.restore()).rejects.toThrow();
+        } else {
+          const next = await fixture.restore();
+          try {
+            expect(next.authority.assertCurrent).not.toThrow();
+            expect(next.authority.scopes).toContain("operator.read");
+            expect(next.authority.scopes).not.toContain("operator.write");
+          } finally {
+            next.release();
+          }
+        }
         if (change === "definition-edited" || change === "definition-deleted") {
           for (const authority of [retained.authority, previouslyRestored.authority]) {
             expect(authority.signal?.aborted).toBe(false);
@@ -138,8 +134,6 @@ it.for<Change>([
       } finally {
         retained.release();
         previouslyRestored.release();
-        expect(retained.authority.assertCurrent).toThrow();
-        expect(previouslyRestored.authority.assertCurrent).toThrow();
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);

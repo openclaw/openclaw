@@ -38,7 +38,6 @@ import { registerActiveEmbeddedRunHumanInputWaitForRun } from "./embedded-agent-
 import { hasInProcessGatewayToolCaller } from "./tools/gateway-caller-availability.js";
 import {
   getGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
 } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -283,7 +282,6 @@ async function requestPluginToolApprovalDecision(
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   const watchdogAttempt =
     params.ctx?.watchdogAttempt ?? getGatewayToolCallerIdentity()?.watchdogAttempt;
-  const assertCurrent = captureGatewayToolCallerAssertion();
   let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
   const beginApprovalWait = (deadlineAtMs: number) => {
     watchdogWait?.close();
@@ -292,7 +290,6 @@ async function requestPluginToolApprovalDecision(
       deadlineAtMs,
       isCurrent: () => {
         params.signal?.throwIfAborted();
-        assertCurrent?.();
         return true;
       },
     });

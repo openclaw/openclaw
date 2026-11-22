@@ -46,6 +46,9 @@ suite.define(() => {
       for (const width of [1400, 390]) {
         await page.setViewportSize({ width, height: 1000 });
         await page.evaluate(() => document.fonts.ready);
+        const subtitle = await page.locator(".content-header .page-subtitle").boundingBox();
+        const intro = await page.locator(".model-setup__intro h1").boundingBox();
+        expect(subtitle!.x).toBeCloseTo(intro!.x, 0);
         const headings = await page
           .locator(".model-setup .settings-section")
           .evaluateAll((sections) =>

@@ -407,6 +407,11 @@ export function isSkillsUpdateParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
 >;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
+>;
 export function isSkillsSearchParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2003,6 +2008,11 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
+export function isSessionsSteerTargetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerTargetParamsSchema
+>;
 export function isSessionsSteerActiveParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2242,6 +2252,11 @@ export function isSessionsFilesPreviewParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
+>;
+export function isSessionsFilesStatParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesStatParamsSchema
 >;
 export function isSessionsFilesPreviewReleaseParams(
   value: unknown,

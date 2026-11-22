@@ -7,8 +7,10 @@ import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
+import type { SandboxContext } from "../../src/agents/sandbox/types.js";
 /**
  * node --import ./scripts/tsx.mjs scripts/perf/worktree-creation-measure.ts \
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
@@ -52,6 +54,11 @@ import { getHeapStatistics } from "node:v8";
  * postinstall copying advance.txt into node_modules/source-dependent.txt and its
  * ionice class into node_modules/install-priority.txt. Native
  * Podman and btrfs remain real; no model or Gateway transport is measured here.
+ * --first-send-layout includes skill delivery, protected mount setup and container startup.
+ * Compare its phase durations, CPU and allocation on the same fixture with two A/A
+ * controls and five counterbalanced pairs. Require lower first-send latency, no
+ * material CPU/allocation regression, identical source/dependency/skill contents,
+ * and zero inline template builds. Parent and child durations are inclusive.
  * --expected-inline-builds 1 qualifies the baseline; the candidate requires zero.
  * Report idle/create/send work separately and total CPU/allocation with A/A controls.
  * --base-advance creates at A, pushes B to a local origin, runs the idle pass,
@@ -73,6 +80,7 @@ const { values } = parseArgs({
     "default-base": { type: "boolean" },
     "base-advance": { type: "boolean" },
     "first-send-image": { type: "string" },
+    "first-send-layout": { type: "boolean" },
     "expected-inline-builds": { type: "string", default: "0" },
     "expected-commit": { type: "string" },
     "alternate-policy": { type: "boolean" },
@@ -93,6 +101,10 @@ assert(values.repo && values.output, "--repo and --output are required");
 assert(
   !values["first-send-image"] || values["base-advance"],
   "--first-send-image requires --base-advance",
+);
+assert(
+  !values["first-send-layout"] || values["first-send-image"],
+  "--first-send-layout requires --first-send-image",
 );
 const output = path.resolve(values.output);
 if (process.env.OPENCLAW_BENCH_BASELINE_DIR) {
@@ -430,12 +442,20 @@ try {
     const { replaceSessionEntry } = await import("../../src/config/sessions/session-accessor.js");
     const { prepareLocalSandboxWorkspace } =
       await import("../../src/agents/sandbox/local-workspace.js");
+    const { resolveSandboxContext } = await import("../../src/agents/sandbox/context.js");
     const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
     const { withWorktreePreparationTiming } =
       await import("../../src/agents/worktrees/preparation-timing.js");
     const { withDiagnosticsTimelineObserver } =
       await import("../../src/infra/diagnostics-timeline.js");
     const sandbox = resolveSandboxConfigForAgent(config, "main");
+    const preparedLayouts: Array<{
+      canonical: string;
+      projection: string;
+      skillsWorkspaceDir: string;
+      eligibility: SandboxContext["skillsEligibility"];
+      skillNames: string[];
+    }> = [];
     const create = async (name: string) => {
       const sessionKey = `agent:main:prewarm-${name}`;
       const created = await service.create({
@@ -485,8 +505,8 @@ try {
     );
     git("push", "origin", "main");
     const target = git("rev-parse", "HEAD");
-    const realNow = Date.now;
-    Date.now = () => realNow() + 31_000;
+    // Let fetch freshness expire without skewing the host against lease workers.
+    await delay(31_000);
     let clones = 0;
     const copy = nativeWorktreeFilesystem.copy;
     nativeWorktreeFilesystem.copy = async (...args) => {
@@ -508,6 +528,8 @@ try {
           ) / 1000
         : undefined;
     const measure = async <T>(phase: string, run: () => Promise<T>) => {
+      gitTimings = {};
+      workerTimings = {};
       const containerBefore = containerCpu();
       const monotonicStartUs = Number(process.hrtime.bigint() / 1000n);
       const cpu = process.cpuUsage();
@@ -517,8 +539,14 @@ try {
       const beforeClones = clones;
       const start = performance.now();
       const phases: string[] = [];
-      const result = await withDiagnosticsTimelineObserver((name) => {
+      const phaseDurationsMs: Record<string, number> = {};
+      const result = await withDiagnosticsTimelineObserver((name, _attributes, durationMs) => {
         phases.push(name);
+        const phaseStart = performance.now();
+        return () => {
+          phaseDurationsMs[name] =
+            (phaseDurationsMs[name] ?? 0) + (durationMs ?? performance.now() - phaseStart);
+        };
       }, run);
       const elapsedMs = performance.now() - start;
       const used = process.cpuUsage(cpu);
@@ -541,6 +569,9 @@ try {
             name === "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build",
         ).length,
         manifestCaptures: phases.filter((name) => name === "worktree.sandbox.snapshot").length,
+        phaseDurationsMs,
+        gitOperations: gitTimings,
+        workerOperations: workerTimings,
         load: loadavg(),
       };
       rows.push(row);
@@ -570,6 +601,30 @@ try {
           assert.equal(creation.nativeCopies, 1, "Create must only clone its warm template");
           const { result: projection, row: measured } = await measure(`${name}-send`, () =>
             withWorktreePreparationTiming("sandbox", async () => {
+              if (values["first-send-layout"]) {
+                const context = await resolveSandboxContext({
+                  config,
+                  agentId: "main",
+                  sessionKey: created.sessionKey,
+                  workspaceDir: created.path,
+                });
+                try {
+                  assert(context?.workspaceSource === "managed-worktree");
+                  assert(context.skillsWorkspaceDir);
+                  preparedLayouts.push({
+                    canonical: created.path,
+                    projection: context.workspaceDir,
+                    skillsWorkspaceDir: context.skillsWorkspaceDir,
+                    eligibility: context.skillsEligibility,
+                    skillNames: (context.skillUsagePaths ?? [])
+                      .map((skill) => skill.skillName)
+                      .toSorted(),
+                  });
+                  return context.workspaceDir;
+                } finally {
+                  context?.[Symbol.dispose]?.();
+                }
+              }
               using prepared = await prepareLocalSandboxWorkspace({
                 cfg: config,
                 agentId: "main",
@@ -605,8 +660,81 @@ try {
         }
       }
       await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
+      // Correctness checks run after all timed phases, so the fresh preparation
+      // does not warm the measured second send or inflate its allocation counters.
+      const verification = [];
+      for (const [index, layout] of preparedLayouts.entries()) {
+        const { captureWorkspaceManifestDocument } =
+          await import("../../src/gateway/worker-environments/workspace-manifest-worker.js");
+        const capture = (root: string) =>
+          captureWorkspaceManifestDocument({
+            root,
+            baseCommit: target,
+            buildCacheInputs: new Set<string>(),
+          });
+        const actual = await capture(layout.projection);
+        assert.deepEqual(
+          actual,
+          await capture(layout.canonical),
+          "Projection must match a fresh canonical capture",
+        );
+        const { syncWorkspaceSkills } =
+          await import("../../src/skills/loading/workspace-skill-sync.runtime.js");
+        const fresh = path.join(output, `fresh-skills-${index}`);
+        const skills = await syncWorkspaceSkills({
+          sourceWorkspaceDir: layout.projection,
+          targetWorkspaceDir: fresh,
+          config,
+          agentId: "main",
+          eligibility: layout.eligibility,
+        });
+        assert(layout.skillNames.length > 0, "The fixture must deliver skills");
+        assert.deepEqual(skills.map((skill) => skill.skillName).toSorted(), layout.skillNames);
+        async function inventory(root: string, relative = ""): Promise<string[]> {
+          const entries: string[] = [];
+          for (const name of (await fs.readdir(path.join(root, relative))).toSorted()) {
+            if (!relative && name === ".openclaw-sync.json") {
+              continue;
+            }
+            const child = path.join(relative, name);
+            const absolute = path.join(root, child);
+            const stat = await fs.lstat(absolute);
+            entries.push(
+              JSON.stringify([
+                child,
+                stat.mode,
+                stat.isDirectory()
+                  ? "directory"
+                  : stat.isSymbolicLink()
+                    ? await fs.readlink(absolute)
+                    : createHash("sha256")
+                        .update(await fs.readFile(absolute))
+                        .digest("hex"),
+              ]),
+            );
+            if (stat.isDirectory()) {
+              entries.push(...(await inventory(root, child)));
+            }
+          }
+          return entries;
+        }
+        const installed = await inventory(path.join(layout.skillsWorkspaceDir, "skills"));
+        assert.deepEqual(
+          installed,
+          await inventory(path.join(fresh, "skills")),
+          "Installed skills must equal a fresh prepare",
+        );
+        verification.push({
+          projectionManifest: actual.manifestRef,
+          skills: layout.skillNames,
+          skillInventoryHash: createHash("sha256").update(JSON.stringify(installed)).digest("hex"),
+        });
+      }
+      await fs.writeFile(
+        path.join(output, "verification.json"),
+        JSON.stringify(verification, null, 2),
+      );
     } finally {
-      Date.now = realNow;
       nativeWorktreeFilesystem.copy = copy;
     }
   }

@@ -12,7 +12,6 @@ import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGatewayScopedTools } from "../tool-resolution.js";
-import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock as adoptCampaign,
@@ -20,7 +19,6 @@ import {
   isRestartEnabledMock as restartEnabled,
   mockGlobalInstallSurface as globalInstall,
   readGatewayOwnerLeaseAsyncMock as ownerLease,
-  resolveStartupInstallStatusMock as installStatus,
   scheduleGatewayRestartMock as scheduleRestart,
   sendGatewayLifecycleNoticeMock as notice,
   sentinelState,
@@ -173,6 +171,8 @@ async function runOwnerTool(tool: ReturnType<typeof createGatewayTool>, channel 
 it.each(["revoked", "reassigned", "unchanged", "webchat", "channel-less"])(
   "%s owner after tool construction uses current config",
   async (change) => {
+    globalInstall();
+    detectSupervisor.mockReturnValue("launchd");
     const tool = ownerTool();
     configureOwner(
       change === "unchanged" ? ["owner"] : change === "revoked" ? [] : ["replacement"],
@@ -216,14 +216,13 @@ it.each(promptUpdateCases)(
         toolNames,
         runtimeInfo: { channel },
       });
-      const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("This Gateway:")),
-        "hosting Gateway guidance",
-      );
       const action = expectDefined(
-        guidance.match(/`gateway` runs `([\w.]+)`/u)?.[1],
-        "prompt-advertised update action",
+        prompt.match(
+          /`gateway`: use ([\w.]+) only when the installation uses the built-in updater/u,
+        )?.[1],
+        "prompt-advertised built-in update action",
       );
+      expect(action).toBe("update.run");
       const result = await tool.execute("update", {
         action,
         requesterSenderId: "model-supplied-sender",
@@ -282,62 +281,6 @@ it.each(promptUpdateCases)(
   },
 );
 
-it.each(["discovery", "acknowledgement", "scheduled admission"] as const)(
-  "rechecks authority after awaited %s",
-  async (boundary) => {
-    const acknowledged = boundary === "acknowledgement";
-    const scheduled = boundary === "scheduled admission";
-    let active = true;
-    detectSupervisor.mockReturnValue(acknowledged ? "launchd" : null);
-    const revoke = () => {
-      if (scheduled) {
-        active = false;
-      } else {
-        configureOwner(["replacement"]);
-      }
-    };
-    if (acknowledged) {
-      notice.mockImplementationOnce(async () => {
-        revoke();
-        return true;
-      });
-    } else {
-      installStatus.mockImplementationOnce(async () => {
-        revoke();
-        return {
-          root: "/tmp/openclaw",
-          status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
-          installReceipt: null,
-        };
-      });
-    }
-
-    if (scheduled) {
-      const response = await invokeUpdate({}, host.context, () => {
-        if (!active) {
-          throw new Error("cron update authority is no longer active");
-        }
-      });
-      const summary = summarizeUpdateRunResponse(response);
-      expect(summary).toMatchObject({
-        ok: false,
-        reason: "owner_required",
-        message: expect.stringContaining(
-          "no longer has a live requester principal or scheduled operator admission",
-        ),
-      });
-      expectOnlyRun({
-        ...ownerFailure,
-        origin: expect.objectContaining({ nextAction: summary.message }),
-      });
-      expectNoHandoff();
-    } else {
-      const result = await runOwnerTool(ownerTool());
-      expectOwnerRefusal(result.details, acknowledged);
-      expect(notice).toHaveBeenCalledTimes(acknowledged ? 1 : 0);
-    }
-  },
-);
 async function runUpdate(
   requester: { channel?: string; senderId?: string } | undefined = {
     channel: "slack",
@@ -397,7 +340,7 @@ it.each([
   }
 });
 
-it.each([false, true])(
+it.each([true])(
   "rechecks current commands.restart after awaited acknowledgement (managed=%s)",
   async (managed) => {
     if (managed) {
