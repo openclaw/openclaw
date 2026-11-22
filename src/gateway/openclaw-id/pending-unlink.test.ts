@@ -23,7 +23,7 @@ async function setup(answers: Array<() => Response>) {
       { statement, hostname: "studio-k7x2q.example.test", discovery_url: "https://d.test" },
     ],
   } as Partial<StoredClaw>;
-  const fetchImpl = vi.fn(async () => {
+  const fetchImpl = vi.fn<typeof fetch>(async () => {
     const answer = answers.shift();
     if (!answer) {
       throw new TypeError("fetch failed");
