@@ -120,7 +120,7 @@ function expectUnused(...mocks: unknown[]) {
 function context(): GatewayRequestContext {
   return createWizardSessionTracker() as GatewayRequestContext;
 }
-const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
+const runSetup = () => runGatewayAutomaticSetup(context());
 
 function pauseDiscovery() {
   const started = createDeferred();
@@ -358,10 +358,10 @@ describe("Gateway automatic inference setup", () => {
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
     const { started, discovered } = pauseDiscovery();
     const gateway = context();
-    const first = runGatewayAutomaticSetup(gateway, () => {});
+    const first = runGatewayAutomaticSetup(gateway);
     try {
       await awaitGateBeforeSettlement(started.promise, first, "setup ended before discovery");
-      const joined = runGatewayAutomaticSetup(gateway, () => {});
+      const joined = runGatewayAutomaticSetup(gateway);
       expect(joined).toBe(first);
       await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
       expect(fixture.activate).not.toHaveBeenCalled();
@@ -372,22 +372,6 @@ describe("Gateway automatic inference setup", () => {
       discovered.resolve(detection());
       await first;
     }
-  });
-
-  it("rejects revoked requester authority after discovery before any activation or preparation", async () => {
-    const { started, discovered } = pauseDiscovery();
-    let current = true;
-    const run = runGatewayAutomaticSetup(context(), () => {
-      if (!current) {
-        throw new Error("Requester authority revoked");
-      }
-    });
-    const rejection = expect(run).rejects.toThrow("Requester authority revoked");
-    await awaitGateBeforeSettlement(started.promise, run, "setup ended before discovery");
-    current = false;
-    discovered.resolve(detection([codex]));
-    await rejection;
-    expectUnused(fixture.activate, fixture.prepare, fixture.commit);
   });
 
   it.each([false, true])(

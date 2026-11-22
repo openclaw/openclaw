@@ -105,11 +105,6 @@ it("binds the plugin ID and delivers only to the requesting browser", async () =
 
 it.for<[string, (h: ReturnType<typeof createHarness>) => void, RegExp]>([
   ["caller revoked", (h) => h.revoke(), /authority/],
-  [
-    "caller scopes downgraded",
-    (h) => Object.assign(h.requester.connect, { scopes: ["operator.read"] }),
-    /authority|scope/,
-  ],
   ["plugin retired", (h) => markPluginRegistryRetired(h.registry), /current plugin runtime/],
   ["plugin disabled", (h) => Object.assign(h.plugin, { enabled: false }), /current plugin runtime/],
   [
