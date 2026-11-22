@@ -2,11 +2,11 @@ import { releaseSessionSourceAuthorities } from "../../../config/sessions/sessio
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-session-lifecycle.js";
-import { captureClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import {
+  captureClientVoiceSessionSource,
   captureClientVoiceSessionWriter,
   type ClientVoiceSessionWriter,
-} from "../../../talk/client-voice-session-write.js";
+} from "../../../talk/client-voice-session-source.js";
 import {
   appendRelayVoiceTranscript,
   closeRelayVoiceSessionRecord,
@@ -65,8 +65,7 @@ export function ensureRelayVoiceSession(session: RelaySession): Promise<boolean>
   try {
     const source = captureRelayVoiceSessionSource(session);
     if (session.voiceSessionCreated) {
-      source.assertCurrent();
-      return Promise.resolve(true);
+      return source.prepareCurrent().then(() => true, fail);
     }
     const { agentId, sessionKey } = session.sessionTarget;
     session.voiceSessionCreation ??= withClientVoiceSessionSettlement(

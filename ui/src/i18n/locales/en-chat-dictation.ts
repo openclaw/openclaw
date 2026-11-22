@@ -1,22 +1,16 @@
-import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-const catalog = {
+// Loads with dictation capture; keep it out of the composer's startup copy.
+const enChatDictation = {
   chat: {
-    composer: {
-      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
-      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
-      dictationFailed: "Couldn’t transcribe your voice.",
-      dictationRetryRecording: "Retry recording",
-      dictationDiscardRecording: "Discard recording",
-      dictationRecordingKept:
-        "No transcript received. This recording is kept in this tab for retry.",
-      dictationStarting: "Starting microphone…",
+    dictation: {
+      busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
     },
   },
 } satisfies TranslationMap;
 
-export const registerChatDictationEnglish = Object.assign(() => mergeCatalog(en, catalog), {
-  catalog,
-});
+export const registerChatDictationEnglish = Object.assign(
+  () => Object.assign(en.chat, enChatDictation.chat),
+  { catalog: enChatDictation },
+);

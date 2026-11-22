@@ -1,6 +1,11 @@
+import { isMainThread } from "node:worker_threads";
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
-import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
+import {
+  iterateSessionContextEntries,
+  iterateSessionContextMessages,
+  projectSessionContextMessage,
+} from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -26,6 +31,10 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  MODEL_CONTEXT_PAYLOAD_BATCH_SIZE,
+  readCompactedModelContextNavigation,
+} from "./session-accessor.sqlite-model-context-navigation.js";
 import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
 import { getSessionKysely, toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import {
@@ -40,7 +49,10 @@ import type {
   SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
-import { readModelContextNavigationPages } from "./session-model-context-pages.js";
+import {
+  readModelContextNavigationPages,
+  type ModelContextNavigationRow,
+} from "./session-model-context-pages.js";
 import {
   projectModelContextEventSql,
   projectModelContextJson,
@@ -78,13 +90,12 @@ type TranscriptContextSnapshot = {
   entries: ContextEntry[];
   version: SessionTranscriptContextVersion;
   readEntry: (entry: ContextEntry) => SessionTreeEntry;
+  readMessages: () => Generator<AgentMessage>;
   readModelEntrySizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>;
   readModelEntries: (
     requests: readonly ModelContextRequest[],
   ) => Map<ContextEntry, SessionTreeEntry>;
 };
-
-const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
 
 /** Unadmitted context retains the prefix captured by its original read snapshot. */
 export function validateSessionTranscriptContextVersion(
@@ -284,8 +295,8 @@ export function readSessionTranscriptContextMessages<T>(
     version?: SessionTranscriptContextVersion,
   ) => T,
 ): T {
-  const result = withTranscriptContextSnapshot(scope, ({ header, entries, readEntry, version }) => {
-    const messages = iterateSessionContextMessages(entries, readEntry);
+  const result = withTranscriptContextSnapshot(scope, ({ header, readMessages, version }) => {
+    const messages = readMessages();
     try {
       return read(messages, header, version);
     } finally {
@@ -358,6 +369,54 @@ function withTranscriptContextSnapshot<T>(
               .limit(1),
           );
           assertTranscriptNavigationValid(header?.navigation_valid);
+          function* readRows(
+            after: number,
+            end: number,
+            sequences?: number[],
+          ): Generator<ModelContextNavigationRow> {
+            const page = base
+              .where("seq", ">", after)
+              .where("seq", "<=", end)
+              .$if(sequences !== undefined, (query) => query.where("seq", "in", sequences!));
+            const query = isPostgresSqlConnection(database.db)
+              ? db
+                  .selectFrom(
+                    projectPostgresModelContextRowsSql(
+                      page.select(["seq", "event_json", "navigation_json"]),
+                    ).as("context"),
+                  )
+                  .selectAll()
+              : page
+                  .select([
+                    "seq",
+                    transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
+                  ])
+                  .orderBy("seq", "asc");
+            for (const row of iterateSqliteQuerySync(database.db, query)) {
+              const raw =
+                "exceptional_json" in row && typeof row.exceptional_json === "string"
+                  ? row.exceptional_json
+                  : null;
+              const bytes = (native: number, omitCheckpoint: boolean) =>
+                raw === null
+                  ? native
+                  : Buffer.byteLength(projectModelContextJson(raw, false, omitCheckpoint), "utf8");
+              const navigationJson =
+                raw === null ? row.navigation_json : projectModelContextJson(raw, true);
+              // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
+              const entry = JSON.parse(navigationJson) as ContextEntry;
+              entry.seq = row.seq;
+              yield {
+                entry,
+                bytes: bytes(row.model_bytes, false),
+                withoutCheckpointBytes: bytes(row.retained_bytes, true),
+                // PostgreSQL rows JSONB cannot decode use the JavaScript projection owner.
+                ...(raw === null ? {} : { exceptional: true as const }),
+              };
+            }
+          }
           const {
             rows: navigation,
             entries,
@@ -374,50 +433,12 @@ function withTranscriptContextSnapshot<T>(
               fence ? fence.beforeRawSeq - 1 : Infinity,
               through?.rawSeq ?? Infinity,
             ),
-            *readRows(after, end) {
-              const page = base.where("seq", ">", after).where("seq", "<=", end);
-              const query = isPostgresSqlConnection(database.db)
-                ? db
-                    .selectFrom(
-                      projectPostgresModelContextRowsSql(
-                        page.select(["seq", "event_json", "navigation_json"]),
-                      ).as("context"),
-                    )
-                    .selectAll()
-                : page
-                    .select([
-                      "seq",
-                      transcriptEventModelNavigationSql(database.db).as("navigation_json"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
-                    ])
-                    .orderBy("seq", "asc");
-              for (const row of iterateSqliteQuerySync(database.db, query)) {
-                const raw =
-                  "exceptional_json" in row && typeof row.exceptional_json === "string"
-                    ? row.exceptional_json
-                    : null;
-                const bytes = (native: number, omitCheckpoint: boolean) =>
-                  raw === null
-                    ? native
-                    : Buffer.byteLength(
-                        projectModelContextJson(raw, false, omitCheckpoint),
-                        "utf8",
-                      );
-                const navigationJson =
-                  raw === null ? row.navigation_json : projectModelContextJson(raw, true);
-                // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
-                const entry = JSON.parse(navigationJson) as ContextEntry;
-                entry.seq = row.seq;
-                yield {
-                  entry,
-                  bytes: bytes(row.model_bytes, false),
-                  withoutCheckpointBytes: bytes(row.retained_bytes, true),
-                  // PostgreSQL rows JSONB cannot decode use the JavaScript projection owner.
-                  ...(raw === null ? {} : { exceptional: true as const }),
-                };
-              }
-            },
+            readRows,
+            // Historical/fenced, full-fidelity and PostgreSQL reads keep canonical navigation.
+            readCompacted:
+              limits && !through && !fence && !isMainThread && !isPostgresSqlConnection(database.db)
+                ? () => readCompactedModelContextNavigation(database, resolved, readRows)
+                : undefined,
           });
           if (!anchorFound) {
             throw new SessionTranscriptReadFenceError(
@@ -521,14 +542,70 @@ function withTranscriptContextSnapshot<T>(
               request.omitCheckpoint,
               request.toolResultOmission,
             );
+          const readEntry = (entry: ContextEntry) =>
+            hydrateContextEntry(readPayload(entry).rows[0]!.event_json, entry);
           return read({
             prepared,
             header: header ? JSON.parse(header.event_json) : undefined,
             entries,
             version,
-            readEntry: (entry) => {
-              const row = readPayload(entry).rows[0];
-              return hydrateContextEntry(row!.event_json, entry);
+            readEntry,
+            *readMessages() {
+              // PostgreSQL's synchronous adapter buffers a whole result, unlike SQLite's cursor.
+              if (isPostgresSqlConnection(database.db)) {
+                yield* iterateSessionContextMessages(entries, readEntry);
+                return;
+              }
+              const selections = iterateSessionContextEntries(entries);
+              let next = selections.next();
+              while (!next.done) {
+                const batch: Array<
+                  Parameters<typeof projectSessionContextMessage<ContextEntry>>[0]
+                > = [];
+                let failure: { error: unknown } | undefined;
+                // Compaction and background placements can reorder rows. Split at each reversal
+                // so the primary-key cursor preserves context order without sorting payloads.
+                while (
+                  !next.done &&
+                  batch.length < MODEL_CONTEXT_PAYLOAD_BATCH_SIZE &&
+                  (batch.length === 0 || next.value.entry.seq > batch.at(-1)!.entry.seq)
+                ) {
+                  if (next.value.entry.type !== "reset") {
+                    batch.push(next.value);
+                  }
+                  try {
+                    next = selections.next();
+                  } catch (error) {
+                    // A short consumer must not observe a later malformed placement.
+                    failure = { error };
+                    break;
+                  }
+                }
+                let index = 0;
+                for (const row of batch.length === 0
+                  ? []
+                  : iterateSqliteQuerySync(
+                      database.db,
+                      base
+                        .select(transcriptEventJsonSql(database.db).as("event_json"))
+                        .where(
+                          "seq",
+                          "in",
+                          batch.map(({ entry }) => entry.seq),
+                        )
+                        .orderBy("seq", "asc"),
+                    )) {
+                  const message = projectSessionContextMessage(batch[index++]!, (entry) =>
+                    hydrateContextEntry(row.event_json, entry),
+                  );
+                  if (message) {
+                    yield message;
+                  }
+                }
+                if (failure) {
+                  throw failure.error;
+                }
+              }
             },
             readModelEntrySizes: (requests) => {
               const sizes = new Map<ContextEntry, number>();

@@ -293,7 +293,7 @@ async function runCapturedSessionActorUsage(
       return { kind: "refresh", changed: false };
     }
     if (selectedFiles?.some((file) => !file)) {
-      throw new Error("A requested usage transcript is unavailable");
+      throw new Error("Chat history for the requested usage is unavailable");
     }
     const rebuild = new Set(operation.rebuildRows?.map((row) => row.key));
     const selected = requested && new Set(requested);

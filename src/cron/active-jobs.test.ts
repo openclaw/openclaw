@@ -4,8 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
-  resolveAdmittedRunActiveAssertion,
-  type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import { resolveMessageActionTurnAuthorization } from "../gateway/message-action-turn-capability.js";
 import { importFreshModule } from "../plugin-sdk/test-helpers/import-fresh.js";
@@ -13,13 +11,11 @@ import {
   advanceCronActiveJobGeneration,
   bindCronJobAdmittedRun,
   bindCronSelfRemovalCommitGuard,
-  captureCronJobMessageActionAuthority,
   clearCronJobActive,
   getActiveCronJobCount,
   isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
-  noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
@@ -47,13 +43,9 @@ function prepareAdmission(
   return admission;
 }
 
-function capture(jobId: string, operationalRunInstance: OperationalRunInstanceRef) {
-  return captureCronJobMessageActionAuthority({ jobId, operationalRunInstance });
-}
-
-async function activeRun(isMessageActionAuthorityCurrent = () => true) {
+async function activeRun() {
   const jobId = "job";
-  const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent })!;
+  const marker = markCronJobActive(jobId)!;
   const controller = new AbortController();
   const admission = prepareAdmission("run");
   const context = await admission.admit("embedded");
@@ -82,7 +74,7 @@ describe("cron message action authority", () => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const jobId = "long-message-read";
-      const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+      const marker = markCronJobActive(jobId, { preserveAcrossGenerationAdvance: true });
       const controller = new AbortController();
       const identity = {
         agentId: "main",
@@ -92,7 +84,15 @@ describe("cron message action authority", () => {
       };
       const owner = prepareCronRunAdmission({
         scheduledExecution: TEST_SCHEDULED_EXECUTION,
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          beforeAttempt: async () => {},
+          assertCurrent: () => {
+            controller.signal.throwIfAborted();
+            if (!isCronActiveJobMarkerCurrent(marker)) {
+              throw new Error("Occurrence retired");
+            }
+          },
+        },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,
         jobId,
@@ -118,6 +118,8 @@ describe("cron message action authority", () => {
         expect(
           resolveMessageActionTurnAuthorization({ ...lookup, runId: "another-invocation" }),
         ).toBeUndefined();
+        advanceCronActiveJobGeneration();
+        expect(grant.assertCurrent).not.toThrow();
         if (end === "closure") {
           owner.close();
           expect(resolveMessageActionTurnAuthorization(lookup)).toBeUndefined();
@@ -129,52 +131,6 @@ describe("cron message action authority", () => {
         owner.close();
         clock.mockRestore();
       }
-    },
-  );
-
-  it("keeps pending authority bound to its exact operational admission", async () => {
-    const jobId = "pending-message-read";
-    const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
-    const controller = new AbortController();
-    const runId = "shared-message-run";
-    const expectedInstance = createOperationalRunInstanceRef(runId);
-    const expected = prepareAdmission(runId, expectedInstance);
-    const other = prepareAdmission(runId);
-    const assertCurrent = capture(jobId, expectedInstance);
-    expect(assertCurrent).toBeTypeOf("function");
-    expect(assertCurrent).toThrow();
-    bindCronJobAdmittedRun(marker, await other.admit("embedded"), controller.signal);
-    expect(assertCurrent).toThrow();
-    bindCronJobAdmittedRun(marker, await expected.admit("embedded"), controller.signal);
-    expect(assertCurrent).not.toThrow();
-    expected.close();
-    expect(assertCurrent).toThrow();
-  });
-
-  it.each(["source observation", "committed mutation"] as const)(
-    "keeps %s revocation through a new prompt without cancelling the run",
-    async (source) => {
-      let sourceCurrent = true;
-      const { jobId, marker, controller, admission, context } = await activeRun(
-        () => sourceCurrent,
-      );
-      const assertCurrent = capture(jobId, context.operationalRunInstance);
-      expect(assertCurrent).not.toThrow();
-      if (source === "committed mutation") {
-        noteActiveCronJobMessageActionAuthorityMutation(jobId);
-      } else {
-        sourceCurrent = false;
-      }
-      expect(assertCurrent).toThrow();
-      expect(resolveAdmittedRunActiveAssertion(context, controller.signal)).not.toThrow();
-      expect(controller.signal.aborted).toBe(false);
-      sourceCurrent = true;
-      admission.close();
-      const next = await prepareAdmission("run").admit("embedded");
-      bindCronJobAdmittedRun(marker, next, controller.signal);
-      const assertReplacementCurrent = capture(jobId, next.operationalRunInstance);
-      expect(assertReplacementCurrent).toThrow();
-      expect(getActiveCronJobCount()).toBeGreaterThan(0);
     },
   );
 });
@@ -206,8 +162,6 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       ["different instance", false],
     ] as const)("keeps self-removal bound to the %s", async (scenario, validAtCommit) => {
       const { jobId, marker, controller, admission, context } = await activeRun();
-      const assertCurrent = capture(jobId, context.operationalRunInstance);
-      expect(assertCurrent).not.toThrow();
       let callerActive = true;
       let commitGuard: () => void = vi.fn();
       const bindingModule =
@@ -267,7 +221,6 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
           : await reload("after-guard");
       expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
       expect(currentMarker).toMatchObject({ jobRemoved: true, scheduleMutated: true });
-      expect(assertCurrent).toThrow();
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
       if (scenario === "active owner") {
         expect(cancel).not.toHaveBeenCalled();

@@ -6,8 +6,6 @@ import { afterAll, expect, it, onTestFinished } from "vitest";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
   withSessionCompactionPersistenceAsync,
-  type CommittedCompactionBoundary,
-  type PreparedCompactionAppend,
   type CompactionAppendPersistenceAsync,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -38,6 +36,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import type {
+  CommittedCompactionBoundary,
+  PreparedCompactionAppend,
+} from "./session-compaction-persistence.types.js";
 import type { SessionMetadataWorkerOperations } from "./session-manager-write-contract.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";

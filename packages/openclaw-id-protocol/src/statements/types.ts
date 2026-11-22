@@ -14,6 +14,7 @@ export const STATEMENT_TYPES = [
   "RootReset",
   "NodeInviteCap",
   "NodeRedemption",
+  "ClawUnlink",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -110,6 +111,7 @@ export const MEMBERSHIP_OPS = [
   "revoke_device",
   "add_owner_device",
   "add_member_device",
+  "set_member_recovery_kit",
   "deny_invite",
   "add_node",
   "remove_node",
@@ -133,6 +135,7 @@ export type MembershipTarget =
       device_pub: Ed25519PublicKey;
       label: string;
     }
+  | { op: "set_member_recovery_kit"; account_id: string; device_pub: Ed25519PublicKey | null }
   | { op: "add_node"; peer_key: IrohEndpointKey; label: string; invite_id: string }
   | { op: "remove_node"; peer_key: IrohEndpointKey }
   | { op: "remove"; account_id: string }
@@ -254,6 +257,16 @@ export type RootResetBody = {
   issued_at: UnixSeconds;
 };
 
+/**
+ * Unlinking a claw (OCF-281): the claw's own Gateway, with the K_gw of the current binding, ends
+ * the claw's link to OpenClaw ID. Discovery retires the hostname for good and deletes the claw.
+ * `binding_seq` names the binding it ends, so the statement is refused for any other binding.
+ */
+export type ClawUnlinkBody = {
+  claw_id: string;
+  binding_seq: number;
+};
+
 /** A single-use node invitation, registered directly with its proof key. */
 export type NodeInviteCapBody = Pick<
   InviteCapBody,
@@ -302,6 +315,7 @@ export type StatementBodies = {
   RootReset: RootResetBody;
   NodeInviteCap: NodeInviteCapBody;
   NodeRedemption: NodeRedemptionBody;
+  ClawUnlink: ClawUnlinkBody;
 };
 
 /**

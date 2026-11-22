@@ -84,7 +84,7 @@ describe("CronService failure alerts", () => {
         for (let count = 1; count <= 3; count++) {
           vi.setSystemTime(cron.getJob(job.id)!.state.nextRunAtMs!);
           await expect(cron.run(job.id, "due")).resolves.toEqual({ ok: true, ran: true });
-          expect(sendCronFailureAlert).toHaveBeenCalledTimes(count < 2 ? 0 : 1);
+          expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
           expect(cron.getJob(job.id)).toMatchObject({
             enabled: true,
             state: {
@@ -224,7 +224,7 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
 
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining('Automation "work-owned failure" failed 1 times'),
+          expect.stringContaining('Automation "work-owned failure" failed'),
           {
             agentId: "work",
             sessionKey,
@@ -247,7 +247,10 @@ describe("CronService failure alerts", () => {
         await runJob(job, 1);
         const firstAlert = expectAlertFields(sendCronFailureAlert, telegramRoute);
         expect(firstAlert.job.id).toBe(job.id);
-        expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 2 times');
+        expectAlertTextContaining(
+          sendCronFailureAlert,
+          'Automation "daily report" failed 2 times in a row',
+        );
 
         await runJob(job, 1, timeoutFailure);
 
@@ -319,7 +322,7 @@ describe("CronService failure alerts", () => {
           sendCronFailureAlert,
           owned ? { mode: "announce", channel: "slack", to: "#alerts" } : route,
         );
-        expectAlertTextContaining(sendCronFailureAlert, `Automation "${name}" skipped 1 times`);
+        expectAlertTextContaining(sendCronFailureAlert, `Automation "${name}" skipped`);
       },
       {
         ...(owned
@@ -375,34 +378,47 @@ describe("CronService failure alerts", () => {
       },
     ));
 
-  it("adds provider login recovery to OpenAI OAuth refresh failures", () =>
-    withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("Sunday Magic Drop (Tax Payers)");
+  it.each([false, true])(
+    "adds provider login recovery to OpenAI OAuth refresh failures (one-shot=%s)",
+    (oneShot) =>
+      withAlerts(
+        async ({ cron, sendCronFailureAlert, addJob }) => {
+          const job = await addJob(
+            "Sunday Magic Drop (Tax Payers)",
+            oneShot
+              ? {
+                  schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
+                }
+              : {},
+          );
 
-        await cron.run(job.id, "force");
+          await cron.run(job.id, "force");
 
-        const alert = alertCallArg(sendCronFailureAlert);
-        expect(alert.text).toContain("Cause: auth_permanent");
-        expect(alert.text).toContain("Send `/login openai`");
-        const signIn = {
-          label: "Sign in",
-          action: { type: "command", command: "/login openai" },
-        };
-        expect(alert.presentation).toEqual({
-          blocks: [{ type: "buttons", buttons: [signIn] }],
-        });
-      },
-      {
-        runResult: {
-          status: "error",
-          provider: "openai",
-          errorClassification: { kind: "reason", reason: "auth_permanent" },
-          error:
-            'FailoverError: OAuth token refresh failed for openai: OpenAI Codex token refresh failed (401): {"error":{"message":"Your session has ended. Please log in again.","type":"invalid_request_error"}}',
+          const alert = alertCallArg(sendCronFailureAlert);
+          expect(alert.text).toContain("Cause: auth_permanent");
+          expect(alert.text).toContain("Send /login openai");
+          if (oneShot) {
+            expect(cron.getJob(job.id)?.enabled).toBe(false);
+          }
+          const signIn = {
+            label: "Sign in",
+            action: { type: "command", command: "/login openai" },
+          };
+          expect(alert.presentation).toEqual({
+            blocks: [{ type: "buttons", buttons: [signIn] }],
+          });
         },
-      },
-    ));
+        {
+          runResult: {
+            status: "error",
+            provider: "openai",
+            errorClassification: { kind: "reason", reason: "auth_permanent" },
+            error:
+              'FailoverError: OAuth token refresh failed for openai: OpenAI Codex token refresh failed (401): {"error":{"message":"Your session has ended. Please log in again.","type":"invalid_request_error"}}',
+          },
+        },
+      ),
+  );
 
   it.each([
     ["arbitrary permanent error", undefined, "Check automation history for details."],
@@ -428,7 +444,7 @@ describe("CronService failure alerts", () => {
 
           await runJob(job, 1);
           expect(alertCallArg(sendCronFailureAlert).text).toBe(
-            `Automation "closed detail alert" failed 1 times\n${expected}`,
+            `Automation "closed detail alert" failed\n${expected}`,
           );
         },
         {

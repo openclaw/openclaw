@@ -46,7 +46,9 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const { createSessionStoreDir, createArchiveWorktreeFixture, initializeRemoteBackedGitWorkspace } =
   setupGatewaySessionsWorktreeTestHarness();
 type Worktree = { id: string; path: string; branch: string };
-const defaultAdminClient = { connect: { scopes: ["operator.admin"] } } as never;
+const defaultAdminClient = {
+  connect: { scopes: ["operator.admin"], client: { id: "test" } },
+} as never;
 const createWorktree = (params: Partial<SessionsCreateParams>, client = defaultAdminClient) =>
   directSessionReq<{ key: string; sessionId: string; worktree: Worktree }>(
     "sessions.create",
@@ -112,8 +114,8 @@ async function expectWorktreePresent(worktree: Worktree, present = true) {
   }
 }
 
-test.each(["restore-failed", "placement-changed"] as const)(
-  "inbound admission restores the archived worktree before opening its session (failure=%s)",
+test.each(["removed", "placement-changed"] as const)(
+  "inbound admission requires explicit worktree restore and current placement (failure=%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
@@ -163,14 +165,12 @@ test.each(["restore-failed", "placement-changed"] as const)(
         : {},
       resolveOperationExpectedSessionId: () => sessionId,
     });
-    const restore =
-      failure === "restore-failed"
-        ? vi
-            .spyOn(ManagedWorktreeService.prototype, "restore")
-            .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
-        : undefined;
-    const worktreeLifecycle = await import("../sessions/session-worktree-lifecycle.js");
-    const synchronize = worktreeLifecycle.restoreSessionWorktree;
+    if (failure === "placement-changed") {
+      await managedWorktrees.restore({ id: worktree.id });
+    }
+    using restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
+    const worktreeLifecycle = await import("../agents/worktrees/session-lifecycle.js");
+    const synchronize = worktreeLifecycle.resolveSessionWorktree;
     const sqliteScope = resolveSqliteScope({ storePath, sessionKey: key });
     const writerQueuePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(sqliteScope));
     const writer = createStartupGate();
@@ -178,7 +178,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     const placementChange = placements
       ? vi
-          .spyOn(worktreeLifecycle, "restoreSessionWorktree")
+          .spyOn(worktreeLifecycle, "resolveSessionWorktree")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
             heldWriter = runExclusiveSqliteSessionWrite(
@@ -194,7 +194,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
       admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
       void admission.catch(() => {});
       if (failure === "placement-changed") {
-        // Advance placement only after the restored session waits behind a real SQLite writer.
+        // Advance placement only after the explicitly restored session waits behind a writer.
         await Promise.race([writer.entered, admission]);
         expect(heldWriter).toBeDefined();
         await vi.waitFor(() => {
@@ -223,6 +223,7 @@ test.each(["restore-failed", "placement-changed"] as const)(
         await expect(admission).rejects.toThrow(/worktree/i);
         await expect(fs.access(worktree.path)).rejects.toThrow();
       }
+      expect(restore).not.toHaveBeenCalled();
       expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
@@ -232,7 +233,6 @@ test.each(["restore-failed", "placement-changed"] as const)(
       await heldWriter;
       await admission?.catch(() => {});
       placementChange?.mockRestore();
-      restore?.mockRestore();
       coordinator.completeDispatchReplyOperation();
       await coordinator.releasePreDispatchLifecycleAdmission();
       expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(false);
@@ -283,7 +283,7 @@ test("archived deletion replies before snapshotting while fencing same-key succe
   // Creation revalidates admitted profile authority before allocating the worktree.
   const creatorProfileId = ensureProfileForEmail("delete-worktree-successor@example.test").id;
   const adminClient = {
-    connect: { scopes: ["operator.admin"] },
+    connect: { scopes: ["operator.admin"], client: { id: "test" } },
     authenticatedUserProfile: gatewayProfile(creatorProfileId, "Delete Worktree Test"),
   } as never;
   attachGatewayLocalUserIngress(
@@ -403,6 +403,7 @@ test.each([
   ["sessions.delete", "snapshot-failed", false],
   ["sessions.delete", "snapshot-failed", true],
   ["sessions.delete", "finalized", false],
+  ["sessions.delete", "preserved", false],
   ["sessions.delete", "busy", false],
   ["sessions.delete", "owner-mismatch", false],
   ["sessions.reset", "removed", false],
@@ -441,12 +442,27 @@ test.each([
       removeSpy.mockClear();
     } else if (outcome === "busy") {
       runLease = await acquireWorktreeRunLease(worktree.id);
-    } else if (outcome === "snapshot-failed" || outcome === "finalized") {
+    } else if (
+      outcome === "snapshot-failed" ||
+      outcome === "finalized" ||
+      outcome === "preserved"
+    ) {
       removeSpy.mockImplementation(async function (this: ManagedWorktreeService, params) {
         if (params.id === worktree.id && params.reason === "session-delete") {
           if (outcome === "finalized") {
             await originalRemove(this, params);
             throw new WorktreeRemovalContentionError("finalized", "removed concurrently");
+          }
+          if (outcome === "preserved") {
+            return {
+              removed: false,
+              preserved: {
+                state: "preserved",
+                reason: "nested repository",
+                attempts: 1,
+                nextAttemptAt: null,
+              },
+            };
           }
           throw new WorktreeSnapshotError("simulated snapshot failure");
         }
@@ -486,7 +502,12 @@ test.each([
         ok: true,
         payload: {
           deleted: true,
-          worktreePreserved: { id, path: worktreePath, branch, reason: outcome },
+          worktreePreserved: {
+            id,
+            path: worktreePath,
+            branch,
+            reason: outcome === "preserved" ? "cleanup-failed" : outcome,
+          },
         },
       });
     } else {

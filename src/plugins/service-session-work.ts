@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import type { OperatorRunRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "../gateway/operator-run-recovery.js";
@@ -18,7 +15,11 @@ import {
 } from "../gateway/session-access-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../gateway/session-mutation-authorization-error.js";
 import { requireSessionRowProjection } from "../gateway/session-row-projection-access.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { createCorePluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -98,7 +99,6 @@ export function createPluginServiceSessionWork(params: {
       throw new Error("Session work requires its registered tool owner");
     }
     const caller = getGatewayToolCallerIdentity();
-    const assertCaller = captureGatewayToolCallerAssertion();
     if (caller && (caller.agentId !== input.agentId || caller.sessionKey !== input.sessionKey)) {
       throw new Error("Session work must target the invoking agent's own conversation");
     }
@@ -122,7 +122,6 @@ export function createPluginServiceSessionWork(params: {
         if (context() !== owner) {
           throw new Error("Session work Gateway changed");
         }
-        assertCaller?.();
         captured.assertInvocationCurrent?.();
         captured.authority?.assertCurrent();
         assertSession?.();
@@ -272,8 +271,8 @@ export function createPluginServiceSessionWork(params: {
       try {
         restored = await restoreGatewayOperatorSource({
           snapshot: accepted.snapshot,
-          target: accepted.target,
           context: owner,
+          agentId: accepted.target.agentId,
           assertCurrent: assertOwner,
           prepareCurrent: async () => {
             const current = await durable.lookup(id);
@@ -375,13 +374,15 @@ export function createPluginServiceSessionWork(params: {
           throw error;
         }
         if (
+          isOperatorAuthorityUnavailable(error) ||
+          (error instanceof GatewayDispatchUnavailableError && error.retryable) ||
           error instanceof SessionAccessPreparationPendingError ||
           active.signal.reason instanceof SessionAccessPreparationPendingError
         ) {
           assertOwner();
           return {
             status: "unavailable",
-            reason: "Session access is refreshing",
+            reason: "Operator or session access is refreshing",
             retryAfterMs: 5000,
           };
         }

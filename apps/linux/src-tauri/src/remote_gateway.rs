@@ -1113,7 +1113,7 @@ pub(crate) fn dashboard_url(gateway_url: &Url) -> Result<Url, String> {
         "http"
     };
     url.set_scheme(scheme)
-        .map_err(|_| "Could not construct Gateway dashboard URL.".to_string())?;
+        .map_err(|_| "Could not construct the Gateway URL.".to_string())?;
     Ok(url)
 }
 

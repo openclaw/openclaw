@@ -44,7 +44,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
     { deadlineAtMs: scope.owner.databaseAdmissionDeadlineAtMs },
     () =>
       currentAdmission.run(scope, () =>
-        withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+        withSqliteDatabaseAdmissionExchange((admissions, location, create, observedLocation) => {
           if (!scope.active) {
             const upstream = getSqliteDatabaseAdmissionUpstream();
             if (create || !upstream || upstream.closed) {
@@ -54,9 +54,21 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
               );
             }
             // Retained cleanup may publish facts; creation still needs the live grant.
-            return exchangeDatabaseAdmissions(upstream.port, admissions, location);
+            return exchangeDatabaseAdmissions(
+              upstream.port,
+              admissions,
+              location,
+              undefined,
+              observedLocation,
+            );
           }
-          return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
+          return exchangeSqliteDatabaseAdmissions(
+            scope.port,
+            admissions,
+            location,
+            create,
+            observedLocation,
+          );
         }, operation),
       ),
   );

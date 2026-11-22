@@ -10,6 +10,7 @@ import {
   applyTestPluginDefaults,
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolvePreparedPluginRegistrationConfigKey,
   resolveEligibleContextEngineDeclaredOwners,
   resolveEligibleContextEngineOwnerIds,
   withContextEngineOwner,
@@ -20,7 +21,6 @@ import {
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { resolvePluginDiscoveryContext } from "./plugin-control-plane-context.js";
@@ -228,9 +228,9 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     loadPaths: trustNormalized.loadPaths,
     env,
   });
-  const registrationConfigKey = resolvePluginRegistrationConfigKey({
-    runtimeEntries: normalized.entries,
-    sourceEntries: activationSource.plugins.entries,
+  const registrationConfigKey = resolvePreparedPluginRegistrationConfigKey({
+    runtimeConfig: runtimeConfig.plugins,
+    sourceConfig: activationConfig.plugins,
   });
   const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
   // Staged runtime registration is independent of publishing the process registry.

@@ -1224,7 +1224,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const turnStarted = createDeferred<void>();
-    const client = createPendingClient();
+    const client = createPendingClient({ policyRelay: true });
     let relayIdDuringFork: string | undefined;
     approveRequest.mockResolvedValueOnce({ decision: "decline" });
     scriptRequests(client, {

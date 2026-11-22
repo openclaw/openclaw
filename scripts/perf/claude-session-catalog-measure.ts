@@ -10,13 +10,13 @@
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { SessionCatalogEntrySnapshot } from "../../src/plugins/session-catalog.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -109,12 +109,7 @@ function run(count: number) {
 run(100);
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32768);
 }
 const cpu = process.threadCpuUsage();
 const start = performance.now();
@@ -124,9 +119,7 @@ const used = process.threadCpuUsage(cpu);
 let allocatedBytes: number | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-  allocatedBytes = sum(profile.head);
+  allocatedBytes = sumSampledHeapBytes(profile.head);
   inspector.disconnect();
 }
 assert.equal(result!.size, 200);

@@ -15,15 +15,41 @@ import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts"
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createPluginSettingsDetailProps, createResult } from "./plugins-page.test-support.ts";
 import { PluginSettingsEditor } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
 afterEach(cleanupSolid);
 
+function editorModel(
+  overrides: Partial<PluginSettingsEditorModel> = {},
+): PluginSettingsEditorModel {
+  return {
+    pluginId: "fixture",
+    result: null,
+    connected: true,
+    configValue: {},
+    configSchema: {},
+    configHints: {},
+    configUnsupportedPaths: [],
+    canEditConfig: true,
+    configBusy: false,
+    configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
+    configError: null,
+    onConfigPatch: vi.fn(),
+    onConfigRemove: vi.fn(),
+    onConfigReadRetry: vi.fn(),
+    onConfigWriteRetry: vi.fn(),
+    backHref: "/settings/plugins/fixture",
+    onBack: vi.fn(),
+    ...overrides,
+  };
+}
+
 function ReadStatus(props: { model: Partial<PluginSettingsEditorModel> }) {
-  const defaults = createPluginSettingsDetailProps(createResult(), { configSchema: {} });
+  const defaults = editorModel();
   return (
     <PluginSettingsReadStatus
       model={{ ...defaults, ...props.model }}
@@ -78,10 +104,7 @@ it("dispatches retained retry controls to the current settings operation", () =>
   const currentRead = vi.fn();
   const currentWrite = vi.fn();
   const [model, setModel] = createSignal<PluginSettingsEditorModel>(
-    createPluginSettingsDetailProps(createResult(), {
-      pluginId: "fixture",
-      result: null,
-      backHref: "/settings/plugins/fixture",
+    editorModel({
       configValue: null,
       configError: "Request failed",
       onConfigReadRetry: initialRead,

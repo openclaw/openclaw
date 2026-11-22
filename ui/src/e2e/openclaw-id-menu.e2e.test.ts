@@ -23,7 +23,11 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
+const suite = createControlUiE2eSuite({
+  name: "OpenClaw ID account menu",
+  // Native clipboard contents are shared across contexts in one Chromium process.
+  browserLaunchOptions: { headless: true },
+});
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {
@@ -252,7 +256,7 @@ suite.define(() => {
                   ),
                 );
               }
-              await page.goto(`${suite.server.baseUrl}/new`);
+              await page.goto(new URL("new", suite.server.baseUrl).href);
               await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
               if (width === 390) {
                 await navigationDrawerToggle(page).click();

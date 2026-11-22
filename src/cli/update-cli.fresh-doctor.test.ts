@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
-import { VERSION } from "../version.js";
 import {
   commandCalls,
   expectNoSideEffects,
@@ -10,13 +9,11 @@ import {
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
-  spawnCall,
   getLogOutput,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
-import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import { packageTargetStatus } from "./update-cli/update-cli-package.test-support.js";
 import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
@@ -27,9 +24,6 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });
@@ -40,82 +34,7 @@ describe("update-cli", () => {
       switchToPackage: true,
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expectNoSideEffects(update.updateGitCheckout, update.replaceConfigFile, mocks.spawn);
-  });
-
-  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
-    const downgradedRoot = f.createCaseDir("openclaw-downgraded-compat-root");
-    vi.mocked(update.resolveUpdateInstallKind).mockImplementation(async (root) =>
-      root === downgradedRoot ? "package" : "git",
-    );
-    f.setupUpdatedRootRefresh({
-      targetVersion: "2026.4.10",
-      gatewayUpdateImpl: async () =>
-        update.makeOkUpdateResult({
-          mode: "npm",
-          root: downgradedRoot,
-          before: { version: "2026.4.14" },
-          after: { version: "2026.4.10" },
-        }),
-    });
-    mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
-      pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
-    );
-    f.primeNpmChannelTag("latest", "2026.4.10");
-
-    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    f.mockCurrentProcessFreshDoctor({ postCoreResumeAttempt: false });
-    let hostVersionDuringPluginUpdate: string | undefined = "unset";
-    mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
-      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      return { changed: false, config: f.baseConfig, outcomes: [] };
-    });
-
-    try {
-      await update.updateCommand({ yes: true, tag: "2026.4.10", restart: false });
-
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
-      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    } finally {
-      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    }
-  });
-
-  it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
-      doctorConfigWrites: true,
-      doctorRetirementOnly: true,
-    });
-    mocks.readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(update.updateGitCheckout).mockResolvedValue(
-      runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
-    );
-    vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-      f.FRESH_POST_UPDATE_ENTRYPOINT,
-    );
-    f.mockNpmPluginOutcomes([], true);
-    let strictValidationEnv: string | undefined;
-    vi.mocked(update.readConfigFileSnapshot).mockImplementation(async (options) => {
-      if (!options?.skipPluginValidation) {
-        strictValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      }
-      return f.baseSnapshot;
-    });
-
-    await update.updateCommand({ yes: true, restart: false });
-
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
-    expect(doctorCalls).toHaveLength(1);
-    update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
-    expect(update.runExec).toHaveBeenCalledWith(
-      expect.any(String),
-      [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
-      expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
-    );
-    expect(strictValidationEnv).toBe("0");
-    expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expectNoSideEffects(update.updateGitRelease, update.replaceConfigFile, mocks.spawn);
   });
 
   it("records diagnostics as a warning when the fresh plugin doctor cannot run", async () => {
@@ -140,21 +59,6 @@ describe("update-cli", () => {
     const message = result.pluginUpdate.warnings?.at(-1)?.message;
     expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
     expect(message).not.toContain("long-argv-prefix");
-  });
-});
-
-describe("update-cli", () => {
-  const f = createUpdateCliFixture({ databaseEngines: ["sqlite", "postgres"] });
-
-  registerForegroundFailureRecoveryTests({
-    setupUpdatedRootRefresh: f.setupUpdatedRootRefresh,
-    spawn: mocks.spawn,
-    updateCommand: update.updateCommand,
-    defaultRuntime: update.defaultRuntime,
-    ExitError: update.ExitError,
-    spawnCall,
-    lastWriteJsonCall,
-    updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
   });
 });
 

@@ -700,7 +700,14 @@ const sealedRecoveryNativeLoaderModules = [
 ];
 // These module owners implement fixed names required by the worker loaders.
 // Other modules remain collisions, including while these consumers land separately.
-const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
+const workerProtocolModules = new Map<string, ReadonlySet<string>>([
+  [
+    "createNativeWorkerResource",
+    new Set([
+      "src/infra/sqlite-readonly-native-resource.ts",
+      "src/plugins/plugin-capture-native-resource.ts",
+    ]),
+  ],
   [
     "createSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
@@ -727,6 +734,15 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
+    ]),
+  ],
+  [
+    "startHostedWorker",
+    new Set([
+      "src/agents/plugin-model-catalog-read.worker.ts",
+      "src/config/sessions/session-transcript.worker.ts",
+      "src/infra/sqlite-store.worker.ts",
+      "src/state/openclaw-state-read.worker.ts",
     ]),
   ],
 ]);
@@ -765,7 +781,7 @@ function analyzeExportNames(modules: SourceModule[]) {
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
-    const protocolModules = sqliteWorkerProtocolModules.get(name);
+    const protocolModules = workerProtocolModules.get(name);
     if (
       fileSet.size < 2 ||
       intentionalSameNameFamilies.has(name) ||

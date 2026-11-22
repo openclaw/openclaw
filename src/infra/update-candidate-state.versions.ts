@@ -134,3 +134,42 @@ export function updateStateSchemaVersionsMatch(
     })
   );
 }
+
+/** Inventory databases owned by or registered to an agent. */
+export function addAgentInventoryPaths(
+  agentPaths: Set<string>,
+  files: ReadonlyMap<string, StateDatabaseDiscovery>,
+): void {
+  for (const database of files.values()) {
+    if (database.owners?.some(({ role }) => role === "agent") || database.registeredPaths?.length) {
+      database.spellings.forEach((pathname) => agentPaths.add(pathname));
+    }
+  }
+}
+
+/** Shared and agent stores the candidate Doctor must migrate before activation completes. */
+export function listIncompleteUpdateMigrations(
+  versions: readonly UpdateStateSchemaVersion[],
+  params: {
+    sharedPath: string;
+    agentPaths: ReadonlySet<string>;
+    candidateSchemaVersions: OpenClawSchemaVersions;
+  },
+): Array<{ path: string; expected: number; found: number | null }> {
+  const { sharedPath, agentPaths, candidateSchemaVersions } = params;
+  const shared = versions.find((entry) => entry.path === sharedPath);
+  const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : null;
+  return [
+    ...(sharedVersion !== candidateSchemaVersions.state
+      ? [{ path: sharedPath, expected: candidateSchemaVersions.state, found: sharedVersion }]
+      : []),
+    ...versions.flatMap((entry) =>
+      agentPaths.has(entry.path) &&
+      !shared?.retainedAgentPaths?.includes(entry.path) &&
+      entry.userVersion !== null &&
+      entry.userVersion !== candidateSchemaVersions.agent
+        ? [{ path: entry.path, expected: candidateSchemaVersions.agent, found: entry.userVersion }]
+        : [],
+    ),
+  ];
+}

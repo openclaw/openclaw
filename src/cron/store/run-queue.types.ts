@@ -8,8 +8,6 @@ export type CronRunRequestContext = {
   mode: "scheduled" | "force" | "if-enabled" | "on-exit";
   onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
   event?: CronEventAdmission;
-  /** Set when a manual or stream run still evaluates the job's condition before its payload. */
-  evaluateTrigger?: boolean;
 };
 
 export type CronQueuedRun = {
@@ -52,6 +50,8 @@ export type CronRunQueueOperations = {
       nowMs: number;
       defaultAgentId?: string;
       maxConcurrentRuns: number;
+      /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
+      memoryAllowsExtraRun?: boolean;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];

@@ -58,6 +58,8 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  /** A provider setup suggests first: one of its text-inference choices is onboarding-featured. */
+  featured?: true;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];
 };
 

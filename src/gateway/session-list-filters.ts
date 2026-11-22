@@ -408,12 +408,14 @@ export function filterSessionEntries(
           const modelKey = JSON.stringify([
             "prepared",
             agentId,
-            source.selectedModel.provider,
-            source.selectedModel.model,
+            source.selectedModel?.provider,
+            source.selectedModel?.model,
             source.rowModelIdentity.provider,
             source.rowModelIdentity.model,
           ]);
-          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
+          if (
+            matchesModelRefs(modelKey, () => [source.selectedModel ?? {}, source.rowModelIdentity])
+          ) {
             return true;
           }
         }
@@ -458,9 +460,6 @@ export function filterSessionEntries(
       continue;
     }
     const target = expectDefined(params.getTarget(key), "selection row owner");
-    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
-      continue;
-    }
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
@@ -478,6 +477,9 @@ export function filterSessionEntries(
       continue;
     }
     if (selection.isPhantom) {
+      continue;
+    }
+    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
       continue;
     }
     if (spawnedBy) {

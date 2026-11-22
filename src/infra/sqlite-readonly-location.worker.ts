@@ -72,31 +72,39 @@ async function inspect(
   const mode = args[0];
   const pathname = args[1];
   const stagingRoot = args[2] || undefined;
-  if (
-    (mode !== "sync" &&
-      mode !== "private-fork" &&
-      mode !== "update-generation" &&
-      mode !== "async" &&
-      mode !== "staged-sync" &&
-      mode !== "staged-async" &&
-      mode !== "metadata" &&
-      mode !== "backup-engine" &&
-      mode !== "backup-engine-preserving" &&
-      mode !== "state-sqlite-populated" &&
-      mode !== "consolidated" &&
-      mode !== "task-delivery-recovery" &&
-      !isSqliteSnapshotStagingMode(mode)) ||
-    !pathname
-  ) {
-    return {
-      ok: false,
-      message: "SQLite read-only worker requires a mode and a database path",
-    };
-  }
   try {
+    if (mode === "staging-sweep") {
+      if (args.length !== 1) {
+        throw new Error("SQLite staging sweep does not accept a database path");
+      }
+      const { reclaimSqliteSnapshotInstallationInProcess } =
+        await import("./sqlite-snapshot-reclamation.js");
+      return { ok: true, reclamation: await reclaimSqliteSnapshotInstallationInProcess() };
+    }
+    if (
+      (mode !== "sync" &&
+        mode !== "private-fork" &&
+        mode !== "update-generation" &&
+        mode !== "async" &&
+        mode !== "staged-sync" &&
+        mode !== "staged-async" &&
+        mode !== "metadata" &&
+        mode !== "backup-engine" &&
+        mode !== "backup-engine-preserving" &&
+        mode !== "state-sqlite-populated" &&
+        mode !== "consolidated" &&
+        mode !== "task-delivery-recovery" &&
+        !isSqliteSnapshotStagingMode(mode)) ||
+      !pathname
+    ) {
+      return {
+        ok: false,
+        message: "SQLite read-only worker requires a mode and a database path",
+      };
+    }
     if (mode === "state-sqlite-populated") {
       const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
-        import("./database-engine/physical-store.js"),
+        import("./database-engine/physical-store-inspection.js"),
         import("../state/openclaw-state-db-engine.js"),
       ]);
       return {
@@ -108,15 +116,12 @@ async function inspect(
       };
     }
     if (mode === "backup-engine" || mode === "backup-engine-preserving") {
-      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      const { readBackupEngineInProcess } =
+        await import("./database-engine/physical-store-inspection.js");
       return {
         ok: true,
         engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
       };
-    }
-    if (mode === "staging-sweep") {
-      const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
-      return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
     }
     if (mode === "task-delivery-recovery") {
       const recoveryDirectory = args[2];
@@ -410,7 +415,8 @@ function runSession(): void {
         if (
           !isRecord(read) ||
           typeof read.expectedIdentity !== "string" ||
-          !read.expectedIdentity.startsWith("file:")
+          !read.expectedIdentity.startsWith("file:") ||
+          (read.expectedBirthtime !== undefined && typeof read.expectedBirthtime !== "string")
         ) {
           throw new Error(
             operation
@@ -418,7 +424,7 @@ function runSession(): void {
               : "Auth profile read requires captured physical ownership",
           );
         }
-        const { expectedIdentity } = read;
+        const { expectedIdentity, expectedBirthtime } = read;
         if (operation) {
           if (typeof read.command !== "string") {
             throw new Error("Invalid SQLite read-only operation encoding");
@@ -435,7 +441,7 @@ function runSession(): void {
           if (!sqliteReadOnlyOperations.has(request)) {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
           const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
@@ -443,13 +449,13 @@ function runSession(): void {
               if (stopping) {
                 throw new Error("SQLite read-only worker is stopping");
               }
-              assertExistingDatabaseIdentity(pathname, expectedIdentity);
+              assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
             },
           });
           if (stopping) {
             return;
           }
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
           const handle = transfers.start(
             [{ kind: "result", value: { operation: request.type, value } }].values(),
             { kinds: ["result"] },
@@ -475,6 +481,7 @@ function runSession(): void {
         if (stopping) {
           return;
         }
+        assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
         const rows = readAuthProfileRowsReadOnly(
           pathname,
           openReadOnlyDatabase,
@@ -485,7 +492,7 @@ function runSession(): void {
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }
-        assertExistingDatabaseIdentity(pathname, expectedIdentity);
+        assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
         function* rowFields() {
           for (const batch of jsonFieldBatches(rows)) {
             yield { kind: "fields", value: batch };

@@ -1,6 +1,10 @@
 import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import {
+  freezeJsonSnapshot,
+  freezeTrustedJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../shared/immutable-data.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { isOwnedTranscriptPayload, retainOwnedTranscriptPayload } from "./transcript-json.js";
 
@@ -36,6 +40,7 @@ export function freezeTranscriptSnapshot<T extends SessionTranscriptReadSnapshot
       retainOwnedTranscriptPayload(event.message);
     }
   }
+  retainOwnedTranscriptPayload(snapshot.events);
   retainOwnedTranscriptPayload(snapshot);
   return Object.freeze(snapshot);
 }
@@ -49,9 +54,16 @@ class NativeCloneRequired extends Error {
 /** Detach mutable containers while sharing sealed transcript payloads. */
 export function cloneTranscriptView<T>(
   snapshot: T,
-  { shareImmutablePayloads = true }: { shareImmutablePayloads?: boolean } = {},
+  {
+    shareImmutablePayloads = true,
+    freeze = false,
+  }: {
+    shareImmutablePayloads?: boolean;
+    freeze?: boolean;
+  } = {},
 ): T {
   const copies = new Map<object, object>();
+  let plain = true;
   const copy = (value: unknown): unknown => {
     if (typeof value === "function" || typeof value === "symbol") {
       throw new NativeCloneRequired();
@@ -74,12 +86,14 @@ export function cloneTranscriptView<T>(
     }
     const prototype = Object.getPrototypeOf(value);
     if (value instanceof Map && prototype === Map.prototype) {
+      plain = false;
       const result = new Map<unknown, unknown>();
       copies.set(value, result);
       value.forEach((member, key) => result.set(copy(key), copy(member)));
       return result;
     }
     if (value instanceof Set && prototype === Set.prototype) {
+      plain = false;
       const result = new Set<unknown>();
       copies.set(value, result);
       value.forEach((member) => result.add(copy(member)));
@@ -105,6 +119,7 @@ export function cloneTranscriptView<T>(
       Object.defineProperty(result, key, descriptor);
     }
     for (const key of Object.getOwnPropertySymbols(value)) {
+      plain = false;
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
       if ("value" in descriptor) {
         descriptor.value = copy(descriptor.value);
@@ -115,13 +130,20 @@ export function cloneTranscriptView<T>(
   };
   try {
     // SAFETY: Copying containers preserves the snapshot's shape and shared references.
-    return copy(snapshot) as T;
+    const cloned = copy(snapshot) as T;
+    // The copier owns plain containers; opaque/symbol members still need inspection.
+    return freeze
+      ? plain
+        ? freezeTrustedJsonSnapshot(cloned)
+        : freezeJsonSnapshot(cloned)
+      : cloned;
   } catch (error) {
     if (!(error instanceof NativeCloneRequired)) {
       throw error;
     }
     // fromEntries accepts opaque structured-cloneable SDK data. Clone the whole
     // graph so references crossing an opaque value retain their original identity.
-    return structuredClone(snapshot);
+    const cloned = structuredClone(snapshot);
+    return freeze ? freezeJsonSnapshot(cloned) : cloned;
   }
 }

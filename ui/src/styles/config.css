@@ -54,6 +54,11 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
+
+  /* In this row, scroll the tabs rather than pushing the settings page sideways. */
+  > .config-sections-hub-tabs {
+    flex-shrink: 1;
+  }
 }
 
 .config-raw-actions {
@@ -1038,9 +1043,4 @@
 
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
   color: var(--text-strong);
-}
-
-/* Inherited values stay editable while remaining distinct from authored overrides. */
-.cfg-default-control {
-  opacity: 0.55;
 }

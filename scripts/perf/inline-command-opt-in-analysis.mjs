@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { isAbsolute } from "node:path";
 
 const controlSource = "454004eab143e6bb25ee95f905fa650173e0c4a4";
-const finite = (value) => Number.isFinite(value) && value >= 0;
 const commit = (value) => /^[a-f0-9]{40}$/u.test(value ?? "");
 
 // Both live measurement owners accept the same explicit comparison identities.
@@ -46,83 +45,4 @@ export function comparisonPlanCells(plan, candidate) {
     }
     return { ...cell, control: role === "control", integration: role === "upstream" };
   });
-}
-
-export function distribution(input, signed = false) {
-  assert(
-    input.every((value) => Number.isFinite(value) && (signed || value >= 0)),
-    "Missing, negative or non-finite measurements cannot become zero",
-  );
-  const values = input.toSorted((a, b) => a - b);
-  if (!values.length) {
-    return { count: 0, min: null, median: null, p95: null, max: null, spread: null };
-  }
-  const middle = values.length / 2;
-  return {
-    count: values.length,
-    min: values[0],
-    median: Number.isInteger(middle)
-      ? (values[middle - 1] + values[middle]) / 2
-      : values[Math.floor(middle)],
-    p95: values[Math.ceil(values.length * 0.95) - 1],
-    max: values.at(-1),
-    spread: values.at(-1) - values[0],
-  };
-}
-
-export function inspectOptInFrames(startup) {
-  const callbacks = startup.frameCallbacks;
-  assert(callbacks.length >= 2, "Continuous startup/warm callback observations required");
-  assert([startup.sendAt, startup.warmStartAt, startup.endAt].every(finite));
-  assert(
-    callbacks.some((callback) => callback.warm) && callbacks.some((callback) => !callback.warm),
-  );
-  assert(
-    callbacks.every(
-      (callback) =>
-        [callback.timestamp, callback.callbackAt, callback.callbackEndAt].every(finite) &&
-        callback.callbackAt >= startup.sendAt &&
-        callback.callbackEndAt >= callback.callbackAt &&
-        callback.callbackEndAt <= startup.endAt,
-    ),
-  );
-  const intervals = callbacks.slice(1).map((callback, index) => {
-    const previous = callbacks[index];
-    assert([callback.timestamp, callback.callbackAt, callback.callbackEndAt].every(finite));
-    assert(callback.callbackAt >= previous.callbackAt && callback.timestamp >= previous.timestamp);
-    assert(callback.callbackEndAt >= callback.callbackAt);
-    return {
-      at: previous.callbackAt,
-      actualMs: callback.callbackAt - previous.callbackAt,
-      animationTimestampMs: callback.timestamp - previous.timestamp,
-      callbackLagMs: callback.callbackAt - callback.timestamp,
-      previousCallbackLagMs: previous.callbackAt - previous.timestamp,
-      period: previous.warm && callback.warm ? "warm" : "startup-or-boundary",
-    };
-  });
-  intervals.unshift({
-    at: startup.sendAt,
-    actualMs: callbacks[0].callbackAt - startup.sendAt,
-    animationTimestampMs: null,
-    period: "startup-first-callback",
-  });
-  intervals.push({
-    at: callbacks.at(-1).callbackAt,
-    actualMs: startup.endAt - callbacks.at(-1).callbackAt,
-    animationTimestampMs: null,
-    period: "warm-end-boundary",
-  });
-  assert(startup.tasks.every((task) => finite(task.at) && finite(task.duration)));
-  const actualTails = intervals.filter((interval) => interval.actualMs >= 50);
-  const animationTimestampTails = intervals.filter(
-    (interval) => interval.animationTimestampMs >= 50,
-  );
-  const longTasks = startup.tasks
-    .filter((task) => task.duration >= 50)
-    .map((task) => ({
-      at: task.at,
-      duration: task.duration,
-      period: task.at < startup.warmStartAt ? "startup-or-boundary" : "warm",
-    }));
-  return { intervals, actualTails, animationTimestampTails, longTasks };
 }

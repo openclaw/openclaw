@@ -31,6 +31,9 @@ const catalog = {
       contextShowAll: "Show all {count}",
     },
     sessionAutomation: {
+      created: "Created",
+      removed: "Removed",
+      unavailable: "Automation unavailable",
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
       atTime: "at {time}",
@@ -237,6 +240,11 @@ const catalog = {
       askImageUnsupported:
         "This side chat model can’t read images. Choose a model that supports images, then try again.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askTimeout: "Side chat timed out.",
+      askStop: "Stop side chat answer",
+      askStopped: "Answer stopped.",
+      askStopFailed: "Couldn’t stop the side chat answer. Try again.",
+      askStillWaiting: "Still waiting for an answer",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       health: {
@@ -404,9 +412,9 @@ const catalog = {
     workspaceFiles: {
       attachments: "Attachments",
       attachmentsLoading: "Loading attachments…",
-      attachmentsUnknown: "Transcript attachment coverage is not yet known.",
+      attachmentsUnknown: "Chat attachment coverage is not yet known.",
       attachmentsPartial:
-        "Showing attachments available in the loaded transcript. Earlier or omitted content may contain more.",
+        "Showing attachments available in the loaded chat. Earlier or omitted content may contain more.",
       mobile: {
         searchFolder: "Search in {folder}",
         empty: "No files match this filter.",

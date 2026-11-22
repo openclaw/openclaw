@@ -74,9 +74,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
     });
-    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain("read exact `<location>`");
     expect(prompt).toContain(
-      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+      "## Execution Bias\n- Act now on actionable requests using available tools; tool policy and approvals gate risk, so do not pre-refuse or ask unrequired permission. Explicit skill gates, user instructions, prior authorization, safety, and tool policy remain authoritative.",
     );
   });
 
@@ -113,7 +113,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
-    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain(
+      "Working directory: /tmp/task-repo (tools, deliverables, and relative reply file paths; write other files as absolute paths).",
+    );
     expect(prompt).toContain("Agent workspace: /tmp/openclaw");
   });
 
@@ -190,7 +192,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
-    expect(prompt).not.toContain("Keep TMPDIR, TMP, and TEMP at their inherited system paths");
+    expect(prompt).not.toContain(
+      "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+    );
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", async () => {
@@ -209,7 +213,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
     expect(prompt).toContain("## Promised Work");
-    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt).toContain("`running` is not completion.");
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
@@ -266,7 +270,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
     expect(prompt.includes("tools.fs.workspaceOnly ON"), name).toBe(restricted);
     expect(
-      prompt.includes("Keep TMPDIR, TMP, and TEMP at their inherited system paths"),
+      prompt.includes(
+        "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+      ),
       name,
     ).toBe(restricted);
     expect(prompt).toContain("Fixture stable provider guidance.");

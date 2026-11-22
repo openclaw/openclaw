@@ -6,6 +6,7 @@ import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
+import { isConversationAccessAccepted } from "./capability-summary.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   isThirdPartyNpmInstallRecord,
@@ -122,6 +123,13 @@ export function resolvePluginTrust(params: {
   } else {
     reason = "provenance-invalid";
   }
+  // Approval binds to the recorded install, so it grants only when that install is what loaded.
+  const conversationAccessAccepted =
+    record !== undefined &&
+    reason !== "owner-ambiguous" &&
+    origin !== "workspace" &&
+    matchesInstalledPluginRecord({ ...params, installPathOnly: true }) &&
+    isConversationAccessAccepted(record);
   return {
     reason,
     registryPath: params.registryPath,
@@ -129,5 +137,6 @@ export function resolvePluginTrust(params: {
     installSource: record?.source,
     installSpec:
       record?.spec === undefined ? undefined : redactSensitiveText(record.spec, { mode: "tools" }),
+    ...(conversationAccessAccepted ? { conversationAccessAccepted: true } : {}),
   };
 }

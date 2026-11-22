@@ -34,9 +34,11 @@ import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-chat-system-notice.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
+import { registerChatWorktreeEnglish } from "../../ui/src/i18n/locales/en-chat-worktree.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -45,6 +47,7 @@ import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
+import { registerDevicePairSecureAccessEnglish } from "../../ui/src/i18n/locales/en-device-pair-secure-access.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
@@ -57,7 +60,7 @@ import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts"
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerLogsEnglish } from "../../ui/src/i18n/locales/en-logs.ts";
 import { registerMcpAppEnglish } from "../../ui/src/i18n/locales/en-mcp-app.ts";
-import { registerMcpEnglish } from "../../ui/src/i18n/locales/en-mcp.ts";
+import { registerMcpManagementEnglish } from "../../ui/src/i18n/locales/en-mcp-management.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
@@ -79,6 +82,7 @@ import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts"
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
+import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
@@ -146,11 +150,12 @@ const sourceFiles = [
   "en-board.ts",
   "en-browser.ts",
   "en-chat-camera.ts",
+  "en-chat-dictation.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
   "en-chat-composer.ts",
-  "en-chat-dictation.ts",
+  "en-chat-worktree.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
@@ -160,6 +165,7 @@ const sourceFiles = [
   "en-chat-public-qr.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
+  "en-chat-system-notice.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
   "en-chat-tool-widgets.ts",
@@ -173,6 +179,7 @@ const sourceFiles = [
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
+  "en-device-pair-secure-access.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
   "en-processes.ts",
@@ -182,6 +189,7 @@ const sourceFiles = [
   "en-github.ts",
   "en-github-connections.ts",
   "en-mcp.ts",
+  "en-mcp-management.ts",
   "en-mcp-app.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
@@ -189,6 +197,7 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-favorites.ts",
+  "en-model-provider-auth.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",
@@ -197,6 +206,7 @@ const sourceFiles = [
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
+  "en-session-deletion.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
@@ -226,24 +236,6 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
-  // Lazy dictation copy retains its original canonical translation positions.
-  const composer: TranslationMap = {};
-  const dictationCopy = registerChatDictationEnglish.catalog.chat.composer;
-  const dictationBefore = new Map<string, (keyof typeof dictationCopy)[]>([
-    ["dictationDisconnected", ["dictationAudioUnsupported", "dictationBrowserAudioUnsupported"]],
-    ["dictationInterruptedRecovery", ["dictationFailed"]],
-    [
-      "dictationListening",
-      ["dictationRetryRecording", "dictationDiscardRecording", "dictationRecordingKept"],
-    ],
-    ["dictationStopAndKeep", ["dictationStarting"]],
-  ]);
-  for (const [key, value] of Object.entries(registerChatComposerEnglish.catalog.chat.composer)) {
-    for (const moved of dictationBefore.get(key) ?? []) {
-      composer[moved] = dictationCopy[moved];
-    }
-    composer[key] = value;
-  }
   // Keep canonical translation order when summary copy moves out of the lazy CI catalog.
   const { automationNoChecks, ...pullRequests } = registerGitHubEnglish.catalog.chat.pullRequests;
   const { automationRetry, ...ciPullRequests } = registerChatCiEnglish.catalog.chat.pullRequests;
@@ -271,8 +263,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const menuCopy = registerSessionMenuEnglish.catalog.sessionsView;
   // Menu leaves retain their original positions in the canonical translation memory.
   const menuBefore = new Map<string, keyof typeof menuCopy>([
-    ["personalGroupReferenceAdded", "personalGroupAdd"],
-    ["personalGroupEdit", "personalGroupNew"],
     ["subagentPrefix", "communication"],
     ["actionRequiresScope", "actionUnavailable"],
     ["withParticipant", "ownerYou"],
@@ -311,6 +301,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   for (const [key, value] of Object.entries(
     registerSessionOrganizationEnglish.catalog.sessionsView,
   )) {
+    // Deferred deletion leaves keep their original canonical order.
+    if (key === "archiveSessionTitle") {
+      Object.assign(sessionsView, registerSessionDeletionEnglish.catalog.sessionsView);
+    }
     const lastMenuKey = menuBefore.get(key);
     if (lastMenuKey) {
       while (menuIndex < menuEntries.length) {
@@ -604,6 +598,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionDetails,
         sessionSharing,
         subagentsPanel,
+        pendingInputs: {
+          ...registerChatSessionEnglish.catalog.chat.pendingInputs,
+          ...registerChatSystemNoticeEnglish.catalog.chat.pendingInputs,
+        },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
           continueInTerminal,
@@ -661,13 +659,15 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
+    registerChatDictationEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
     {
       chat: {
         ...registerChatComposerEnglish.catalog.chat,
         composer: {
-          ...composer,
+          ...registerChatComposerEnglish.catalog.chat.composer,
+          ...registerChatWorktreeEnglish.catalog.chat.composer,
           menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,
         },
         permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
@@ -680,6 +680,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerConnectionRecoveryEnglish.catalog,
     registerCronEnglish.catalog,
     registerDevicesEnglish.catalog,
+    registerDevicePairSecureAccessEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
     registerProcessesEnglish.catalog,
@@ -687,7 +688,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,
-    registerMcpEnglish.catalog,
+    registerMcpManagementEnglish.catalog,
     registerMcpAppEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,

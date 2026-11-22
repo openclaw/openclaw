@@ -19,7 +19,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
-import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -53,7 +52,6 @@ it.each([
   ...variants("route", ["board.widget.put", "progressCard.put"]),
   ...variants("lifecycle", ["progressCard.put"]),
   ...variants("narrow-allow", ["board.update", "board.widget.put"]),
-  ...variants("narrow-revoked", ["board.update", "board.widget.put"]),
   ...variants("narrow-replaced", ["board.update", "board.widget.put"]),
 ])("queues registered $method behind a native reservation ($change)", ({ method, change }) =>
   withOpenClawTestState(stateOptions, async () => {
@@ -230,8 +228,6 @@ it.each([
           { ...target, storePath: database.path },
           { ...entry, lifecycleRevision: "after", updatedAt: 2 },
         );
-      } else if (change === "narrow-revoked") {
-        await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
       } else if (change === "narrow-replaced") {
         replaceSessionEntrySync(
           { ...target, storePath: database.path },
@@ -254,10 +250,6 @@ it.each([
         expect(requestFailure.error).toBe(change === "guard" ? retiredError : abortError);
       } else if (change === "lifecycle") {
         expect(requestFailure.error).toBeInstanceOf(SessionMutationFactsUnavailableError);
-      } else if (change === "narrow-revoked") {
-        expect(requestFailure.error).toMatchObject({
-          message: "Gateway requester authority changed",
-        });
       } else {
         throw requestFailure.error;
       }

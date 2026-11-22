@@ -10,7 +10,6 @@ import {
 import {
   expectCount,
   expectText,
-  scrollRemainder,
   setVisibility,
   showText,
 } from "./activity-assertions.test-support.ts";
@@ -246,47 +245,7 @@ suite.define(() => {
           hasMore: true,
           totalCount: 101,
         });
-        const after = await gateway.deferNext("sessions.messages.subscribe", { key });
-        await page.getByRole("tab", { name: "Live activity", exact: true }).click();
-        await gateway.waitForRequest("sessions.messages.subscribe", { after, match: { key } });
-        // Scoped events can be delivered only after the Gateway accepts the subscription.
-        await gateway.resolveDeferred("sessions.messages.subscribe", undefined, { match: { key } });
-        const emitTool = (data: object) =>
-          gateway.emitGatewayEvent("agent", {
-            runId: "run-activity",
-            stream: "tool",
-            sessionKey: key,
-            data,
-          });
-        await emitTool({
-          phase: "result",
-          name: "exec",
-          toolCallId: "tool-activity",
-          result: { content: [{ type: "text", text: "Received while viewing Live activity." }] },
-        });
-        const entry = page.locator(".activity-entry");
-        await expectCount(entry).toBe(1);
-        await entry.locator("summary").click();
-        await showText(entry, "Received while viewing Live activity.");
-        await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
-        for (let index = 0; index < 20; index += 1) {
-          await emitTool({ phase: "start", name: "exec", toolCallId: `tool-${index}` });
-        }
-        const stream = page.locator(".activity-stream");
-        await expect
-          .poll(() =>
-            stream.evaluate((element) => element.scrollHeight > element.clientHeight + 120),
-          )
-          .toBe(true);
-        const autoFollow = page.locator(".activity-live-autofollow").getByRole("switch");
-        await autoFollow.click();
-        await stream.evaluate((element) => {
-          element.scrollTop = 0;
-          element.dispatchEvent(new Event("scroll"));
-        });
-        await autoFollow.click();
-        await page.clock.runFor(100);
-        await expect.poll(() => scrollRemainder(stream)).toBeLessThanOrEqual(1);
+        await page.getByRole("tab", { name: "Current work", exact: true }).click();
         const current = page.getByRole("region", { name: "Active sessions", exact: true });
         await showText(current.locator(`[data-session-key="${key}"]`), "Latest activity");
         await showText(current, "Showing 1 of 101 active sessions.");

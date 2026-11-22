@@ -48,7 +48,7 @@ describe("failover user copy", () => {
       "This model doesn't support chat; pick another model.",
     );
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
-      "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+      "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
     );
     expect(codeCopy("plugin_selected_profile_unavailable")).toBeUndefined();
     expect(codeCopy({ code: "selected_auth_profile_unavailable" })).toBeUndefined();
@@ -75,7 +75,7 @@ describe("failover user copy", () => {
       "openclaw configure",
     );
     expect(missingKeyCopy({ provider: "provider-with-secret-name" })).toBe(
-      "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+      "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.",
     );
   });
 
@@ -171,7 +171,7 @@ describe("failover user copy", () => {
         },
       }),
     ).toBe(
-      "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the Control UI settings.",
+      "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the OpenClaw app settings.",
     );
   });
 

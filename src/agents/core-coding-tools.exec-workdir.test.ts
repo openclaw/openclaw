@@ -3,8 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -83,6 +85,22 @@ describe("coding-tool exec working directory", () => {
     expect(output?.trim()).toBe(expectedCwd);
   });
 
+  it("keeps temporary files in the checkout scratch root when exec changes directory", async () => {
+    const result = await createExecTool().execute("coding-scratch", {
+      command: nodeCommand(
+        'const fs=require("node:fs"),os=require("node:os"),path=require("node:path");const file=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"validation-")),"proof");fs.writeFileSync(file,"scratch");console.log(JSON.stringify({file,tmp:process.env.TMP,temp:process.env.TEMP}));',
+      ),
+      workdir: "nested",
+    });
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+    const output = result.content.find((entry) => entry.type === "text")?.text;
+    const created = JSON.parse(output!);
+    const scratch = path.join(fs.realpathSync(codingRoot), ".openclaw", "tmp");
+    expect(path.dirname(path.dirname(created.file))).toBe(scratch);
+    expect(created).toMatchObject({ tmp: scratch, temp: scratch });
+    expect(fs.readFileSync(created.file, "utf8")).toBe("scratch");
+  });
+
   it("forwards sandbox cleanup custody through the builtin exec tool", async () => {
     const terminate = vi.fn(async () => {});
     const finalizeExec = vi.fn(async () => {});
@@ -115,7 +133,18 @@ describe("coding-tool exec working directory", () => {
         fsBridge: createHostSandboxFsBridge(codingRoot),
       },
     });
-    const result = await createExecTool(sandbox).execute("coding-cleanup", { command: "fixture" });
+    sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
+    let tool: ReturnType<typeof createExecTool>;
+    {
+      using lstat = vi.spyOn(fs, "lstatSync");
+      using exists = vi.spyOn(fs, "existsSync");
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      tool = createExecTool(sandbox);
+      expect(lstat).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
+    }
+    const result = await tool.execute("coding-cleanup", { command: "fixture" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
       "coding-cleanup",

@@ -190,6 +190,14 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../sessions/session-controller.queries",
   }),
   runLoop: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "gateway-cli/run-loop" }),
+  cleanupScope: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup-scope",
+  }),
+  gatewayLock: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-lock",
+  }),
   restartIntent: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart-intent",

@@ -33,7 +33,7 @@ struct ConnectionSettingsView: View {
     var body: some View {
         Form {
             self.statusSection
-            if let presentation = self.openClawID.presentation(state: self.state) {
+            if MacOpenClawIDFeature.isEnabled, let presentation = self.openClawID.presentation(state: self.state) {
                 OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
             }
             self.gatewayModeSection
@@ -390,11 +390,11 @@ struct ConnectionSettingsView: View {
     private var dashboardSettingsSection: some View {
         Section {
             LabeledContent {
-                Button("Open Dashboard Settings…") { AppNavigationActions.openSettings() }
+                Button("Open OpenClaw Settings…") { AppNavigationActions.openSettings() }
             } label: {
                 Text("App settings")
                 Text("""
-                Permissions, Quick Chat, voice, and updates live in Dashboard → Settings → This Mac \
+                Permissions, Quick Chat, voice, and updates live in Settings → This Mac in the main window \
                 and need a Gateway release that includes those pages.
                 """)
             }

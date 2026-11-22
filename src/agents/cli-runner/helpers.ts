@@ -105,7 +105,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapMode?: BootstrapMode;
+  bootstrap?: { bootstrapMode: BootstrapMode; bootstrapCompleted: boolean };
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
@@ -118,7 +118,8 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -171,7 +172,8 @@ export function buildCliAgentSystemPrompt(params: {
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     contextFiles: params.contextFiles,
-    bootstrapMode: params.bootstrapMode,
+    bootstrapMode: params.bootstrap?.bootstrapMode,
+    bootstrapCompleted: params.bootstrap?.bootstrapCompleted,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }

@@ -60,12 +60,9 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
-The panel and the agent can use the same browser at the same time. When you
-click or type in the panel, the agent's next browser results include a short
-note that you used the browser recently, so it can check the page before acting.
-
-Click **Take control** in the panel toolbar to work in the browser without the
-agent acting at the same time. While you hold control of that profile, browser
+The panel and the agent can use the same browser at the same time. Click **Take
+control** in the panel toolbar to work in the browser without the agent acting
+at the same time. While you hold control of that profile, browser
 actions from anyone else (the agent's browser tool, the `openclaw browser` CLI,
 other Control UI windows) are not run. The agent's browser tool answers that you
 have taken over the browser, and its turn continues; it can still take snapshots

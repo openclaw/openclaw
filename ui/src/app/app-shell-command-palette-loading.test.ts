@@ -6,6 +6,7 @@ import type { CommandPaletteElement } from "../components/command-palette-contra
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "../components/modal-dialog.tsx";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
@@ -14,6 +15,7 @@ let restoreDialog: () => void;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  vi.stubGlobal("localStorage", createStorageMock());
   vi.useFakeTimers();
   restoreDialog = installDialogPolyfill();
   container = document.createElement("div");
@@ -26,6 +28,7 @@ afterEach(() => {
   restoreDialog();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const emptyActions = { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false };

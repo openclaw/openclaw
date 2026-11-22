@@ -6,7 +6,6 @@ import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-i
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -25,7 +24,6 @@ import { logDebug, logWarn } from "../logger.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -38,6 +36,10 @@ import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
+import {
+  resolveInMcpGrantRequestScope,
+  runInMcpGrantRequestScope,
+} from "./mcp-http.grant-generation.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
@@ -363,9 +365,10 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   withManagementScope(resolveTools),
                 );
               scopedTools = await (boundClientGrant.requestScope
-                ? withPluginRuntimeGatewayRequestScope(
+                ? resolveInMcpGrantRequestScope(
                     boundClientGrant.requestScope,
                     constructAsCaller,
+                    requestAbort.signal,
                   )
                 : constructAsCaller());
             } else {
@@ -466,10 +469,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     turnSourceTo: requestContext.currentChannelId,
                     turnSourceAccountId: requestContext.accountId,
                     turnSourceThreadId: requestContext.currentThreadTs,
-                    loopDetection: resolveToolLoopDetectionConfig({
-                      cfg,
-                      agentId: scopedTools.agentId,
-                    }),
                   },
                   signal,
                   authorizeToolCall,
@@ -503,7 +502,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   ),
                 );
               response = await (runRequestScope
-                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                ? runInMcpGrantRequestScope(runRequestScope, handleAsCaller)
                 : handleAsCaller());
             } finally {
               markMcpLoopbackToolCallFinished(cliCaptureHandle);

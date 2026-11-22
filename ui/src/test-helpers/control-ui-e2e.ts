@@ -737,6 +737,19 @@ function installControlUiMockGateway(
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
       models: scenario.models,
+      hasMessages: (row) => {
+        if (typeof row.key !== "string") {
+          return undefined;
+        }
+        // Inspect the configured initial read without advancing wire-response sequences.
+        for (const method of ["chat.startup", "chat.history"]) {
+          const { value } = responseFixtures.select(method, { sessionKey: row.key }, false);
+          if (isRecord(value) && Array.isArray(value.messages)) {
+            return value.messages.length > 0 || value.hasMore === true;
+          }
+        }
+        return chatHistoryMessages(row.key).length > 0;
+      },
     },
     isRecord,
   );
@@ -1572,8 +1585,8 @@ function installControlUiMockGateway(
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
-          avatar: "",
-          avatarStatus: "none",
+          avatar: scenario.assistantAvatar,
+          avatarStatus: scenario.assistantAvatarStatus,
           name: scenario.assistantName,
         };
       case "agents.list":
@@ -1581,7 +1594,7 @@ function installControlUiMockGateway(
           agents: [
             {
               id: scenario.defaultAgentId,
-              identity: { name: scenario.assistantName },
+              identity: { name: scenario.assistantName, avatar: scenario.assistantAvatar },
               ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
