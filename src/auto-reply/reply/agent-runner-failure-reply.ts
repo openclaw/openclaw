@@ -24,6 +24,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "../../agents/failover/assistant-request-failure-copy.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import {
   ContextPreparationTimeoutError,
   findLocalWorkerTaskFailure,
@@ -106,6 +107,7 @@ export function resolveReplyFailureSummary(params: {
     return undefined;
   }
   const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const code = failoverError?.code ?? attempts?.at(-1)?.code;
   const facts = params.facts;
   const text =
     kind === "rate_limit" && !attempts?.length && facts.requestFailureText
@@ -118,7 +120,9 @@ export function resolveReplyFailureSummary(params: {
             authMode: failoverError?.authMode,
           })
         : kind === "overloaded"
-          ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
+          ? // A host-authored refusal names its own cause; overload copy would blame the AI service.
+            (code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE && renderFailoverCodeUserCopy(code)) ||
+            renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
           : renderRateLimitReplyCopy({
               message: params.message,
               reason: facts.reason,
