@@ -99,7 +99,7 @@ struct OnboardingAISetupView: View {
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
     /// The picked provider. Its card replaces the list until the user chooses another.
-    @State private var openRow: OnboardingAIPicker.RowID?
+    @State private var openRow: OnboardingAIPicker.Row?
     @State private var showMoreProviders = false
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
@@ -142,7 +142,7 @@ struct OnboardingAISetupView: View {
             // A canceled or failed sign-in goes back to the list instead of leaving an empty step.
             .onChange(of: self.model.activeAuthOption == nil) { _, ended in
                 guard ended, self.model.phase != .testing, !self.model.connected,
-                      let row = self.openRow.flatMap({ id in self.picker.rows.first { $0.id == id } }),
+                      let row = self.openRow,
                       case .signIn = row.action
                 else { return }
                 withAnimation(.easeInOut(duration: 0.15)) { self.openRow = nil }
@@ -224,13 +224,16 @@ struct OnboardingAISetupView: View {
         let picker = self.picker
         if self.model.configuredGatewayAuthIssue == nil {
             // A picked provider's card stands alone, like a sign-in from More providers or a resumed setup.
-            if let row = self.openRow.flatMap({ id in picker.rows.first { $0.id == id } }) {
+            if let row = self.openRow.flatMap({ picker.row(for: $0, manualProviders: self.model.manualProviders) }) {
                 self.chooseAnotherLink
                 self.rowStep(row)
             } else if self.model.activeAuthOption != nil {
                 self.chooseAnotherLink
                 self.unplacedSetupSteps
             } else {
+                if self.model.discovering {
+                    self.activity(String(localized: "Looking for AI you already use…"))
+                }
                 if !picker.rows.isEmpty {
                     self.rowList(picker.rows)
                 }
@@ -445,7 +448,7 @@ struct OnboardingAISetupView: View {
 
     private func select(_ row: OnboardingAIPicker.Row) {
         withAnimation(.easeInOut(duration: 0.15)) {
-            self.openRow = row.id
+            self.openRow = row
             switch row.action {
             case let .candidate(kind):
                 self.model.userSelect(kind: kind)
@@ -549,6 +552,7 @@ struct OnboardingAISetupView: View {
                 {
                     self.model.startProviderPrepare(option)
                 }
+                .disabled(self.model.discovering)
             }
             ForEach(picker.localAuthOptions) { option in
                 self.providerAuthRow(option)

@@ -170,15 +170,27 @@ export function createModelSetup(
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
+  const ownsDetection = (outcome: {
+    token: object;
+    client: GatewayBrowserClient;
+    hello: unknown;
+    agentId: string | null;
+  }) =>
+    state.detectionRequest === outcome.token &&
+    context.gateway.snapshot.client === outcome.client &&
+    context.gateway.snapshot.hello === outcome.hello &&
+    agentSelection().state.selectedId === outcome.agentId;
   const runDetection = createModelSetupDetectRequest({
     getHello: () => context.gateway.snapshot.hello,
+    onOptions: (outcome) => {
+      // Known choices become usable now; discovery still owns readiness and
+      // first-run recovery, so the ready connection waits for its result.
+      if (ownsDetection(outcome) && state.pageState.phase !== "ready" && !firstRun.awaitsRecovery) {
+        state.pageState = { phase: "ready", result: outcome.value };
+      }
+    },
     onComplete: (outcome): boolean => {
-      if (
-        state.detectionRequest !== outcome.token ||
-        context.gateway.snapshot.client !== outcome.client ||
-        context.gateway.snapshot.hello !== outcome.hello ||
-        agentSelection().state.selectedId !== outcome.agentId
-      ) {
+      if (!ownsDetection(outcome)) {
         return false;
       }
       state.detectionRequest = null;
@@ -325,18 +337,26 @@ export function createModelSetup(
 
   async function detect(currentRoute = routeData()): Promise<SystemAgentSetupDetectResult | null> {
     const client = context.gateway.snapshot.client;
-    if (!canUseSetup(client, currentRoute) || state.detectionRequest) {
+    if (!canUseSetup(client, currentRoute)) {
       return null;
     }
     resetVerify();
     // Only a cold load replaces the content. Same-owner rescans keep forms and
     // focus mounted; a changed connection clears them in synchronizeGateway.
-    if (state.pageState.phase !== "ready") {
+    const cold = state.pageState.phase !== "ready";
+    if (cold) {
       state.pageState = { phase: "loading" };
     }
+    // Setup actions may run during discovery. A refresh they request replaces
+    // the older scan, whose result could predate their change.
     const token = {};
     state.detectionRequest = token;
-    const completion = runDetection([client, agentSelection(currentRoute).state.selectedId, token]);
+    const completion = runDetection([
+      client,
+      agentSelection(currentRoute).state.selectedId,
+      token,
+      cold,
+    ]);
     setDetectionRequest({ completion });
     const outcome = await completion;
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
@@ -364,7 +384,7 @@ export function createModelSetup(
   }
 
   function activationBlocked(): boolean {
-    return actionsDisabled() || state.detectionRequest !== null || firstRun.unresolved;
+    return actionsDisabled() || firstRun.unresolved;
   }
 
   async function activate(params: SystemAgentSetupActivateParams, targetId: string): Promise<void> {
@@ -418,7 +438,7 @@ export function createModelSetup(
   ): Promise<void> {
     const client = context.gateway.snapshot.client;
     if (
-      ((wizardMutationActive || state.detectionRequest !== null) && !settling) ||
+      (wizardMutationActive && !settling) ||
       !canUseSetup(client) ||
       (wizard.state.phase === "idle" && firstRun.unresolved)
     ) {

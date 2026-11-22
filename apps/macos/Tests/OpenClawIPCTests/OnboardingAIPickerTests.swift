@@ -65,4 +65,18 @@ struct OnboardingAIPickerTests {
             "xai-device-code",
         ])
     }
+
+    @Test func `late discovery keeps the selected Gemini key form available`() throws {
+        let providers: [Model.ManualProvider] = try Self.decode(Self.manualProviders)
+        let early = OnboardingAIPicker(candidates: [], authOptions: [], manualProviders: providers, prepareOptions: [])
+        let selection = try #require(early.rows.first { $0.id == .gemini })
+        let candidates: [Model.Candidate] = try Self.decode("""
+        [{"kind":"gemini-cli","label":"Gemini CLI","detail":"installed","modelRef":"gemini-cli/gemini-3-pro"}]
+        """)
+        let settled = OnboardingAIPicker(
+            candidates: candidates, authOptions: [], manualProviders: providers, prepareOptions: [])
+
+        #expect(settled.row(for: selection, manualProviders: providers)?.action == .apiKey("gemini-api-key"))
+        #expect(settled.row(for: selection, manualProviders: [])?.action == .candidate("gemini-cli"))
+    }
 }

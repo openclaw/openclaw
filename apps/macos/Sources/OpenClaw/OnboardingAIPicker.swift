@@ -93,6 +93,16 @@ struct OnboardingAIPicker {
         self.moreAuthOptions = authOptions.filter { !usedOptions.contains($0.id) }
     }
 
+    func row(for selection: Row, manualProviders: [Model.ManualProvider]) -> Row? {
+        // Keep the selected key form open while its provider is in the current catalog.
+        if case let .apiKey(providerID?) = selection.action,
+           manualProviders.contains(where: { $0.id == providerID })
+        {
+            return selection
+        }
+        return self.rows.first { $0.id == selection.id }
+    }
+
     static func isLocalModelRef(_ modelRef: String) -> Bool {
         self.isLocalProvider(modelRef.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "")
     }
