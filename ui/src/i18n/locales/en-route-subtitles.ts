@@ -45,7 +45,7 @@ const enRouteSubtitles = {
     about: "Web app and connected Gateway build identity.",
     aiAgents: "Global agent defaults: skills, tools, and session.",
     modelSetup: "Connect a verified AI model",
-    modelProviders: "Global model defaults and provider access for your agents.",
+    modelProviders: "Connect providers and choose the models your agents use.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
     notifications: "Choose when you get notifications.",
     security: "Command permissions, tool profiles, and access.",

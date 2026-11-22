@@ -8,10 +8,18 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   claimsSharedHostSlot,
   createHostedWorker,
+  isHostedWorkerEndpoint,
   type HostedWorkerEndpoint,
 } from "./shared-worker-host.js";
+import { sharedHostSqliteKeys } from "./shared-worker-host.types.js";
 import { getTrackedWorkerPoolSnapshot } from "./worker-cpu.js";
+import {
+  createWorkerPoolMemoryBudget,
+  getWorkerMemoryBudgetSnapshot,
+  initializeWorkerMemoryBudget,
+} from "./worker-memory-budget.js";
 import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import { createWorkerTaskHost } from "./worker-task-host.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const sqliteStore = resolveRuntimeProcessEntrypointUrl("sqliteStore");
@@ -39,7 +47,10 @@ afterEach(async () => {
     await endpoint.terminate();
   }
   live.clear();
-  initializeGatewayResourceProfile({ profile: "standard" });
+  initializeWorkerMemoryBudget(
+    initializeGatewayResourceProfile({ profile: "standard" }),
+    undefined,
+  );
 });
 
 it("hosts nothing outside the lean profile", () => {
@@ -190,6 +201,88 @@ it("fails endpoints and frees the slot when the host constructor is refused", as
   expect(outcome.code).not.toBe(0);
   expect(outcome.error?.message).toMatch(/^Shared worker host failed:/);
   expect(claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
+});
+
+it("charges hosted endpoints once while reserving dedicated same-kind slots", async () => {
+  initializeWorkerMemoryBudget(initializeGatewayResourceProfile({ profile: "lean" }), {
+    memoryBudgetMiB: 8192,
+  });
+  const host = createWorkerTaskHost();
+  const owners = [{}, {}];
+  const budgets = [];
+  const urls = ["sessionTranscript", "pluginModelCatalogRead"] as const;
+  for (const [index, name] of urls.entries()) {
+    const url = resolveRuntimeProcessEntrypointUrl(name);
+    const owner = owners[index]!;
+    const budget = createWorkerPoolMemoryBudget(owner, url, 2)!;
+    budgets.push(budget);
+    const pending = getWorkerMemoryBudgetSnapshot()!;
+    expect(pending.floorBytes - pending.baselineBytes).toBeGreaterThanOrEqual(90 * 1024 ** 2);
+    const { worker } = host.createWorker(url, {});
+    if (!isHostedWorkerEndpoint(worker)) {
+      throw new Error("Expected a hosted endpoint in the qualified lean runtime");
+    }
+    live.add(worker);
+    host.workerStarted(worker, owner, 2, {}, {});
+    await new Promise<void>((resolve) => {
+      worker.once("started", resolve);
+    });
+    expect(budget.floor).toBe(1);
+  }
+  const agent = carrier(sharedHostSqliteKeys.agent);
+  const shared = carrier(sharedHostSqliteKeys["shared-state"]);
+  await Promise.all([agent.started, shared.started]);
+  const snapshot = getWorkerMemoryBudgetSnapshot()!;
+  // Four logical endpoints share 90 MiB; the native lifecycle supervisor adds 10 MiB.
+  expect(snapshot.floorBytes - snapshot.baselineBytes).toBe((90 + 10) * 1024 ** 2);
+  expect(snapshot).toMatchObject({ pendingBytes: 0, growthAdmissions: 0 });
+  expect(getTrackedWorkerPoolSnapshot()).toMatchObject({
+    workerCount: 2,
+    workerCensus: expect.arrayContaining([
+      expect.objectContaining({
+        kind: "shared-worker-host.worker.js",
+        count: 1,
+        hostedEndpoints: 4,
+      }),
+      expect.objectContaining({ kind: "worker-native-lifecycle.worker.js", count: 1 }),
+    ]),
+  });
+  // Another pool of the same kind cannot claim the occupied endpoint's discount.
+  const dedicated = {};
+  createWorkerPoolMemoryBudget(
+    dedicated,
+    resolveRuntimeProcessEntrypointUrl("sessionTranscript"),
+    2,
+  );
+  const mixed = getWorkerMemoryBudgetSnapshot()!;
+  expect(mixed.floorBytes - mixed.baselineBytes).toBe((90 + 10 + 38) * 1024 ** 2);
+  expect(mixed.pendingBytes).toBe(38 * 1024 ** 2);
+  const original = budgets[0]!;
+  expect(original.admitGrowth()).toBe(true);
+  expect(getWorkerMemoryBudgetSnapshot()!.pendingBytes).toBe(76 * 1024 ** 2);
+  original.releaseGrowth(1);
+
+  // A failing host stays physically reserved through join and replacement.
+  agent.endpoint.retiring("cancelled");
+  const stopped = agent.endpoint.terminate();
+  const exiting = getWorkerMemoryBudgetSnapshot()!;
+  expect(exiting.floorBytes - exiting.baselineBytes).toBe((90 + 10 + 38) * 1024 ** 2);
+  await stopped;
+  const replacement = carrier(sharedHostSqliteKeys.agent);
+  await replacement.started;
+  expect(owners).toHaveLength(2);
+  expect(dedicated).toEqual({});
+  const replaced = getWorkerMemoryBudgetSnapshot()!;
+  expect(replaced.floorBytes - replaced.baselineBytes).toBe((90 + 10 + 38) * 1024 ** 2);
+  expect(getTrackedWorkerPoolSnapshot().workerCensus).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "shared-worker-host.worker.js",
+        count: 1,
+        hostedEndpoints: 1,
+      }),
+    ]),
+  );
 });
 
 it("settles a retried stop that was rejected before the host joined", async () => {

@@ -10,20 +10,24 @@ import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { resolveAgentModelPrimary } from "../../lib/agents/display.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { buildModelProviderCards } from "./data.ts";
+import { hasProviderAccounts } from "./profiles-view.tsx";
 
 registerModelSetupEnglish();
 
-type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
+export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
   authProvider: string;
 };
 
-type LoginProvider = {
+export type LoginProvider = {
   id: string;
   label: string;
   choices: LoginChoice[];
   authProviders: string[];
   apiKeyProvider?: string;
+  /** Setup suggests this provider first. */
+  featured?: true;
 };
 
 export function buildLoginProviders({
@@ -65,15 +69,21 @@ export function buildLoginProviders({
         group.choices.push({ ...option, authProvider: capability.provider });
       }
     }
+    const brands = new Set(
+      loginOptions.length ? loginOptions.map((option) => option.brandId) : [capability.provider],
+    );
     // Quick-key support is independent of wizard choices. Keep the exact
     // capability owner for the key form even when its login brand is an alias.
     if (capability.quickApiKeySetup && allowQuickApiKey) {
-      const brands = loginOptions.length
-        ? loginOptions.map((option) => option.brandId)
-        : [capability.provider];
-      for (const id of new Set(brands)) {
+      for (const id of brands) {
         const group = ensureGroup(id, capability.provider);
         group.apiKeyProvider ??= capability.provider;
+      }
+    }
+    for (const id of brands) {
+      const group = groups.get(id);
+      if (group && (capability.featured || group.choices.some((choice) => choice.featured))) {
+        group.featured = true;
       }
     }
   }
@@ -106,6 +116,29 @@ export function buildLoginProviders({
   return [...groups.values()].toSorted(
     (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
   );
+}
+
+/** Saved accounts this agent can already use with one login provider. */
+export function providerAccounts(group: LoginProvider, authStatus?: ModelAuthStatusResult | null) {
+  return authStatus
+    ? buildModelProviderCards({ authStatus, models: null, providerUsage: null }).filter((card) =>
+        group.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
+      )
+    : [];
+}
+
+/** One way in and nothing saved: the method step would be a single button, so skip it. */
+export function directEntry(
+  group: LoginProvider,
+  authStatus?: ModelAuthStatusResult | null,
+): { apiKeyProvider: string } | { choice: LoginChoice } | null {
+  if (authStatus?.unavailable || hasProviderAccounts(providerAccounts(group, authStatus))) {
+    return null;
+  }
+  if (group.apiKeyProvider && !group.choices.length) {
+    return { apiKeyProvider: group.apiKeyProvider };
+  }
+  return !group.apiKeyProvider && group.choices.length === 1 ? { choice: group.choices[0]! } : null;
 }
 
 export function resolveLoginSelection(

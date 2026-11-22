@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessDeliveryDefaults } from "../../agents/harness/selection-decision.js";
 import {
   buildModelAliasIndex,
@@ -156,7 +157,8 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
       manifestPlugins: metadataSnapshot ?? [],
     };
     const defaultModelRef = resolveDefaultModelForAgent(modelContext);
-    const selectionContext = { ...modelContext, defaultProvider: defaultModelRef.provider };
+    const defaultProvider = defaultModelRef?.provider ?? DEFAULT_PROVIDER;
+    const selectionContext = { ...modelContext, defaultProvider };
     const aliasIndex = buildModelAliasIndex(selectionContext);
     const resolveModelCandidate = (raw: string) =>
       resolveModelRefFromString({ ...selectionContext, raw, aliasIndex })?.ref;
@@ -209,11 +211,11 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       parentSessionKey,
-      defaultProvider: defaultModelRef.provider,
+      defaultProvider,
     });
     const storedModelCandidate = storedModelRef
       ? {
-          provider: storedModelRef.provider ?? defaultModelRef.provider,
+          provider: storedModelRef.provider ?? defaultProvider,
           model: storedModelRef.model,
         }
       : undefined;
@@ -251,7 +253,7 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
         return sourceDefault;
       }
     }
-    return resolveCandidateDefault(defaultModelRef);
+    return defaultModelRef && resolveCandidateDefault(defaultModelRef);
   } catch (error) {
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,

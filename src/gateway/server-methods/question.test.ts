@@ -118,7 +118,7 @@ async function sharingFixture(others: "none" | "suggest" | "invited" = "none") {
     updatedAt: user.updatedAt,
   });
   const client = {
-    connect: { scopes: ["operator.questions"] },
+    connect: { scopes: ["operator.questions"], client: { id: "test" } },
     authenticatedUserProfile: profile(guest),
   } as GatewayClient;
   return { owner, guest, cfg, client, profile };

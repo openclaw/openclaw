@@ -49,7 +49,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { withOperatorToolGatewayAuthority } from "../server-plugin-in-process-dispatch.js";
 import {
@@ -220,7 +220,7 @@ async function createHostedChildFixture({
     );
   const captured = system
     ? undefined
-    : await captureGatewayOperatorRunAuthority({
+    : await prepareGatewayOperatorRunAuthority({
         client: identifiedClient(profile.id),
         context,
         sourceAuthority: { assertCurrent: guard("source", "original operator source revoked") },
@@ -604,7 +604,7 @@ describe("hosted creation transfers accepted child input", () => {
     { system: false, toolInvocation: true },
     { system: true, toolInvocation: true },
   ])(
-    "continues after parent closure (system=$system, inherited invocation=$toolInvocation)",
+    "continues after parent closure and source permission changes (system=$system, inherited invocation=$toolInvocation)",
     async (options) => {
       await using fixture = await createHostedChildFixture(options);
       const accepted = await fixture.send();
@@ -613,6 +613,7 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.closeInvocation();
       }
       fixture.closeParent();
+      fixture.revoke.source();
       await fixture.finish();
       expect(fixture.provider).toHaveBeenCalledOnce();
       expect(userMessages(fixture.scope())).toHaveLength(1);
@@ -626,31 +627,16 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    ["invocation", false],
-    ["invocation", true],
-    ["parent", false],
-    ["parent", true],
-  ] as const)(
-    "retains %s authority through child input COMMIT (system=%s)",
-    async (boundary, system) => {
-      await using fixture = await createHostedChildFixture({
-        system,
-        toolInvocation: boundary === "invocation",
+  it.each([false, true])(
+    "retains invocation authority through child input COMMIT (system=%s)",
+    async (system) => {
+      await using fixture = await createHostedChildFixture({ system, toolInvocation: true });
+      fixture.beforeInputCommit.mockImplementation(fixture.closeInvocation);
+      await expect(fixture.send()).resolves.toMatchObject({
+        ok: true,
+        runStarted: false,
+        runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
       });
-      fixture.beforeInputCommit.mockImplementation(
-        boundary === "invocation" ? fixture.closeInvocation : fixture.closeParent,
-      );
-      const creating = fixture.send();
-      if (boundary === "invocation") {
-        await expect(creating).resolves.toMatchObject({
-          ok: true,
-          runStarted: false,
-          runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
-        });
-      } else {
-        await expect(creating).rejects.toThrow("agent tool caller authority is no longer active");
-      }
       expect(fixture.beforeInputCommit).toHaveBeenCalledOnce();
       expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
       expect(userMessages(fixture.scope())).toEqual([]);
@@ -659,8 +645,8 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each(["source", "host", "signal", "gateway", "replacement"] as const)(
-    "retains the original %s boundary after child ACK and parent closure",
+  it.each(["host", "signal", "gateway", "replacement"] as const)(
+    "finishes admitted input after %s changes unless its physical target is replaced",
     async (change) => {
       await using fixture = await createHostedChildFixture();
       const accepted = await fixture.send();
@@ -672,10 +658,10 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.revoke[change]();
       }
       await fixture.finish();
-      expect(fixture.provider).not.toHaveBeenCalled();
+      expect(fixture.provider).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
       expect(userMessages(scope)).toEqual(transcript);
       expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
-      expect(fixture.persistenceResult).not.toHaveBeenCalled();
+      expect(fixture.persistenceResult).toHaveBeenCalledTimes(change === "replacement" ? 0 : 1);
       if (change === "replacement") {
         expect(loadSessionEntry(scope)?.sessionId).toBe("successor-child");
         expect(userMessages({ ...scope, sessionId: "successor-child" })).toEqual([]);

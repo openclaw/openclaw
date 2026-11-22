@@ -604,7 +604,7 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        const execution = prepareReplyTurnExecution(executionParams, runId);
+        const execution = await prepareReplyTurnExecution(executionParams, runId);
         let scheduledInference: CronRunInference | undefined;
         let workspaceLease: CronWorkspaceLease | undefined;
         try {
