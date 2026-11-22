@@ -69,14 +69,6 @@ const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthority
   Symbol("cronCreatorAuthorityResolver"),
 );
 
-/** Retain the Cron-only fence when tools materialize outside their creator scope. */
-export function bindActiveCronAuthorityCurrentness(
-  runId: string | undefined,
-): (() => boolean) | undefined {
-  const scope = activeCronCreatorAuthority.getStore();
-  return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
-}
-
 /** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
 export function bindCronManagementToolConstruction(
   runId: string | undefined,

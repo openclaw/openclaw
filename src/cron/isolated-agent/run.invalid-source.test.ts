@@ -140,10 +140,22 @@ describe("undecodable scheduled authority", () => {
     expect(failure).toBe(controller.signal.reason);
   });
 
-  it.each(["undecodable", ...memberSourceCases] as const)(
+  it.each(["undecodable", ...memberSourceCases, "membership revoked while parked"] as const)(
     "records the first recurring authority failure without executing: %s",
     async (name) => {
-      const scenario = name === "undecodable" ? undefined : memberSourceCase(name);
+      const revokeWhileParked = name === "membership revoked while parked";
+      const scenario =
+        name === "undecodable"
+          ? undefined
+          : memberSourceCase(revokeWhileParked ? "removed member" : name);
+      let memberActive = true;
+      if (revokeWhileParked && scenario) {
+        const principal = scenario.principal;
+        setOpenClawIdMemberAccountLookup(
+          (accountId) => memberActive && accountId === principal.accountId,
+        );
+        setOpenClawIdTunnelPrincipalLookup(() => (memberActive ? principal : undefined));
+      }
       const unavailable =
         Boolean(scenario?.transientError) || name === "disabled membership lookup";
       const { storePath } = await makeStorePath();
@@ -174,6 +186,16 @@ describe("undecodable scheduled authority", () => {
             ...request,
             cfg: scenario?.cfg ?? {},
             sessionKey: `cron:${request.job.id}`,
+            ...(revokeWhileParked
+              ? {
+                  providerRunSlot: {
+                    tryStart: () => false,
+                    wait: async () => {
+                      memberActive = false;
+                    },
+                  },
+                }
+              : {}),
           }),
         ),
       );
@@ -248,7 +270,12 @@ describe("undecodable scheduled authority", () => {
             expect(result).toMatchObject({
               error: new CronOperatorSourceError(
                 new Error(
-                  ["removed member", "changed account", "changed listing"].includes(name)
+                  [
+                    "removed member",
+                    "changed account",
+                    "changed listing",
+                    "membership revoked while parked",
+                  ].includes(name)
                     ? "Restart recovery operator authority changed; start a new user turn."
                     : scenario.refusal,
                 ),
@@ -278,7 +305,11 @@ describe("undecodable scheduled authority", () => {
           );
         }
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
+        if (revokeWhileParked) {
+          expect(memberActive).toBe(false);
+        } else {
+          expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
+        }
         expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
         expect(h.runCliAgentMock).not.toHaveBeenCalled();
         expect(h.dispatchCronDeliveryMock).not.toHaveBeenCalled();
