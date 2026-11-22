@@ -644,6 +644,8 @@ run_with_spinner() {
     fi
 }
 
+# Quiet steps hide output, so they never read the terminal. A terminal stdin
+# under sudo-rs use_pty with redirected output stops apt with SIGTTOU (#203460).
 run_quiet_step() {
     local title="$1"
     shift
@@ -662,18 +664,14 @@ run_quiet_step() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "$@"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || cmd_exit=$?
+        run_with_spinner "$title" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
     else
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
-        if needs_stdin_isolation; then
-            "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
-        else
-            "$@" >"$log" 2>&1 || cmd_exit=$?
-        fi
+        "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
@@ -987,7 +985,7 @@ run_npm_global_install() {
         local log_quoted=""
         printf -v cmd_quoted '%q ' "${cmd[@]}"
         printf -v log_quoted '%q' "$log"
-        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || install_status=$?
+        run_with_spinner "Installing OpenClaw package" bash -c "${cmd_quoted}</dev/null >${log_quoted} 2>&1" || install_status=$?
     else
         ui_info "Installing OpenClaw package"
         "${cmd[@]}" < /dev/null >"$log" 2>&1 || install_status=$?

@@ -3692,6 +3692,44 @@ exit 0
         : '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
   });
+
+  // #203460: a terminal stdin under sudo-rs use_pty with redirected output stops apt with SIGTTOU.
+  it.each([false, true])("quiet steps never hand terminal stdin to the command (gum=%s)", (gum) => {
+    const dir = tempDirs.make("openclaw-install-sh-quiet-stdin-");
+    const gumPath = join(dir, "gum");
+    const commandPath = join(dir, "command");
+    const stdinLog = join(dir, "stdin-source");
+    const stdinPath = join(dir, "stdin");
+    writeFileSync(stdinPath, "terminal input\n");
+    writeFileSync(
+      gumPath,
+      '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      commandPath,
+      `#!/usr/bin/env bash
+if [[ /dev/fd/0 -ef /dev/null ]]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+`,
+      { mode: 0o755 },
+    );
+
+    const result = runInstallShell(
+      `
+      set -euo pipefail
+      exec < "$STDIN_FIXTURE_PATH"
+      source "${SCRIPT_PATH}"
+      needs_stdin_isolation() { return 1; }
+      gum_is_tty() { return ${gum ? 0 : 1}; }
+      GUM="${gum ? gumPath : ""}"
+      run_quiet_step "Configuring NodeSource repository" "${commandPath}"
+    `,
+      { STDIN_FIXTURE_PATH: stdinPath },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(stdinLog, "utf8").trim()).toBe("devnull");
+  });
 });
 
 describe("install.sh duplicate OpenClaw install detection", () => {
