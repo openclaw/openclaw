@@ -110,9 +110,9 @@ it("lists native gateways and dispatches switching, window, primary, and setting
       shortcut(row),
     ]),
   ).toEqual([
-    ["Connected", "⌘1"],
+    ["Connected", "⌃⌘1"],
     ["Unreachable", undefined],
-    ["Unknown status", "⌘3"],
+    ["Unknown status", "⌃⌘3"],
   ]);
   expect(query(rows[0]!, ".sidebar-gateway-primary")?.textContent).toBe("primary");
   expect(query(rows[1]!, ".sidebar-gateway-primary")).toBeNull();
@@ -146,7 +146,7 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   await open();
   const manyRows = sidebar.querySelectorAll('[data-value^="gateway:"]');
   expect(manyRows).toHaveLength(10);
-  expect(shortcut(manyRows[8]!)).toBe("⌘9");
+  expect(shortcut(manyRows[8]!)).toBe("⌃⌘9");
   expect(query(manyRows[9]!, "kbd")).toBeNull();
 });
 

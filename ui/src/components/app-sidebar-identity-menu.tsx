@@ -159,7 +159,8 @@ function renderIdentityGateways(
               <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
             ) : undefined}
             {capability.openWindow && !selected && index < 9 ? (
-              <Kbd class="session-menu__shortcut" ariaHidden keys={["⌘", String(index + 1)]} />
+              // Sessions own ⌘1–9 on desktop hosts; Gateways add Control.
+              <Kbd class="session-menu__shortcut" ariaHidden keys={["⌃", "⌘", String(index + 1)]} />
             ) : undefined}
             {selected ? (
               <span class="sidebar-gateway-check" aria-hidden="true">

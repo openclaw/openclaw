@@ -45,6 +45,11 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   imagePanRight: { modifiers: ["shift"], key: "ArrowRight" },
   imagePanUp: { modifiers: ["shift"], key: "ArrowUp" },
   imagePanDown: { modifiers: ["shift"], key: "ArrowDown" },
+  // Desktop hosts only: browsers reserve these chords for their own tabs.
+  // Displayed here; resolveSessionJumpDigit and resolveRecentSessionStep match them.
+  sessionJump: { modifiers: ["mod"], key: "Digits", platformSpecific: true },
+  recentSession: { modifiers: ["ctrl"], key: "Tab" },
+  recentSessionReverse: { modifiers: ["ctrl", "shift"], key: "Tab" },
   // Display-only mouse chords; never keyboard-matched.
   toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
@@ -79,6 +84,8 @@ export function formatKeyboardShortcutParts(
     ArrowLeft: "←",
     ArrowRight: "→",
     Click: "Click",
+    Digits: "1–9",
+    Tab: applePlatform ? "⇥" : "Tab",
   };
   return [
     ...combo.modifiers.map((modifier) => modifiers[modifier]),
@@ -88,6 +95,24 @@ export function formatKeyboardShortcutParts(
 
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
   return matchesKeyboardShortcut(combo, event, isApplePlatform(), resolveAsciiShortcutKey(event));
+}
+
+/** The 1–9 digit of a session jump chord, including layouts that shift digits (AZERTY). */
+export function resolveSessionJumpDigit(event: KeyboardEvent): number | null {
+  const key = resolveAsciiShortcutKey(event);
+  if (key === null || !/^[1-9]$/u.test(key)) {
+    return null;
+  }
+  const combo = { ...KEYBOARD_SHORTCUT_COMBOS.sessionJump, key };
+  return matchesKeyboardShortcut(combo, event, isApplePlatform(), key) ? Number(key) : null;
+}
+
+/** Control+Tab steps back through recent sessions; Control+Shift+Tab steps forward. */
+export function resolveRecentSessionStep(event: KeyboardEvent): 1 | -1 | null {
+  if (event.key !== "Tab" || event.isComposing || !event.ctrlKey || event.metaKey || event.altKey) {
+    return null;
+  }
+  return event.shiftKey ? -1 : 1;
 }
 
 /** Runtime controls of the lazily loaded shortcuts dialog. */
