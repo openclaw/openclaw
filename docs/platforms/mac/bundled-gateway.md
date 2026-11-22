@@ -488,8 +488,11 @@ a migration conflict stops startup and shows recovery guidance.
 
 After an in-place app update, the app stops a previous build's app-managed
 Gateway before preparing credentials and installing the updated service.
-Normal migrations complete automatically; unsupported or inconsistent state
-requires Doctor recovery.
+If credential preparation fails, the app reports the error. It restarts the
+previous Gateway only when that build confirms it can use the current config
+and databases. If Doctor was interrupted, the state has moved beyond what the
+previous build supports, or compatibility cannot be checked, the Gateway stays
+stopped for recovery.
 
 For storage, migration, and rollback details, see
 [local client credentials](/reference/database-schemas/versioning#local-client-credentials).

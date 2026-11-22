@@ -51,6 +51,35 @@ struct ClientCredentialStartupTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.externalMarker.path))
     }
 
+    @Test(arguments: [true, false])
+    func `replacement preserves the Doctor error when its process times out or is interrupted`(
+        timedOut: Bool) async throws
+    {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        do {
+            try await ClientCredentialStartup.prepare(
+                executionRoot: fixture.executionRoot,
+                configURL: fixture.configURL,
+                bundle: fixture.bundle,
+                profile: AppProfile(environment: [:]),
+                environment: fixture.environment,
+                replacingServiceEntrypoint: "/old/openclaw.mjs",
+                runCommand: { _, _, _ in
+                    ShellExecutor.ShellResult(
+                        stdout: "",
+                        stderr: "preparation interrupted",
+                        exitCode: timedOut ? nil : 1,
+                        timedOut: timedOut,
+                        success: false,
+                        signaled: !timedOut)
+                })
+            Issue.record("Interrupted credential preparation reported success")
+        } catch let error as CLIInstaller.DoctorProcessesUnsettled {
+            #expect(error.message.contains("preparation interrupted"))
+        }
+    }
+
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

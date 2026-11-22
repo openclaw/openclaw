@@ -4,6 +4,7 @@ import Synchronization
 struct LaunchAgentPlistSnapshot: Equatable, Sendable {
     let programArguments: [String]
     let environment: [String: String]
+    var workingDirectory: String?
     let stdoutPath: String?
     let stderrPath: String?
 
@@ -56,6 +57,7 @@ enum LaunchAgentPlist {
         return LaunchAgentPlistSnapshot(
             programArguments: programArguments,
             environment: env,
+            workingDirectory: root["WorkingDirectory"] as? String,
             stdoutPath: stdoutPath,
             stderrPath: stderrPath,
             port: port,

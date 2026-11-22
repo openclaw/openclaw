@@ -13,6 +13,7 @@ enum ShellExecutor {
         var success: Bool
         var errorMessage: String?
         var preflightError: String?
+        var signaled = false
     }
 
     /// A background descendant may inherit stdout after its parent exits.
@@ -108,9 +109,9 @@ enum ShellExecutor {
         _ terminationStatus: TerminationStatus,
         captured: (stdout: String, stderr: String)) -> ShellResult
     {
-        let status = switch terminationStatus {
-        case let .exited(code), let .signaled(code):
-            Int(code)
+        let (status, signaled) = switch terminationStatus {
+        case let .exited(code): (Int(code), false)
+        case let .signaled(code): (Int(code), true)
         }
         return ShellResult(
             stdout: captured.stdout,
@@ -119,7 +120,7 @@ enum ShellExecutor {
             timedOut: false,
             success: terminationStatus.isSuccess,
             errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)",
-            preflightError: nil)
+            signaled: signaled)
     }
 
     private static func timedOutResult(captured: (stdout: String, stderr: String)) -> ShellResult {
