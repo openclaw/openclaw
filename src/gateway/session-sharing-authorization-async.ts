@@ -22,10 +22,7 @@ import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-st
 import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  intersectOperatorScopes,
-  resolveMissingOperatorScope,
-} from "../shared/operator-scope-compat.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { waitForAgentInputAdmission } from "../state/agent-database-preparation-context.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -37,10 +34,7 @@ import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  captureGatewayOperatorRunAuthority,
-  intersectOperatorRunModelPolicy,
-} from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -90,29 +84,26 @@ export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const source = await prepareSessionPrincipalRunAccess(params);
-  let admitted: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  const original = source.recordedOperatorAuthority;
+  if (original) {
+    return {
+      authority: createAdmittedRunOperatorAuthority({
+        ...original,
+        assertCurrent: source.assertCurrent,
+        signal: source.signal,
+      }),
+      release: source.release,
+    };
+  }
+  let admitted: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
-    admitted = await captureGatewayOperatorRunAuthority({
+    admitted = await prepareGatewayOperatorRunAuthority({
       client: source.client,
       context: params.context,
       sourceAuthority: source,
     });
     if (!admitted) {
       throw new Error("Session principal has no current run authority.");
-    }
-    const original = source.recordedOperatorAuthority;
-    if (original) {
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
-        scopes: intersectOperatorScopes(current.scopes, original.scopes),
-        gatewayAccessGrant: original.gatewayAccessGrant,
-        recoverySnapshot: original.recoverySnapshot,
-        channelRecoverySource: original.channelRecoverySource,
-        get modelPolicy() {
-          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
     }
     return admitted;
   } catch (error) {
@@ -123,12 +114,6 @@ export async function prepareSessionPrincipalRunAuthority(
     }
     throw error;
   }
-}
-
-// A revoked or changed source throws instead of yielding stale scopes.
-function currentRecordedScopes(authority: AdmittedRunOperatorAuthority): readonly string[] {
-  authority.assertCurrent();
-  return authority.scopes;
 }
 
 /** Resolve a recorded person against current grants and an existing exact session. */
@@ -167,34 +152,20 @@ async function prepareSessionPrincipalRunAccess(params: {
   };
   const readScopes = () => {
     const profile = identity.readCurrentProfile();
-    let scopes: readonly string[] | undefined;
-    // The recorded principal must itself remain the Gateway owner; this is never a fallback.
-    if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
+    let scopes: readonly string[] | undefined = recorded?.authority.scopes;
+    if (!scopes && params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
         throw new Error("Session principal is no longer the Gateway owner.");
       }
       scopes = ["operator.admin"];
-    } else {
-      const cfg = getConfig();
-      // Without roles a profile carries no authority of its own; only the person's recorded
-      // authenticated source for this session supplies it.
-      scopes =
-        recorded &&
-        (operatorRoleSubject(profile).openclawIdMember ||
-          recorded.authority.openclawIdPrincipal?.kind === "owner" ||
-          !isOperatorRoleEnforcedFor(cfg, operatorRoleSubject(profile)))
-          ? currentRecordedScopes(recorded.authority)
-          : resolveOperatorRolePolicyForAssignment(
-              params.profileId,
-              profile.assignedRole,
-              cfg,
-              profile.githubLogin ?? null,
-              operatorRoleSubject(profile),
-            )?.scopes;
-    }
-    if (scopes && preserveRecordedSource && recorded) {
-      // Session admission must see the original ceiling, not a later, broader role grant.
-      scopes = intersectOperatorScopes(scopes, currentRecordedScopes(recorded.authority));
+    } else if (!scopes) {
+      scopes = resolveOperatorRolePolicyForAssignment(
+        params.profileId,
+        profile.assignedRole,
+        getConfig(),
+        profile.githubLogin ?? null,
+        operatorRoleSubject(profile),
+      )?.scopes;
     }
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
@@ -231,14 +202,15 @@ async function prepareSessionPrincipalRunAccess(params: {
       });
     }
     const scopes = readScopes();
-    const original = preserveRecordedSource ? recorded?.authority : undefined;
-    // Recovery already resumed the accepted grant; a fresh authorization is a different request.
+    const original = recorded?.authority;
+    // A restored requester already passed current reference admission.
     const access = original
       ? undefined
       : resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
           requireLivePolicySet: true,
           openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
         });
+    access?.assertCurrent();
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
       connect: {
@@ -255,20 +227,9 @@ async function prepareSessionPrincipalRunAccess(params: {
       },
     };
     const assertPrincipalCurrent = composeSessionSourceAssertion(
-      [params.assertCurrent],
-      (assertParent) => {
-        assertParent();
-        access?.signal.throwIfAborted();
-        access?.assertCurrent();
-        if (preserveRecordedSource) {
-          recorded?.authority.assertCurrent();
-        }
-        // readScopes validates the retained identity before consuming its current role.
-        if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-          throw new Error("Session principal has no current run authority.");
-        }
-      },
-      preserveRecordedSource ? undefined : { synchronousCheck: true },
+      [params.assertCurrent, recorded?.authority.assertCurrent],
+      undefined,
+      { synchronousCheck: true },
     );
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client,
@@ -311,13 +272,10 @@ async function prepareSessionPrincipalRunAccess(params: {
       { synchronousCheck: true },
     );
     assertCurrent();
-    const signals = [access?.signal, recorded?.authority.signal].filter(
-      (signal): signal is AbortSignal => signal !== undefined,
-    );
     return {
       client,
       assertCurrent,
-      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+      signal: recorded?.authority.signal,
       gatewayAccessGrant: original
         ? original.gatewayAccessGrant
         : access

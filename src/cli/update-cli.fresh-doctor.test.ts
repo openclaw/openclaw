@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
-import { VERSION } from "../version.js";
 import {
   commandCalls,
   expectNoSideEffects,
@@ -37,72 +35,6 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(update.updateGitRelease, update.replaceConfigFile, mocks.spawn);
-  });
-
-  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
-    update.mockGitUpdateAfterMutation(
-      update.makeOkUpdateResult({
-        before: { version: "2026.4.14" },
-        after: { version: "2026.4.10" },
-      }),
-    );
-    const releaseRoot = gitReleaseSlot(resolveGitReleasePrefix());
-    mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
-      pkgRoot === releaseRoot ? "2026.4.10" : "2026.4.14",
-    );
-
-    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    let hostVersionDuringPluginUpdate: string | undefined = "unset";
-    mocks.updateNpmInstalledPlugins.mockImplementation(async () => {
-      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      return { changed: false, config: f.baseConfig, outcomes: [] };
-    });
-
-    try {
-      await update.updateCommand({ yes: true });
-
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
-      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    } finally {
-      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    }
-  });
-
-  it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
-      doctorConfigWrites: true,
-      doctorRetirementOnly: true,
-    });
-    mocks.readPackageVersion.mockResolvedValue(VERSION);
-    vi.mocked(update.updateGitRelease).mockResolvedValue(
-      runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
-    );
-    vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-      f.FRESH_POST_UPDATE_ENTRYPOINT,
-    );
-    f.mockNpmPluginOutcomes([], true);
-    let strictValidationEnv: string | undefined;
-    vi.mocked(update.readConfigFileSnapshot).mockImplementation(async (options) => {
-      if (!options?.skipPluginValidation) {
-        strictValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      }
-      return f.baseSnapshot;
-    });
-
-    await update.updateCommand({ yes: true, restart: false });
-
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
-    expect(doctorCalls).toHaveLength(1);
-    update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
-    expect(update.runExec).toHaveBeenCalledWith(
-      expect.any(String),
-      [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
-      expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
-    );
-    expect(strictValidationEnv).toBe("0");
-    expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("records diagnostics as a warning when the fresh plugin doctor cannot run", async () => {

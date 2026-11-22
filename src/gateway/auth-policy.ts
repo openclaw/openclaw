@@ -20,6 +20,64 @@ const policies = new WeakMap<
   }
 >();
 
+/** Current credential and identity grants, independent of a transport fingerprint. */
+export function resolveGatewayAuthPolicyGrant(
+  config: OpenClawConfig,
+  principal: Parameters<typeof captureGatewayAuthPolicy>[1],
+) {
+  const verifiedIdentity = normalizeOptionalString(principal?.verifiedIdentity);
+  const { role, authMethod, authModeOverride, browserOrigin, delegation } = principal ?? {};
+  const grant =
+    role === "operator" && verifiedIdentity
+      ? [
+          ...new Set(
+            delegation?.scopes ??
+              resolveIdentityOperatorScopes(verifiedIdentity, config.gateway?.auth?.identityScopes),
+          ),
+        ].toSorted()
+      : undefined;
+  let methodEnabled: boolean | undefined;
+  let proxyUserAllowed: boolean | undefined;
+  let fallbackCredentialGeneration: string | undefined;
+  if (
+    authMethod === "trusted-proxy" ||
+    authMethod === "tailscale" ||
+    authMethod === "none" ||
+    authMethod === "password"
+  ) {
+    const auth = resolveGatewayAuthForConfig({
+      config,
+      authOverride: authModeOverride ? { mode: authModeOverride } : undefined,
+      tailscaleMode: config.gateway?.tailscale?.mode,
+    });
+    if (authMethod === "trusted-proxy") {
+      methodEnabled = auth.mode === "trusted-proxy" && auth.trustedProxy !== undefined;
+      const allowUsers = auth.trustedProxy?.allowUsers;
+      proxyUserAllowed = Boolean(
+        delegation
+          ? isGatewayDelegationCurrent(delegation, config)
+          : verifiedIdentity && (!allowUsers?.length || allowUsers.includes(verifiedIdentity)),
+      );
+    } else if (authMethod === "tailscale") {
+      methodEnabled = auth.allowTailscale && auth.mode !== "trusted-proxy" && auth.mode !== "none";
+    } else if (authMethod === "none") {
+      methodEnabled = auth.mode === "none";
+    } else if (auth.mode === "trusted-proxy") {
+      methodEnabled = Boolean(auth.password);
+      fallbackCredentialGeneration = auth.password ? sha256Base64Url(auth.password) : undefined;
+    }
+  }
+  return {
+    grant,
+    methodEnabled,
+    proxyUserAllowed,
+    fallbackCredentialGeneration,
+    browserOriginAllowed: browserOrigin
+      ? checkGatewayWsBrowserOrigin(browserOrigin, config).ok
+      : undefined,
+  };
+}
+
 /** Capture the grant principal together with its generation; null means no identity-derived scopes. */
 export function captureGatewayAuthPolicy(
   config: OpenClawConfig,
@@ -69,62 +127,10 @@ export function captureGatewayAuthPolicy(
     : stableStringify([role, verifiedIdentity, authMethod, authModeOverride, browserOrigin]);
   let policy = principalKey === undefined ? undefined : cached.identities.get(principalKey);
   if (!policy) {
-    const grant =
-      role === "operator" && verifiedIdentity
-        ? [
-            ...new Set(
-              delegation?.scopes ??
-                resolveIdentityOperatorScopes(
-                  verifiedIdentity,
-                  config.gateway?.auth?.identityScopes,
-                ),
-            ),
-          ].toSorted()
-        : undefined;
-    let methodEnabled: boolean | undefined;
-    let proxyUserAllowed: boolean | undefined;
-    let fallbackCredentialGeneration: string | undefined;
-    if (
-      authMethod === "trusted-proxy" ||
-      authMethod === "tailscale" ||
-      authMethod === "none" ||
-      authMethod === "password"
-    ) {
-      const auth = resolveGatewayAuthForConfig({
-        config,
-        authOverride: authModeOverride ? { mode: authModeOverride } : undefined,
-        tailscaleMode: config.gateway?.tailscale?.mode,
-      });
-      if (authMethod === "trusted-proxy") {
-        methodEnabled = auth.mode === "trusted-proxy" && auth.trustedProxy !== undefined;
-        const allowUsers = auth.trustedProxy?.allowUsers;
-        proxyUserAllowed = Boolean(
-          delegation
-            ? isGatewayDelegationCurrent(delegation, config)
-            : verifiedIdentity && (!allowUsers?.length || allowUsers.includes(verifiedIdentity)),
-        );
-      } else if (authMethod === "tailscale") {
-        methodEnabled =
-          auth.allowTailscale && auth.mode !== "trusted-proxy" && auth.mode !== "none";
-      } else if (authMethod === "none") {
-        methodEnabled = auth.mode === "none";
-      } else if (auth.mode === "trusted-proxy") {
-        // The proxy handshake generation does not include its local password fallback.
-        methodEnabled = Boolean(auth.password);
-        fallbackCredentialGeneration = auth.password ? sha256Base64Url(auth.password) : undefined;
-      }
-    }
+    const grant = resolveGatewayAuthPolicyGrant(config, principal);
     policy = Object.freeze({
       generation: cached.global,
-      grantGeneration: stableStringify({
-        grant,
-        methodEnabled,
-        proxyUserAllowed,
-        fallbackCredentialGeneration,
-        browserOriginAllowed: browserOrigin
-          ? checkGatewayWsBrowserOrigin(browserOrigin, config).ok
-          : undefined,
-      }),
+      grantGeneration: stableStringify(grant),
       role,
       authMethod,
       authModeOverride,

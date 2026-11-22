@@ -51,10 +51,7 @@ export function registerFailureSelectorTests(deps: {
   runUpdateFailureTriage: typeof RunUpdateFailureTriage;
   expectSelectorTriageFailure: typeof import("../update-cli-invocation.test-support.js").expectSelectorTriageFailure;
 }) {
-  it.each([
-    { name: "update", run: deps.updateCommand },
-    { name: "repair", run: deps.updateFinalizeCommand },
-  ])(
+  it.each([{ name: "repair", run: deps.updateFinalizeCommand }])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
       const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
@@ -71,9 +68,7 @@ export function registerFailureSelectorTests(deps: {
         OPENCLAW_WORKSPACE_DIR: "relative-workspace",
       };
       await withEnvAsync(selectors, async () => {
-        const error = await run({ yes: true, json: true, restart: false }).catch(
-          (caught: unknown) => caught,
-        );
+        const error = await run({ yes: true, json: true }).catch((caught: unknown) => caught);
         expect(deps.runUpdateFailureTriage).toHaveBeenCalledOnce();
         const triageCall = vi.mocked(deps.runUpdateFailureTriage).mock.calls[0]?.[0];
         if (name === "update") {

@@ -22,7 +22,7 @@ import {
   resolveInternalRealtimeVoiceGatewayRelayLaunchError,
 } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProviderAsync } from "../../../talk/provider-resolver.js";
-import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
@@ -608,7 +608,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           }
         };
         assertCurrent();
-        const captured = await captureGatewayOperatorRunAuthority({
+        const captured = await prepareGatewayOperatorRunAuthority({
           client: client ?? null,
           context,
           hasCurrentClientAuthority,

@@ -4,25 +4,26 @@ import {
   setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
 } from "../../gateway/openclaw-id/tunnel-principal.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { restoreGatewayOperatorSource } from "../../gateway/operator-run-recovery.js";
+import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
-import { readCronOperatorSnapshotForRun } from "../operator-source-snapshot.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
   writeCronStoreSnapshot,
 } from "../service.test-harness.js";
+import { resolveCronOperatorExecutionRevision } from "../service/jobs-tool-policy.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { onTimer } from "../service/timer.test-support.js";
 import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { prepareCronCreatorSandbox } from "./run-creator-sandbox.js";
 import {
   memberSourceCase as createMemberSourceCase,
   memberSourceCases,
@@ -71,7 +72,6 @@ describe("undecodable scheduled authority", () => {
       const job = makeIsolatedAgentJobFixture({
         operatorSource: { executionRevision: "invalid", source },
       });
-      expect(() => readCronOperatorSnapshotForRun(job)).toThrow(CronOperatorSourceError);
       await expect(
         runAgent(
           makeIsolatedAgentParamsFixture({
@@ -94,8 +94,10 @@ describe("undecodable scheduled authority", () => {
     },
   );
 
-  it("hydrates stored membership before deciding that its authority was removed", async () => {
+  it("hydrates membership and retains the Guest sandbox when its role gains unrelated scopes", async () => {
     const scenario = memberSourceCase("removed member");
+    const role = expectDefined(scenario.cfg.gateway?.roles?.definitions.guest, "guest role");
+    role.scopes = [...role.scopes, "operator.read"];
     let hydrated = false;
     setOpenClawIdMemberAccountLookup(
       (accountId) => hydrated && accountId === scenario.principal.accountId,
@@ -106,81 +108,44 @@ describe("undecodable scheduled authority", () => {
         hydrated = true;
       },
     );
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const sessionBoundary = new Error("prepared session boundary");
-    h.resolveCronSessionMock.mockRejectedValueOnce(sessionBoundary);
-    await expect(
-      runAgent(
-        makeIsolatedAgentParamsFixture({
-          cfg: scenario.cfg,
-          job: makeIsolatedAgentJobFixture({
-            operatorSource: scenario.operatorSource,
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: scenario.operatorSource.source.snapshot.profileId,
-            },
-          }),
-        }),
-      ),
-    ).rejects.toBe(sessionBoundary);
-    expect(hydrated).toBe(true);
-    expect(h.resolveCronSessionMock).toHaveBeenCalledOnce();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("retains the Guest sandbox when its current role gains unrelated scopes", async () => {
-    const scenario = memberSourceCase("removed member");
-    const role = expectDefined(scenario.cfg.gateway?.roles?.definitions.guest, "guest role");
-    role.scopes = [...role.scopes, "operator.read"];
-    setOpenClawIdMemberAccountLookup((accountId) => accountId === scenario.principal.accountId);
-    setOpenClawIdTunnelPrincipalLookup(
-      () => scenario.operatorSource.source.snapshot.openclawIdPrincipal,
-    );
-    const params = makeIsolatedAgentParamsFixture({
-      cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({
-        operatorSource: scenario.operatorSource,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: scenario.operatorSource.source.snapshot.profileId,
-        },
-      }),
+    const restored = await restoreGatewayOperatorSource({
+      agentId: "main",
+      snapshot: scenario.operatorSource.source.snapshot,
+      context: createContext([], () => scenario.cfg),
+      assertCurrent() {},
     });
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    await expect(prepareCronCreatorSandbox(params.cfg, params.job)).resolves.toBe("required");
+    try {
+      expect(hydrated).toBe(true);
+      expect(restored.authority.rolePolicy?.sandboxRequired).toBe(true);
+      expect(restored.authority.scopes).toEqual(["operator.sessions.write", "operator.cron"]);
+    } finally {
+      restored.release();
+    }
   });
 
-  it("does not permanently retire an attempt aborted during membership hydration", async () => {
+  it("does not turn aborted membership hydration into an authority refusal", async () => {
     const scenario = memberSourceCase("removed member");
     const controller = new AbortController();
     setOpenClawIdTunnelPrincipalLookup(
       () => undefined,
       async () => controller.abort(),
     );
-    const params = makeIsolatedAgentParamsFixture({
-      cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({
-        operatorSource: scenario.operatorSource,
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: scenario.operatorSource.source.snapshot.profileId,
-        },
-      }),
-      abortSignal: controller.signal,
-    });
-    await expect(runAgent(params)).rejects.not.toBeInstanceOf(CronOperatorSourceError);
+    const failure = await restoreGatewayOperatorSource({
+      agentId: "main",
+      snapshot: scenario.operatorSource.source.snapshot,
+      context: createContext([], () => scenario.cfg),
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    }).catch((error: unknown) => error);
     expect(controller.signal.aborted).toBe(true);
-    expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(failure).toBe(controller.signal.reason);
   });
 
   it.each(["undecodable", ...memberSourceCases] as const)(
     "records the first recurring authority failure without executing: %s",
     async (name) => {
       const scenario = name === "undecodable" ? undefined : memberSourceCase(name);
+      const unavailable =
+        Boolean(scenario?.transientError) || name === "disabled membership lookup";
       const { storePath } = await makeStorePath();
       const nowMs = Date.now();
       const clock = createGatewaySchedulerClock(nowMs);
@@ -199,6 +164,9 @@ describe("undecodable scheduled authority", () => {
           source: { version: 1, snapshot: null },
         },
       });
+      if (job.operatorSource) {
+        job.operatorSource.executionRevision = resolveCronOperatorExecutionRevision(job);
+      }
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>((request) =>
         runAgent(
@@ -213,6 +181,8 @@ describe("undecodable scheduled authority", () => {
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
+      const context = createContext([], () => scenario?.cfg ?? {});
+      context.resolveGatewayContext = () => context;
       const { cron, state } = createCronServiceWithStateForTest({
         scheduler: createTestGatewayScheduler(clock.clock),
         nowMs: clock.clock.now,
@@ -222,8 +192,10 @@ describe("undecodable scheduled authority", () => {
         log: logger,
         enqueueSystemEvent,
         sendCronFailureAlert,
+        runSchedulerOwned: createScheduledGatewayRunner(() => context),
         runIsolatedAgentJob,
       });
+      context.cron = cron;
       try {
         await cron.start();
         clock.setTime(nowMs + 60_001);
@@ -231,10 +203,10 @@ describe("undecodable scheduled authority", () => {
         await cron.waitForIdle();
         expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
         expect(cron.getJob(job.id)).toMatchObject({
-          enabled: Boolean(scenario?.transientError),
+          enabled: unavailable,
           state: { lastRunStatus: "error", consecutiveErrors: 1 },
         });
-        if (scenario?.transientError) {
+        if (unavailable) {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeGreaterThan(clock.clock.now());
         } else {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
@@ -245,12 +217,16 @@ describe("undecodable scheduled authority", () => {
         );
         const history = readCronRunHistoryPageForTests({ storeKey: storePath });
         expect(history.entries).toHaveLength(1);
-        if (scenario?.transientError) {
-          expect(result).toBe(scenario.transientError);
-          expect(result).not.toBeInstanceOf(CronOperatorSourceError);
+        if (unavailable) {
+          expect(result).toMatchObject({
+            status: "error",
+            error: "Gateway access policy is unavailable; retry the operation.",
+            errorClassification: { kind: "reason", reason: "server_error" },
+            executionStarted: false,
+          });
           expect(history.entries[0]).toMatchObject({
             status: "error",
-            error: scenario.transientError.message,
+            error: "Gateway access policy is unavailable; retry the operation.",
           });
         } else {
           expect(result).toMatchObject({ error: history.entries[0]?.error });
@@ -263,26 +239,44 @@ describe("undecodable scheduled authority", () => {
             executionStarted: false,
             admissionDisposition: "rejected",
           });
-          if (scenario) {
+          if (
+            scenario &&
+            !["changed role", "deleted role definition", "unknown role", "lost scope"].includes(
+              name,
+            )
+          ) {
             expect(result).toMatchObject({
-              error: new CronOperatorSourceError(new Error(scenario.refusal)).message,
+              error: new CronOperatorSourceError(
+                new Error(
+                  ["removed member", "changed account", "changed listing"].includes(name)
+                    ? "Restart recovery operator authority changed; start a new user turn."
+                    : scenario.refusal,
+                ),
+              ).message,
             });
           }
           expect(history.entries[0]).toMatchObject({
             status: "error",
-            error: expect.stringContaining(scenario?.refusal ?? "Restart recovery operator source"),
+            error: expect.stringContaining(
+              "operator authority that created this automation was refused",
+            ),
           });
         }
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        expect(sendCronFailureAlert).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "telegram",
-            to: "fixture-recipient",
-            payload: {
-              text: 'Automation "Test Job" failed\nCheck automation history for details.',
-            },
-          }),
-        );
+        if (unavailable) {
+          // A transient admission outage schedules a quick retry before alerting.
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        } else {
+          expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+          expect(sendCronFailureAlert).toHaveBeenCalledWith(
+            expect.objectContaining({
+              channel: "telegram",
+              to: "fixture-recipient",
+              payload: {
+                text: 'Automation "Test Job" failed\nCheck automation history for details.',
+              },
+            }),
+          );
+        }
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(h.resolveCronSessionMock).not.toHaveBeenCalled();
         expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();

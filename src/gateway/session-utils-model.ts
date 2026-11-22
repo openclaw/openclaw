@@ -3,11 +3,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import {
+  resolveModelAgentRuntimeMetadata,
+  resolveCurrentSessionAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { findModelCatalogEntry, modelSupportsInput } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
@@ -49,7 +52,10 @@ import {
   type GatewayModelThinkingProfile,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveGatewaySessionRuntimeProjection } from "./session-utils-projection.js";
+import {
+  resolveGatewaySessionRuntimeProjection,
+  resolveGatewaySessionRuntimeSelectionLocked,
+} from "./session-utils-projection.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -267,6 +273,39 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   };
 }
 
+/** A session with no selected model has no model-derived thinking or capacity facts. */
+export function resolveGatewaySessionUnconfiguredThinkingProjection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
+}): ReturnType<typeof resolveGatewaySessionThinkingProjectionInternal> {
+  const acpMeta = params.preparedAcpMeta ?? undefined;
+  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentScope: { kind: "prepared", agentId: params.agentId },
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
+  });
+  const thinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
+  return {
+    acpMeta,
+    catalogEntry: undefined,
+    capacityCatalogEntry: undefined,
+    capacityRuntime: agentRuntime.id,
+    agentRuntime,
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(params.entry, acpMeta),
+    thinkingLevel,
+    effectiveThinkingLevel: thinkingLevel,
+    thinkingLevels: [],
+    thinkingOptions: [],
+    thinkingDefault: undefined,
+  };
+}
+
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
@@ -297,10 +336,18 @@ export function getSessionDefaults(
       : resolveConfiguredModelRef({
           cfg,
           defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
           allowPluginNormalization: options?.allowPluginNormalization,
           manifestPlugins,
         }));
+  if (!resolved) {
+    // No configured model: report none rather than a model the agent would not run.
+    return {
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+      communication: resolveSessionCommunicationPolicy({ config: cfg }),
+    };
+  }
   const displayModel = resolveSessionDisplayModelIdentityRefCached({
     cfg,
     provider: resolved.provider,
@@ -612,6 +659,16 @@ export function projectSessionPatchResult(params: {
     agentId: params.targetAgentId,
   });
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
+  const entry = projectPublicSessionEntry(params.entry);
+  delete entry.skillsSnapshot;
+  delete entry.systemPromptReport;
+  const path = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.targetAgentId,
+  }).path;
+  if (!resolved) {
+    // No configured model: the receipt omits model-derived facts.
+    return { ok: true, path, key: params.canonicalKey, entry };
+  }
   const displayModel = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
     provider: resolved.provider,
@@ -640,14 +697,9 @@ export function projectSessionPatchResult(params: {
         selected: params.entry.contextWindow,
       })
     : undefined;
-  const entry = projectPublicSessionEntry(params.entry);
-  delete entry.skillsSnapshot;
-  delete entry.systemPromptReport;
   return {
     ok: true,
-    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
-      agentId: params.targetAgentId,
-    }).path,
+    path,
     key: params.canonicalKey,
     entry,
     resolved: {

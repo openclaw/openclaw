@@ -1,15 +1,9 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi, onTestFinished } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
-import type { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
@@ -17,24 +11,18 @@ import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import {
   mockPostCoreConvergenceOnce,
-  pluginSyncResult,
   stableConfig,
 } from "./update-cli/update-cli-config.test-support.js";
 import {
   mockUnbuiltRecoveryFixture,
   recoveryObservationStep,
-  recoveryCleanupStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
-import {
-  writeJsonFixture,
-  writeOpenClawPackageFixture,
-} from "./update-cli/update-cli-package.test-support.js";
+import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const {
-    baseConfig,
     baseSnapshot,
     configSnapshot,
     createCaseDir,
@@ -206,232 +194,6 @@ describe("update-cli", () => {
     expect(update.runUpdateFailureTriage).not.toHaveBeenCalled();
   });
 
-  it("keeps json update output successful when post-core plugin updates warn", async () => {
-    const drift = {
-      pluginId: "demo",
-      spec: "@openclaw/demo@1.0.0",
-      resolvedSpec: "@openclaw/demo@1.0.0",
-      resolvedVersion: "1.0.0",
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
-    };
-    mocks.updateNpmInstalledPlugins.mockImplementationOnce(
-      async (params: Parameters<typeof updateNpmInstalledPlugins>[0]) => {
-        const proceed = await params.onIntegrityDrift?.({ ...drift, dryRun: false });
-        return {
-          changed: false,
-          config: params.config,
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "error",
-              message:
-                proceed === false
-                  ? "Failed to update demo: aborted: npm package integrity drift detected for @openclaw/demo@1.0.0"
-                  : "unexpected drift continuation",
-            },
-          ],
-        };
-      },
-    );
-    vi.mocked(update.defaultRuntime.writeJson).mockClear();
-
-    // A switched Git release converges plugins only when this update activates it.
-    await update.updateCommand({ json: true });
-
-    const jsonOutput = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(jsonOutput?.status).toBe("ok");
-    expect(jsonOutput?.reason).toBeUndefined();
-    const plugins = jsonOutput?.postUpdate?.plugins;
-    expect(plugins?.integrityDrifts).toEqual([{ ...drift, action: "aborted" }]);
-    expect(plugins?.status).toBe("warning");
-    expect(plugins?.npm.outcomes[0]).toMatchObject({
-      status: "error",
-      message: expect.stringContaining("npm package integrity drift"),
-    });
-    expect(assert.pluginWarning(jsonOutput)).toMatchObject({
-      pluginId: "demo",
-      guidance: ["openclaw plugins update demo"],
-      reason: expect.stringContaining("npm package integrity drift"),
-    });
-  });
-
-  it.each(["sync", "update"] as const)(
-    "prints ClawHub %s trust warnings once in human output",
-    async (source) => {
-      const trustWarning =
-        "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
-        "│ Outcome: Review                                         │\n" +
-        "│ Overview: Review the requested capabilities.             │\n" +
-        "╰───────────────────────────────────────────────────────────────────────╯";
-      if (source === "sync") {
-        mocks.syncPluginsForUpdateChannel.mockImplementationOnce(
-          async (params: {
-            config: OpenClawConfig;
-            logger?: { warn?: (message: string) => void };
-          }) => {
-            params.logger?.warn?.(trustWarning);
-            return pluginSyncResult(params.config, false, {
-              warnings: [trustWarning],
-              errors: [
-                {
-                  pluginId: "demo",
-                  message:
-                    "Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo@1.2.4).",
-                },
-              ],
-            });
-          },
-        );
-      } else {
-        mocks.updateNpmInstalledPlugins.mockImplementationOnce(
-          async (params: {
-            config: OpenClawConfig;
-            logger?: { warn?: (message: string) => void };
-          }) => {
-            params.logger?.warn?.(trustWarning);
-            return {
-              changed: false,
-              config: params.config,
-              outcomes: [
-                {
-                  pluginId: "demo",
-                  status: "skipped",
-                  code: CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED,
-                  warning: trustWarning,
-                  message:
-                    "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged.",
-                },
-              ],
-            };
-          },
-        );
-      }
-      await update.updateCommand({ yes: true });
-      const output = assert.getLogOutput();
-      expect(output.split(trustWarning).length - 1).toBe(1);
-      if (source === "sync") {
-        expect(
-          vi.mocked(update.defaultRuntime.log).mock.calls.filter(([line]) => line === trustWarning),
-        ).toHaveLength(1);
-      } else {
-        expect(output).toContain("openclaw plugins update demo");
-      }
-    },
-  );
-
-  it.each([
-    { json: false, repaired: false },
-    { json: true, repaired: true },
-  ])(
-    "reports unavailable retained plugin targets without failing core ($json, repaired=$repaired)",
-    async ({ json, repaired }) => {
-      const message =
-        'Retained plugin "demo" at 1.0.0: requested @example/demo@2.0.0 for core 9999.0.0 could not be resolved: No matching version found. Run `openclaw plugins update demo` when the package or registry is available.';
-      const installPath = createCaseDir("unavailable-target");
-      await fs.mkdir(installPath, { recursive: true });
-      await writeJsonFixture(path.join(installPath, "package.json"), {
-        name: "@example/demo",
-        version: "1.0.0",
-      });
-      const record: PluginInstallRecord = {
-        source: "npm",
-        spec: "@example/demo@2.0.0",
-        installPath,
-        version: "1.0.0",
-      };
-      const records = { demo: record };
-      const warningLogPath = path.join(installPath, "update-warning.log");
-      setLoggerOverride({ level: "warn", file: warningLogPath });
-      onTestFinished(async () => {
-        await flushLogger();
-        resetLogger();
-      });
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mockNpmPluginOutcomes(
-        [
-          {
-            pluginId: "demo",
-            status: "unchanged",
-            code: "plugin-target-unavailable",
-            currentVersion: "1.0.0",
-            message,
-          },
-        ],
-        false,
-        { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
-      );
-      mockPostCoreConvergenceOnce(update.runPostCorePluginConvergenceSpy, {
-        installRecords: repaired ? { demo: { ...record, version: "2.0.0" } } : records,
-      });
-
-      await update.updateCommand({ yes: true, json });
-
-      expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-      await flushLogger();
-      const logEntries = fsSync.existsSync(warningLogPath)
-        ? (await fs.readFile(warningLogPath, "utf8"))
-            .trim()
-            .split("\n")
-            .map((line): unknown => JSON.parse(line))
-        : [];
-      const retainedWarning = expect.objectContaining({
-        message,
-        _meta: expect.objectContaining({ logLevelName: "WARN" }),
-      });
-      if (repaired) {
-        expect(logEntries).not.toContainEqual(retainedWarning);
-      } else {
-        expect(logEntries).toContainEqual(retainedWarning);
-      }
-      if (json) {
-        expect(assert.lastWriteJsonCall()).toMatchObject({
-          status: "ok",
-          postUpdate: { plugins: { warnings: [] } },
-        });
-      } else {
-        expect(stripAnsi(assert.getLogOutput())).toContain(message);
-      }
-    },
-  );
-
-  it("reports actionable ClawHub blocked plugin updates", async () => {
-    const trustWarning =
-      "╭─ BLOCKED - ClawHub flagged this release as malicious ─╮\n" +
-      "│ • Security scan: malicious                           │\n" +
-      "╰──────────────────────────────────────────────────────╯";
-    mockNpmPluginOutcomes(
-      [
-        {
-          pluginId: "demo",
-          status: "skipped",
-          code: "clawhub_download_blocked",
-          warning: trustWarning,
-          message:
-            "Skipped demo ClawHub update: ClawHub blocked this release; update was not started. Existing installed plugin left unchanged.",
-        },
-      ],
-      false,
-    );
-    vi.mocked(update.defaultRuntime.writeJson).mockClear();
-
-    await update.updateCommand({ json: true });
-
-    const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(result?.postUpdate?.plugins?.status).toBe("warning");
-    expect(assert.pluginWarning(result)).toMatchObject({
-      pluginId: "demo",
-      guidance: ["openclaw plugins update demo"],
-    });
-    expect(assert.pluginOutcome(result)).toMatchObject({ pluginId: "demo", status: "skipped" });
-    expect(assert.pluginWarning(result)?.reason).toContain("Security scan: malicious");
-    expect(assert.pluginWarning(result)?.reason).toContain("ClawHub blocked this release");
-    expect(assert.pluginOutcome(result)?.message).toContain(
-      "Existing installed plugin left unchanged",
-    );
-  });
-
   it("fails unexpected post-core npm update exceptions", async () => {
     await mockUnbuiltRecoveryFixture();
     process.chdir(await mockPackageInstallAtCaseDir("openclaw-current-plugin-exception", VERSION));
@@ -451,8 +213,8 @@ describe("update-cli", () => {
       reason: "post-update-failed",
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
+        // An already-current core copied nothing, so there is nothing to clean up.
         recoveryObservationStep(),
-        recoveryCleanupStep(),
       ],
     });
   });

@@ -103,7 +103,10 @@ describe("agents_list tool", () => {
     );
     const details = result.details as AgentListDetails;
     expect(details.agents?.map((agent) => agent.id)).toEqual(["blank", "research"]);
-    expect(details.agents?.find((agent) => agent.id === "research")).toMatchObject({
+    const research = details.agents?.find((agent) => agent.id === "research");
+    expect(research).not.toHaveProperty("model");
+    expect(research).not.toHaveProperty("agentRuntime");
+    expect(research).toMatchObject({
       name: "Research",
       description: "Finds and synthesizes evidence",
     });

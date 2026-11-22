@@ -144,7 +144,8 @@ migration originals it produced; without that verification, for example after
 update. Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 first if you want a downgrade path.
 A failed update that stopped before repair or activation does the same and also
-retires its own original-state capture, since nothing it captured changed.
+retires its own original-state capture if it took one, since nothing it captured
+changed. An update refused before its first state change took none.
 Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
@@ -1213,6 +1214,22 @@ freshness or dependencies. Those checks run when you apply the update; use
 | ----------------------- | ------- | ------------------------------------------------------------ |
 | `--timeout <seconds>`   | Unset   | Optional overall update budget in seconds.                   |
 | `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
+
+## `update plugins`
+
+Plugin maintenance for the release this command runs from: channel sync, plugin
+updates and repair, the same work `openclaw update` does after a core update. On a
+Git install, `openclaw update` runs it from the new release before the restart, so
+the new core chooses its plugins, and from the serving release when the checkout is
+already current. A plugin problem is reported as a warning and never fails the update;
+`openclaw plugins update` retries it. You do not normally run this command yourself.
+
+| Flag                    | Default  | Description                                |
+| ----------------------- | -------- | ------------------------------------------ |
+| `--channel <channel>`   | Required | Update channel the plugins follow.         |
+| `--timeout <seconds>`   | Required | Budget for plugin maintenance in seconds.  |
+| `--accept-capabilities` | `false`  | Accept reviewed plugin capability changes. |
+| `--json`                | `false`  | Print the result as JSON.                  |
 
 ## Detailed topics
 

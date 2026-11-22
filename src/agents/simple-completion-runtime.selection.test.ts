@@ -126,8 +126,8 @@ it("resolves alias refs before parsing provider/model", () => {
   expectRoute(cfg, "openrouter", "anthropic/claude-sonnet-4-6", {}, "work");
 });
 
-it("falls back to the runtime default", () => {
-  expectRoute({}, "openai", "gpt-6-astra");
+it("selects no route when no model is configured", () => {
+  expect(resolveSelection({ agentId: "main", cfg: {} })).toBeNull();
 });
 
 it("uses the configured provider model when the runtime default is unavailable", () => {
