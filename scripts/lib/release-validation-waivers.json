@@ -627,6 +627,66 @@
           }
         ]
       }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
+      "reason": "Z.AI Coding Plan provider returned billing-class failures; accept unavailable account entitlement, not passing live text proof.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live agents)",
+      "reason": "The only failed native-agent assertions were two Z.AI billing-class empty completions; other native-agent correctness failures are not accepted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live gateway profiles Z.ai)",
+      "reason": "All eight selected Z.AI probes returned billing errors and zero successful model runs; accept the account prerequisite gap, not passing model coverage.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (Z.ai)",
+      "reason": "All six selected Z.AI models returned HTTP 429 insufficient balance or missing resource package; accept the account prerequisite gap, not passing model coverage.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
     }
   ]
 }
