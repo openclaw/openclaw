@@ -5,6 +5,8 @@ import {
   resolveTargetPrefixedChannel,
   validateTargetProviderPrefix,
 } from "../infra/outbound/channel-target-prefix.js";
+import { MessageActionDeniedError } from "../infra/outbound/message-action-denial.js";
+import { tryResolveLoadedOutboundTarget } from "../infra/outbound/targets-loaded.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -116,9 +118,11 @@ function resolveAnnounceValidationChannel(params: {
     : (resolveTargetPrefixedChannel(params.to) ?? params.channel);
 }
 
-function assertCompatibleAnnounceTarget(params: {
+async function assertCompatibleAnnounceTarget(params: {
+  cfg: OpenClawConfig;
   channel?: string;
   to?: string;
+  accountId?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
 }) {
   if (!params.channel || params.channel === "last") {
@@ -128,6 +132,24 @@ function assertCompatibleAnnounceTarget(params: {
   if (error) {
     throw new Error(`${params.field}: ${error.message}`);
   }
+  if (params.to) {
+    return;
+  }
+  // The channel's own resolver decides whether a chat is required (a configured default counts).
+  const resolved = await tryResolveLoadedOutboundTarget({
+    channel: params.channel,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    mode: "explicit",
+  });
+  if (
+    resolved?.ok === false &&
+    resolved.error instanceof MessageActionDeniedError &&
+    resolved.error.reasonCode === "message_target_missing"
+  ) {
+    const toField = params.field.replace(/channel$/, "to");
+    throw new Error(`${params.field}: ${resolved.error.message}; set ${toField} to that chat`);
+  }
 }
 
 export async function assertValidCronAnnounceDelivery(params: {
@@ -136,9 +158,11 @@ export async function assertValidCronAnnounceDelivery(params: {
 }) {
   assertCanonicalCronDeliveryMode(params.delivery);
   if (params.delivery?.mode === "announce") {
-    assertCompatibleAnnounceTarget({
+    await assertCompatibleAnnounceTarget({
+      cfg: params.cfg,
       channel: params.delivery.channel,
       to: params.delivery.to,
+      accountId: params.delivery.accountId,
       field: "delivery.channel",
     });
     await assertConfiguredAnnounceChannel({
@@ -164,9 +188,11 @@ export async function assertValidCronAnnounceDelivery(params: {
     ) {
       return;
     }
-    assertCompatibleAnnounceTarget({
+    await assertCompatibleAnnounceTarget({
+      cfg: params.cfg,
       channel: failureDestination.channel,
       to: failureDestination.to,
+      accountId: failureDestination.accountId,
       field: "delivery.failureDestination.channel",
     });
     await assertConfiguredAnnounceChannel({
@@ -209,9 +235,11 @@ export async function assertValidCronFailureAlert(params: {
   if (!failureAlert || failureAlert.mode === "webhook") {
     return;
   }
-  assertCompatibleAnnounceTarget({
+  await assertCompatibleAnnounceTarget({
+    cfg: params.cfg,
     channel: failureAlert.channel,
     to: failureAlert.to,
+    accountId: failureAlert.accountId,
     field: "failureAlert.channel",
   });
   await assertConfiguredAnnounceChannel({

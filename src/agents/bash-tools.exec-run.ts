@@ -126,8 +126,9 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     10,
     MAX_EXEC_YIELD_MS,
   );
+  // An owner that has no later turn to collect a handle turns continuation off for good.
   const backgroundAvailable =
-    defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
+    defaults?.allowBackground !== false && (defaults?.processToolAvailabilityRef?.value ?? true);
   const [defaultTimeoutSec, serviceTimeoutSec] = resolveExecTimeoutDefaults(defaults);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   let safeBinPolicy: ReturnType<typeof resolveExecSafeBinRuntimePolicy> | undefined;

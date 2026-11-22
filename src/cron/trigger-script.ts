@@ -285,7 +285,8 @@ async function prepareTriggerRuntime(
               messageActionTurnCapability,
               abortSignal: signal,
               prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
-              exec: { config },
+              // No conversation collects a backgrounded command, so exec waits for its result.
+              exec: { config, allowBackground: false },
               sandbox,
               sessionKey,
               trigger: "cron",
