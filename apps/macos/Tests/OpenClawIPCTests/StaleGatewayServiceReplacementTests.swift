@@ -11,20 +11,21 @@ struct StaleGatewayServiceReplacementTests {
         StaleGatewayServiceReplacement(
             stop: { recorder.steps.append("stop"); return stopError },
             restore: { recorder.steps.append("restore") },
-            install: { recorder.steps.append("install"); return nil })
+            install: { recorder.steps.append("install"); return nil },
+            serviceEntrypoint: "/stale/openclaw.mjs")
     }
 
     @Test func `credentials are prepared after the stale service stops and before this build installs`() async throws {
         let recorder = Recorder()
-        let failure = try await self.replacement(recorder).run { recorder.steps.append("credentials") }
+        let failure = try await self.replacement(recorder).run { recorder.steps.append("credentials for \($0)") }
         #expect(failure == nil)
-        #expect(recorder.steps == ["stop", "credentials", "install"])
+        #expect(recorder.steps == ["stop", "credentials for /stale/openclaw.mjs", "install"])
     }
 
     @Test func `failed credential preparation restores the previous service instead of installing`() async throws {
         let recorder = Recorder()
         await #expect(throws: GatewayHostingError.self) {
-            _ = try await self.replacement(recorder).run {
+            _ = try await self.replacement(recorder).run { _ in
                 recorder.steps.append("credentials")
                 throw GatewayHostingError(message: "synthetic preparation failure")
             }
@@ -90,7 +91,7 @@ struct StaleGatewayServiceReplacementTests {
     @Test func `a refused stop never runs credential preparation`() async throws {
         let recorder = Recorder()
         await #expect(throws: GatewayHostingError.self) {
-            _ = try await self.replacement(recorder, stopError: "stop refused").run {
+            _ = try await self.replacement(recorder, stopError: "stop refused").run { _ in
                 recorder.steps.append("credentials")
             }
         }

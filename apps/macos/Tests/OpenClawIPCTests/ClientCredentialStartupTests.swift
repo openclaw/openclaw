@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawNativeState
+import os
 import Testing
 @testable import OpenClaw
 
@@ -85,6 +86,30 @@ struct ClientCredentialStartupTests {
         }
         await #expect(throws: CancellationError.self) { try await operation.value }
         #expect(!FileManager.default.fileExists(atPath: fixture.capture.path))
+    }
+
+    @Test(arguments: [nil, "/stale/runtime/lib/node_modules/openclaw/openclaw.mjs"])
+    func `only the caller can name the service this build is replacing`(_ entrypoint: String?) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var environment = fixture.environment
+        environment["OPENCLAW_REPLACING_GATEWAY_SERVICE_ENTRYPOINT"] = "/inherited/openclaw.mjs"
+        let observed = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
+        try await ClientCredentialStartup.prepare(
+            executionRoot: fixture.executionRoot,
+            configURL: fixture.configURL,
+            bundle: fixture.bundle,
+            profile: AppProfile(environment: [:]),
+            environment: environment,
+            replacingServiceEntrypoint: entrypoint,
+            runCommand: { _, _, environment in
+                observed.withLock { $0 = environment }
+                return ShellExecutor.ShellResult(
+                    stdout: "", stderr: "", exitCode: 0, timedOut: false, success: true)
+            })
+        let child = observed.withLock { $0 }
+        #expect(child["OPENCLAW_STATE_DIR"] == fixture.executionRoot.path)
+        #expect(child["OPENCLAW_REPLACING_GATEWAY_SERVICE_ENTRYPOINT"] == entrypoint)
     }
 
     private struct Fixture {

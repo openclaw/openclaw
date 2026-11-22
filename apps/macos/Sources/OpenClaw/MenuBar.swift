@@ -348,20 +348,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
                 if BundledRuntime.isBundledApp {
-                    let prepare = {
+                    let prepare = { (replacingServiceEntrypoint: String?) in
                         try await ClientCredentialStartup.prepare(
                             executionRoot: executionRoot,
-                            configURL: OpenClawPaths.configURL)
+                            configURL: OpenClawPaths.configURL,
+                            replacingServiceEntrypoint: replacingServiceEntrypoint)
                     }
                     if let replacement = await StaleGatewayServiceReplacement.detect() {
                         self.credentialLogger
                             .info("Replacing the previous build's Gateway service before credential preparation")
-                        if let error = try await replacement.run(prepareCredentials: prepare) {
+                        if let error = try await replacement.run(prepareCredentials: { try await prepare($0) }) {
                             self.credentialLogger
                                 .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
                         }
                     } else {
-                        try await prepare()
+                        try await prepare(nil)
                     }
                 }
                 try Task.checkCancellation()

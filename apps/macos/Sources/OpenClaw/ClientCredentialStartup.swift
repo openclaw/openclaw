@@ -7,12 +7,14 @@ enum ClientCredentialStartup {
 
     /// Run the app's matching migration owner before native credential admission.
     /// The selected Gateway may still use an older runtime; PATH is not an update authority.
+    /// `replacingServiceEntrypoint` names a stopped older service that this build is replacing.
     static func prepare(
         executionRoot: URL,
         configURL: URL,
         bundle: Bundle = .main,
         profile: AppProfile = .current,
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        replacingServiceEntrypoint: String? = nil,
         runCommand: CommandRunner = { command, cwd, environment in
             await ShellExecutor.runDetailed(
                 command: command,
@@ -27,6 +29,7 @@ enum ClientCredentialStartup {
         childEnvironment["OPENCLAW_PROFILE"] = profile.name ?? "default"
         childEnvironment["OPENCLAW_STATE_DIR"] = executionRoot.path
         childEnvironment["OPENCLAW_CONFIG_PATH"] = configURL.path
+        childEnvironment["OPENCLAW_REPLACING_GATEWAY_SERVICE_ENTRYPOINT"] = replacingServiceEntrypoint
         let command = profile.localCLICommand(
             prefix: runtime.cliCommand,
             arguments: ["doctor", "--client-credentials", "--fix", "--non-interactive"])
