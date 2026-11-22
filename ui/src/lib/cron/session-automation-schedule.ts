@@ -1,11 +1,18 @@
 import { CronPattern } from "croner";
-import type { CronJob } from "../../../api/types.ts";
-import { i18n } from "../../../i18n/index.ts";
-import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { CronJob } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
+import { registerEnglishCatalog, t } from "../reactive/i18n.ts";
 import { nonCronSessionAutomationSchedule } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
+
+export function automationCardSchedule(schedule: CronJob["schedule"]): string {
+  const label = sessionAutomationSchedule(schedule);
+  return schedule.kind === "cron" && schedule.tz
+    ? t("cron.scheduleLabel.withTimeZone", { value: label, timeZone: schedule.tz })
+    : label;
+}
 
 const selected = (values: number[]) => values.flatMap((value, index) => (value ? [index] : []));
 const all = (values: number[]) => values.every(Boolean);

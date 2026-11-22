@@ -25,7 +25,7 @@ import { holdArchive } from "./session-archive-hold.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "./session-automation-confirm.ts";
+} from "./session-automation-confirm.tsx";
 import { isSessionMutationScopeCurrent } from "./session-mutation-scope.ts";
 import {
   patchSessionRows,
