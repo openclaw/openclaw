@@ -198,14 +198,5 @@ async function captureManagedUpdateRequester(
         throw error;
       },
     });
-  } finally {
-    // The managed update helper waits while Doctor and rollback take native exclusion.
-    // A retained idle WAL reader from this check would hold their shared lock.
-    const [{ closeOpenClawStateDatabaseWorkersByPathAsync }, { resolveOpenClawStateSqlitePath }] =
-      await Promise.all([
-        import("../state/openclaw-state-db-cache.js"),
-        import("../state/openclaw-state-db.paths.js"),
-      ]);
-    await closeOpenClawStateDatabaseWorkersByPathAsync(resolveOpenClawStateSqlitePath(env));
   }
 }

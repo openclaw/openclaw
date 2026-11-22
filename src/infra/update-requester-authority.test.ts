@@ -304,22 +304,35 @@ it.each(["registry", "config preparation", "config recheck"])(
   },
 );
 
-it("releases worker-held state readers before the helper waits on Doctor", async () => {
-  // The managed handoff helper outlives this check while Doctor and rollback take
-  // native exclusion; an idle retained WAL reader would hold their shared lock.
-  const run = create();
-  // Only the authority check may hold a connection when exclusion is attempted.
-  await closeOpenClawStateDatabaseAsync();
-  vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
-    await getUpdateRunForProgressAsync(run.runId, { env });
-  });
-  expect((await authorityFor()).isCurrent()).toBe(true);
-  const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
-  try {
-    exclusive.exec(
-      "PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;",
-    );
-  } finally {
-    exclusive.close();
-  }
-});
+it.each(["owner check", "identity preparation"] as const)(
+  "the update helper's %s releases worker-held state readers before Doctor",
+  async (entry) => {
+    // The managed handoff helper outlives this check while Doctor and rollback take
+    // native exclusion; an idle retained WAL reader would hold their shared lock.
+    const run = create();
+    // Only the requester check may hold a connection when exclusion is attempted.
+    await closeOpenClawStateDatabaseAsync();
+    for (const [name, value] of Object.entries(env)) {
+      vi.stubEnv(name, value);
+    }
+    vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
+      await getUpdateRunForProgressAsync(run.runId, { env });
+    });
+    const helper = await import("../cli/daemon-cli/lifecycle-context.js");
+    if (entry === "owner check") {
+      expect(await helper.isManagedUpdateRequesterOwner(requester)).toBe(true);
+    } else {
+      expect((await helper.prepareManagedUpdateRequesterIdentity(requester)).requester).toEqual(
+        requester,
+      );
+    }
+    const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    try {
+      exclusive.exec(
+        "PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;",
+      );
+    } finally {
+      exclusive.close();
+    }
+  },
+);
