@@ -23,6 +23,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
+import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -128,15 +129,6 @@ async function recoverRequesterCompletionCustody(params: {
   if (!pending.length) {
     return [];
   }
-  const authority = await prepareSessionSystemTurnAuthority({
-    context,
-    agentId,
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    preserveRecordedSource: true,
-    assertCurrent,
-  });
   let target: TranscriptLease | undefined;
   try {
     target = await acquireTranscriptLease(
@@ -145,39 +137,56 @@ async function recoverRequesterCompletionCustody(params: {
       { env: params.env },
     );
     const requester = target;
-    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      withOperatorToolGatewayAuthority(
-        {
-          operatorRunAuthority: authority?.authority,
-          operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [WRITE_SCOPE],
-          assertCurrent,
-        },
-        async () => {
-          for (const child of pending) {
-            const custody = await captureOperatorToolGatewayContinuationContext({
-              agentId,
-              sessionKey,
-            });
-            if (!custody) {
-              throw new Error("Restart completion has no current Gateway authority");
-            }
-            try {
-              assertCurrent();
-              requester.assertCurrent();
-              bindGatewayContextResolver(child, context.resolveGatewayContext);
-              subagentRuns.bindCompletionAuthority(child, custody);
-            } catch (error) {
-              custody.release();
-              throw error;
-            }
-          }
-        },
-      ),
-    );
+    for (const child of pending) {
+      // Re-admit the spawning requester's saved source; the woken turn checks session access
+      // when it starts. Older rows use the session principal, else the System write baseline.
+      const source = child.requesterOperatorSource;
+      const authority = source
+        ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
+        : await prepareSessionSystemTurnAuthority({
+            context,
+            agentId,
+            sessionKey,
+            storePath,
+            sessionId: entry.sessionId,
+            preserveRecordedSource: true,
+            assertCurrent,
+          });
+      try {
+        await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+          withOperatorToolGatewayAuthority(
+            {
+              operatorRunAuthority: authority?.authority,
+              operatorRoleActor: { kind: "system" },
+              scopes: authority?.authority.scopes ?? [WRITE_SCOPE],
+              assertCurrent,
+            },
+            async () => {
+              const custody = await captureOperatorToolGatewayContinuationContext({
+                agentId,
+                sessionKey,
+              });
+              if (!custody) {
+                throw new Error("Restart completion has no current Gateway authority");
+              }
+              try {
+                assertCurrent();
+                requester.assertCurrent();
+                bindGatewayContextResolver(child, context.resolveGatewayContext);
+                subagentRuns.bindCompletionAuthority(child, custody);
+              } catch (error) {
+                custody.release();
+                throw error;
+              }
+            },
+          ),
+        );
+      } finally {
+        authority?.release();
+      }
+    }
   } finally {
     target?.release();
-    authority?.release();
   }
   return pending.map((child) => child.runId);
 }
