@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOperatorMcpOAuthConnection } from "../plugins/mcp-auth-status.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { hasRegisteredOAuthRedirect } from "./mcp-oauth-provider.js";
+import { hasRegisteredOAuthRedirect, McpOAuthClientConfigError } from "./mcp-oauth-provider.js";
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   completeOAuthCallback,
@@ -111,8 +111,12 @@ export async function startOperatorMcpOAuthLink(
               usesPublicOrigin: Boolean(resolveGatewayPublicOrigin(params.cfg)),
             };
     }
-  } catch {
-    throw new Error("MCP sign-in could not be started. Try connecting again.");
+  } catch (error) {
+    // Client settings errors name the fix and carry no provider text or secrets.
+    if (error instanceof McpOAuthClientConfigError) {
+      throw error;
+    }
+    throw new Error("MCP sign-in could not be started. Try connecting again.", { cause: error });
   }
   if (started !== "pinned") {
     return started;

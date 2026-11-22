@@ -546,6 +546,88 @@ describe("MCP OAuth provider", () => {
     });
   });
 
+  itWithHome("does not retry a pre-registered client on another loopback host", async () => {
+    authMock.mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"));
+    await expect(
+      startMcpOAuthAuthorization(
+        CALENDLY_IDENTITY,
+        { ...resolvedOAuthConfig(CALENDLY_IDENTITY), oauth: { clientId: "registered-app" } },
+        {},
+      ),
+    ).rejects.toThrow("invalid_client_metadata");
+    expect(authMock).toHaveBeenCalledTimes(1);
+    expect(authMock.mock.calls[0]?.[0]?.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
+  });
+
+  itWithHome("treats tokens issued to another client as signed out", async () => {
+    const fresh = Date.now() + 3_600_000;
+    seedMcpOAuthStoreForTest(REMOTE_IDENTITY.storeKey, {
+      clientInformation: { client_id: "dynamic-client", redirect_uris: [] },
+      tokens: makeTokens("dynamic-access", "dynamic-refresh"),
+      tokenExpiresAt: fresh,
+    });
+    const configured = { clientId: "registered-app" };
+    // Lock-free fast path and the leased path both refuse the other client's token.
+    await expect(resolveRemoteToken({ config: configured })).rejects.toThrow(loginInstruction);
+    await expect(
+      resolveRemoteToken({ config: configured, allowMissingToken: true }),
+    ).resolves.toBeUndefined();
+    await withMcpOAuthProviderForTest(
+      { identity: REMOTE_IDENTITY, config: configured },
+      async (provider) => {
+        await expect(provider.tokens()).resolves.toBeUndefined();
+      },
+    );
+    // The same row is still usable for the client that obtained it.
+    await expect(resolveRemoteToken({ config: { clientId: "dynamic-client" } })).resolves.toBe(
+      "dynamic-access",
+    );
+    await expect(resolveRemoteToken()).resolves.toBe("dynamic-access");
+    expect(authMock).not.toHaveBeenCalled();
+  });
+
+  itWithHome("fails closed when a configured client secret was not resolved", async () => {
+    await expect(
+      withMcpOAuthProviderForTest(
+        {
+          identity: REMOTE_IDENTITY,
+          config: {
+            clientId: "registered-app",
+            clientSecret: { source: "env", provider: "default", id: "DOCS_SECRET" },
+          },
+        },
+        async () => undefined,
+      ),
+    ).rejects.toThrow(
+      'MCP server "Remote Docs": mcp.servers["Remote Docs"].oauth.clientSecret (env:default:DOCS_SECRET) is not resolved.',
+    );
+  });
+
+  itWithHome(
+    "refuses a Gateway sign-in link for a client registered with another callback",
+    async () => {
+      const cfg: OpenClawConfig = {
+        gateway: { port: 18790 },
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              auth: "oauth",
+              oauth: {
+                clientId: "registered-app",
+                redirectUrl: "http://127.0.0.1:8989/oauth/callback",
+              },
+            },
+          },
+        },
+      };
+      await expect(startOperatorMcpOAuthLink({ cfg, serverName: "docs" })).rejects.toThrow(
+        'MCP server "docs" uses oauth.redirectUrl http://127.0.0.1:8989/oauth/callback, but this sign-in returns to http://127.0.0.1:18790/oauth/mcp/callback. Register http://127.0.0.1:18790/oauth/mcp/callback with the OAuth client, then remove oauth.redirectUrl or set it to that URL; or sign in from the terminal with the Gateway stopped.',
+      );
+      expect(authMock).not.toHaveBeenCalled();
+    },
+  );
+
   itWithHome("forbids hidden noninteractive authorization", async () => {
     await withProvider(async (provider) => {
       await expect(provider.state?.()).rejects.toThrow(loginInstruction);

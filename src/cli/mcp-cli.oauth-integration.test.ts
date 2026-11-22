@@ -50,8 +50,24 @@ const oauthServer = (url: string, oauth?: object) => ({
   ...(oauth ? { oauth } : {}),
 });
 
-async function startOAuthFixture() {
+type FixtureTokenRequest = {
+  grantType: string | null;
+  authorization?: string;
+  clientId: string | null;
+  clientSecret: string | null;
+};
+
+async function startOAuthFixture(
+  options: {
+    registration?: boolean;
+    tokenAuthMethods?: string[];
+    client?: { id: string; secret: string };
+  } = {},
+) {
   let issuer = "";
+  const registrations: unknown[] = [];
+  const tokenRequests: FixtureTokenRequest[] = [];
+  const authorizeRequests: URLSearchParams[] = [];
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
   let tokenVerifier: string | undefined;
@@ -67,16 +83,17 @@ async function startOAuthFixture() {
         issuer,
         authorization_endpoint: `${issuer}/authorize`,
         token_endpoint: `${issuer}/token`,
-        registration_endpoint: `${issuer}/register`,
+        ...(options.registration === false ? {} : { registration_endpoint: `${issuer}/register` }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
-        token_endpoint_auth_methods_supported: ["none"],
+        token_endpoint_auth_methods_supported: options.tokenAuthMethods ?? ["none"],
         code_challenge_methods_supported: ["S256"],
         authorization_response_iss_parameter_supported: true,
       });
     }
     if (url.pathname === "/register" && request.method === "POST") {
       const metadata = JSON.parse(await readBody(request)) as { redirect_uris?: string[] };
+      registrations.push(metadata);
       const redirectUris = metadata.redirect_uris?.map((value) => {
         const redirect = new URL(value);
         redirect.port = "";
@@ -85,6 +102,7 @@ async function startOAuthFixture() {
       return reply({ ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" }, 201);
     }
     if (url.pathname === "/authorize") {
+      authorizeRequests.push(url.searchParams);
       const redirectUri = url.searchParams.get("redirect_uri");
       const state = url.searchParams.get("state");
       codeChallenge = url.searchParams.get("code_challenge") ?? undefined;
@@ -99,6 +117,22 @@ async function startOAuthFixture() {
     }
     if (url.pathname === "/token" && request.method === "POST") {
       const form = new URLSearchParams(await readBody(request));
+      tokenRequests.push({
+        grantType: form.get("grant_type"),
+        authorization: request.headers.authorization,
+        clientId: form.get("client_id"),
+        clientSecret: form.get("client_secret"),
+      });
+      const client = options.client;
+      if (client) {
+        const basic = `Basic ${Buffer.from(`${client.id}:${client.secret}`).toString("base64")}`;
+        const authenticated =
+          request.headers.authorization === basic ||
+          (form.get("client_id") === client.id && form.get("client_secret") === client.secret);
+        if (!authenticated) {
+          return reply({ error: "invalid_client" }, 401);
+        }
+      }
       if (form.get("grant_type") === "refresh_token") {
         if (form.get("refresh_token") !== "fixture-refresh-token") {
           return reply({ error: "invalid_grant" }, 400);
@@ -173,6 +207,9 @@ async function startOAuthFixture() {
     close,
     exchange: () => ({ tokenRedirectUri, tokenVerifier }),
     mcpRequests: () => mcpRequests,
+    registrations: () => registrations,
+    tokenRequests: () => tokenRequests,
+    authorizeRequests: () => authorizeRequests,
   };
 }
 
@@ -391,6 +428,146 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       await expectAuth("unauthenticated");
       await expect(fetch(redirectUrl)).rejects.toThrow();
     } finally {
+      await fixture.close();
+    }
+  });
+});
+
+const PRE_REGISTERED_CLIENT = {
+  id: "fixture-pre-registered",
+  secret: "fixture-client-secret-value",
+};
+const PRE_REGISTERED_SECRET_ENV = "OPENCLAW_FIXTURE_MCP_CLIENT_SECRET";
+
+function readRawMcpOAuthRows(): string {
+  return withOpenClawStateDatabaseReadOnly(({ db }) =>
+    JSON.stringify(db.prepare("SELECT * FROM mcp_oauth_stores").all()),
+  );
+}
+
+it.each([
+  { method: "client_secret_basic", registration: false },
+  { method: "client_secret_post", registration: false },
+  // A configured client wins even when the server also offers dynamic registration.
+  { method: "client_secret_basic", registration: true },
+])(
+  "signs in with a pre-registered client ($method, registration endpoint: $registration)",
+  async ({ method, registration }) => {
+    await withTempHome(`openclaw-mcp-preregistered-${randomUUID()}-`, async () => {
+      const fixture = await startOAuthFixture({
+        registration,
+        tokenAuthMethods: [method],
+        client: PRE_REGISTERED_CLIENT,
+      });
+      vi.stubEnv(PRE_REGISTERED_SECRET_ENV, PRE_REGISTERED_CLIENT.secret);
+      try {
+        const identity = operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`);
+        const redirectUrl = `http://127.0.0.1:${await getFreePort()}/oauth/callback`;
+        const logs: string[] = [];
+        const authorizationUrl = createDeferred<string>();
+        vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
+          const text = String(line);
+          logs.push(text);
+          if (text.startsWith(`${fixture.issuer}/authorize`)) {
+            authorizationUrl.resolve(text);
+          }
+        });
+        const { run, set } = createCli();
+        await set(
+          oauthServer(`${fixture.issuer}/mcp`, {
+            redirectUrl,
+            clientId: PRE_REGISTERED_CLIENT.id,
+            clientSecret: { source: "env", provider: "default", id: PRE_REGISTERED_SECRET_ENV },
+            authorizationParams: { access_type: "offline", prompt: "consent" },
+          }),
+        );
+        logs.length = 0;
+
+        const browser = authorizationUrl.promise.then((url) => fetch(url));
+        await Promise.all([browser, run("login", "fixture")]);
+        expect(logs).toContain('MCP OAuth credentials saved for "fixture".');
+        await expect(readMcpOAuthCredentialsStatus(identity)).resolves.toMatchObject({
+          state: "authorized",
+        });
+
+        expect(fixture.registrations()).toEqual([]);
+        const authorize = fixture.authorizeRequests()[0];
+        expect(authorize?.get("client_id")).toBe(PRE_REGISTERED_CLIENT.id);
+        expect(authorize?.get("redirect_uri")).toBe(redirectUrl);
+        expect(authorize?.get("code_challenge_method")).toBe("S256");
+        expect(authorize?.get("code_challenge")).toEqual(expect.any(String));
+        expect(authorize?.get("access_type")).toBe("offline");
+        expect(authorize?.getAll("prompt")).toEqual(["consent"]);
+        const basic = `Basic ${Buffer.from(
+          `${PRE_REGISTERED_CLIENT.id}:${PRE_REGISTERED_CLIENT.secret}`,
+        ).toString("base64")}`;
+        const expectedClientAuth =
+          method === "client_secret_basic"
+            ? { authorization: basic, clientSecret: null }
+            : {
+                authorization: undefined,
+                clientId: PRE_REGISTERED_CLIENT.id,
+                clientSecret: PRE_REGISTERED_CLIENT.secret,
+              };
+        expect(fixture.tokenRequests()).toEqual([
+          expect.objectContaining({ grantType: "authorization_code", ...expectedClientAuth }),
+        ]);
+        expect(readRawMcpOAuthRows()).toContain(PRE_REGISTERED_CLIENT.id);
+        expect(readRawMcpOAuthRows()).not.toContain(PRE_REGISTERED_CLIENT.secret);
+
+        // The fixture rejects the first resource request, forcing a leased refresh.
+        logs.length = 0;
+        await run("probe", "fixture");
+        expect(logs).toContain("- fixture: 1 tools, Codex approval auto");
+        expect(fixture.tokenRequests()).toEqual([
+          expect.objectContaining({ grantType: "authorization_code", ...expectedClientAuth }),
+          expect.objectContaining({ grantType: "refresh_token", ...expectedClientAuth }),
+        ]);
+        expect(fixture.mcpRequests().at(-1)?.headers.authorization).toBe(
+          "Bearer fixture-refreshed-access-token",
+        );
+        expect(fixture.registrations()).toEqual([]);
+        expect(readRawMcpOAuthRows()).not.toContain(PRE_REGISTERED_CLIENT.secret);
+        expect(logs.join("\n")).not.toContain(PRE_REGISTERED_CLIENT.secret);
+      } finally {
+        vi.unstubAllEnvs();
+        await fixture.close();
+      }
+    });
+  },
+);
+
+it("names the config path when a pre-registered client secret cannot be resolved", async () => {
+  await withTempHome(`openclaw-mcp-preregistered-missing-${randomUUID()}-`, async () => {
+    const fixture = await startOAuthFixture({
+      registration: false,
+      tokenAuthMethods: ["client_secret_basic"],
+      client: PRE_REGISTERED_CLIENT,
+    });
+    vi.stubEnv(PRE_REGISTERED_SECRET_ENV, "");
+    try {
+      const errors: string[] = [];
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "error").mockImplementation((line) => errors.push(String(line)));
+      const { run, set } = createCli();
+      await set(
+        oauthServer(`${fixture.issuer}/mcp`, {
+          clientId: PRE_REGISTERED_CLIENT.id,
+          clientSecret: { source: "env", provider: "default", id: PRE_REGISTERED_SECRET_ENV },
+        }),
+      );
+      const failure: unknown = await run("login", "fixture").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeDefined();
+      const output = [...errors, failure instanceof Error ? failure.message : ""].join("\n");
+      expect(output).toContain("mcp.servers.fixture.oauth.clientSecret");
+      expect(output).toContain(PRE_REGISTERED_SECRET_ENV);
+      expect(fixture.authorizeRequests()).toEqual([]);
+      expect(fixture.tokenRequests()).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
       await fixture.close();
     }
   });

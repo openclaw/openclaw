@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
+import { resolveMcpOAuthClientSecretLocally } from "./mcp-cli-oauth.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
@@ -76,10 +77,23 @@ export async function probeMcpServers(
 ) {
   const { recoverMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
   await recoverMcpDockerServers(Object.values(servers));
+  const resolvedServers = Object.fromEntries(
+    await Promise.all(
+      Object.entries(servers).map(
+        async ([name, server]) =>
+          [
+            name,
+            server.enabled === false
+              ? server
+              : await resolveMcpOAuthClientSecretLocally(config, name, server),
+          ] as const,
+      ),
+    ),
+  );
   const runtime = await createSessionMcpRuntime({
     sessionId,
     workspaceDir: process.cwd(),
-    cfg: { ...config, mcp: { ...config.mcp, servers } },
+    cfg: { ...config, mcp: { ...config.mcp, servers: resolvedServers } },
     manifestRegistry: { plugins: [] },
   });
   let result: Awaited<ReturnType<typeof readMcpProbeResult>>;
