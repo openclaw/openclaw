@@ -566,6 +566,15 @@ export function closeOpenClawStateDatabaseByPath(
   );
 }
 
+/** Seal after final release unless a read still borrows the handle; the next owner validates. */
+export function sealOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const database = cachedDatabases.get(resolveDatabasePath({ path: pathname }));
+  if (database && borrowers.get(database.db)?.references.size) {
+    return false;
+  }
+  return closeOpenClawStateDatabaseByPath(pathname);
+}
+
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
@@ -677,6 +686,7 @@ export const openClawStateDatabaseCache = {
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseByPath,
+  sealOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseHandle,
   closeUnpublishedOpenClawStateDatabaseHandle,
