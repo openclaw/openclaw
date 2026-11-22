@@ -165,13 +165,13 @@ it.each([
   }),
 );
 
+const SEEDED_ACTIVITY_AT = Date.UTC(2020, 0, 1);
+
 it("counts a posted assistant message as session activity", () =>
   withMentionInbox(async (f) => {
-    const before =
-      (await loadSessionEntry({ ...scope, sessionId: SESSION_ID }))?.lastActivityAt ?? 0;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
+    // Seed an older stamp instead of waiting for the clock, so the assertion
+    // fails on an untouched timestamp rather than depending on elapsed time.
+    await f.setSession({ lastActivityAt: SEEDED_ACTIVITY_AT });
     const posted = await injectGatewayAssistantMessage(contextFor(f), {
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -180,5 +180,5 @@ it("counts a posted assistant message as session activity", () =>
     expect(posted.ok).toBe(true);
     const after =
       (await loadSessionEntry({ ...scope, sessionId: SESSION_ID }))?.lastActivityAt ?? 0;
-    expect(after).toBeGreaterThan(before);
+    expect(after).toBeGreaterThan(SEEDED_ACTIVITY_AT);
   }));
