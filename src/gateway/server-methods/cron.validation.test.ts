@@ -2061,8 +2061,8 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  failureAlertUpdateRejected(
-    "refuses an explicit failure-alert channel with no chat to post in",
+  failureAlertUpdateAccepted(
+    "does not inherit a primary recipient for another explicit failure-alert channel",
     { failureAlert: { channel: "slack" } },
     createRoutedCronJob("telegram", "telegram:1"),
   );
