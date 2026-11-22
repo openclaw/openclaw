@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { repairPublishedPnpmLaunchers } from "./update-launcher-repair.js";
 
@@ -64,6 +64,10 @@ async function pnpmHome(base: string, globalName = "global", homeName = "pnpm-ho
 }
 
 describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     ["global", "pnpm-home"],
     // An apostrophe below the pnpm home: the live target and NODE_PATH need `'\''`.
@@ -148,6 +152,79 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
       ]);
       const [entry, liveNodePath] = (await runFile(launcher)).stdout.split("\n");
       expect([path.resolve(entry ?? ""), liveNodePath]).toEqual([recorded, nodePath]);
+    }));
+
+  it("leaves another account's launcher unchanged and reports why", async () =>
+    withTestDir({ prefix: "launcher-repair-owner-" }, async (base) => {
+      const { home, packageRoot, launcher } = await pnpmHome(base);
+      const before = await fs.readFile(launcher, "utf8");
+      const owner = (await fs.stat(launcher)).uid;
+      // This process now runs as a different account than the launcher's owner.
+      vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
+
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({
+        root: packageRoot,
+        env: { PNPM_HOME: home },
+      });
+
+      expect(repaired).toEqual([]);
+      expect(failed).toEqual([{ file: launcher, error: expect.any(Error) }]);
+      expect(String(failed[0]?.error)).toContain(
+        `belongs to uid ${owner}, not this account (uid ${owner + 1}); it was left unchanged`,
+      );
+      expect(await fs.readFile(launcher, "utf8")).toBe(before);
+      expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
+    }));
+
+  it("never carries set-ID bits into the repaired launcher", async () =>
+    withTestDir({ prefix: "launcher-repair-setid-" }, async (base) => {
+      const { home, packageRoot, launcher } = await pnpmHome(base);
+      await fs.chmod(launcher, 0o4755);
+      expect((await fs.stat(launcher)).mode & 0o7777).toBe(0o4755);
+
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({
+        root: packageRoot,
+        env: { PNPM_HOME: home },
+      });
+
+      expect(failed).toEqual([]);
+      expect(repaired).toHaveLength(1);
+      expect((await fs.stat(launcher)).mode & 0o7777).toBe(0o755);
+    }));
+
+  it("relocates a lexical shim from the bin path its shell and detection use", async () =>
+    withTestDir({ prefix: "launcher-repair-lexical-" }, async (base) => {
+      // pnpm 10 shims resolve `$basedir` lexically. Here `bin` is a link into a directory
+      // two levels deeper, so the physical directory would resolve `../` elsewhere.
+      const { home, packageRoot, launcher } = await pnpmHome(base);
+      const realBin = path.join(base, "elsewhere", "deeper", "bin");
+      await fs.mkdir(path.dirname(realBin), { recursive: true });
+      await fs.rename(path.join(home, "bin"), realBin);
+      await fs.symlink(realBin, path.join(home, "bin"));
+      const target = `../${STAGE}/${GROUP}/node_modules/openclaw/openclaw.mjs`;
+      await fs.writeFile(
+        path.join(realBin, "openclaw"),
+        [
+          "#!/bin/sh",
+          'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+          `exec "$basedir/node"  "$basedir/${target}" "$@"`,
+          `# cmd-shim-target=${path.join(packageRoot, "openclaw.mjs")}`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({
+        root: packageRoot,
+        env: { PNPM_HOME: home },
+      });
+
+      expect(failed).toEqual([]);
+      expect(repaired).toEqual([expect.objectContaining({ file: launcher })]);
+      // Node resolves its entry argument lexically, from the bin path the shell reached.
+      const live = `../global/${GROUP}/node_modules/openclaw/openclaw.mjs`;
+      expect(await fs.readFile(launcher, "utf8")).toContain(`"\${basedir}"/${live} `);
+      expect(path.resolve(home, "bin", live)).toBe(path.join(packageRoot, "openclaw.mjs"));
     }));
 
   it.each([
