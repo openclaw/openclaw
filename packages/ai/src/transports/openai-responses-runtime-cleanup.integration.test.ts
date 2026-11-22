@@ -22,8 +22,9 @@ vi.mock("openai/resources/responses/ws.js", async (importOriginal) => {
 import { WebSocketServer } from "ws";
 import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createApiRegistry, type ApiStreamFunction } from "../api-registry.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
@@ -102,6 +103,7 @@ async function turn(params: {
   const response = await params.runtime.complete(params.model, params.context, {
     apiKey: "test-key",
     sessionId: params.sessionId,
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState(params.sessionId),
     transport: params.transport,
     reasoningEffort: "low",
   });

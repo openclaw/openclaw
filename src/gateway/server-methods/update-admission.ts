@@ -116,6 +116,22 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
+export function makeUpdateRefusal({ mode, root }: UpdateInstallSurface) {
+  return (
+    status: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status,
+    mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
+}
+
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
@@ -123,15 +139,18 @@ export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
+  publishAppUpdate?: (run: UpdateRunRecord) => void,
 ): Promise<void> {
   const reason = "immutable-native-updater-required";
   await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  await finishUpdateRun(runId, { status: "skipped", reason });
+  const run = await finishUpdateRun(runId, { status: "skipped", reason });
+  publishAppUpdate?.(run);
   respond(true, {
     runId,
     ok: false,
+    ...(publishAppUpdate ? { noticeInApp: true } : {}),
     message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",

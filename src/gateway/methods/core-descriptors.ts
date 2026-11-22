@@ -1,5 +1,6 @@
 import {
   CONTROL_PLANE_WRITE,
+  MODEL_CATALOG_READ,
   OBSERVATION,
   OWN_SESSION_WRITE,
   PORTAL_SESSION_WRITE,
@@ -12,7 +13,7 @@ import {
   UNADVERTISED_OBSERVATION,
 } from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
-import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
+import { cronListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 // This is the canonical core method policy table: every core handler must appear here so
@@ -106,18 +107,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
   // Profile authorization and catalog publication own readiness for this read.
-  [
-    "models.list",
-    "models",
-    "operator.read",
-    "<=2026.7",
-    {
-      ...PROFILE_DEPENDENT,
-      shareKey: modelsListShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
-    },
-  ],
+  ["models.list", "models", "operator.read", "<=2026.7", MODEL_CATALOG_READ],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
   ["models.authLogout", "models-auth-status", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["tools.catalog", "tools-catalog", "operator.read", "<=2026.7"],
@@ -758,5 +748,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["openclaw.setup.options", "system-agent", "operator.admin", "2026.11"],
   ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
+  ["skills.categories", "skills", "operator.read", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

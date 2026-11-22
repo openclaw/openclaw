@@ -190,6 +190,8 @@ const repositoryScriptEntries = [
   "scripts/bench-usage-gateway.ts!",
   "scripts/lib/usage-bench-child.ts!",
   "scripts/lib/usage-bench-observer.mjs!",
+  // scripts/README.md invokes the trusted Usage route/open benchmark by path.
+  "scripts/bench-usage-open.ts!",
   // scripts/README.md invokes the Chromium/WebKit companion with shared scenarios.
   "scripts/bench-control-ui-engines.ts!",
   // The event-load guide invokes the isolated Gateway wire fixture directly.
@@ -451,6 +453,8 @@ const repositoryScriptEntries = [
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
+  // Published driver CI executes the PostgreSQL upgrade against its service database.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.

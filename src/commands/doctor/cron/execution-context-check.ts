@@ -5,6 +5,7 @@ import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveCliRuntimeExecutionProvider } from "../../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
@@ -158,7 +159,7 @@ function resolveCliBackend(cfg: OpenClawConfig, agentId: string, job: CronStored
     ? resolveModelRefFromString({
         ...selection,
         raw: job.payload.model,
-        defaultProvider: fallback.provider,
+        defaultProvider: fallback?.provider ?? DEFAULT_PROVIDER,
       })?.ref
     : fallback;
   if (!ref) {

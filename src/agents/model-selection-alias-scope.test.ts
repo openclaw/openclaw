@@ -36,9 +36,7 @@ function checkPrimary(
   includeConfig = false,
 ) {
   expect(resolver(cfg)(raw, includeConfig)?.ref).toEqual(expected);
-  expect(resolveConfiguredModelRef({ ...context, cfg, defaultModel: "gpt-4o-mini" })).toEqual(
-    expected,
-  );
+  expect(resolveConfiguredModelRef({ ...context, cfg })).toEqual(expected);
 }
 
 it.each(["openai", "anthropic"])(

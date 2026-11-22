@@ -11,6 +11,19 @@ import { formatUiError } from "../lib/format-error.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
+/** Resolved icon actions from the same pane that owns their invocation lifetime. */
+export type ComposerMenuAction = {
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  label: string;
+  icon: import("../components/icon-data.ts").IconName;
+  disabled: boolean;
+  running: boolean;
+  run: () => void;
+};
+export type BindComposerActionMenu = (read: () => readonly ComposerMenuAction[]) => () => void;
+
 /** The invoking pane's draft owner; `getDraft` reads ahead of the rendered `draft`. */
 export type ControlUiComposerDraft = {
   draft: string;

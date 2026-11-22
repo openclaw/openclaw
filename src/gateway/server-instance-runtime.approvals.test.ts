@@ -416,7 +416,7 @@ it("mints a cron standing grant with the internal approval verdict in the worker
   );
 });
 
-it.each(["channel", "tool"] as const)(
+it.each(["channel"] as const)(
   "refuses %s approval after its owner retires before commit",
   async (route) => {
     await using fixture = createFixture();

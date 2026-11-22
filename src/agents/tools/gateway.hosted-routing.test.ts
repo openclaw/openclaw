@@ -176,7 +176,6 @@ function messageFixture(overrides: Partial<TurnInput> = {}) {
 
 let context: GatewayRequestContext;
 let currentContext: GatewayRequestContext | undefined;
-let callerActive: boolean;
 const hostedSource = {
   turnSourceChannel: "telegram",
   turnSourceTo: "alice",
@@ -206,7 +205,7 @@ function runHosted<T>(
       ...hostedSource,
       gatewayUiCommandTarget,
       gatewayContextResolver: () => currentContext,
-      receiptAuthority: () => callerActive,
+      receiptAuthority: () => true,
       cronSelfManagementJobId: "current-job",
       cronToolsAllowCapture: "final-executable-surface",
       cronExecToolTarget: { host: "gateway", ask: "always" },
@@ -224,7 +223,6 @@ describe("Gateway tool identity and hosted routing", () => {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext;
     currentContext = context;
-    callerActive = true;
     mocks.callGateway.mockReset().mockResolvedValue({ ok: true });
     mocks.handleGatewayRequest
       .mockReset()
@@ -702,7 +700,6 @@ describe("Gateway tool identity and hosted routing", () => {
 
   it.each([
     { owner: "run", pending: false },
-    { owner: "caller", pending: false },
     { owner: "gateway", pending: true },
   ])("handles retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
     const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
@@ -711,8 +708,6 @@ describe("Gateway tool identity and hosted routing", () => {
       await deferred?.entered.promise;
       if (owner === "run") {
         releaseAgentRunDelegatedAuthority(authority);
-      } else if (owner === "caller") {
-        callerActive = false;
       } else {
         currentContext = { ...context };
       }

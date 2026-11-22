@@ -32,7 +32,8 @@ export function videoLightboxItem(
       let retryPending = retryFailed;
       const report = () => {
         if (active) {
-          notify(controller.readiness === "idle" ? "preparing" : controller.readiness);
+          const readiness = controller.readiness;
+          notify(readiness === "idle" || readiness === "checking" ? "preparing" : readiness);
         }
       };
       const refresh = () => {

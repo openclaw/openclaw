@@ -1,24 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  loadTranscriptEventsSync,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentTurnTestContext } from "../../gateway/agent-turn/agent-run-dispatch.test-support.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { loadSessionEntryAsync } from "../../gateway/session-entry-load.test-support.js";
 import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -50,7 +45,7 @@ afterEach(() => {
 });
 
 it.each(["allowed", "revoked", "replaced"] as const)(
-  "admits delayed ACP results under current custody and records refused returns: %s",
+  "finishes delayed ACP results under admitted policy and fences replaced requesters: %s",
   async (boundary) => {
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
@@ -155,7 +150,7 @@ it.each(["allowed", "revoked", "replaced"] as const)(
           undefined,
           { isCurrent: () => true, subscribe: () => () => {} },
         );
-        const source = await captureGatewayOperatorRunAuthority({
+        const source = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: device.isCurrent,
@@ -247,33 +242,10 @@ it.each(["allowed", "revoked", "replaced"] as const)(
           releaseChild.resolve();
           await finished.promise;
           await work.drain();
-          if (boundary === "allowed") {
+          if (boundary !== "replaced") {
             expect(admissions).toEqual([expect.stringContaining(resultText)]);
           } else {
             expect(admissions).toEqual([]);
-          }
-          if (boundary === "revoked") {
-            const target = {
-              agentId: "main",
-              sessionKey: parentKey,
-              sessionId: parent.sessionId,
-              storePath: (await loadSessionEntryAsync(parentKey, { agentId: "main" })).storePath,
-            };
-            expect(
-              loadTranscriptEventsSync(target).filter((event) =>
-                JSON.stringify(event).includes("withheld:"),
-              ),
-            ).toHaveLength(1);
-            expect((await listSessionPendingInputs(target)).items).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  state: "cancelled",
-                  message: expect.objectContaining({
-                    content: expect.stringContaining(resultText),
-                  }),
-                }),
-              ]),
-            );
           }
         } finally {
           releaseChild.resolve();
