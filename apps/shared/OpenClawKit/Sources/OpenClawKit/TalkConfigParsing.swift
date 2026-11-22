@@ -131,14 +131,13 @@ public enum TalkConfigParsing {
 
     /// Device locales use script tags such as zh-Hans-US. Recognizers publish zh-CN, zh-TW, and zh-HK.
     static func chineseRecognitionLocaleID(_ localeID: String, supported: Set<String>) -> String? {
-        let parts = localeID.split(separator: "-").map(String.init)
-        guard parts.first?.caseInsensitiveCompare("zh") == .orderedSame else { return nil }
-        let script = parts.dropFirst().first { $0.count == 4 }?.lowercased()
-        let region = parts.last?.uppercased()
-        let ranked: [String] = switch script {
-        case "hans":
+        let language = Locale.Language(identifier: localeID)
+        guard language.languageCode?.identifier == "zh" else { return nil }
+        let region = language.region?.identifier
+        let ranked: [String] = switch language.script?.identifier {
+        case "Hans":
             ["zh-CN"]
-        case "hant":
+        case "Hant":
             region == "HK" || region == "MO" ? ["zh-HK", "zh-TW"] : ["zh-TW", "zh-HK"]
         default:
             []
