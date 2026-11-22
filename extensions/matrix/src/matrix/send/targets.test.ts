@@ -93,6 +93,42 @@ describe("resolveMatrixRoomId", () => {
     expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
+  it("reports an unreadable m.direct instead of blaming a missing mapping", async () => {
+    const client = makeDirectClient({
+      getAccountData: vi.fn().mockRejectedValue(new Error("M_UNKNOWN: 503 Service Unavailable")),
+      getJoinedRooms: vi.fn().mockRejectedValue(new Error("M_UNKNOWN: 503 Service Unavailable")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `Could not read m.direct for ${userId} from the homeserver: M_UNKNOWN: 503 Service Unavailable`,
+    );
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a timeout while reading m.direct", async () => {
+    const client = makeDirectClient({
+      getAccountData: vi.fn().mockRejectedValue(new Error("timeout of 30000ms exceeded")),
+      getJoinedRooms: vi.fn().mockRejectedValue(new Error("timeout of 30000ms exceeded")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `Could not read m.direct for ${userId} from the homeserver: timeout of 30000ms exceeded`,
+    );
+  });
+
+  it("still resolves through joined rooms when the m.direct read fails", async () => {
+    const client = makeDirectClient({
+      roomIds: [roomId],
+      getAccountData: vi.fn().mockRejectedValue(new Error("M_UNKNOWN: 503 Service Unavailable")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe(roomId);
+  });
+
+  it("keeps the missing-mapping message when the read succeeds but is empty", async () => {
+    const client = makeDirectClient({});
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `No direct room found for ${userId} (m.direct missing)`,
+    );
+  });
+
   it("accepts nested Matrix user target prefixes", async () => {
     const client = makeDirectClient({ mappedRoomIds: [roomId], resolveRoom: vi.fn() });
     await expect(resolveMatrixRoomId(client, `matrix:user:${userId}`)).resolves.toBe(roomId);

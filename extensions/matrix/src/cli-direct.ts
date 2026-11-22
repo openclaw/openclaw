@@ -12,13 +12,16 @@ import type { CoreConfig } from "./types.js";
 type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
 type MatrixCliDirectRoomInspection = Omit<
   Awaited<ReturnType<typeof inspectMatrixDirectRooms>>,
-  "mappedRooms"
+  "mappedRooms" | "directReadError"
 > & {
   accountId: string;
   mappedRooms: MatrixCliDirectRoomCandidate[];
 };
 type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection &
-  Omit<Awaited<ReturnType<typeof repairMatrixDirectRooms>>, keyof MatrixCliDirectRoomInspection> & {
+  Omit<
+    Awaited<ReturnType<typeof repairMatrixDirectRooms>>,
+    keyof MatrixCliDirectRoomInspection | "directReadError"
+  > & {
     encrypted: boolean;
   };
 

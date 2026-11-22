@@ -141,9 +141,16 @@ export async function inspectMatrixDirectRooms(params: {
       source,
     };
   };
+  // Keep the read failure so callers can distinguish an unreadable homeserver
+  // from a successfully read but genuinely absent m.direct mapping. The write
+  // path must still fail closed (readMatrixDirectAccountData itself still throws).
+  let directReadError: unknown = null;
   const directContent: MatrixDirectAccountData = await readMatrixDirectAccountData(
     params.client,
-  ).catch(() => ({}));
+  ).catch((error: unknown) => {
+    directReadError = error;
+    return {};
+  });
   const mappedRoomIds = normalizeUniqueTrimmedStringList(directContent[remoteUserId]);
   const mappedRooms = await Promise.all(
     mappedRoomIds.map(async (roomId) => await classifyRoom(roomId, "account-data")),
@@ -167,6 +174,7 @@ export async function inspectMatrixDirectRooms(params: {
   return {
     selfUserId,
     remoteUserId,
+    directReadError,
     mappedRoomIds,
     mappedRooms,
     discoveredStrictRoomIds,
