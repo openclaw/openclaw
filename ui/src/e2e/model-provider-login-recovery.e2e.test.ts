@@ -30,25 +30,28 @@ const pasteStep = {
   },
 };
 
-async function startSignIn(page: Page, nextResponse: () => unknown = () => pasteStep) {
+async function startSignIn(
+  page: Page,
+  replies: { next?: () => unknown; config?: () => unknown } = {},
+) {
   // The sign-in tab is the provider's; this proof stays on the Control UI page.
   await page.addInitScript(() => {
     window.open = () => null;
   });
   const config = { agents: { defaults: { model: "example/existing" } } };
+  const configSnapshot = {
+    config,
+    sourceConfig: config,
+    hash: "models-login-recovery",
+    issues: [],
+    raw: JSON.stringify(config),
+    valid: true,
+  };
   const gateway = await installMockGateway(
     page,
     {
       featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
       methodResponses: {
-        "config.get": {
-          config,
-          sourceConfig: config,
-          hash: "models-login-recovery",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
         "models.authStatus": {
           ts: 1,
           providers: [],
@@ -73,7 +76,12 @@ async function startSignIn(page: Page, nextResponse: () => unknown = () => paste
       },
     },
     // A Node-side reply outlives the page, so a reload sees the Gateway's current answer.
-    { requestHandlers: { "wizard.next": () => nextResponse() } },
+    {
+      requestHandlers: {
+        "wizard.next": () => replies.next?.() ?? pasteStep,
+        "config.get": () => replies.config?.() ?? configSnapshot,
+      },
+    },
   );
   // First-run setup lands here with the picker open; a reload reopens the same address.
   await page.goto(`${suite.server.baseUrl}settings/model-providers?connect=1`);
@@ -120,17 +128,43 @@ suite.define(() => {
     });
   });
 
-  it("says the sign-in ended when the reloaded page finds no session", async () => {
+  it("reopens the sign-in after a socket drop interrupts the reloaded page's restore", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      let holdConfig = false;
+      // Never settles: only the socket close ends the reloaded page's config read.
+      const held = Promise.withResolvers<void>();
+      const { gateway, paste } = await startSignIn(page, {
+        config: () => {
+          if (!holdConfig) {
+            return undefined;
+          }
+          holdConfig = false;
+          return held.promise;
+        },
+      });
+      holdConfig = true;
+      await page.reload();
+      // The restore waits for config; the socket closes before it arrives.
+      await expect.poll(() => holdConfig).toBe(false);
+      await gateway.closeLatest(1006, "phone dropped the socket again");
+      await paste.waitFor();
+      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
+    });
+  });
+
+  it("says the sign-in ended when the reloaded page finds no session, once", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       let next: unknown = pasteStep;
-      await startSignIn(page, () => next);
+      await startSignIn(page, { next: () => next });
       // The Gateway lost the sign-in (restart, timeout or replacement) while the page was away.
       next = wizardNotFound;
       await page.reload();
-      await page
-        .locator("openclaw-modal-dialog")
-        .getByText("This sign-in session ended.", { exact: false })
-        .waitFor();
+      const dialog = page.locator("openclaw-modal-dialog");
+      await dialog.getByText("This sign-in session ended.", { exact: false }).waitFor();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await page.reload();
+      await page.locator("[data-models-login-provider]").first().waitFor();
+      expect(await dialog.getByText("This sign-in session ended.").count()).toBe(0);
     });
   });
 });

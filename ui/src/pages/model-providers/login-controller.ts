@@ -91,10 +91,6 @@ export function createModelProviderLogin(options: {
   const signIn = createLoginSignIn(options, {
     runner,
     run,
-    retireRequests: () => {
-      generation += 1;
-      mutationActive = false;
-    },
     reset,
     synchronizePresentation: () => presentation.synchronize(),
     allowSetup: () => Boolean(options.onManualProvider) || !selection().modelRef,
@@ -336,14 +332,19 @@ export function createModelProviderLogin(options: {
       }
     }
   }
-  onSettled(() => () => {
-    presentation.dispose();
-    publish = undefined;
-    generation += 1;
-    chat.reset();
-    inventoryRequest?.controller.abort();
-    inventoryRequest?.result.resolve(null);
-    completionCatalog.clear();
+  onSettled(() => {
+    // A suspended or recorded sign-in continues once config admits it again.
+    const stopConfig = options.getScope().context.runtimeConfig.subscribe(signIn.synchronize);
+    return () => {
+      stopConfig();
+      presentation.dispose();
+      publish = undefined;
+      generation += 1;
+      chat.reset();
+      inventoryRequest?.controller.abort();
+      inventoryRequest?.result.resolve(null);
+      completionCatalog.clear();
+    };
   });
 
   function doneAction() {
@@ -360,7 +361,6 @@ export function createModelProviderLogin(options: {
   function pickerView(authStatus?: ModelAuthStatusResult | null) {
     view.read();
     const picker = currentPicker;
-    // A sign-in reopened after a reload wins over a picker its route opened.
     if (!picker || wizard.state().phase !== "idle") {
       return null;
     }
@@ -733,7 +733,6 @@ export function createModelProviderLogin(options: {
     },
     open,
     invalidateInventory,
-    // Owners reset on a connection or agent change; a resumable sign-in stays.
     reset: () => (signIn.active ? signIn.synchronize() : reset()),
   };
 }

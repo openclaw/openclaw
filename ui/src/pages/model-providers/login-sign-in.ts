@@ -26,15 +26,19 @@ type LoginScope = {
 /**
  * The running provider sign-in: its choice, and its recovery while the user is away on
  * the provider's page. The Gateway session outlives the socket, and the existing
- * activation record lets a reloaded page reopen the same session.
+ * activation record lets a reloaded page reopen the same session. Owners' resets on a
+ * connection or agent change keep a sign-in its owner can resume, and a reopened
+ * sign-in shows in front of a provider picker the page's route opened.
  */
 export function createLoginSignIn(
   page: { getScope: () => LoginScope; canContinue: () => boolean },
   host: {
     runner: ModelSetupWizardRunner;
-    run: (task: () => Promise<ModelSetupWizardCompletion | null>) => Promise<void>;
-    /** Retires the request chain of a closed socket; the Gateway keeps the sign-in. */
-    retireRequests: () => void;
+    /** `settling` lets a resumed sign-in replace the request chain of a closed socket. */
+    run: (
+      task: () => Promise<ModelSetupWizardCompletion | null>,
+      settling?: boolean,
+    ) => Promise<void>;
     reset: () => void;
     synchronizePresentation: () => void;
     /** Whether a sign-in from this page may select a model. */
@@ -53,7 +57,9 @@ export function createLoginSignIn(
   let restart: (() => void) | undefined;
   // Who started the running sign-in. Only the same owner resumes it after a reconnect.
   let owner: { recoveryScope: string | null; agentId: string | null } | undefined;
-  let restoreChecked = false;
+  // The record of the running sign-in, cleared once the Gateway no longer has it.
+  let record: FirstRunActivationReceipt | null = null;
+  let restoring = false;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
     gateway: context.gateway,
@@ -103,11 +109,11 @@ export function createLoginSignIn(
     }
     const scope = page.getScope();
     own(scope);
-    const receipt = persistFirstRunActivationReceipt(receiptContext(scope), {
+    record = persistFirstRunActivationReceipt(receiptContext(scope), {
       kind: intent.kind,
       wizard: intent.wizard,
     });
-    return observe(receipt);
+    return observe(record);
   }
 
   /** Follows the Gateway connection: suspends, resumes or reopens the running sign-in. */
@@ -121,7 +127,6 @@ export function createLoginSignIn(
     const snapshot = context.gateway.snapshot;
     if (snapshot.phase !== "connected") {
       if (!runner.isSuspended) {
-        host.retireRequests();
         runner.suspend(t("modelSetup.wizard.gatewayReconnecting"));
       }
       return;
@@ -142,31 +147,43 @@ export function createLoginSignIn(
       return;
     }
     if (runner.isSuspended && page.canContinue()) {
-      void host.run(() => runner.resume());
+      resume();
     }
+  }
+
+  /** Any error after a resume means the Gateway no longer has the sign-in: forget it. */
+  function resume(): void {
+    void host
+      .run(() => runner.resume(), true)
+      .then(() => {
+        if (runner.state.phase === "error" && !runner.hasAdmittedSession) {
+          clearFirstRunActivationReceipt(record);
+        }
+      });
   }
 
   /** A sign-in recorded before a reload reopens once this page can continue it. */
   function reopen(): void {
     // Pages without a Models sign-in record never read scope: that read can load config.
     if (
-      restoreChecked ||
-      runner.hasAdmittedSession ||
+      restoring ||
+      runner.state.phase !== "idle" ||
       !hasFirstRunActivationReceipt("provider-login")
     ) {
       return;
     }
     const { context, agentId } = page.getScope();
     if (context.gateway.snapshot.phase === "connected" && agentId) {
-      void restore();
+      restoring = true;
+      void restore().finally(() => (restoring = false));
     }
   }
 
   async function restore(): Promise<void> {
-    restoreChecked = true;
     const scope = page.getScope();
     const { context, agentId } = scope;
     const client = context.gateway.snapshot.client;
+    // Reading validates the record; an invalid or expired one is removed here.
     const receipt = readFirstRunActivationReceipt(receiptContext(scope));
     const recovery = receipt?.kind === "provider-login" ? receipt.wizard : undefined;
     if (!client || !agentId || !recovery) {
@@ -190,6 +207,7 @@ export function createLoginSignIn(
       current.agentId !== agentId ||
       !page.canContinue()
     ) {
+      // The record stays; the next connection or config change tries again.
       return;
     }
     const allowSetup = host.allowSetup();
@@ -201,11 +219,12 @@ export function createLoginSignIn(
       adopt(selected, allowSetup);
     }
     own(scope);
+    record = receipt;
     runner.restore(recovery, observe(receipt), "models.authLogin", {
       label: selected?.label,
       brandId: selected?.brandId,
     });
-    void host.run(() => runner.resume());
+    resume();
   }
 
   return {
