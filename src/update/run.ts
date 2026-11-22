@@ -246,7 +246,7 @@ export async function prepareUpdate(params: {
     if (target.kind === "git" && !releaseAwareGit) {
       return await fail(
         "release-updates-unsupported",
-        `This commit predates release updates. To install it manually, run: cd ${JSON.stringify(target.checkout)} && git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
+        `This commit predates release updates. In your OpenClaw Git checkout, run: git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
       );
     }
     staging = await allocateStaging({ kind: install.kind }, prefix);

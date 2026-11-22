@@ -273,6 +273,7 @@ describe("package release conversion", () => {
   it.each([true, false])("admits a Git target with release support %s", async (releaseAware) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const target = await repository(false, ">=1", releaseAware);
+    vi.stubEnv("HOME", root);
     try {
       openOpenClawStateDatabase({ env: process.env });
       const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.6" } });
@@ -291,6 +292,11 @@ describe("package release conversion", () => {
           reason: "release-updates-unsupported",
           message: expect.stringContaining(`git checkout ${target.sha}`),
         });
+        if (outcome.status !== "failed") {
+          throw new Error("Expected unsupported-target refusal");
+        }
+        expect(outcome.message).not.toContain("~");
+        expect(outcome.message).not.toContain(`"${target.checkout}"`);
         expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
         expect(await readTrial()).toBeNull();
         expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
