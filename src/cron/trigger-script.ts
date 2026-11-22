@@ -71,6 +71,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
   resolveCronScheduledToolPolicy,
@@ -661,6 +662,10 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
+      // A refused operator source is not a script failure; the caller ends the job's runs.
+      if (error instanceof CronOperatorSourceError) {
+        throw error;
+      }
       return scriptFailure(
         formatErrorMessageWithCode(error),
         error instanceof CodeModeHeadlessTimeoutError
