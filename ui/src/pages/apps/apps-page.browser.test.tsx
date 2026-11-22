@@ -1,17 +1,73 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { AppsPage } from "./apps-page.tsx";
+import { Apps } from "./view.tsx";
 import "../../styles.css";
+
+it.each([false, true])(
+  "keeps catalog actions with their cards (native setup: %s)",
+  async (native) => {
+    const { page } = await import("vitest/browser");
+    const viewport = { width: innerWidth, height: innerHeight };
+    await page.viewport(820, 1180);
+    if (native) {
+      const snapshot = createNativeDeviceSettingsSnapshot();
+      vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+      vi.stubGlobal("webkit", {
+        messageHandlers: {
+          openclawDeviceSettings: {
+            postMessage: async ({ type }: { type: string }) =>
+              type === "chrome-extension-setup" ? createChromeExtensionSetupResult() : snapshot,
+          },
+        },
+      });
+    }
+    const nativeDeviceSettings = native ? createNativeDeviceSettingsCapability() : null;
+    const { wrapper } = createSolidApplicationContextProvider({
+      nativeDeviceSettings,
+    } as ApplicationContext);
+    const mounted = mountSolid(() => <Apps onNavigate={() => undefined} />, { wrapper });
+    try {
+      const chromeLink = mounted.getByRole("link", { name: "Chrome Web Store" });
+      const pluginsButton = mounted.getByRole("button", { name: "Open plugins" });
+      const chrome = chromeLink.closest("article")!;
+      const plugins = pluginsButton.closest("article")!;
+      expect(chrome.getBoundingClientRect().top).toBe(plugins.getBoundingClientRect().top);
+      if (native) {
+        const chromeHeight = chrome.getBoundingClientRect().height;
+        const pluginsHeight = plugins.getBoundingClientRect().height;
+        mounted.getByRole("button", { name: "Refresh setup status" }).click();
+        await waitForSolid(() =>
+          expect(chrome.getBoundingClientRect().height).toBeGreaterThan(chromeHeight),
+        );
+        expect(plugins.getBoundingClientRect().height).toBe(pluginsHeight);
+        expect(pluginsHeight).toBeLessThan(chromeHeight);
+      } else {
+        expect(chromeLink.getBoundingClientRect().top).toBe(
+          pluginsButton.getBoundingClientRect().top,
+        );
+      }
+    } finally {
+      mounted.unmount();
+      nativeDeviceSettings?.dispose();
+      vi.unstubAllGlobals();
+      await page.viewport(viewport.width, viewport.height);
+    }
+  },
+);
 
 beforeEach(async () => {
   await i18n.setLocale("en");
