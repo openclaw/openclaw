@@ -30,6 +30,7 @@ function legacyFixture(tableName: string) {
   restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
+    ALTER TABLE worker_session_placements DROP COLUMN confirmed_loss_recovery_json;
     DROP INDEX idx_worker_session_placements_environment;
     ${
       tableName === "user_profile_identities"
