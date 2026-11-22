@@ -56,7 +56,7 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
       }),
     });
     const expected =
-      "⚠️ The model returned malformed tool-call arguments (19 characters; diagnostic hash jiqoxq1e07seo; repair attempted: yes). This call was rejected before execution. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
+      "⚠️ The model returned malformed tool-call arguments. This call was rejected before execution. Check completed work, then retry the task or choose another model. Diagnostic details: 19 characters; hash jiqoxq1e07seo; repair attempted: yes. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
     const copy = formatUserFacingAssistantErrorText(message);
 
     expect(copy).toBe(expected);

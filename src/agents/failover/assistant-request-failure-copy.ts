@@ -307,7 +307,7 @@ export function renderMalformedToolCallFailureCopy(message: {
   ) {
     return undefined;
   }
-  return `⚠️ The model returned malformed tool-call arguments (${argumentChars} characters; diagnostic hash ${argumentHash}; repair attempted: ${repairAttempted ? "yes" : "no"}). This call was rejected before execution. ${ERROR_DETAILS_HINT}`;
+  return `⚠️ The model returned malformed tool-call arguments. This call was rejected before execution. Check completed work, then retry the task or choose another model. Diagnostic details: ${argumentChars} characters; hash ${argumentHash}; repair attempted: ${repairAttempted ? "yes" : "no"}. ${ERROR_DETAILS_HINT}`;
 }
 
 /** Render loading facts without trusting provider diagnostics or recovery instructions. */

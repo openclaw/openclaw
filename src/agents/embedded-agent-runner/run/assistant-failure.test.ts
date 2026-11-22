@@ -618,8 +618,9 @@ describe("handleEmbeddedAssistantFailure", () => {
         primaryAttempts += 1;
         const fixture = makeToolRejectionInput();
         fixture.input.runInput.fallbackConfigured = true;
-        await handleEmbeddedAssistantFailure(fixture.input);
-        throw new Error("malformed failure did not enter fallback");
+        fixture.input.emptyErrorRetries = 0;
+        const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+        return `Primary unexpectedly returned ${outcome.action}`;
       },
     });
 
