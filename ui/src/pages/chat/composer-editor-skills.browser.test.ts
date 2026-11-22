@@ -35,7 +35,9 @@ function fixture(value: string, person = false) {
   surface.append(input);
   document.body.append(surface);
   let raw = value;
-  let mentions: readonly HumanMention[] = person ? [{ profileId: "alex-one", start: 0, end: 5 }] : [];
+  let mentions: readonly HumanMention[] = person
+    ? [{ profileId: "alex-one", start: 0, end: 5 }]
+    : [];
   input.addEventListener("input", () => {
     mentions = updateHumanMentions(raw, input.value, mentions) ?? [];
     raw = input.value;
