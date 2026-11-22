@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import { setSharedControlUiE2eServerBaseUrl } from "./control-ui-e2e-shared-preview.ts";
+import { prepareNativePluginMockGatewayScenario } from "./control-ui-plugin-e2e.ts";
 import { prepareNativeControlUiPluginFixtures } from "./control-ui-plugin-fixture.ts";
 
 const { buildPluginControlUi } = vi.hoisted(() => ({
@@ -59,3 +60,39 @@ it("reuses the invocation's matching build while reading each caller's assets an
     "declared browser assets are missing",
   );
 });
+
+it.each([false, true])(
+  "does not advertise settings-only views for activation (mixed: %s)",
+  async (mixed) => {
+    const root = tempDirs.make("control-ui-settings-fixture-");
+    const entry = "dist/control-ui/prepared/index.js";
+    const source = "browser/index.ts";
+    const settings = { rootDir: path.join(root, "settings"), source, pluginId: "settings" };
+    const active = { rootDir: path.join(root, "active"), source, pluginId: "active" };
+    const fixtures = mixed ? [settings, active] : [settings];
+    for (const fixture of fixtures) {
+      const target = path.join(fixture.rootDir, entry);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, "export const settingsViews = [];");
+    }
+    setSharedControlUiE2eServerBaseUrl("http://fixture.invalid/", null, [
+      {
+        ...settings,
+        declaration: {
+          entry,
+          activation: "settings-only",
+          settingsViews: [{ section: "memory", panel: "overview" }],
+        },
+      },
+      { ...active, declaration: { entry } },
+    ]);
+    const { assets, scenario } = await prepareNativePluginMockGatewayScenario({
+      nativePlugins: fixtures,
+    });
+    expect(scenario.featureMethods).toContain("plugins.controlUi.list");
+    expect(scenario.methodResponses?.["plugins.controlUi.list"]).toMatchObject({
+      plugins: mixed ? [expect.objectContaining({ pluginId: "active" })] : [],
+    });
+    expect(assets.has("/__openclaw__/plugins/control-ui/settings/prepared/index.js")).toBe(true);
+  },
+);
