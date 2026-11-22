@@ -1,6 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
 import {
@@ -100,12 +103,31 @@ describe("update-cli", () => {
       return f.baseSnapshot;
     });
 
+    // Record, at the moment Doctor starts, how many sealed copies the run has.
+    const store = resolveUpdateCaptureRoot(resolveStateDir());
+    const sealedCopies = () =>
+      fsSync.existsSync(store)
+        ? fsSync
+            .readdirSync(store)
+            .filter((name) => fsSync.existsSync(path.join(store, name, "manifest.json"))).length
+        : 0;
+    const copiesAtDoctor: number[] = [];
+    const runCommand = vi.mocked(update.runCommandWithTimeout).getMockImplementation();
+    vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (argv.at(-1) === "--doctor") {
+        copiesAtDoctor.push(sealedCopies());
+      }
+      return await runCommand!(argv, options);
+    });
+
     await update.updateCommand({ yes: true, restart: false });
 
     expect(mocks.spawn).not.toHaveBeenCalled();
     const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
     expect(doctorCalls).toHaveLength(1);
     update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
+    // The core is current, but Doctor can migrate plugin state: the run copied first, once.
+    expect(copiesAtDoctor).toEqual([1]);
     expect(update.runExec).toHaveBeenCalledWith(
       expect.any(String),
       [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],

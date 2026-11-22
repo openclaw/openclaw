@@ -63,7 +63,10 @@ import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
-import { publishPluginRecordsWithoutConfigWrite } from "./update-command-plugin-records.js";
+import {
+  createPluginRecordPublicationHooks,
+  publishPluginRecordsWithoutConfigWrite,
+} from "./update-command-plugin-records.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   createOwedPluginStepWarning,
@@ -109,6 +112,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
   cohort?: { runId: string; env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
+  beforeRecordPublication?: () => Promise<void>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     params.assertCurrent?.();
@@ -552,13 +556,12 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
-    const beforeCommit = async () => {
-      assertCurrent();
-      await params.configWriteOptions.beforeCommit?.();
-      assertCurrent();
-      await assertRecoveryCurrent();
-      assertCurrent();
-    };
+    const { beforeRecordWrite, beforeCommit } = createPluginRecordPublicationHooks({
+      beforeRecordPublication: params.beforeRecordPublication,
+      configBeforeCommit: params.configWriteOptions.beforeCommit,
+      assertCurrent,
+      assertRecoveryCurrent,
+    });
     const recordsOnly =
       changedPaths.length === 0 &&
       (await publishPluginRecordsWithoutConfigWrite({
@@ -617,7 +620,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
         },
         commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
           const { configWrite } = await commitPluginInstallRecordsWithConfig({
-            beforePersistentEffect: assertCurrent,
+            beforePersistentEffect: beforeRecordWrite,
             previousInstallRecords: pluginInstallRecords,
             nextInstallRecords,
             nextConfig: candidate,

@@ -83,6 +83,15 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
+  // Every path below writes a changed channel to config: copy the originals first.
+  if (
+    params.requestedChannel &&
+    params.configSnapshot.valid &&
+    params.requestedChannel !== params.storedChannel
+  ) {
+    await params.opts.run?.captureOriginal?.();
+    assertCurrent?.();
+  }
   // Uncommitted target finalization cannot authorize a detached helper restart.
   const failedTargetRuntime = (result = params.result): UpdateRunResult => ({
     ...result,
@@ -287,7 +296,13 @@ export async function convergeUpdatePlugins(params: {
                 }
               : {}),
             pluginUpdate: producedPluginUpdate,
-            beforeDoctor: params.beforeDoctor,
+            beforeDoctor: async () => {
+              // Fresh Doctor can migrate core and plugin state. An already-current core
+              // copies its originals only here, once it knows Doctor will run.
+              await params.opts.run?.captureOriginal?.();
+              assertCurrent?.();
+              await params.beforeDoctor?.();
+            },
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

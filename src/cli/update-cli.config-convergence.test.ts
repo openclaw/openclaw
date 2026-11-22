@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as configIo from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { channelToNpmTag, resolveEffectiveUpdateChannel } from "../infra/update-channels.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -129,6 +132,12 @@ it.each([
           expect(cli.resolveNpmChannelTag).toHaveBeenCalled();
           expect(await fs.readFile(configPath, "utf8")).toBe(before.raw);
           expect(params.plan?.snapshot).toMatchObject({ hash: before.hash, path: configPath });
+          // The repair is this already-current run's first state change: it copied first.
+          const store = resolveUpdateCaptureRoot(
+            resolvePathViaExistingAncestorSync(resolveStateDir()),
+          );
+          const copies = await fs.readdir(store, { withFileTypes: true });
+          expect(copies.filter((entry) => entry.isDirectory())).toHaveLength(1);
           return repairLegacyConfigForUpdateChannel(params);
         },
       );

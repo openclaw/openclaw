@@ -76,3 +76,30 @@ it.each([false, true])(
     }
   },
 );
+
+it("does not spend the activation budget on excluded work", async () => {
+  const directory = fs.realpathSync(dirs.make("executor-exclude-"));
+  const root = path.join(directory, "install");
+  fs.mkdirSync(root);
+  const { databasePath, assertDatabasePath } = installPrivateUpdateHandoffStore(directory);
+  assertDatabasePath(databasePath);
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  const checks: string[] = [];
+  const outcome = await withUpdateCommandExecutor("exclude-run", async (executor) => {
+    const fence = await executor.enter(root, { activationTimeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(400);
+    // Five seconds of separately bounded work (the original-state copy) inside a 1 s budget.
+    await executor.exclude!(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+      fence.assertCurrent();
+    });
+    fence.assertCurrent();
+    checks.push("current after excluded work");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(() => fence.assertCurrent()).toThrow(UpdateActivationTimeoutError);
+    checks.push("expired on the remaining budget");
+  }).catch((error: unknown) => error);
+  expect(checks).toEqual(["current after excluded work", "expired on the remaining budget"]);
+  expect(outcome).toBeInstanceOf(UpdateActivationTimeoutError);
+});

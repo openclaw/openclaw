@@ -22,7 +22,6 @@ import {
 import {
   mockUnbuiltRecoveryFixture,
   recoveryObservationStep,
-  recoveryCleanupStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -443,8 +442,8 @@ describe("update-cli", () => {
       reason: "post-update-failed",
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
+        // An already-current core copied nothing, so there is nothing to clean up.
         recoveryObservationStep(),
-        recoveryCleanupStep(),
       ],
     });
   });

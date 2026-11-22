@@ -3,8 +3,11 @@ import fsSync from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import * as serviceMembership from "../daemon/service-process-membership.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -306,6 +309,13 @@ describe("update-cli", () => {
         ],
       });
       expect(JSON.stringify(lastWriteJsonCall())).toContain("openclaw update status");
+      // The handed-off update changes state in a process that cannot copy: this one did, once.
+      const store = resolveUpdateCaptureRoot(resolvePathViaExistingAncestorSync(resolveStateDir()));
+      const copies = fsSync
+        .readdirSync(store, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory());
+      expect(copies).toHaveLength(1);
+      expect(fsSync.existsSync(path.join(store, copies[0]!.name, "manifest.json"))).toBe(true);
     },
   );
 

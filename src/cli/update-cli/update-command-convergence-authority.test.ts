@@ -182,6 +182,49 @@ describe("candidate convergence Doctor dispatch authority", () => {
     ]);
     expect(report.markdown).not.toContain("Let the current update or repair finish.");
   });
+  it.each([
+    { requestedChannel: "beta" as const, copies: true },
+    { requestedChannel: null, copies: false },
+  ])(
+    "copies an already-current core's originals before writing a changed channel (channel=$requestedChannel)",
+    async ({ requestedChannel, copies }) => {
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+      vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+      const order: string[] = [];
+      // Convergence writes the requested channel; no plugin changes, so no Doctor runs.
+      mocks.convergeCandidate.mockImplementationOnce(async () => {
+        order.push("converge");
+        return candidateResult({ changed: false });
+      });
+      await withOpenClawTestState({ label: "current-core-channel" }, async (state) => {
+        const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        await converge({
+          coreAlreadyCurrent: true,
+          result: {
+            status: "skipped",
+            reason: "already-current",
+            mode: "npm",
+            before: { version: VERSION },
+            after: { version: VERSION },
+          },
+          requestedChannel,
+          storedChannel: "stable",
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId,
+              env: state.env,
+              captureOriginal: async () => {
+                order.push("capture");
+              },
+            },
+          },
+        });
+      });
+      expect(order).toEqual(copies ? ["capture", "converge"] : ["converge"]);
+    },
+  );
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,

@@ -14,12 +14,19 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
 ) {
   const controller = new AbortController();
   let closed = false;
+  let paused = false;
   let cancelDeadline: (() => void) | undefined;
   let admission: { error: E; timeoutMs: number; deadlineAtMs: number } | undefined;
   let failure: E | undefined;
   const expired = createDeferredCore<{ error: E }>();
   const inspectDeadline = () => {
-    if (!closed && !failure && admission && performance.now() >= admission.deadlineAtMs) {
+    if (
+      !closed &&
+      !paused &&
+      !failure &&
+      admission &&
+      performance.now() >= admission.deadlineAtMs
+    ) {
       failure = admission.error;
       try {
         onExpired?.(failure);
@@ -71,6 +78,28 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
         );
       }
     },
+    /** Separately bounded work the budget does not cover: the deadline moves by its duration. */
+    async exclude<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      const started = admission;
+      if (!started) {
+        return await operation();
+      }
+      cancelDeadline?.();
+      paused = true;
+      const pausedAtMs = performance.now();
+      try {
+        return await operation();
+      } finally {
+        started.deadlineAtMs += performance.now() - pausedAtMs;
+        paused = false;
+        if (!closed && !failure) {
+          cancelDeadline = scheduleAbsoluteDeadline(started.deadlineAtMs, inspectDeadline, () =>
+            performance.now(),
+          );
+        }
+      }
+    },
     async run<T>(
       operation: () => Promise<T>,
       acceptSettledTimeout?: (result: T) => boolean,
@@ -84,7 +113,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
                 // The relay compares this value against Date.now(), so translate
                 // the monotonic deadline's remaining budget into an epoch timestamp.
                 get deadlineAtMs() {
-                  return admission
+                  return admission && !paused
                     ? Date.now() + Math.max(0, admission.deadlineAtMs - performance.now())
                     : undefined;
                 },

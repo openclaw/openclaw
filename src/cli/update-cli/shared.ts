@@ -73,6 +73,11 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     runId: string;
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+    /**
+     * In-process only: takes the original capture before this run's first state change.
+     * Runs at most once; a run that changes nothing never copies. Never serialized.
+     */
+    captureOriginal?: () => Promise<void>;
     defaultStepTimeoutMs?: number;
     /** Retain the admitted SQLite writer allowance through finalization. */
     busyTimeoutMs?: number;
