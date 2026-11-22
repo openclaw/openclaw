@@ -22,8 +22,6 @@ extension OnboardingView {
         switch pageIndex {
         case 0:
             self.welcomePage()
-        case 1:
-            self.connectionPage()
         case 2:
             self.cliPage()
         case 3:
@@ -39,63 +37,25 @@ extension OnboardingView {
         }
     }
 
+    /// Introduces OpenClaw and asks where it runs. "On this Mac" is preselected, so
+    /// the navigation button commits local setup in one action.
     func welcomePage() -> some View {
         onboardingPage {
-            VStack(spacing: 18) {
-                VStack(spacing: 8) {
-                    Text("Welcome to OpenClaw")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Your personal AI assistant, living on your own Mac.")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-                Text(
-                    "It answers questions, works with your files and apps, and can chat with you " +
-                        "on WhatsApp or Telegram. Setup takes about two minutes.")
-                    .font(.body)
+            VStack(spacing: 8) {
+                Text("Welcome to OpenClaw")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Your personal AI assistant, living on your own Mac.")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 520)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                self.onboardingCard(spacing: 14, padding: 16) {
-                    self.featureRow(
-                        title: "Ask, create, and automate",
-                        subtitle: "Give your assistant tasks and let it help across your Mac.",
-                        systemImage: "sparkles")
-                    self.featureRow(
-                        title: "Chat wherever you like",
-                        subtitle: "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
-                        systemImage: "bubble.left.and.bubble.right.fill")
-                    self.featureRow(
-                        title: "Stay in control",
-                        subtitle: "Everything runs where you decide, with permissions you grant.",
-                        systemImage: "hand.raised.fill")
-                }
-                .frame(maxWidth: 520)
-
-                Label {
-                    Text(
-                        "OpenClaw can take actions using the permissions and services you enable. " +
-                            "Review prompts and only connect tools you trust.")
-                } icon: {
-                    Image(systemName: "info.circle")
-                }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 500, alignment: .leading)
             }
-            .padding(.top, 8)
-        }
-    }
-
-    func connectionPage() -> some View {
-        onboardingPage {
-            Text("Where should your assistant run?")
-                .font(.largeTitle.weight(.semibold))
-            Text("Most people pick this Mac. You can change this anytime in the Connection window.")
+            Text(
+                "It answers questions, works with your files and apps, and can chat with you " +
+                    "on WhatsApp or Telegram. Setup takes about two minutes.")
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
             self.onboardingCard(spacing: 12, padding: 14) {
                 self.connectionChoiceButton(
                     title: "On this Mac",
@@ -132,6 +92,16 @@ extension OnboardingView {
                 Text("OpenClaw won’t start anything yet. Set up a connection whenever you’re ready.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Label {
+                Text(
+                    "OpenClaw can take actions using the permissions and services you enable. " +
+                        "Review prompts and only connect tools you trust.")
+            } icon: {
+                Image(systemName: "info.circle")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: 500, alignment: .leading)
         }
         .disabled(self.installingCLI)
     }
@@ -801,6 +771,8 @@ extension OnboardingView {
         }
     }
 
+    /// Outcome page for flows without a verified AI handoff. A verified AI connection
+    /// finishes onboarding directly and opens the dashboard instead.
     func readyPage() -> some View {
         onboardingPage {
             Text("You’re all set!")
@@ -818,66 +790,12 @@ extension OnboardingView {
                         title: "Configure later",
                         subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                         systemImage: "gearshape")
-                } else if self.selectedConnectionMode == .local, !MacOpenClawIDFeature.isEnabled {
-                    self.featureRow(
-                        title: "Running on this Mac",
-                        subtitle: "Private to this computer. It starts automatically.",
-                        systemImage: "checkmark.circle")
-                } else if self.selectedConnectionMode == .local {
-                    self.featureRow(
-                        title: "Reach it from anywhere",
-                        subtitle: "Optional OpenClaw ID setup. Native sign-in is not available in this build.",
-                        systemImage: "globe",
-                        buttonTitle: "Learn more")
-                    {
-                        self.currentPage = self.pageOrder.firstIndex(of: self.reachabilityPageIndex) ?? 0
-                    }
                 } else {
+                    // A joined OpenClaw ID claw owns its AI setup.
                     self.featureRow(
                         title: "Connected to your Gateway",
                         subtitle: "Your remote connection is ready.",
                         systemImage: "checkmark.circle")
-                }
-                if self.finishState.connectionCompletion == nil {
-                    Divider()
-                        .padding(.vertical, 6)
-                    self.featureRow(
-                        title: "Open the menu bar panel",
-                        subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
-                        systemImage: "bubble.left.and.bubble.right")
-                    self.featureRow(
-                        title: "Connect Discord, Slack, Telegram, WhatsApp, …",
-                        subtitle: "Open Settings → Channels to link channels and monitor status.",
-                        systemImage: "link",
-                        buttonTitle: "Open Settings → Channels")
-                    {
-                        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
-                    }
-                    self.featureRow(
-                        title: "Try Voice Wake",
-                        subtitle: "Enable Voice Wake in Settings → Talk for hands-free commands " +
-                            "with a live transcript overlay.",
-                        systemImage: "waveform.circle")
-                    self.featureRow(
-                        title: "Use the panel + Canvas",
-                        subtitle: "Open the compact chat panel; the agent can show previews " +
-                            "and richer visuals in Canvas.",
-                        systemImage: "rectangle.inset.filled.and.person.filled")
-                    self.featureRow(
-                        title: "Give your agent more powers",
-                        subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Skills.",
-                        systemImage: "sparkles",
-                        buttonTitle: "Open Skills")
-                    {
-                        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
-                    }
-                    if AppProfile.current.isActive {
-                        LabeledContent("Launch at login", value: "Unavailable under profile")
-                    } else {
-                        Toggle("Launch at login", isOn: self.$state.launchAtLogin)
-                            .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state
-                                .launchAtLogin)
-                    }
                 }
             }
         }

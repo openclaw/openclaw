@@ -9,15 +9,11 @@ struct OnboardingRenderTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
     func `native onboarding pages render`() throws {
         let output = try Self.outputDirectory()
-        let before = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_BEFORE"] == "1"
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.isPaused = true
         let view = OnboardingView(state: state, gatewaySelectionPersister: { true }, dashboardHandoffOpener: { _ in })
-        let pages = before ? [(1, "where"), (9, "done")] : [
-            (1, "where"), (2, "getting-ready"), (3, "connect-ai"),
-            (4, "find"), (5, "reach"), (9, "done-local"),
-        ]
+        let pages = [(2, "getting-ready"), (3, "connect-ai"), (4, "find"), (5, "reach")]
         for (page, name) in pages {
             try Self.capturePage(
                 view.pageView(for: page, contentHeight: OnboardingView.contentHeight(for: OnboardingView.windowHeight)),
@@ -25,6 +21,24 @@ struct OnboardingRenderTests {
                 label: "Native page · default window size · navigation omitted · no live connection",
                 output: output)
         }
+        // The first screen includes navigation: its primary action is the hosting choice.
+        let fresh = AppState(preview: true)
+        fresh.onboardingSeen = false
+        fresh.connectionMode = .unconfigured
+        let first = OnboardingView(state: fresh, gatewaySelectionPersister: { true }, dashboardHandoffOpener: { _ in })
+        let pageHeight = OnboardingView.contentHeight(for: OnboardingView.windowHeight)
+        try Self.capture(
+            VStack(spacing: 0) {
+                GlowingOpenClawIcon(size: 130).offset(y: 10).frame(height: 145)
+                first.pageView(for: 0, contentHeight: pageHeight)
+                    .frame(width: OnboardingView.windowWidth, height: pageHeight)
+                Spacer(minLength: 0)
+                first.navigationBar
+            }
+            .frame(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight),
+            name: "first-screen",
+            label: "Fresh first run · default window size · page and navigation views · no live connection",
+            output: output)
         state.connectionMode = .unconfigured
         try Self.capturePage(
             view.pageView(for: 9, contentHeight: OnboardingView.contentHeight(for: OnboardingView.windowHeight)),

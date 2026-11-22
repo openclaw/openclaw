@@ -8,8 +8,6 @@ struct DashboardRouteMapTests {
         #expect(DashboardRouteMap.appearanceSettingsPath == "/settings/appearance")
         #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
         #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
-        #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
-        #expect(DashboardRouteMap.skillsPagePath == "/skills")
         #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
         #expect(DashboardRouteMap.systemsPagePath == "/systems")
@@ -17,8 +15,7 @@ struct DashboardRouteMapTests {
     }
 
     @Test(arguments: [
-        DashboardRouteMap.channelsSettingsPath,
-        DashboardRouteMap.skillsPagePath, DashboardRouteMap.cronJobsPagePath,
+        DashboardRouteMap.cronJobsPagePath,
         DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
         DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
         DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
@@ -43,10 +40,10 @@ struct DashboardRouteMapTests {
     @Test func `Dashboard URL appends route and preserves token fragment`() throws {
         let baseURL = try #require(URL(string: "http://127.0.0.1:18789/control/#token=test-token"))
         let url = try #require(DashboardRouteMap.dashboardURL(
-            byAppendingSameAppPath: DashboardRouteMap.channelsSettingsPath,
+            byAppendingSameAppPath: DashboardRouteMap.devicesSettingsPath,
             to: baseURL))
 
-        #expect(url.absoluteString == "http://127.0.0.1:18789/control/settings/channels#token=test-token")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/settings/devices#token=test-token")
     }
 
     @Test(arguments: [
