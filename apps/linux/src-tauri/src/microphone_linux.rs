@@ -7,6 +7,7 @@ use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequestEx
 pub fn install(view: &webkit2gtk::WebView, admit: impl Fn(&Url) -> bool + 'static) {
     if let Some(settings) = WebViewExt::settings(view) {
         settings.set_enable_media_stream(true);
+        settings.set_enable_webrtc(true);
     }
     let pending: Rc<RefCell<Option<gtk::MessageDialog>>> = Rc::default();
     let admit = Rc::new(admit);
