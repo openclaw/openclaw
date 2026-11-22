@@ -33,6 +33,63 @@ async function selectProject(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("shows the distinguishing names of recent folders and registered projects on touch", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        const ids = ["violet", "amber"];
+        const recents = ids.map((id) => ({
+          kind: "folder",
+          folder: "/observatory/Northern-Hemisphere-Spectrograph-" + id + "/release",
+          displayName: "release",
+        }));
+        const projects = ids.map((id) => ({
+          id,
+          displayName: "observatory-instrument-calibration-" + id,
+          repositoryIdentity: "studio/release-calibration-" + id,
+          repoRoot: "/studio/" + id,
+          source: "registered",
+        }));
+        await installMockGateway(page, {
+          workspace: "/workspace",
+          workspaceGit: false,
+          featureMethods: ["projects.list", "worktrees.branches", "sessions.create"],
+          methodResponses: {
+            "projects.list": { projects, recents },
+            "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+          },
+        });
+        await page.goto(suite.server.baseUrl + "new");
+        const trigger = page.locator("#new-session-project-trigger");
+        await trigger.tap();
+        const menu = page.locator(".oc-popover.new-session-page__project-popover");
+        for (const value of [
+          ...recents.map((item) => "recent:" + item.folder),
+          ...ids.map((id) => "project:" + id),
+        ]) {
+          const row = menu.locator('[data-value="' + value + '"]');
+          await row.waitFor();
+          const identity = row.locator(".session-menu__text,.session-menu__sub");
+          expect(await identity.count()).toBe(2);
+          expect(
+            await identity.evaluateAll((parts) =>
+              parts.every(
+                (part) =>
+                  part.scrollWidth <= part.clientWidth + 1 &&
+                  part.scrollHeight <= part.clientHeight + 1,
+              ),
+            ),
+          ).toBe(true);
+        }
+        const amber = menu.locator('[data-value="project:amber"]');
+        await amber.tap();
+        await menu.waitFor({ state: "hidden" });
+        expect(await trigger.textContent()).toContain("studio/release-calibration-amber");
+        await trigger.tap();
+        await expect.poll(() => amber.getAttribute("aria-pressed")).toBe("true");
+      },
+    );
+  });
   const openPage = createPageOpener(suite);
   it("drafts a session with a browsed folder and creates it on first message", async () => {
     const page = await openPage({

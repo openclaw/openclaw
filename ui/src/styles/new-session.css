@@ -1955,6 +1955,38 @@ span.new-session-page__select {
   margin-inline-start: 0;
 }
 
+/* Project names and their distinguishing folders or repositories must both be readable.
+   Keep short pairs beside each other and give longer identities the full text column. */
+.new-session-page__project-popover
+  .new-session-page__picker-root
+  .session-menu__item:not(:has(> .new-session-page__submenu-chevron)) {
+  position: relative;
+  flex-wrap: wrap;
+  align-content: center;
+  column-gap: 8px;
+  row-gap: 0;
+  padding-inline: calc(var(--picker-row-inset) + 14px + 8px);
+
+  & > .session-menu__icon {
+    position: absolute;
+    inset-inline-start: var(--picker-row-inset);
+  }
+
+  & > .session-menu__check {
+    position: absolute;
+    inset-inline-end: var(--picker-row-inset);
+  }
+
+  & > .session-menu__text,
+  & > .session-menu__sub {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
 .new-session-page__picker-popover .session-menu__check,
 .new-session-page__picker-popover .new-session-page__menu-chevron {
   margin-inline-start: auto;
