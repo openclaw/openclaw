@@ -47,7 +47,7 @@ suite.define(() => {
               "usage.status": usage,
             },
           });
-          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+          await page.goto(`${suite.server.baseUrl}settings/model-providers?provider=openai`);
           await waitForControlUiRoute(page, {
             pathname: "/settings/model-providers",
             routeId: "model-providers",

@@ -286,6 +286,11 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
         })
       : undefined;
+  // A short list reads at a glance; the filter earns its row on a long one. Once shown (or seeded
+  // by a link) it stays, so clearing the field never removes it mid-typing.
+  const filterable = createMemo<boolean>(
+    (shown) => shown === true || props.cards.length > 6 || Boolean(search()),
+  );
   return (
     <SettingsSection
       carapace
@@ -306,15 +311,17 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         </>
       }
     >
-      <label class="field model-providers__search">
-        <input
-          type="search"
-          aria-label={t("modelProviders.searchConnected")}
-          placeholder={t("modelProviders.searchConnected")}
-          value={search()}
-          onInput={(event) => setSearch(event.currentTarget.value)}
-        />
-      </label>
+      <Show when={filterable()}>
+        <label class="field model-providers__search">
+          <input
+            type="search"
+            aria-label={t("modelProviders.searchConnected")}
+            placeholder={t("modelProviders.searchConnected")}
+            value={search()}
+            onInput={(event) => setSearch(event.currentTarget.value)}
+          />
+        </label>
+      </Show>
       <div class="model-providers__provider-list">
         <Show when={props.error}>
           {(error) => (

@@ -395,6 +395,11 @@ describe("ModelProvidersPage agent scope", () => {
       });
       const page = appendPage(context);
       await waitForProviders(page);
+      const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+      if (moreSettings.getAttribute("aria-expanded") !== "true") {
+        moreSettings.click();
+        await page.updateComplete;
+      }
       runtimeConfig.patch.mockClear();
 
       await updatePickers(page.renderRoot);

@@ -93,6 +93,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onFastModeReset: () => undefined,
     onCatalogRetry: () => undefined,
     catalogProviders: [],
+    agentModelRef: null,
     onCatalogConnect: () => undefined,
     onDiscover: () => undefined,
     discoverDisabled: false,

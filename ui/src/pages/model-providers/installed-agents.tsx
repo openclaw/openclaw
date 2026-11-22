@@ -469,7 +469,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         status = { kind: "danger", labelKey: "modelProviders.installedAgents.status.signIn" };
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       } else if (card?.catalogStatus === "unavailable") {
-        status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
+        // An app on by default that lists nothing is just not set up yet; warn only after a choice.
+        if (typeof configuredEnabled === "boolean") {
+          status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
+        }
         hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
       } else if (card && card.availableModelCount > 0) {
         status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
@@ -631,12 +634,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         const detected = createMemo(() =>
           (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
         );
-        const missingNames = createMemo(() =>
+        const missingNames = () =>
           (displayedInventory().agents ?? [])
-            .filter((agent) => agent.installation === "missing")
-            .map((agent) => agent.name)
-            .join(", "),
-        );
+            .flatMap((agent) => (agent.installation === "missing" ? [agent.name] : []))
+            .join(", ");
         const outcome = createMemo(() => {
           const failure = displayedInventory().failure;
           if (failure) {

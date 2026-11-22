@@ -69,10 +69,14 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);
           const primary = page.getByRole("button", { name: /^Model: GPT-5.5/ });
           await primary.waitFor();
+          const moreSettings = page.locator("[data-models-more-settings]");
+          if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+            await moreSettings.click();
+          }
           expect(await primary.textContent()).not.toContain("alex@example.com");
           expect(await primary.locator(".picker-select__description").count()).toBe(0);
           const rows = await page
-            .locator(".model-providers__defaults .settings-row")
+            .locator(".model-providers__defaults .settings-row:not([data-models-more-settings])")
             .evaluateAll((elements) =>
               elements.map((row) => {
                 const label = row.querySelector(".settings-row__text")!.getBoundingClientRect();

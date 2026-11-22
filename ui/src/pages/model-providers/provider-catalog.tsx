@@ -15,28 +15,22 @@ import "../../styles/plugins.css";
 
 const POPULAR_FALLBACK_SIZE = 8;
 
-/** The ways in, in words, and the one verb the row's button uses. */
-function waysIn(provider: LoginProvider, connected: boolean): { summary: string; action: string } {
-  const ways = new Set(
-    provider.choices.map((choice) =>
+/** The ways in, in words; a provider already in use says so first. */
+function waysIn(provider: LoginProvider, connected: boolean): string {
+  const ways = new Set(connected ? [t("modelProviders.catalog.connected")] : []);
+  for (const choice of provider.choices) {
+    ways.add(
       t(
         choice.kind === "secret"
           ? "modelProviders.catalog.token"
           : "modelProviders.catalog.browserSignIn",
       ),
-    ),
-  );
+    );
+  }
   if (provider.apiKeyProvider) {
     ways.add(t("modelProviders.status.apiKey"));
   }
-  const action = connected
-    ? "modelProviders.profiles.addAccount"
-    : provider.choices.length === 0
-      ? "modelProviders.catalog.addKey"
-      : provider.choices.length === 1 && !provider.apiKeyProvider
-        ? "modelProviders.catalog.signIn"
-        : "modelProviders.catalog.connect";
-  return { summary: [...ways].join(" · "), action: t(action) };
+  return [...ways].join(" · ");
 }
 
 export function ProviderCatalog(props: {
@@ -130,7 +124,7 @@ export function ProviderCatalog(props: {
         >
           <PluginCatalogGrid items={shown()}>
             {(provider, contentRef) => {
-              const ways = createMemo(() =>
+              const summary = createMemo(() =>
                 waysIn(
                   provider(),
                   [provider().id, ...provider().authProviders].some((id) =>
@@ -152,20 +146,22 @@ export function ProviderCatalog(props: {
                         <div class="plugin-card-title-row">
                           <h3>{provider().label}</h3>
                         </div>
-                        <p class="installed-plugins-card__summary">{ways().summary}</p>
+                        <p class="installed-plugins-card__summary">{summary()}</p>
                       </div>
+                      {/* One verb on every row keeps the actions in one column; the next step
+                          picks the method. */}
                       <div class="plugin-catalog-card__action">
                         <button
                           type="button"
                           class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
                           disabled={props.disabled}
                           aria-label={t("modelProviders.actionNamed", {
-                            action: ways().action,
+                            action: t("modelProviders.catalog.connect"),
                             name: provider().label,
                           })}
                           onClick={() => props.onConnect(provider().id)}
                         >
-                          {ways().action}
+                          {t("modelProviders.catalog.connect")}
                         </button>
                       </div>
                     </div>

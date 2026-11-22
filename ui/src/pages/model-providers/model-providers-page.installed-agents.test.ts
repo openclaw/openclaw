@@ -331,7 +331,8 @@ it("keeps pending discovery silent and lets Check again recover failed models", 
   await waitForProviders(page);
   await waitForSolid(() => {
     expect(agentRow(page, "qwen")?.textContent).toMatch(/sign-in required/i);
-    expect(agentRow(page, "kilocode")?.textContent).toMatch(/models unavailable/i);
+    expect(agentRow(page, "kilocode")?.textContent).toMatch(/installed/i);
+    expect(agentRow(page, "kilocode")?.textContent).not.toMatch(/models unavailable/i);
     expect(agentText(page)).not.toMatch(/discovering models/i);
     expect(agentText(page)).toMatch(/installed/i);
     expect(agentText(page)).not.toMatch(/sign.in/i);

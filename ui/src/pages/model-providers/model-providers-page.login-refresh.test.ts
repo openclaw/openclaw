@@ -285,7 +285,15 @@ it("retains search and Retry controls through admitted core error feedback", asy
   const { context, request } = createHarness("main");
   const initialRequest = request.getMockImplementation()!;
   request.mockImplementation(async (method, ...args) =>
-    method === "models.authStatus" ? createAuthStatus() : initialRequest(method, ...args),
+    method === "models.authStatus"
+      ? createAuthStatus([
+          {},
+          ...Array.from({ length: 6 }, (_, index) => ({
+            provider: `fixture-${index}`,
+            displayName: `Fixture ${index}`,
+          })),
+        ])
+      : initialRequest(method, ...args),
   );
   const page = appendPage(context);
   await waitForProviders(page);

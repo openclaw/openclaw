@@ -647,16 +647,16 @@ describe("renderModelProviders", () => {
     const catalog = container.querySelector("[data-models-catalog]");
     expect(text(catalog)).toContain(t("modelProviders.catalog.firstTitle"));
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
-    button(catalog!, "Add API key")?.click();
+    button(catalog!, "Connect")?.click();
     expect(onCatalogConnect).toHaveBeenCalledWith("openai");
-    // Connected: the catalog moves below as "Add a provider"; the provider in use offers another account.
+    // Connected: the catalog moves below as "Add a provider" and marks the provider in use.
     mount(props({ catalogProviders: [openai] }), container);
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     const later = container.querySelector("[data-models-catalog]");
     expect(text(later)).toContain(t("modelProviders.catalog.title"));
     expect(
-      text(later?.querySelector('[data-models-catalog-provider="openai"] button') ?? null),
-    ).toBe("Add account");
+      text(later?.querySelector('[data-models-catalog-provider="openai"] p') ?? null),
+    ).toContain("Connected");
   });
 
   it.each([true])(

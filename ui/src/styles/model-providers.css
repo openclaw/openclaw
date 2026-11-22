@@ -800,3 +800,24 @@ button.provider-row__summary:hover {
     grid-column: 1 / -1;
   }
 }
+
+/* "More settings" folds the advanced defaults under the model row. */
+.model-providers__more {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.model-providers__more svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  transition: transform var(--duration-fast) ease;
+}
+
+.model-providers__more[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}

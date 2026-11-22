@@ -172,6 +172,7 @@ suite.define(() => {
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
+            await page.locator("[data-models-more-settings]").click();
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility model",
             );

@@ -685,6 +685,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const defaults = page.locator(".model-providers__defaults");
+      await defaults.locator("[data-models-more-settings]").click();
       const utility = page.locator("openclaw-select-picker:has(#model-providers-utility-model)");
       await expect.poll(() => modelPickerValue(utility)).toBe("__openclaw_automatic_utility__");
       if (recordVisuals) {
@@ -725,6 +726,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         });
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await page.reload();
+        const moreSettings = defaults.locator("[data-models-more-settings]");
+        await moreSettings.waitFor();
+        if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+          await moreSettings.click();
+        }
         await expect.poll(() => modelPickerValue(utility)).toBe(choice.value);
         await expect
           .poll(() => modelPickerValue(defaults.locator("openclaw-select-picker").first()))

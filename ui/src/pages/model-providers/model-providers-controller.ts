@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { resolveAgentModelPrimary } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -633,7 +634,6 @@ export function createModelProviders(
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
     const props = {
-      installedAgents: undefined,
       providerQuery: providerQuery(),
       accountUsage:
         !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
@@ -653,6 +653,7 @@ export function createModelProviders(
       onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
       basePath: context.basePath,
       credentialAgentLabel: agentLabel,
+      agentModelRef: resolveAgentModelPrimary(mutations.configObject(), state.selectedAgentId),
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
       catalogReceipt: core.catalogReceipt,
