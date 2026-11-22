@@ -48,11 +48,21 @@ it.each([
   expect(mocks.log).not.toHaveBeenCalled();
 });
 
-it.each(["0", "91", "2.5", "not-a-number"])(
+it.each(["0", "91", "2.5", "1e2", "0x10", "not-a-number"])(
   "rejects invalid import days %s before RPC",
   async (days) => {
     await expect(run(["import", "--since", days])).rejects.toThrow(
       "Expected an integer between 1 and 90",
+    );
+    expect(mocks.call).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["0", "101", "2.5", "1e1", "0x10", "not-a-number"])(
+  "rejects invalid status limit %s before RPC",
+  async (limit) => {
+    await expect(run(["status", "--limit", limit])).rejects.toThrow(
+      "Expected an integer between 1 and 100",
     );
     expect(mocks.call).not.toHaveBeenCalled();
   },
