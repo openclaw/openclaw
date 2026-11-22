@@ -54,7 +54,7 @@ export function AsyncQuestionSummary(props: {
     };
   });
   return (
-    <div class="chat-question-summary">
+    <div class="chat-question-summary chat-question-summary--async">
       {/* The announcement region holds text only: focusable controls inside a live region
           get re-announced and interrupt the reader, so the action buttons stay outside it. */}
       <div class="chat-question-summary__announcement" role="status" aria-live="polite">

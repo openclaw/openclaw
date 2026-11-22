@@ -145,3 +145,37 @@ it("keeps the grid row gap between multiple questions", () => {
   const second = blocks[1]!.getBoundingClientRect();
   expect(second.top - first.bottom).toBeGreaterThan(0);
 });
+
+it.each([256, 326, 620])(
+  "contains unbroken answer-summary text in a %i px chat column",
+  async (width) => {
+    container.style.width = `${width}px`;
+    const title = `Question_${"T".repeat(130)}`;
+    const answer = `Audience_${"A".repeat(80)}`;
+    const delivery = failedDelivery();
+    const queued = delivery.get("question-1")!;
+    queued.text = `> ${title}\n\n${answer}`;
+    queued.sendError = `Synthetic rejection: ${"UNBROKEN".repeat(35)}`;
+    draw({ itemId: "question-1", questions: [{ title }] }, { delivery, retry: vi.fn() });
+    await document.fonts.ready;
+
+    const summary = container.querySelector<HTMLElement>(".chat-question-summary")!;
+    const bounds = summary.getBoundingClientRect();
+    expect(summary.scrollWidth).toBeLessThanOrEqual(summary.clientWidth);
+    const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) {
+        continue;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const line of range.getClientRects()) {
+        expect(line.left).toBeGreaterThanOrEqual(bounds.left - 1);
+        expect(line.right).toBeLessThanOrEqual(bounds.right + 1);
+      }
+    }
+    expect(summary.textContent).toContain(title);
+    expect(summary.textContent).toContain(answer);
+    expect(summary.textContent).toContain(queued.sendError);
+  },
+);

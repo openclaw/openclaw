@@ -517,6 +517,10 @@ openclaw-chat-question-panel {
   line-height: 1.4;
 }
 
+.chat-question-summary--async {
+  overflow-wrap: anywhere;
+}
+
 /* The live region wraps the question lines, so it has to keep participating in the parent
    grid: as a plain block it would collapse every question into a single grid item and drop
    the row gap between them. */
