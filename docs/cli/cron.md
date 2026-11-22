@@ -374,7 +374,7 @@ Isolated automation turns require a final deliverable rather than an interim sta
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
+For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. Reasoning the model closes with a tag such as `</think>` before that exact token counts as the same silent final. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
