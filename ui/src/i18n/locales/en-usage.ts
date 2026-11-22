@@ -166,7 +166,8 @@ const enUsage = {
       toolCalls: "Tool calls",
       toolsUsed: "tools used",
       errors: "Errors",
-      errorsHint: "Total message and tool errors in range.",
+      errorsHint:
+        "Counts tool-result errors and assistant messages stopped for error, abort, or timeout in this range. Attempts that fail before a message is recorded are excluded.",
       toolResults: "tool results",
       avgTokens: "Avg tokens / msg",
       avgCost: "Avg cost / msg",

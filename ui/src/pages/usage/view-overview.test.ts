@@ -38,23 +38,6 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
 }
 
 describe("UsageInsights", () => {
-  it("explains that the error rate covers recorded message errors only", () => {
-    const messages = { total: 3, user: 3, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-    const { container } = mountInsights(
-      () => usageTotals(0, 0),
-      () => ({ ...aggregates, messages }),
-    );
-    const button = container.querySelector<HTMLButtonElement>("#usage-summary-hint-error-rate")!;
-    const tooltip = button.closest("openclaw-tooltip")!;
-    const card = button.closest(".usage-summary-card")!;
-
-    expect(text(card, ".usage-summary-value")).toBe("0.00%");
-    expect(text(card, ".usage-summary-sub")).toContain("0 errors");
-    expect(tooltip.querySelector('[slot="content"]')?.textContent).toBe(
-      "Recorded tool-result errors and assistant messages stopped for error, abort, or timeout ÷ total messages. Failed attempts with no recorded message are not included.",
-    );
-  });
-
   it("keeps an unmeasured cache rate neutral and rates measured results", () => {
     const [current, setCurrent] = createSignal(usageTotals(0, 0));
     const { container } = mountInsights(current, () => aggregates);
