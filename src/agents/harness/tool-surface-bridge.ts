@@ -37,7 +37,7 @@ const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_W
 type PreparedToolSurface = Pick<
   Parameters<typeof createCodeModeTools>[0],
   "abortSignal" | "executeTool" | "toolExecutionAllow" | "codeModeSkills"
->;
+> & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
   input: Omit<
@@ -165,18 +165,25 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     } = {},
   ) => {
     const prepared = options.prepared;
-    // Native harness callers may supply raw tools, while the bundled tool constructor
-    // already applied the full prepared policy and must not be filtered a second time.
-    const projectedProfileTools = options.agentProfileApplied
-      ? tools
-      : filterToolsByAgentProfile({
-          tools,
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          resolvedProfile: agentProfile,
-          preserveToolNames: preserveAgentProfileTools(),
-        });
+    // A worker receives the Gateway's already-projected tools and has only presentation config,
+    // so it cannot rebuild the preserve list and must not filter them again. Native harness
+    // callers may supply raw tools, while the bundled tool constructor already applied the full
+    // prepared policy and must not be filtered a second time.
+    const gatewayProjected = presentation !== undefined;
+    const preserveToolNames =
+      prepared?.preserveToolNames ??
+      (options.agentProfileApplied || gatewayProjected ? undefined : preserveAgentProfileTools());
+    const projectedProfileTools =
+      prepared || options.agentProfileApplied || gatewayProjected
+        ? tools
+        : filterToolsByAgentProfile({
+            tools,
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            resolvedProfile: agentProfile,
+            preserveToolNames,
+          });
     let effectiveTools = prepared
       ? projectedProfileTools
       : filterRuntimeCompatibleTools(projectedProfileTools).tools;
@@ -210,16 +217,17 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       toolExecutionAllow: prepared?.toolExecutionAllow,
       codeModeSkills,
     });
-    const projectedProfileCompactedTools = options.agentProfileApplied
-      ? compacted.tools
-      : filterToolsByAgentProfile({
-          tools: compacted.tools,
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          resolvedProfile: agentProfile,
-          preserveToolNames: preserveAgentProfileTools(),
-        });
+    const projectedProfileCompactedTools =
+      gatewayProjected || (!prepared && options.agentProfileApplied)
+        ? compacted.tools
+        : filterToolsByAgentProfile({
+            tools: compacted.tools,
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: prepared ? undefined : params.sessionKey,
+            resolvedProfile: agentProfile,
+            preserveToolNames,
+          });
     const schemaProjection = filterRuntimeCompatibleTools(projectedProfileCompactedTools);
     effectiveTools = schemaProjection.tools;
     if (!compacted.catalogRegistered) {

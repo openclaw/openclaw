@@ -368,7 +368,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         });
         const projected = toolSurfaceRuntime
           .compactTools(tools, {
-            prepared: { abortSignal: toolSignal },
+            prepared: { abortSignal: toolSignal, preserveToolNames: [] },
           })
           .promptToolPolicy.apply();
         await resourceLoader.reload();

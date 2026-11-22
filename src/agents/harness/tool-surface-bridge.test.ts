@@ -196,7 +196,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           setPluginToolMeta(target, { pluginId: "bundle-mcp", optional: false });
         }
         const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
-          prepared: {},
+          prepared: { preserveToolNames: [] },
         });
         expect(toolNames(surface.tools)).toEqual([
           ...searchControlNames,
@@ -252,7 +252,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       };
       const localSurface = local.compactTools(buildTools());
       const workerSurface = worker.compactTools(buildTools(), {
-        prepared: {},
+        prepared: { preserveToolNames: [] },
       });
       expect(toolNames(workerSurface.tools)).toEqual(expected);
       expect(workerSurface.tools.map(projectAgentToolDefinition)).toEqual(
@@ -482,7 +482,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       expect(prompt).toContain("- fixture_lookup (core)");
       expect(prompt?.includes("Search the local archive.")).toBe(!compact);
       expect(prompt?.includes("- browser (core)")).toBe(!compact);
-      const projected = worker.compactTools([lookup], { prepared: {} });
+      const projected = worker.compactTools([lookup], { prepared: { preserveToolNames: [] } });
       const directory = projected.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
       expect(directory?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
         compact ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
@@ -490,24 +490,51 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     },
   );
 
-  it.each([
-    { selected: "openclaw/base", surviving: ["read", "browser"] },
-    { selected: "openclaw/small", surviving: ["read"] },
-  ])("keeps the gateway-selected $selected on a worker", ({ selected, surviving }) => {
-    const model = {};
-    const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: selected as "openclaw/base" | "openclaw/small" } },
-      tools: { codeMode: false, toolSearch: false },
-    };
-    const worker = rawRuntime({
-      model,
-      presentation: structuredClone(preparePresentation({ config, model })),
-    });
+  it.each(["openclaw/base", "openclaw/small"] as const)(
+    "keeps the gateway-selected %s on a worker and trusts the Gateway's tool projection",
+    (selected) => {
+      const model = {};
+      const config: OpenClawConfig = {
+        agents: { defaults: { agentProfileId: selected } },
+        tools: { codeMode: false, toolSearch: false },
+      };
+      const worker = rawRuntime({
+        model,
+        presentation: structuredClone(preparePresentation({ config, model })),
+      });
 
-    expect(worker.agentProfile.profile.id).toBe(selected);
+      expect(worker.agentProfile.profile.id).toBe(selected);
+      expect(
+        toolNames(
+          worker.compactTools(tools(["read", "browser", "message"]), {
+            prepared: { preserveToolNames: [] },
+          }).tools,
+        ),
+      ).toEqual(["read", "browser", "message"]);
+    },
+  );
+
+  it("keeps a tool that only the prepared preserve list allows after catalog compaction", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      tools: { toolSearch: { enabled: false } },
+    };
+    const runtime = createRuntime(config);
+
     expect(
-      toolNames(worker.compactTools(tools(["read", "browser"]), { prepared: {} }).tools),
-    ).toEqual(surviving);
+      toolNames(
+        runtime.compactTools(tools(["read", "browser"]), {
+          prepared: { preserveToolNames: ["browser"] },
+        }).tools,
+      ),
+    ).toEqual(["read", "browser"]);
+    expect(
+      toolNames(
+        runtime.compactTools(tools(["read", "browser"]), {
+          prepared: { preserveToolNames: [] },
+        }).tools,
+      ),
+    ).toEqual(["read"]);
   });
 
   it("atomically filters and restores direct tools plus the hidden catalog", () => {

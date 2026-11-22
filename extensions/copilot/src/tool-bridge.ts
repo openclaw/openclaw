@@ -185,7 +185,9 @@ export async function createCopilotToolBridge(
     toolSurfaceRuntime.runtimeToolAllowlist,
     { toolMeta: getPluginToolMeta },
   );
-  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools);
+  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
+    agentProfileApplied: true,
+  });
   // The constructor output is bound before catalog compaction so hidden tools
   // cannot outlive the attempt. Bind only controls created by compaction here;
   // rebinding retained tools would stack the before-tool hook.

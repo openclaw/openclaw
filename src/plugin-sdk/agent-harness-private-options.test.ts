@@ -107,7 +107,7 @@ it.each(["sync", "async"] as const)("projects only public %s controls", async (m
   const internal = expectDefined(create.mock.results[0]?.value, "core surface");
   using compact = vi.spyOn(internal, "compactTools");
   const publicOptions = { hookContext: { agentId: "sdk-public" }, agentProfileApplied: true };
-  const options = { ...publicOptions, prepared: {} };
+  const options = { ...publicOptions, prepared: { preserveToolNames: ["browser"] } };
   const result = runtime.compactTools([], options);
   expect(runtime).not.toHaveProperty("plan");
   expect(compact).toHaveBeenCalledExactlyOnceWith([], publicOptions);
