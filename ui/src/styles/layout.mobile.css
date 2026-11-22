@@ -421,7 +421,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   /* The header carries the title; the heading stays for assistive tech. */
-  & .content .content-header .page-title {
+  & .content .content-header .page-title,
+  & .content openclaw-plugin-page .plugin-page-title {
     position: absolute;
     width: 1px;
     height: 1px;
