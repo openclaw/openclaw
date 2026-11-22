@@ -3,6 +3,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
+import { captureSessionGoalBudget } from "../../config/sessions/goals-transitions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
@@ -343,6 +344,18 @@ export function recordGoalContinuationSettlement(params: {
       ? { runId: params.runId, result: params.result }
       : undefined;
   }
+}
+
+/** The requester's admitted Goal return can spend; an independent command cannot. */
+export function readAdmittedGoalContinuationBudget(runId: string, sessionKey: string) {
+  const settlement = goalSettlements.getStore();
+  return settlement?.admitted &&
+    settlement.runId === runId &&
+    settlement.owner.params.sessionKey === sessionKey &&
+    !settlement.owner.closed &&
+    settlement.isCurrent()
+    ? captureSessionGoalBudget(settlement.entry?.goal)
+    : undefined;
 }
 
 /** Run only after the persisted batch commit; waiting inside the command would deadlock. */

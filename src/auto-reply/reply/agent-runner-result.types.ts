@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionGoalBudgetAdmission } from "../../config/sessions/goals-transitions.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -33,6 +34,7 @@ export type FinalizeReplyAgentRunInput = Pick<
 > & {
   activeIsNewSession: boolean;
   activeSessionEntry: SessionEntry | undefined;
+  admittedGoalBudget?: SessionGoalBudgetAdmission;
   activeSessionStore: Record<string, SessionEntry> | undefined;
   completion?: AgentTurnCompletion;
   activitySummaryCompletion?: SessionActivitySummaryCompletion;

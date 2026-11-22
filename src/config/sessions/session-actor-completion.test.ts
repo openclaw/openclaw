@@ -266,3 +266,22 @@ it.each(["active", "complete", "replaced", "cleared"] as const)(
     });
   },
 );
+
+it("keeps committed Goal usage across actor restart without recharging a replay", async () => {
+  await withActor(async (f) => {
+    const entry = f.nativeEntry()!;
+    const goal = buildCreatedSessionGoal(entry, { objective: "Index poems", tokenBudget: 100 }, 1);
+    f.writeEntry({ ...entry, activeWriterRunId: "goal-writer", goal });
+    const reducers: SessionActorReducer[] = [
+      { kind: "goal-usage", admitted: { id: goal.id, tokensUsed: 0 }, tokens: 60, updatedAt: 2 },
+    ];
+    const command = completion(f, "goal-usage", { reducers });
+    await f.prepare(command);
+    expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+    f.restartActor();
+    const replay = completion(f, "goal-usage-retry", { reducers });
+    await f.prepare(replay);
+    expect(f.mutate(replay)).toMatchObject({ kind: "committed" });
+    expect(f.read().entry?.goal).toMatchObject({ status: "active", tokensUsed: 60 });
+  });
+});

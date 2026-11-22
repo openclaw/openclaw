@@ -395,7 +395,7 @@ describe("session actor usage accounting", () => {
       expect(stored, name).not.toHaveProperty(field);
     }
   });
-  it("accounts goal usage when fresh token snapshots are persisted", async () => {
+  it("keeps native harness Goal accounting when fresh token snapshots are persisted", async () => {
     const session = await usageSession({
       sessionId: "s1",
       updatedAt: 1,
@@ -415,6 +415,7 @@ describe("session actor usage accounting", () => {
     });
 
     await session.update({
+      agentHarnessId: "codex",
       usage: { input: 100, output: 5, total: 105 },
       lastCallUsage: { input: 100, output: 5, total: 105 },
       contextTokensUsed: 200_000,
@@ -428,6 +429,7 @@ describe("session actor usage accounting", () => {
     });
 
     await session.update({
+      agentHarnessId: "codex",
       usage: { input: 125, output: 5, total: 130 },
       lastCallUsage: { input: 125, output: 5, total: 130 },
       contextTokensUsed: 200_000,

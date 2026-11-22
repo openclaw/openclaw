@@ -86,8 +86,15 @@ describe("session goals", () => {
 
   it("resumes budget-limited goals with a fresh budget window", async () => {
     await startGoal(100, { objective: "finish task", tokenBudget: 20 });
-    await patchEntry({ totalTokens: 125 });
-    await snapshot(20);
+    await patchEntry({
+      totalTokens: 125,
+      goal: {
+        ...readEntry()!.goal!,
+        status: "budget_limited",
+        tokensUsed: 25,
+        budgetLimitedAt: 20,
+      },
+    });
     const resumed = await setStatus("active", 30);
     expect(resumed).toMatchObject({ status: "active", tokenStart: 125, tokensUsed: 0 });
     expect(resumed.budgetLimitedAt).toBeUndefined();
@@ -100,7 +107,7 @@ describe("session goals", () => {
       totalTokensFresh: false,
       totalTokensVersion: undefined,
     });
-    await createGoal({ objective: "finish task", tokenBudget: 20 });
+    await createGoal({ objective: "finish task" });
     await patchEntry({
       totalTokens: 125,
       totalTokensFresh: true,
@@ -128,13 +135,13 @@ describe("session goals", () => {
   });
 
   it.each([
-    { totalTokens: 105, tokenStart: 100, tokensUsed: 5 },
-    { totalTokens: 125, tokenStart: 125, tokensUsed: 0 },
+    { used: 5, tokenStart: 100, tokensUsed: 5 },
+    { used: 25, tokenStart: 125, tokensUsed: 0 },
   ])(
-    "resumes completed goals with appropriate accounting at $totalTokens tokens",
-    async ({ totalTokens, tokenStart, tokensUsed }) => {
+    "resumes completed goals with appropriate accounting after $used settled tokens",
+    async ({ used, tokenStart, tokensUsed }) => {
       const created = await startGoal(100, { tokenBudget: 20 });
-      await patchEntry({ totalTokens });
+      await patchEntry({ totalTokens: 125, goal: { ...created, tokensUsed: used } });
       const completed = await setStatus("complete", 20, "verified");
       expect(formatSessionGoalStatus(completed)).toContain("Commands: /goal resume, /goal clear");
       const resumed = await setStatus("active", 30);
@@ -200,7 +207,7 @@ describe("session goals", () => {
         totalTokens: 140,
         totalTokensFresh: true,
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        goal: goalState({ tokenStartFresh: false, tokenBudget: 40 }),
+        goal: goalState({ tokenStartFresh: false }),
       },
       20,
       { adoptFreshBaseline: false },

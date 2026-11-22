@@ -319,14 +319,28 @@ describe("Goal continuation eligibility", () => {
       ).toBe(expected);
     }
   });
-  it("observes fresh token exhaustion before scheduling another turn", () => {
+  it("checks the committed spend rather than context before scheduling another turn", () => {
     const current = entry();
     current.goal!.tokenBudget = 50;
     current.totalTokens = 50;
     current.totalTokensFresh = true;
     current.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
+    expect(isGoalContinuationCurrent(identity, current)).toBe(true);
+    current.goal!.tokensUsed = 50;
     expect(isGoalContinuationCurrent(identity, current)).toBe(false);
     expect(current.goal!.status).toBe("active");
+  });
+  it("does not start an unmetered CLI successor for a budgeted Goal", async () => {
+    const f = fixture();
+    const current = entry();
+    current.goal!.tokenBudget = 50;
+    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(current);
+    f.params.result = {
+      ...normal,
+      meta: { ...normal.meta, executionTrace: { runner: "cli", fallbackUsed: false } },
+    };
+    expect(await enqueueGoalContinuation(f.params)).toBe(false);
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
   it.each([
     { meta: { aborted: true } },

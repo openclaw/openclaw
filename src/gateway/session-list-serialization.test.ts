@@ -734,7 +734,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         createdAt: start,
         updatedAt: start,
         tokenStart: 0,
-        tokensUsed: 0,
+        tokensUsed: 20,
         tokenBudget: 10,
         continuationTurns: 0,
       },

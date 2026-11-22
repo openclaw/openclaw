@@ -190,6 +190,10 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (!eligible() || !entry?.goal) {
     return false;
   }
+  // CLI replies have no built-in settlement and need not set an agent harness ID.
+  if (entry.goal.tokenBudget !== undefined && params.result.meta.executionTrace?.runner === "cli") {
+    return false;
+  }
   const codexPlacement =
     entry.agentHarnessId === "codex"
       ? await resolveCodexGoalPlacement({

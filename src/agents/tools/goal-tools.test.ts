@@ -80,7 +80,7 @@ describe("goal tools", () => {
       totalTokens: 125,
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      goal: makeGoal({ tokenStart: 100, tokenBudget: 20 }),
+      goal: makeGoal({ tokenStart: 100, tokenBudget: 20, tokensUsed: 20 }),
     });
     const result = await createGetGoalTool(options).execute("call-1", {});
     expect(result.details).toMatchObject({ goal: { status: "budget_limited" } });

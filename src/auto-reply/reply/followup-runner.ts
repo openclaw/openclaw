@@ -7,6 +7,7 @@ import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-a
 import { withoutRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { captureSessionGoalBudget } from "../../config/sessions/goals-transitions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { CronDeliveryAuthorityError } from "../../cron/delivery-attempt-fence.js";
@@ -245,6 +246,7 @@ export function createFollowupRunner(
       }
       const initialSessionEntry = turn.session.current();
       const initialGoal = initialSessionEntry?.goal;
+      const admittedGoalBudget = captureSessionGoalBudget(initialGoal);
       // Queued user input can explicitly start the next goal after completion.
       const initialGoalId = initialGoal?.status === "complete" ? undefined : initialGoal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
@@ -345,6 +347,7 @@ export function createFollowupRunner(
               turn,
               defaults,
               execution,
+              admittedGoalBudget,
               completion: turnCompletion,
             });
             const resolved = await resolveFollowupDeliveryDecision({
