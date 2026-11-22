@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { parseUserChannelAuthorizationReference } from "../state/user-channel-authorization-reference.js";
@@ -192,9 +191,6 @@ function captureLinkedOperatorAdmin(
       : undefined;
   } catch (error) {
     if (error instanceof GatewayOperatorAccessDeniedError) {
-      if (error.accessCause === "policy-unavailable") {
-        throw new GatewayOperatorAccessUnavailableError();
-      }
       return undefined;
     }
     throw error;
