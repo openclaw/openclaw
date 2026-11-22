@@ -263,6 +263,17 @@
   margin-block: var(--space-4);
 }
 
+.transcripts-reader__header .transcripts-actions .btn {
+  min-height: var(--settings-control-height);
+  height: auto;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.transcripts-reader__header > p:is([role="status"], [role="alert"]) {
+  font-size: var(--control-ui-text-md);
+  overflow-wrap: anywhere;
+}
+
 .transcripts-source-details {
   margin-block: var(--space-3);
 }
@@ -534,7 +545,11 @@
   }
 
   .transcripts-reader__header h1 {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
+  }
+
+  .transcripts-reader__header .transcripts-actions .btn {
+    flex-grow: 1;
   }
 
   /* One row with or without Clear search; a long query scrolls inside its field. */

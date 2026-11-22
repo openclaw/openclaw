@@ -73,6 +73,8 @@ The URL preserves the selected meeting and tab. Opening a meeting with saved
 speech automatically generates missing notes when you have write access. The
 reader shows generation progress and offers a retry if generation fails.
 
+The meeting title, download buttons, and download feedback follow the Control UI text size. On a narrow screen, the download buttons move onto separate rows when their labels need more room.
+
 **Download Markdown** includes the transcript and any stored summary.
 **Download JSONL** exports the reader's public utterance projection, excluding
 provider-private metadata and local filesystem paths. Local CLI exports retain

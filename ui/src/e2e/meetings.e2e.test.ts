@@ -5,7 +5,10 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Meetings dashboard" });
@@ -487,4 +490,78 @@ suite.define(() => {
       );
       await expectAbsent(view.getByRole("heading", { name: "No meetings yet." }));
     }));
+
+  it("keeps enlarged export controls and failure feedback readable in the phone reader", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        const gateway = await installMockGateway(
+          page,
+          {
+            communityInvite: false,
+            heldMethods: ["transcripts.export"],
+            methodResponses: {
+              "transcripts.list": { sessions: [meeting], nextCursor: null },
+              "transcripts.get": detail,
+            },
+          },
+          {
+            afterInitScript:
+              ";localStorage.setItem(" +
+              JSON.stringify(controlUiBundledSettingsStorageKey(suite.server.baseUrl)) +
+              "," +
+              JSON.stringify(JSON.stringify({ textScale: 140 })) +
+              ");",
+          },
+        );
+        await page.goto(
+          suite.server.baseUrl + "meetings?selector=" + encodeURIComponent(meeting.selector),
+        );
+        const header = page.locator(".transcripts-reader__header"),
+          actions = header.locator(".transcripts-actions button"),
+          markdown = header.getByRole("button", { name: "Download Markdown" });
+        await markdown.waitFor();
+        expect(
+          await header.locator("h1").evaluate((e) => parseFloat(getComputedStyle(e).fontSize)),
+        ).toBeCloseTo(30.8);
+        const boxes = await actions.evaluateAll((nodes) =>
+          nodes.map((e) => ({
+            rect: e.getBoundingClientRect().toJSON(),
+            font: parseFloat(getComputedStyle(e).fontSize),
+          })),
+        );
+        expect(boxes).toHaveLength(2);
+        expect(boxes.every((b) => b.font >= 18)).toBe(true);
+        expect(boxes[1]!.rect.y).toBeGreaterThanOrEqual(boxes[0]!.rect.bottom);
+        expect(boxes[0]!.rect.width).toBeCloseTo(boxes[1]!.rect.width, 0);
+        await markdown.tap();
+        const status = header.getByRole("status");
+        await status.waitFor();
+        expect(await status.evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(
+          19.6,
+        );
+        await gateway.rejectDeferred("transcripts.export", {
+          code: "INVALID_REQUEST",
+          message: "Transcript exceeds the download limit; use a local transcript export.",
+          details: { type: "transcript_export_too_large", maxBytes: 4194304 },
+        });
+        const error = header.getByRole("alert");
+        await error.waitFor();
+        expect(
+          await error.evaluate((e) => {
+            const range = document.createRange();
+            range.selectNodeContents(e);
+            const bounds = e.getBoundingClientRect();
+            return (
+              parseFloat(getComputedStyle(e).fontSize) >= 19.5 &&
+              [...range.getClientRects()].every(
+                (r) => r.left >= bounds.left - 1 && r.right <= bounds.right + 1,
+              )
+            );
+          }),
+        ).toBe(true);
+        expect(await markdown.isEnabled()).toBe(true);
+      },
+    );
+  });
 });
