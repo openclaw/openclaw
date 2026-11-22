@@ -1,7 +1,11 @@
 import { expect } from "playwright/test";
 import { it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Packaged Memory overview" });
@@ -23,6 +27,35 @@ function memoryFixture(config: Record<string, unknown>, hash: string) {
   };
 }
 suite.define(() => {
+  it("keeps the selected phone tab with its content when switching Memory views", async () => {
+    await suite.withPage(
+      { ...pageOptions, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          communityInvite: false,
+          featureMethods: [...defaultControlUiFeatureMethods, "memory.search"],
+          methodResponses: memoryFixture({}, "phone-memory"),
+        });
+        await page.goto(suite.server.baseUrl + "settings/memory");
+        const tabs = page.locator(".memory-page .hub-tabs");
+        const gapAbove = async (selector: string) => {
+          const first = page.locator(selector).first();
+          await expect(first).toBeVisible();
+          const tabBottom = await tabs.evaluate((el) => el.getBoundingClientRect().bottom);
+          return (await first.evaluate((el) => el.getBoundingClientRect().top)) - tabBottom;
+        };
+        const overview = await gapAbove(".memory-overview .settings-group");
+        await page.locator("#memory-tab-memories").press("Enter");
+        const memories = await gapAbove(".memory-memories__search");
+        expect(memories).toBe(overview);
+        // The space above the active panel should be smaller than the gap between unrelated sections.
+        const sectionGap = await page
+          .locator(".memory-memories")
+          .evaluate((el) => parseFloat(getComputedStyle(el).rowGap));
+        expect(memories).toBeLessThan(sectionGap);
+      },
+    );
+  });
   it("loads packaged JS and CSS in the actual Memory route, probes explicitly, and remounts after navigation", async () => {
     await suite.withPage({ ...pageOptions, serviceWorkers: "block" }, async ({ page }) => {
       const assets: Array<{ url: string; status: number }> = [];
