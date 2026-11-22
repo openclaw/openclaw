@@ -8,6 +8,7 @@ import {
   isSameSessionObserverLifecycle,
   markSessionObserverRunSuperseded,
   rememberSessionObserverRevisionFloor,
+  resolveSessionObserverSessionRoute,
   snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
@@ -119,6 +120,9 @@ export function createSessionObserverLifecycle(params: {
     utilityModelRef: string | undefined,
   ): SessionObserverState => {
     const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
+    // Admission re-reads the session, so the route reflects the established
+    // session selection rather than a dormant run's earlier snapshot.
+    const sessionRoute = resolveSessionObserverSessionRoute(params.getConfig(), session, agentId);
     const dormant = dormantRuns.get(event.runId);
     if (dormant && isSameSessionObserverLifecycle(dormant, session)) {
       dormantRuns.delete(event.runId);
@@ -129,6 +133,7 @@ export function createSessionObserverLifecycle(params: {
         ...(dormantState.lastPreambleHeadline
           ? { lastPublishedPreambleHeadline: dormantState.lastPreambleHeadline }
           : {}),
+        ...(sessionRoute ? { sessionRoute } : {}),
         ...(utilityModelRef ? { utilityModelRef } : {}),
         lastActivityAt: event.ts,
         lastRunAt: Date.now(),
@@ -152,6 +157,7 @@ export function createSessionObserverLifecycle(params: {
       lifecycleRevision: session?.lifecycleRevision,
       runId: event.runId,
       agentId,
+      ...(sessionRoute ? { sessionRoute } : {}),
       ...(utilityModelRef ? { utilityModelRef } : {}),
       startedAt,
       lastActivityAt: event.ts,

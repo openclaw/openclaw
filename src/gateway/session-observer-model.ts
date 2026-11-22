@@ -11,6 +11,7 @@ import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
+import { resolveSessionAuthProfile, resolveSessionModelRef } from "../agents/session-model-ref.js";
 import type {
   runUtilityCompletion,
   prepareUtilityCompletionForAgent,
@@ -59,6 +60,19 @@ type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
 
+/**
+ * The session-sticky route inputs for automatic utility routing: the effective
+ * session model plus the account selection the session runs on. Sessions on a
+ * multi-user Gateway keep their owner's linked model account here so observer
+ * digests authenticate like the session's own turns instead of the agent-level
+ * auth order.
+ */
+export type SessionObserverSessionRoute = {
+  provider: string;
+  model: string;
+  profile?: string;
+};
+
 export function isSameSessionObserverLifecycle(
   left: SessionObserverLifecycle | undefined,
   right: SessionObserverLifecycle | undefined,
@@ -78,6 +92,8 @@ export type SessionObserverState = SessionActivityNoteState & {
   lifecycleRevision?: string;
   runId: string;
   agentId: string;
+  /** Route inputs captured from the admitted session entry; admission refreshes them. */
+  sessionRoute?: SessionObserverSessionRoute;
   utilityModelRef?: string;
   startedAt: number;
   lastActivityAt: number;
@@ -286,6 +302,31 @@ export function defaultReadSession(
     agentId,
     ...(storePath ? { storePath } : {}),
   });
+}
+
+/**
+ * Derives a session's utility-routing inputs from its entry, mirroring the
+ * dashboard-title contract: the effective session provider/model plus the
+ * session-sticky auth selection (linked account first, then the configured
+ * primary's profile on the same provider). Undefined without an entry keeps
+ * agent-level resolution.
+ */
+export function resolveSessionObserverSessionRoute(
+  cfg: OpenClawConfig,
+  entry: SessionEntry | undefined,
+  agentId: string,
+): SessionObserverSessionRoute | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  const model = resolveSessionModelRef(cfg, entry, agentId);
+  const profile = resolveSessionAuthProfile({
+    cfg,
+    agentId,
+    entry,
+    provider: model.provider,
+  });
+  return { provider: model.provider, model: model.model, ...(profile ? { profile } : {}) };
 }
 
 export async function defaultPersistDigest(params: {

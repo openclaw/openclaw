@@ -1,6 +1,9 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   advanceAndFlush as advance,
   broadcastDigest as lastDigest,
@@ -19,6 +22,11 @@ import {
 } from "./session-observer.test-utils.js";
 
 const { createHarness, activeHarnesses } = useObserverSuite();
+
+afterEach(() => {
+  setCurrentPluginMetadataSnapshot(undefined);
+});
+
 const message = (headline: string, health: "on-track" | "done" = "on-track") =>
   modelMessage({ headline, health });
 
@@ -66,6 +74,60 @@ it("keeps global observer streams scoped to their owning agents", async () => {
     ),
     delivery("work", ["conn-work"], ["agent:work:global"]),
   ]);
+});
+
+it("routes observer utility digests through each session's linked model account", async () => {
+  setGatewayPluginMetadataSnapshot(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "anthropic",
+          modelCatalog: {
+            providers: { anthropic: { defaultUtilityModel: "claude-haiku-4-5", models: [] } },
+          },
+        },
+      ],
+    }),
+  );
+  const harness = createHarness({
+    subscribe: false,
+    config: {
+      gateway: { controlUi: { sessionObserver: true } },
+      // The agent's auth order for anthropic is an unusable placeholder, so only
+      // each session owner's linked account can serve observer digests.
+      agents: { defaults: { model: "anthropic/claude-opus-5-5" } },
+    },
+    readSession: vi.fn((sessionKey: string) => ({
+      sessionId: sessionKey.endsWith("alice") ? "session-alice" : "session-bob",
+      updatedAt: 0,
+      authProfileOverride: sessionKey.endsWith("alice") ? "anthropic-alice" : "anthropic-bob",
+    })),
+  });
+  for (const owner of ["alice", "bob"] as const) {
+    harness.subscribers.subscribe(`conn-${owner}`, `agent:main:session-${owner}`)?.commit();
+    declareObserverVisibility(harness.observer, `conn-${owner}`);
+  }
+  for (let index = 0; index < 4; index += 1) {
+    for (const owner of ["alice", "bob"] as const) {
+      await emitEvent(
+        harness,
+        "tool",
+        { phase: "start", name: "read", args: { index } },
+        { runId: `run-${owner}`, sessionKey: `agent:main:session-${owner}` },
+      );
+    }
+  }
+  await advance(24_000);
+
+  expect(harness.prepareModel).toHaveBeenCalledTimes(2);
+  expect(harness.prepareModel.mock.calls.map((call) => call[0]?.modelRef).toSorted()).toEqual([
+    "anthropic/claude-haiku-4-5@anthropic-alice",
+    "anthropic/claude-haiku-4-5@anthropic-bob",
+  ]);
+  for (const call of harness.prepareModel.mock.calls) {
+    expect(call[0]).toMatchObject({ agentId: "main", useUtilityModel: true });
+  }
+  expect(harness.completeModel).toHaveBeenCalledTimes(2);
 });
 
 it("terminalizes a preamble-only digest without a utility model", async () => {

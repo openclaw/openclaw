@@ -6,7 +6,9 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveNativeModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -180,4 +182,31 @@ export function resolveSessionModelIdentityRef(
   }
   const resolved = resolveSessionModelRefCore(cfg, entry, agentId, options);
   return { provider: resolved.provider, model: resolved.model };
+}
+
+/**
+ * Resolves the auth profile a session-scoped utility call should use: the
+ * session-sticky linked account selection first, else the configured primary's
+ * profile when it serves the same provider. Explicitly configured model routes
+ * keep their own profile; callers derive their effective session route from this.
+ */
+export function resolveSessionAuthProfile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: Pick<SessionEntry, "authProfileOverride">;
+  provider: string;
+}): string | undefined {
+  const sessionProfile = params.entry?.authProfileOverride?.trim();
+  if (sessionProfile) {
+    return sessionProfile;
+  }
+  const configuredRef = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
+  const configuredProfile = configuredRef
+    ? splitTrailingAuthProfile(configuredRef).profile
+    : undefined;
+  if (!configuredProfile) {
+    return undefined;
+  }
+  const configuredModel = resolveSessionModelRefCore(params.cfg, undefined, params.agentId);
+  return configuredModel.provider === params.provider ? configuredProfile : undefined;
 }
