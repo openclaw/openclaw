@@ -239,21 +239,25 @@ it("passes caller cancellation through instead of reporting transport failure", 
   await expect(evaluate()).resolves.toEqual({ status: "unavailable", reason: "transport" });
 });
 
-it("keeps late authority errors terminal on a resource-bound request", async () => {
-  const revoked = new Error("grant revoked during transport preparation");
-  const isAdmissible = vi.fn(() => true);
-  const send = vi.fn(() => Response.json({ answer: true }));
+it("lets an admitted resource-bound request finish and checks authority on the next request", async () => {
+  const authorityError = new Error("grant revoked during transport preparation");
+  let revoked = false;
+  const isAdmissible = vi.fn(() => {
+    if (revoked) {
+      throw authorityError;
+    }
+    return true;
+  });
   mocks.fetch.mockImplementationOnce(async ({ beforeRequest }) => {
-    isAdmissible.mockImplementationOnce(() => {
-      throw revoked;
-    });
+    revoked = true;
     beforeRequest?.();
-    return send();
+    return Response.json({ answer: true });
   });
 
-  await expect(evaluate({ isAdmissible }, { isBoundResourceCurrent: () => true })).rejects.toBe(
-    revoked,
-  );
+  const route = { isBoundResourceCurrent: () => true };
+  await expect(evaluate({ isAdmissible }, route)).resolves.toEqual(ok);
+  expect(isAdmissible).toHaveBeenCalledOnce();
+  await expect(evaluate({ isAdmissible }, route)).rejects.toBe(authorityError);
   expect(isAdmissible).toHaveBeenCalledTimes(2);
-  expect(send).not.toHaveBeenCalled();
+  expect(mocks.fetch).toHaveBeenCalledOnce();
 });

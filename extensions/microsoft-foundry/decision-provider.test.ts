@@ -219,29 +219,42 @@ it("keeps prepared model headers and auth overrides off the resource-bound wire 
   expect([headers.get("api-key"), headers.get("authorization")]).toEqual([key, null]);
 });
 
-it("does not send if the live resource binding changes while transport is preparing", async () => {
+it("keeps the admitted route through DNS and refuses a later request with the old binding", async () => {
+  vi.stubEnv("NO_PROXY", host);
+  vi.stubEnv("no_proxy", host);
   let live = cfg;
   const provider = buildFoundryDecisionProvider(() => live);
-  const send = vi.fn();
-  vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async ({ beforeRequest }) => {
-    live = {
-      plugins: {
-        entries: {
-          "microsoft-foundry": {
-            config: { decision: { resourceHost: host, deployment: "replacement" } },
+  const send = vi.fn<typeof fetch>().mockResolvedValue(Response.json(reply));
+  vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce((request) =>
+    fetchWithSsrFGuard({
+      ...request,
+      fetchImpl: send,
+      lookupFn: async () => {
+        live = {
+          plugins: {
+            entries: {
+              "microsoft-foundry": {
+                config: { decision: { resourceHost: host, deployment: "replacement" } },
+              },
+            },
           },
-        },
+        };
+        return [{ address: "93.184.216.34", family: 4 }];
       },
-    };
-    beforeRequest?.();
-    return send();
-  });
+    }),
+  );
+  await expect(provider.evaluate(batch, context())).resolves.toMatchObject({ status: "ok" });
+  expect(send).toHaveBeenCalledOnce();
+  const [url, init] = send.mock.calls[0]!;
+  expect(url).toBe(`https://${host}/providers/microsoft/v1/systemone`);
+  expect(new Headers(init?.headers).get("api-key")).toBe(key);
+  expect(JSON.parse(String(init?.body))).toMatchObject({ model: deployment });
+
   await expect(provider.evaluate(batch, context())).resolves.toEqual({
     status: "unavailable",
     reason: "transport",
   });
   expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
-  expect(send).not.toHaveBeenCalled();
 });
 
 it.each([

@@ -38,9 +38,9 @@ export type DecisionHttpRoute<T> = {
   /** Non-secret headers that describe this body; they win, and `null` removes one. */
   readonly requestHeaders?: ModelRequestHeaders;
   /**
-   * Bind an HTTPS route and its provider-owned credential to the current resource.
+   * Bind an HTTPS route and its provider-owned credential to the current resource at admission.
    * Prepared proxy/TLS options still apply, but prepared model headers/auth and
-   * address-policy overrides do not. Recheck the binding just before dispatch.
+   * address-policy overrides do not.
    */
   readonly isBoundResourceCurrent?: () => boolean;
   /** Opt out of HTTP debug capture when the route must not persist supplied evidence. */
@@ -110,7 +110,7 @@ function failureForStatus(
 
 /**
  * Execute one provider-owned JSON Decision request with prepared auth.
- * Admission is checked at the start; resource-bound routes also check at dispatch.
+ * Admission is checked once when the request starts; a request that passed may finish.
  */
 export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
   execution: DecisionHttpExecution<T>,
@@ -137,16 +137,6 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
     operation: `${execution.provider} decision`,
   });
   const signal = timeoutSignal ?? execution.signal;
-  let dispatchAdmissionError: { error: unknown } | undefined;
-  const checkDispatchAdmission = () => {
-    try {
-      return execution.isAdmissible();
-    } catch (error) {
-      // Transport cleanup must not turn a revoked caller grant into a retryable failure.
-      dispatchAdmissionError = { error };
-      throw error;
-    }
-  };
   try {
     const base = new URL(execution.baseUrl);
     if (
@@ -208,21 +198,7 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       signal,
       maxRedirects: 0,
       ...(execution.capture === false ? { capture: false as const } : {}),
-      ...(isBoundResourceCurrent
-        ? {
-            requireHttps: true,
-            beforeRequest: () => {
-              signal.throwIfAborted();
-              if (
-                performance.now() >= execution.deadlineMonotonicMs ||
-                !checkDispatchAdmission() ||
-                !isBoundResourceCurrent()
-              ) {
-                throw new Error("Decision resource is no longer admitted.");
-              }
-            },
-          }
-        : {}),
+      ...(isBoundResourceCurrent ? { requireHttps: true } : {}),
       dispatcherPolicy,
       policy: isBoundResourceCurrent
         ? { hostnameAllowlist: [base.hostname] }
@@ -288,9 +264,6 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       await release();
     }
   } catch {
-    if (dispatchAdmissionError) {
-      throw dispatchAdmissionError.error;
-    }
     execution.signal.throwIfAborted();
     return unavailable("transport");
   } finally {
