@@ -73,6 +73,7 @@ export function planParentForkDecision(
 
 export function estimateParentForkPromptTokens(
   source: ParentForkSourceTranscript | null,
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
 ): number | undefined {
   if (!source) {
     return undefined;
@@ -82,6 +83,7 @@ export function estimateParentForkPromptTokens(
   let trailingBytes = 0;
   for (const { event, context, placed } of selectParentForkTokenEstimateEvents(
     source.branchEntries,
+    readEvent,
   )) {
     if (
       context !== "reset-retained" &&
@@ -161,7 +163,10 @@ export function estimateParentForkPromptTokens(
   return normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
 }
 
-function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
+function* selectParentForkTokenEstimateEvents(
+  branch: readonly TranscriptEvent[],
+  readEvent: (event: TranscriptEvent) => TranscriptEvent,
+): Generator<{
   event: TranscriptEvent;
   context: "current" | "retained" | "reset-retained" | "opaque";
   placed?: boolean;
@@ -170,15 +175,20 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
     for (const { entry, placement, context } of iterateSessionContextEntries(
       branch.filter(isIndexedSessionEntry),
     )) {
+      // Hydrate before projecting: placement carries ancestry, not the result body.
+      const hydrated = readEvent(entry);
+      const hydratedPlacement = placement ? readEvent(placement) : undefined;
       yield {
         event:
-          placement && entry.type === "message"
+          isRecord(hydratedPlacement) &&
+          isIndexedSessionEntry(hydrated) &&
+          hydrated.type === "message"
             ? {
-                ...placement,
+                ...hydratedPlacement,
                 type: "message",
-                message: projectPlacedBackgroundResultMessage(entry.message),
+                message: projectPlacedBackgroundResultMessage(hydrated.message),
               }
-            : entry,
+            : hydrated,
         context,
         placed: placement !== undefined,
       };
@@ -191,7 +201,7 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
     )
   ) {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -200,7 +210,7 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
   const boundary = selected[0]?.entry;
   if (boundary?.type !== "compaction" && boundary?.type !== "reset") {
     for (const event of branch) {
-      yield { event, context: "current" };
+      yield { event: readEvent(event), context: "current" };
     }
     return;
   }
@@ -211,12 +221,12 @@ function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]
     const context =
       isRecord(event) && typeof event.id === "string" ? contexts.get(event.id) : undefined;
     if (context) {
-      yield { event, context };
+      yield { event: readEvent(event), context };
     } else if (
       index > boundaryIndex &&
       (!isRecord(event) || typeof event.id !== "string" || !indexedIds.has(event.id))
     ) {
-      yield { event, context: "opaque" };
+      yield { event: readEvent(event), context: "opaque" };
     }
   }
 }
@@ -425,13 +435,14 @@ export function resolveParentForkLimitDecision(
     "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
   >,
   source: ParentForkSourceTranscript,
+  readEvent: (event: TranscriptEvent) => TranscriptEvent = (event) => event,
 ): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
   if (!params.enforceTokenLimit) {
     return undefined;
   }
   const decision = planParentForkDecision(
     params.parentEntry,
-    estimateParentForkPromptTokens(source),
+    estimateParentForkPromptTokens(source, readEvent),
     {
       maxTokens: params.maxTokens,
       preferTranscriptEstimate: params.forkFrom === "last-completed",
