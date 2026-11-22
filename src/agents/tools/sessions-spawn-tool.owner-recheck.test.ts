@@ -4,7 +4,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  supportedSpawnModelChoice,
+  withSpawnTestModel,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -15,7 +18,7 @@ beforeAll(async () => {
   ({ createSessionsCreateTool } = await import("./sessions-create-tool.js"));
 });
 beforeEach(() => {
-  setRuntimeConfigSnapshot({});
+  setRuntimeConfigSnapshot(withSpawnTestModel());
   hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
   hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
     status: "accepted",

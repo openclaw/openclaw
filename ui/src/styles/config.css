@@ -54,6 +54,11 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
+
+  /* In this row, scroll the tabs rather than pushing the settings page sideways. */
+  > .config-sections-hub-tabs {
+    flex-shrink: 1;
+  }
 }
 
 .config-raw-actions {
@@ -738,6 +743,13 @@
 
 .config-content :is(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--danger);
+}
+
+/* A saved provider absent from the catalog is still a selectable ID, not a short label. */
+.talk-provider-options > .settings-segmented__btn {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* The curated rows and the schema editor read as one column of sections. */

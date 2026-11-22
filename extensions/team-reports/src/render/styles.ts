@@ -294,8 +294,8 @@ blockquote { border-left: 2px solid var(--oc-border-strong); padding: var(--oc-s
 .oc-resource-list-link, .resource-row { display: flex; align-items: center; justify-content: space-between; gap: var(--oc-space-3); padding: var(--oc-space-2) var(--oc-space-3); }
 .oc-avatar { position: relative; display: inline-grid; flex: 0 0 auto; place-items: center; overflow: hidden; border: 1px solid var(--oc-border-subtle); border-radius: var(--oc-radius-surface); background: var(--oc-surface-secondary-soft); color: var(--oc-accent-secondary); font-weight: 650; line-height: 1; }
 .oc-avatar::before { content: attr(data-initials); }
-/* Transparent failed images leave the CSS initials beneath them visible. */
-.oc-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; color: transparent; font-size: 0; }
+/* The badge reserves the square. A missing photo with empty alt has no intrinsic height. */
+.oc-avatar img { position: absolute; top: 0; left: 0; width: 100%; height: auto; }
 .oc-avatar-xs { width: 20px; height: 20px; font-size: var(--oc-font-size-xs); }
 .oc-avatar-md { width: 40px; height: 40px; font-size: var(--oc-font-size-sm); }
 .oc-avatar-sm { width: 36px; height: 36px; font-size: var(--oc-font-size-sm); }

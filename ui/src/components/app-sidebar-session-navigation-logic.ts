@@ -217,14 +217,6 @@ export function buildSidebarSessionNavigationState(input: {
       ],
       () => {
         const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
-        let runtimeSampledAt = row.runtimeSampledAt;
-        if (row.runtimeMs != null && runtimeSampledAt == null) {
-          runtimeSampledAt = input.rowProjection.runtimeSampledAtByRow.get(row);
-          if (runtimeSampledAt == null) {
-            runtimeSampledAt = Date.now();
-            input.rowProjection.runtimeSampledAtByRow.set(row, runtimeSampledAt);
-          }
-        }
         return {
           key: row.key,
           agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
@@ -318,8 +310,6 @@ export function buildSidebarSessionNavigationState(input: {
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
           endedAt: row.endedAt,
-          runtimeMs: row.runtimeMs,
-          runtimeSampledAt,
           childSessionKeys:
             row.archived === true
               ? []

@@ -144,9 +144,17 @@ function SidebarPlugins(props: {
                 href={href()}
                 active={props.pathname === href()}
                 icon={
-                  // Refresh artwork with the inventory snapshot while keeping the link mounted.
-                  <Show when={plugin()} keyed>
-                    {(entry) => <SidebarPluginArt plugin={entry} />}
+                  // A fresh list is not a new icon. Reload only for a changed installation or icon availability.
+                  <Show
+                    when={JSON.stringify([
+                      plugin().catalogId,
+                      plugin().version,
+                      plugin().installedAt,
+                      Boolean(plugin().hasIcon),
+                    ])}
+                    keyed
+                  >
+                    <SidebarPluginArt plugin={plugin()} />
                   </Show>
                 }
                 label={plugin().name}

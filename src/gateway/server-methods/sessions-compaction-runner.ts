@@ -4,6 +4,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -49,7 +50,7 @@ export async function prepareGatewaySessionCompaction(
   const usesLegacyRuntime = (entry: SessionEntry) => {
     const resolvedModel = resolveSessionModelRef(params.cfg, entry, params.agentId);
     const persistedRuntime = resolveManualCompactionCliTarget({
-      provider: resolvedModel.provider,
+      provider: resolvedModel?.provider,
       entry,
       cfg: params.cfg,
     }).agentHarnessId;
@@ -153,6 +154,9 @@ export async function runGatewaySessionCompaction(
     storePath: params.storePath,
   };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!resolvedModel) {
+    return { ok: false, compacted: false, reason: NO_MODEL_CONFIGURED_MESSAGE };
+  }
   // Capture the foreground window before a separate compaction.model is selected.
   const configuredWindow = floorPositiveFiniteNumber(
     resolveContextTokensForModel({

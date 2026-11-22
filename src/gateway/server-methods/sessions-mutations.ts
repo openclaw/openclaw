@@ -24,7 +24,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
@@ -74,7 +74,7 @@ function createSessionPatchHandler(
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const diagnostics = startSessionPatchDiagnostics(method);
     let archivedSessionsCommitted = false;
-    let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
+    let preparingOperator: ReturnType<typeof prepareGatewayOperatorRunAuthority> | undefined;
     try {
       let request:
         | { many: true; params: SessionsPatchManyParams }
@@ -132,7 +132,7 @@ function createSessionPatchHandler(
         patch.agentRuntime !== undefined ||
         patch.cyberAccessProgram !== undefined
       ) {
-        preparingOperator = captureGatewayOperatorRunAuthority({
+        preparingOperator = prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -613,7 +613,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,

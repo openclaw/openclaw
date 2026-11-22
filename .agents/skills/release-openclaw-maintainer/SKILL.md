@@ -33,6 +33,7 @@ Read only the references needed for the selected phase:
 - Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
+- Failed validation sealing/collection after checks finish: assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery) before replacing the FRV; this is distinct from same-parent continuation and publication recovery.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
@@ -227,8 +228,13 @@ product source changes. Missing contracts need a deliberate Q repair or candidat
 backport, never a moving-main fallback. Follow the
 [qualification-tooling recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
 and the CI skill's [C ≠ Q decision and command guide](../release-openclaw-ci/SKILL.md#repair-release-tooling-without-changing-the-product-c--q).
-Use new Q for workflow/harness/collector repairs, P for admission/verifier/publisher
-repairs, and new C only for changed product bytes. Reuse the explicitly qualified
+Use new Q for changed qualification workflow/harness behavior, P for admission/aggregate/verifier/publisher
+repairs, and new C only for changed product bytes. For a drained FRV with a sealing/collector
+defect, first assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery):
+a reviewed P-only repair may authenticate the original admission, C/Q, child receipts,
+and unchanged artifact bytes without a fresh test run, even when same-parent continuation
+cannot restore its plan. Require a successful authenticated recovery aggregate; never
+relabel the original failed parent or bypass publication verification. Reuse the explicitly qualified
 parent through the checklist's `--full-release-validation-run-id` and `--skip-dispatch`;
 its `--workflow-sha` still selects P, and its fresh qualification defaults to Q=C.
 

@@ -104,6 +104,8 @@ export type OpenClawSharedToolsOptions = {
   fixedToolListing?: boolean;
   /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
+  /** Admitted session is in its default workspace. The move checks live authority separately. */
+  sessionProjectMoveEligible?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };

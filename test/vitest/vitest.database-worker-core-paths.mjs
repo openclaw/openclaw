@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/update/gateway-trial.test.ts",
+  "src/update/prepare.test.ts",
   "src/state/state-upgrade.large-agent-db.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
@@ -846,6 +848,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-killed-run.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-checkout.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-refusals.process.test.ts",
+  "src/cli/update-cli/update-command-killed-run-replaced.process.test.ts",
   "src/cli/update-cli/update-command-killed-run-restart.process.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",

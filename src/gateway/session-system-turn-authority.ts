@@ -55,6 +55,7 @@ export async function prepareSessionSystemTurnAuthority(
   }
   if (params.operatorSource) {
     const restored = await restoreGatewayQueuedOperatorRecovery({
+      agentId: params.agentId,
       source: params.operatorSource,
       context: params.context,
       assertCurrent: () => params.assertCurrent?.(),

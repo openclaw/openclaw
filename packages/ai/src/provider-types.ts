@@ -1,10 +1,14 @@
 import type * as Llm from "@openclaw/llm-core";
+import { PROVIDER_STATE_SCOPE, type ProviderStateScope } from "./session-resources.js";
 export type * from "./types.js";
 
 export const PROVIDER_CONTEXT_HANDOFF: unique symbol = Symbol("providerContextHandoff");
 export const PROVIDER_MODEL_INPUT: unique symbol = Symbol("providerModelInput");
 /** Callable tools deliberately left out of the request's tool list (Tool Search directory). */
 export const PROVIDER_DEFERRED_TOOL_NAMES: unique symbol = Symbol("providerDeferredToolNames");
+export { PROVIDER_STATE_SCOPE };
+/** A completed host interaction whose call belongs only to the provider's history. */
+export const NATIVE_HISTORICAL_TOOL_CALL: unique symbol = Symbol("nativeHistoricalToolCall");
 
 export type VideoContent = Omit<Llm.ImageContent, "type"> & { type: "video" };
 export type MediaContent = Llm.ImageContent | VideoContent;
@@ -22,6 +26,7 @@ export type ProviderStreamOptions = Llm.StreamOptions & {
   [PROVIDER_CONTEXT_HANDOFF]?: ProviderContextHandoff;
   [PROVIDER_MODEL_INPUT]?: ProviderModel["input"];
   [PROVIDER_DEFERRED_TOOL_NAMES]?: ReadonlySet<string>;
+  [PROVIDER_STATE_SCOPE]?: ProviderStateScope;
 };
 export type ProviderStreamFunction<
   TApi extends Llm.Api = Llm.Api,

@@ -1,4 +1,3 @@
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
@@ -100,7 +99,6 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
-  private readonly cleanupProviderSessionResourcesOnDispose: boolean;
   protected abstract readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
@@ -127,8 +125,6 @@ export abstract class AgentSessionBase {
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
-    this.cleanupProviderSessionResourcesOnDispose =
-      config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
   get modelRegistry(): ModelRegistry {
@@ -562,9 +558,6 @@ export abstract class AgentSessionBase {
     this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
-    if (this.cleanupProviderSessionResourcesOnDispose) {
-      cleanupSessionResources(this.sessionId);
-    }
   }
 
   get state(): AgentState {

@@ -454,6 +454,9 @@ export function getDiscordModelPickerRecentModelRefs(
   data: ModelsProviderData,
   quickModels: string[],
 ): string[] {
+  if (!data.resolvedDefault) {
+    return quickModels;
+  }
   const defaultModelRef = `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`;
   return [defaultModelRef, ...quickModels.filter((modelRef) => modelRef !== defaultModelRef)];
 }

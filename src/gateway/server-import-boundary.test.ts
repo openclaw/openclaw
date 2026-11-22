@@ -143,8 +143,8 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   return resolved;
 }});
-const { listManualSetupInferenceOptions } = await import(${JSON.stringify(entry)});
-const result = await listManualSetupInferenceOptions("main");
+const { listManualSetupInferenceDetection } = await import(${JSON.stringify(entry)});
+const result = await listManualSetupInferenceDetection("main");
 console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: result.setupComplete }));
 `,
           ],
