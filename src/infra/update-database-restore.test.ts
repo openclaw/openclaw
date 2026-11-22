@@ -34,6 +34,7 @@ import {
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
+import * as sqliteWal from "./sqlite-wal.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateDatabaseGenerationsIsolated,
@@ -263,22 +264,10 @@ it("completes credential rebinding when journal reconciliation fails", async () 
       });
       const fixture = await createRestoreFixture(state);
       const reportedFailures: string[][] = [];
-      // Spy on the shared native prototype so createRequire-based SQLite owners
-      // see the failure without replacing the real restoration boundary.
-      const prepare: (
-        database: DatabaseSync,
-        ...args: Parameters<DatabaseSync["prepare"]>
-      ) => ReturnType<DatabaseSync["prepare"]> = Function.prototype.call.bind(
-        DatabaseSync.prototype.prepare,
-      );
-      const fault = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        ...args: Parameters<DatabaseSync["prepare"]>
-      ) {
-        if (args[0].includes("journal_mode = WAL")) {
-          throw new Error("injected sqlite-boundary conversion failure");
-        }
-        return prepare(this, ...args);
+      // The normal-path test proves physical conversion. Here fail at its owner
+      // to keep real publication and credential recovery under test.
+      const fault = vi.spyOn(sqliteWal, "enableSqliteWalJournalMode").mockImplementation(() => {
+        throw new Error("injected journal conversion failure");
       });
       try {
         const displaced = await restoreUpdateDatabaseBackup({
