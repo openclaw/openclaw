@@ -72,20 +72,21 @@ export async function resolveTarget(params: {
         if (!packed.ok) {
           throw new Error(packed.error);
         }
-        if (packed.metadata.name !== "openclaw" || !packed.metadata.version) {
+        const manifest: { name?: string; version?: string; engines?: { node?: string } } =
+          JSON.parse(
+            (
+              await readArchiveEntry(packed.archivePath, "package/package.json", {
+                maxBytes: 1024 * 1024,
+              })
+            ).toString("utf8"),
+          );
+        if (manifest.name !== "openclaw" || !manifest.version) {
           throw new Error("The update artifact must contain the openclaw package and a version.");
         }
-        const manifest: { engines?: { node?: string } } = JSON.parse(
-          (
-            await readArchiveEntry(packed.archivePath, "package/package.json", {
-              maxBytes: 1024 * 1024,
-            })
-          ).toString("utf8"),
-        );
         return {
           kind: "package",
           spec,
-          version: packed.metadata.version,
+          version: manifest.version,
           engines: manifest.engines ?? {},
           schemaVersions: parsePackageOpenClawSchemaVersions(manifest),
         };

@@ -173,12 +173,12 @@ describe("release preparation", () => {
   });
 
   it.each([
-    { engine: ">=1", source: "tag", runtime: "node" },
-    { engine: ">=999", source: "override", runtime: "node" },
-    { engine: ">=999", source: "tag", runtime: "bun" },
+    { engine: ">=1", source: "tag", runtime: "node", npm: 11 },
+    { engine: ">=999", source: "override", runtime: "node", npm: 11 },
+    { engine: ">=999", source: "tag", runtime: "bun", npm: 12 },
   ])(
-    "checks package $runtime with Node $engine from the $source before installing production dependencies",
-    async ({ engine, source, runtime }) => {
+    "checks package $runtime with Node $engine and npm $npm from the $source before installing production dependencies",
+    async ({ engine, source, runtime, npm: npmVersion }) => {
       const packedRoot = path.join(root, "packed", "package");
       await fs.mkdir(packedRoot, { recursive: true });
       await fs.writeFile(
@@ -200,7 +200,9 @@ const args = process.argv.slice(2);
 if (process.env.OPENCLAW_UPDATE_IN_PROGRESS) process.exit(7);
 if (args[0] === 'pack') {
   fs.copyFileSync(${JSON.stringify(archive)}, 'openclaw.tgz');
-  console.log(JSON.stringify([{filename:'openclaw.tgz',name:'openclaw',version:'2026.11.21'}]));
+  const entry = {id:'openclaw@2026.11.21',filename:'openclaw.tgz',name:'openclaw',version:'2026.11.21'};
+  const output = JSON.stringify(${npmVersion} === 12 ? {openclaw:entry} : [entry]);
+  process.stdout.write(${npmVersion} === 12 ? output.slice(0, 32) : output);
 } else {
   if (process.cwd().split(path.sep).includes('node_modules')) process.exit(8);
   if (${JSON.stringify(runtime)} === 'bun'

@@ -41,7 +41,7 @@ export async function preparePackage(params: {
     await fs.mkdir(params.staging, { recursive: true });
     await params.onStep?.("pack");
     const packed = await runCommandWithTimeout(
-      [params.npm, "pack", params.spec, "--json", "--ignore-scripts"],
+      [params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
       {
         cwd: params.staging,
         baseEnv: env,
@@ -52,13 +52,15 @@ export async function preparePackage(params: {
     if (packed.code !== 0 || packed.killed || packed.signal) {
       throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
     }
-    const packages: unknown = JSON.parse(packed.stdout);
-    const filename =
-      Array.isArray(packages) && packages.length === 1 ? packages[0]?.filename : undefined;
-    if (typeof filename !== "string" || path.basename(filename) !== filename) {
-      throw new Error("npm pack did not return one package archive.");
+    // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
+    const packages = (await fs.readdir(params.staging, { withFileTypes: true })).filter(
+      (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
+    );
+    const archive = packages[0];
+    if (packages.length !== 1 || !archive) {
+      throw new Error("npm pack did not produce one package archive.");
     }
-    const archivePath = path.join(params.staging, filename);
+    const archivePath = path.join(params.staging, archive.name);
     await fs.mkdir(releaseRoot);
     await extractArchive({
       archivePath,
@@ -72,11 +74,15 @@ export async function preparePackage(params: {
     await fs.rm(archivePath);
     const manifestPath = path.join(releaseRoot, "package.json");
     const manifest: {
+      name?: string;
       version?: string;
       engines?: { node?: string };
       devDependencies?: unknown;
       scripts?: Record<string, string>;
     } = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    if (manifest.name !== "openclaw") {
+      throw new Error("Prepared archive is not the openclaw package.");
+    }
     const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
     if (!version) {
       throw new Error("Prepared package has no package version.");
