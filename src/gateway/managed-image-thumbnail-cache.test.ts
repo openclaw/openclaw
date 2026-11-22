@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
-import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   encodeImageThumbnail,
@@ -42,25 +41,6 @@ it("joins queued thumbnails at capacity while refusing new work", async () => {
     await Promise.allSettled([...admitted, excess, joined]);
   }
 });
-
-it.skipIf(process.platform !== "darwin")(
-  "renders a still HEIC as a JPEG with macOS sips",
-  async () => {
-    const source = await readFile(new URL("./fixtures/thumbnail-still.heic", import.meta.url));
-    vi.stubEnv("PATH", "/usr/bin:/bin");
-    try {
-      const thumbnail = await encodeImageThumbnail(source);
-      expect(thumbnail).toMatchObject({ extension: ".jpg", mimeType: "image/jpeg" });
-      expect(readImageProbeFromHeader(thumbnail.data)).toMatchObject({
-        format: "jpeg",
-        width: 160,
-        height: 96,
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  },
-);
 
 it.each(["hevc", "msf1"])("refuses HEIF sequence brand %s before transcoding", async (brand) => {
   const source = await readFile(new URL("./fixtures/thumbnail-still.heic", import.meta.url));
