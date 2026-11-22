@@ -96,21 +96,6 @@ export async function preflight(params: {
   });
   let reason = "unsupported-install";
   try {
-    const containerMarker = await fs.access("/.dockerenv").then(
-      () => true,
-      (error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    );
-    if (containerMarker || env.container || env.DOCKER_CONTAINER || env.OPENCLAW_CONTAINER) {
-      return refuse(
-        "container-install",
-        "This installation belongs to a container image. Update the image instead.",
-      );
-    }
     const ancestor = await existingAncestor(params.prefix);
     const installPath =
       params.target.kind === "git"

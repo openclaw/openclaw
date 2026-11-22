@@ -58,11 +58,14 @@ This recovery repair is supplied by the candidate CLI; older updaters using
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
-app updater to update the bundled Gateway and runtime together. `openclaw update`,
-`openclaw update repair`, and Gateway update requests return the marker's update
-hint without changing the package or stopping the Gateway; background checks
-skip package-registry updates. Missing or invalid markers retain normal install
-behavior, with a warning for an invalid marker.
+app updater to update the bundled Gateway and runtime together. The official
+container image declares `owner: "container-image"`: pull the new image and
+recreate the container. `openclaw update`, `openclaw update repair`, and Gateway
+update requests return the marker's update hint without changing the package or
+stopping the Gateway; background checks skip package-registry updates. Missing
+or invalid markers retain normal install behavior, with a warning for an invalid
+marker. An npm, pnpm, Bun or Git install that you set up yourself inside a
+container, devcontainer or LXC host has no marker and updates normally.
 
 After a Mac app update, recovery checks the service selected by the connection
 mode: the local Gateway or, with a remote primary, the Mac node service. If a
