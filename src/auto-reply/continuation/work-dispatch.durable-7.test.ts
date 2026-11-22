@@ -33,6 +33,7 @@ const observedDetachedGenerations: Array<{
   prepared: boolean;
   pluginRegistry: boolean;
   dispatchRuntime: boolean;
+  workspaceGate: boolean;
 }> = [];
 // test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force

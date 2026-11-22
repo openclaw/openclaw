@@ -4,6 +4,10 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import {
+  captureAgentWorkspaceReadiness,
+  runWithAgentWorkspaceReadiness,
+} from "../../agents/workspace-readiness.js";
 import { runWithOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -64,33 +68,43 @@ export async function runDetachedAuthorityFossil(params: {
   expect(params.turnGrants).toHaveLength(1);
 }
 
-type ObservedGenerations = { prepared: boolean; pluginRegistry: boolean; dispatchRuntime: boolean };
+type ObservedGenerations = {
+  prepared: boolean;
+  pluginRegistry: boolean;
+  dispatchRuntime: boolean;
+  workspaceGate: boolean;
+};
 
-/** What the wake's reply path sees of the admitted generations it was armed under. */
+const detachedGenerationSessionKey = "agent:main:detached-generation";
+
+/** What the wake's reply path sees of the admitted generations and turn it was armed under. */
 export function observeAdmittedGenerations(): ObservedGenerations {
   return {
     prepared: getPreparedModelRuntimePluginGeneration() !== undefined,
     pluginRegistry: getPluginRuntimeGenerationRegistry() !== undefined,
     dispatchRuntime: getPreparedReplyDispatchRuntime() !== undefined,
+    workspaceGate: captureAgentWorkspaceReadiness(detachedGenerationSessionKey) !== undefined,
   };
 }
 
 /**
  * #1550: a work timer armed inside a turn inherits that turn's admitted generations. The
  * turn's lease closes before the wake fires, so the wake must re-admit on the current
- * generation rather than carry one it can no longer borrow.
+ * generation rather than carry one it can no longer borrow. The same holds for the arming
+ * turn's workspace gate, which fails once that turn ends (upstream #203113).
  */
 export async function runDetachedGenerationFossil(params: {
   mockSessionStore: Record<string, unknown>;
   observedDetachedGenerations: ObservedGenerations[];
   turnGrants: unknown[];
 }): Promise<void> {
-  const sessionKey = "agent:main:detached-generation";
+  const sessionKey = detachedGenerationSessionKey;
   params.mockSessionStore[sessionKey] = { sessionKey };
   params.observedDetachedGenerations.push({
     prepared: true,
     pluginRegistry: true,
     dispatchRuntime: true,
+    workspaceGate: true,
   });
   await enqueuePendingWork({
     sessionKey,
@@ -117,20 +131,32 @@ export async function runDetachedGenerationFossil(params: {
           metadataSnapshot: createPluginMetadataSnapshotFixture(),
           pluginRegistry: createEmptyPluginRegistry(),
         },
-        bindPreparedReplyDispatchRuntime(armingDispatchRuntime, async () => {
-          // Control: the arming frame does carry all three.
-          expect(observeAdmittedGenerations()).toEqual({
-            prepared: true,
-            pluginRegistry: true,
-            dispatchRuntime: true,
-          });
-          await dispatchPendingContinuationWorkFromDetachedCallback({ sessionKey });
-        }),
+        bindPreparedReplyDispatchRuntime(armingDispatchRuntime, () =>
+          runWithAgentWorkspaceReadiness(
+            {
+              sessionKey,
+              waitUntilReady: async () => {},
+              assertCurrent: () => {
+                throw new Error("Session changed while preparing its project; retry the task.");
+              },
+            },
+            async () => {
+              // Control: the arming frame does carry all four.
+              expect(observeAdmittedGenerations()).toEqual({
+                prepared: true,
+                pluginRegistry: true,
+                dispatchRuntime: true,
+                workspaceGate: true,
+              });
+              await dispatchPendingContinuationWorkFromDetachedCallback({ sessionKey });
+            },
+          ),
+        ),
       ),
     () => undefined,
   );
   expect(params.observedDetachedGenerations).toEqual([
-    { prepared: false, pluginRegistry: false, dispatchRuntime: false },
+    { prepared: false, pluginRegistry: false, dispatchRuntime: false, workspaceGate: false },
   ]);
   expect(params.turnGrants).toHaveLength(1);
 }
