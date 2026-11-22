@@ -459,7 +459,6 @@
     },
     {
       "targetVersion": "2026.11.10-beta.2",
-      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-14 (node)",
       "reason": "Exact session-scoped chat delivery test passed on unchanged candidate code. Accept the recorded websocket timeout as a local non-reproduction, not a proven flake.",
@@ -485,7 +484,6 @@
     },
     {
       "targetVersion": "2026.11.10-beta.2",
-      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-9 (node)",
       "reason": "All 34 unchanged worker-execution tests passed locally, including the exact blocked-input redaction case. Accept only the recorded timeout; no input leak was demonstrated. This is non-reproduction, not proof of a flake.",
@@ -511,7 +509,6 @@
     },
     {
       "targetVersion": "2026.11.10-beta.2",
-      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-2 (node)",
       "reason": "Exact native user-home models.list catalog test passed locally on unchanged candidate code. Accept only the recorded request timeout as non-reproduction, not a proven flake.",
@@ -537,7 +534,6 @@
     },
     {
       "targetVersion": "2026.11.10-beta.2",
-      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-5 (node)",
       "reason": "Exact bounded remote-tool lifetime and user-cancellation case passed locally on unchanged candidate code. Accept the recorded timeout as non-reproduction, not a proven flake.",
@@ -563,7 +559,6 @@
     },
     {
       "targetVersion": "2026.11.10-beta.2",
-      "targetSha": "05bfc3751f6f7aa829e5a313fb07d84a01c7ff50",
       "childRole": "normalCi",
       "jobName": "checks-node-compact-large-5 (node)",
       "reason": "Both unchanged transcript-footprint tests passed locally. Accept only the recorded already-persisted timeout and consequent unjoined-fixture rejection; non-reproduction does not prove a flake.",
