@@ -134,6 +134,11 @@ also offer **New session** (**+**) in the page topbar while the drawer is closed
 In team mode, **New session** first opens an agent picker. Native apps keep their
 native creation controls.
 
+**My sessions** and named owner filters apply to **Pinned** too. Pins that don't
+match are hidden, not removed. The section disappears when none match, and
+clearing the owner filter restores their saved order within the selected agent.
+Rail shortcuts remain available regardless of the owner filter.
+
 The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
 **Involving me**, and **All owners** stay within the selected agent; changing the
 owner never expands the list to other agents. Sidebar pins

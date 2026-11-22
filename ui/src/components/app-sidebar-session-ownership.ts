@@ -45,6 +45,17 @@ function hasMultipleSidebarSessionIdentities(
   );
 }
 
+export function matchesSidebarSessionOwner(
+  row: SidebarRecentSession,
+  ownerId: string,
+  profileId?: string,
+): boolean {
+  const actor = row.owner?.actor;
+  return (
+    actor?.id === ownerId && (!profileId || (actor.type === "human" && actor.id === profileId))
+  );
+}
+
 export function applySidebarSessionOwnerFilter(input: {
   projected: SidebarRecentSession[];
   ownerFacet: SessionsListResult["owners"];
@@ -79,11 +90,10 @@ export function applySidebarSessionOwnerFilter(input: {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
-      const ownerId = row.owner?.actor.id;
-      const profileMatches =
-        !input.selectedProfileId ||
-        (row.owner?.actor.type === "human" && ownerId === input.selectedProfileId);
-      if (ownerId === activeOwnerId && profileMatches) {
+      if (
+        activeOwnerId &&
+        matchesSidebarSessionOwner(row, activeOwnerId, input.selectedProfileId)
+      ) {
         // Retain unloaded links for discovery, but count only visible loaded children.
         const childSessionKeys = new Set(row.childSessionKeys);
         for (const child of row.children) {
