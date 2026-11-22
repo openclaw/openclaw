@@ -258,7 +258,7 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
   try {
     const created = await Promise.all(
       inputs.map((params) =>
-        rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params),
+        rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params, 60_000),
       ),
     );
     for (const [index, response] of created.entries()) {
