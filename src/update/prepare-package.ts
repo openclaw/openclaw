@@ -78,6 +78,7 @@ export async function preparePackage(params: {
       version?: string;
       engines?: { node?: string };
       devDependencies?: unknown;
+      workspaces?: unknown;
       scripts?: Record<string, string>;
     } = JSON.parse(await fs.readFile(manifestPath, "utf8"));
     if (manifest.name !== "openclaw") {
@@ -106,10 +107,12 @@ export async function preparePackage(params: {
         );
       }
     }
-    // npm resolves root dev peers even with --omit=dev. This is a published production
-    // package, not a checkout: preserve install scripts, but not development/prepare hooks.
-    let changed = Object.hasOwn(manifest, "devDependencies");
+    // Root dev peers and checkout workspaces do not belong to the published runtime.
+    // Preserve runtime install scripts, but not development/prepare hooks.
+    let changed =
+      Object.hasOwn(manifest, "devDependencies") || Object.hasOwn(manifest, "workspaces");
     delete manifest.devDependencies;
+    delete manifest.workspaces;
     for (const name of PROJECT_ONLY_INSTALL_SCRIPTS) {
       if (manifest.scripts && Object.hasOwn(manifest.scripts, name)) {
         delete manifest.scripts[name];

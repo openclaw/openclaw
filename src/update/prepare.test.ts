@@ -188,6 +188,7 @@ describe("release preparation", () => {
           version: "2026.11.21",
           engines: { node: engine },
           devDependencies: { "fixture-development-only": "1.0.0" },
+          workspaces: ["ui", "tools/solid-lint"],
           dependencies: { "fixture-runtime": "2.0.0" },
           scripts: { prepare: "node development-only.mjs", postinstall: "node production.mjs" },
         }),
@@ -210,7 +211,7 @@ if (args[0] === 'pack') {
     : !args.includes('--ignore-scripts=false') || !args.includes('--omit=dev')) process.exit(9);
   if (args.includes('-g')) process.exit(12);
   const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-  if ('devDependencies' in manifest || 'prepare' in manifest.scripts) process.exit(10);
+  if ('devDependencies' in manifest || 'workspaces' in manifest || 'prepare' in manifest.scripts) process.exit(10);
   if (manifest.dependencies['fixture-runtime'] !== '2.0.0' || manifest.scripts.postinstall !== 'node production.mjs') process.exit(11);
   fs.writeFileSync(${JSON.stringify(path.join(root, "dependencies-installed"))}, 'yes');
   fs.writeFileSync('argv.json', JSON.stringify(args));
