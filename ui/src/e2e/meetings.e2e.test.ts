@@ -5,7 +5,10 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Meetings dashboard" });
@@ -390,6 +393,70 @@ suite.define(() => {
         expect(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
           true,
         );
+      },
+    ));
+
+  it("aligns summary progress and retry feedback with the enlarged phone reader", async () =>
+    suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        const incomplete = {
+          ...detail,
+          session: { ...meeting, hasSummary: false },
+          summary: undefined,
+        };
+        const gateway = await installMockGateway(
+          page,
+          {
+            heldMethods: ["transcripts.summarize"],
+            methodResponses: {
+              "transcripts.get": incomplete,
+              "transcripts.list": { sessions: [incomplete.session], nextCursor: null },
+            },
+          },
+          {
+            afterInitScript:
+              ";localStorage.setItem(" +
+              JSON.stringify(controlUiBundledSettingsStorageKey(suite.server.baseUrl)) +
+              "," +
+              JSON.stringify(JSON.stringify({ textScale: 140 })) +
+              ");",
+          },
+        );
+        await page.goto(
+          suite.server.baseUrl + "meetings?selector=" + encodeURIComponent(meeting.selector),
+        );
+        const summary = page.locator(".transcripts-summary"),
+          pending = summary.getByText("Generating meeting summary…", { exact: true });
+        await pending.waitFor();
+        expect(
+          await pending.evaluate((e) => {
+            const box = e.getBoundingClientRect(),
+              owner = e.closest(".transcripts-summary")!.getBoundingClientRect(),
+              range = document.createRange();
+            range.selectNodeContents(e);
+            return Math.abs(box.left - owner.left) <= 1 && range.getClientRects().length === 1;
+          }),
+        ).toBe(true);
+        await gateway.rejectDeferred("transcripts.summarize", {
+          code: "UNAVAILABLE",
+          message:
+            "The meeting summary could not be generated. Check Gateway diagnostics and retry.",
+        });
+        const retry = summary.getByRole("button", { name: "Retry" });
+        await retry.waitFor();
+        expect(await retry.evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(
+          18.2,
+        );
+        await gateway.deferNext("transcripts.summarize");
+        await retry.press("Enter");
+        await pending.waitFor();
+        expect(await retry.count()).toBe(0);
+        await gateway.resolveDeferred("transcripts.summarize", detail);
+        await summary
+          .getByText("Keep the first-run setup to three steps.", { exact: true })
+          .waitFor();
+        expect(await gateway.getRequests("transcripts.summarize")).toHaveLength(2);
       },
     ));
 

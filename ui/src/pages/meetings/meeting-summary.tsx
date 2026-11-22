@@ -103,15 +103,15 @@ export function MeetingSummary(props: {
         <Loading
           on={props.completion}
           fallback={
-            <div class="meetings-loading" role="status" aria-live="polite">
-              <span class="btn__spinner" aria-hidden="true" />
+            <p class="meetings-summary-feedback meetings-summary-feedback--pending" role="status">
               <span>{t("transcripts.generatingSummary")}</span>
-            </div>
+              <span class="btn__spinner" aria-hidden="true" />
+            </p>
           }
         >
           <Errored
             fallback={(error) => (
-              <div role="alert">
+              <div class="meetings-summary-feedback" role="alert">
                 <p>
                   {t("transcripts.summaryError")} {formatUiError(error())}
                 </p>
@@ -122,7 +122,7 @@ export function MeetingSummary(props: {
             )}
           >
             {completed()}
-            <p role="status">
+            <p class="meetings-summary-feedback" role="status">
               {t(
                 props.page.session.utteranceCount === 0
                   ? props.page.session.active
