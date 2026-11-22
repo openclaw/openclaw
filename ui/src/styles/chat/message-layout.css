@@ -778,14 +778,14 @@
 
     &.chat-assistant-attachment-card--compact .chat-assistant-attachment-card__action,
     .chat-assistant-attachment-card__retry {
-      width: 44px;
-      height: 44px;
+      --chat-attachment-action-size: 44px;
+
+      width: var(--chat-attachment-action-size);
       padding: 0;
       border: 0;
       color: var(--muted);
 
-      &:focus-visible,
-      &:active {
+      &:is(:focus-visible, :active) {
         color: var(--text-strong);
       }
 

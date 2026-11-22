@@ -107,7 +107,7 @@ suite.define(() => {
       ...createControlUiE2eContextOptions(),
       hasTouch: true,
     });
-    const filename = "测试 quarterly report.pdf";
+    const filename = "测试 market report.pdf";
     const source = `/tmp/openclaw/${filename}`;
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
     await installMockGateway(page, {
@@ -140,7 +140,7 @@ suite.define(() => {
       name: `Open ${filename} in the side panel`,
       exact: true,
     });
-    const bubble = page.locator(".chat-bubble").filter({ has: card });
+    const attachments = page.locator(".chat-assistant-attachments").filter({ has: card });
     expect(await link.getByText("Download", { exact: true }).isVisible()).toBe(true);
     expect(await open.getByText("Open", { exact: true }).isVisible()).toBe(true);
     const actionColor = (action: Locator) =>
@@ -155,14 +155,14 @@ suite.define(() => {
     await link.hover();
     expect(await actionColor(link)).toBe(openHoverColor);
 
-    await page.setViewportSize({ width: 568, height: 390 });
+    await page.setViewportSize({ width: 640, height: 390 });
     await waitForControlUiProofSurface(card, [title, link, open]);
-    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(bubble)).width, 0);
+    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(attachments)).width, 0);
     expect((await rectangle(card)).width).toBeGreaterThan(400);
 
     await page.setViewportSize({ width: 320, height: 852 });
     await waitForControlUiProofSurface(card, [title, link, open]);
-    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(bubble)).width, 0);
+    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(attachments)).width, 0);
     const filenameFits = await title.evaluate((element) => ({
       wraps: element.clientHeight > Number.parseFloat(getComputedStyle(element).lineHeight),
       fullyVisible:
