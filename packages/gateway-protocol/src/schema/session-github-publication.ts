@@ -134,6 +134,13 @@ export const GitHubPublicationEvidenceUploadSchema = closedObject({
 });
 export const SessionGitHubActionParamsSchema = Type.Union([
   closedObject({
+    action: Type.Literal("create_issue"),
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    title: GitHubPublicationTitleSchema,
+    body: Type.Optional(GitHubPublicationBodySchema),
+  }),
+  closedObject({
     ...GitHubPullRequestPrepareSchema.properties,
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
