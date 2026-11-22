@@ -81,3 +81,23 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   await runReleaseUpdateCli({ json: true, restart: true, runningRoot: "/tmp/openclaw-checkout" });
   expect(process.exitCode).toBe(0);
 });
+
+it("says the update is still running when the --timeout budget ends first", async () => {
+  const { defaultRuntime } = await import("../runtime.js");
+  const { runReleaseUpdateCli } = await import("./cli.js");
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  runsGet.push(() => ({
+    run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({
+    json: false,
+    restart: true,
+    runningRoot: "/tmp/openclaw-checkout",
+    timeoutMs: 100,
+  });
+  expect(error.mock.calls.map(([message]) => message)).toEqual([
+    "The update did not finish in time. Run `openclaw update status` to see it.",
+  ]);
+  expect(process.exitCode).toBe(1);
+});

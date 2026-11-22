@@ -173,7 +173,8 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;
   }
-  if (!record) {
+  // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
+  if (!record || (record.status === "running" && !isPendingActivation(record))) {
     defaultRuntime.error(
       "The update did not finish in time. Run `openclaw update status` to see it.",
     );
