@@ -19,6 +19,7 @@ import {
   finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
+import { updateInstallationMismatch } from "../../update/installation-identity.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -43,6 +44,19 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
   const params = await admitGatewayUpdateRequest(request);
   if (!params) {
     return;
+  }
+  if (params.checkout) {
+    const mismatch = await updateInstallationMismatch(params.checkout, installed.root);
+    if (mismatch) {
+      respond(true, {
+        runId: null,
+        ok: false,
+        code: "installation-mismatch",
+        message: mismatch,
+        result: { status: "skipped", reason: "installation-mismatch" },
+      });
+      return;
+    }
   }
   const config = context.getRuntimeConfig();
   const requester = params.requester;
@@ -157,6 +171,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     git: installed.status.git,
     sha,
     timeoutMs: params.timeoutMs,
+    acceptCapabilities: params.acceptCapabilities,
     restartDelayMs: params.restartDelayMs,
     sessionKey: params.sessionKey,
     warn: (message) => context.logGateway?.warn(message),
@@ -173,6 +188,7 @@ async function runUpdateInBackground(
     sha?: string;
     /** The requester's overall budget (`timeoutMs`). */
     timeoutMs?: number;
+    acceptCapabilities?: boolean;
     /** The requester's `restartDelayMs`, as the package route honors it. */
     restartDelayMs?: number;
     sessionKey?: string;
@@ -193,6 +209,7 @@ async function runUpdateInBackground(
       channel,
       sha: options.sha,
       timeoutMs: options.timeoutMs,
+      acceptCapabilities: options.acceptCapabilities,
     });
     const restart = {
       reason: "update.run",

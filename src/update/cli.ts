@@ -1,6 +1,8 @@
 // `openclaw update` for Git installs, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
+import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import {
   callGateway,
@@ -15,6 +17,10 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import {
+  checkUpdateInstallationSlot,
+  resolveUpdateInstallationIdentity,
+} from "./installation-identity.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 
 const POLL_MS = 2_000;
@@ -33,11 +39,12 @@ export type ReleaseUpdateOptions = {
   sha?: string;
   /** `--timeout`: one overall budget for preparing and following the run. */
   timeoutMs?: number;
-  /** `--accept-capabilities`, for plugin maintenance in this process. */
+  /** `--accept-capabilities`, including plugin maintenance through the running Gateway. */
   acceptCapabilities?: boolean;
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
+  await checkUpdateInstallationSlot(opts.runningRoot);
   const { channel } = opts;
   if (channel) {
     await mutateConfigFileWithRetry({
@@ -62,10 +69,23 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
-  const record = runId
-    ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
+  const request = opts.restart ? await requestGatewayUpdate(target, opts) : null;
+  let record = request
+    ? await followRun(request.runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
     : await updateWithoutGateway(opts);
+  if (
+    request &&
+    !request.supportsConsent &&
+    opts.acceptCapabilities &&
+    (record?.status === "succeeded" || record?.status === "skipped")
+  ) {
+    // Shipped Gateways reject unknown fields. Update once with the old request, then
+    // apply consent through the now-new Gateway's existing already-current/plugin path.
+    const retry = await requestGatewayUpdate(target, opts, record);
+    record = retry
+      ? await followRun(retry.runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
+      : record;
+  }
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
@@ -75,25 +95,53 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
 
 async function requestGatewayUpdate(
   target: { kind: "git"; upstreamRef: string; upstreamSha: string } | undefined,
-  timeoutMs: number | undefined,
-): Promise<string | null> {
+  opts: ReleaseUpdateOptions,
+  consentRetry?: UpdateRunRecord,
+): Promise<{ runId: string; supportsConsent: boolean } | null> {
   // Only the local Gateway serves this checkout; a remote or overridden target would update
   // another installation, so this checkout prepares its release here instead.
   if (!(await isImplicitLocalGatewayTarget({}))) {
+    if (consentRetry) {
+      throw new Error(
+        `Capability consent was not applied because the updated Gateway is no longer local. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` against that installation to retry."}`,
+      );
+    }
     return null;
   }
+  const checkout = await resolveUpdateInstallationIdentity(opts.runningRoot);
+  const params: UpdateRunParams = {
+    ...(target ? { target } : {}),
+    ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+  };
+  let supportsConsent = false;
   try {
     const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
       method: "update.run",
-      params: { ...(target ? { target } : {}), ...(timeoutMs ? { timeoutMs } : {}) },
+      params,
+      onHelloOk: (hello) => {
+        supportsConsent =
+          hello.features.capabilities?.includes(GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY) ??
+          false;
+        if (supportsConsent) {
+          params.checkout = checkout;
+          params.acceptCapabilities = opts.acceptCapabilities;
+        }
+      },
+      assertDispatchCurrent: () => {
+        if (consentRetry && !supportsConsent) {
+          throw new Error(
+            `Capability consent was not applied because the updated Gateway does not support it. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` to retry."}`,
+          );
+        }
+      },
       timeoutMs: 30_000,
     });
     if (!response.runId) {
       throw new Error(response.message ?? "The Gateway refused the update.");
     }
-    return response.runId;
+    return { runId: response.runId, supportsConsent };
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (!consentRetry && isGatewayTransportError(error)) {
       return null;
     }
     throw error;

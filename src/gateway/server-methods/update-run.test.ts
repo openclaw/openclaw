@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -7,12 +9,14 @@ import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "../../infra/update-check-lifecycle.js";
-import { getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { getUpdateRunAsync, listUpdateRunsAsync } from "../../infra/update-run-reader.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const prepareUpdate = vi.hoisted(() => vi.fn(async () => ({ status: "failed" })));
+const install = vi.hoisted(() => ({ root: "/tmp/openclaw-checkout" }));
 vi.mock("../../update/run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../update/run.js")>()),
   prepareUpdate,
@@ -25,8 +29,8 @@ vi.mock("../../infra/restart.js", async (importOriginal) => ({
 vi.mock("../../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: async () => ({
-    root: "/tmp/openclaw-checkout",
-    status: { root: "/tmp/openclaw-checkout", installKind: "git", packageManager: "pnpm" },
+    root: install.root,
+    status: { root: install.root, installKind: "git", packageManager: "pnpm" },
     installReceipt: null,
   }),
 }));
@@ -40,6 +44,7 @@ let home: TempHomeEnv;
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-run-git-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+  install.root = "/tmp/openclaw-checkout";
 });
 afterEach(async () => {
   await lifecycle.stop();
@@ -126,6 +131,60 @@ it("restarts into the prepared release after the requested delay", async () => {
   await vi.waitFor(() =>
     expect(scheduleGatewayRestart).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "update.run", delayMs: 7000 }),
+    ),
+  );
+});
+
+it("refuses a different checkout before recording any run and names the installed command", async () => {
+  install.root = path.join(home.home, "installation-a");
+  await fs.mkdir(install.root);
+  await runCommandWithTimeout(["git", "init", install.root], { timeoutMs: 10_000 });
+  const { payload } = await invoke({
+    checkout: { gitCommonDir: path.join(home.home, "installation-b", ".git") },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ runId: null, ok: false, code: "installation-mismatch" });
+  expect(payload.message).toContain(install.root);
+  expect(payload.message).toContain("Nothing changed.");
+  expect(payload.message).toContain(`${install.root}/openclaw.mjs update`);
+  expect(await listUpdateRunsAsync()).toEqual([]);
+  expect(prepareUpdate).not.toHaveBeenCalled();
+});
+
+it("accepts the same Git common directory and passes capability consent to preparation", async () => {
+  install.root = path.join(home.home, "installation-a");
+  await fs.mkdir(install.root);
+  await runCommandWithTimeout(["git", "init", install.root], { timeoutMs: 10_000 });
+  await runCommandWithTimeout(
+    [
+      "git",
+      "-C",
+      install.root,
+      "-c",
+      "user.name=Identity Fixture",
+      "-c",
+      "user.email=identity@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ],
+    { timeoutMs: 10_000 },
+  );
+  const commonDir = await fs.realpath(path.join(install.root, ".git"));
+  const release = path.join(home.home, "release-worktree");
+  await runCommandWithTimeout(["git", "-C", install.root, "worktree", "add", "--detach", release], {
+    timeoutMs: 10_000,
+  });
+  install.root = release;
+  const { payload } = await invoke({
+    checkout: { gitCommonDir: commonDir },
+    acceptCapabilities: true,
+  });
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() =>
+    expect(prepareUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ acceptCapabilities: true }),
     ),
   );
 });
