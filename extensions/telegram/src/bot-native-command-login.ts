@@ -1,4 +1,3 @@
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   cancelProviderLoginFlow,
@@ -90,21 +89,6 @@ export async function executeTelegramLoginCommand(params: {
       String(++deliveredReply),
     );
   };
-  const assertCurrent = (config = getRuntimeConfig()) => {
-    dispatch.assertOwnerCurrent?.();
-    const authorization = resolveCommandAuthorization({
-      cfg: config,
-      ctx: dispatch.ownerContext,
-      commandAuthorized: dispatch.commandAuthorized,
-    });
-    if (
-      !dispatch.senderIsOwner ||
-      !authorization.senderIsOwner ||
-      !authorization.isAuthorizedSender
-    ) {
-      throw new Error("Provider login authority is no longer active.");
-    }
-  };
   const sendLoginReply = async (reply: ReplyPayload) => {
     const { deliverReplies } = await dispatch.loadDeliveryRuntime();
     const result = await deliverReplies({
@@ -128,10 +112,6 @@ export async function executeTelegramLoginCommand(params: {
       refreshProviderLoginAuthState({
         agentId: dispatch.route.agentId,
         readConfig: getRuntimeConfig,
-        assertCurrent: (config) => {
-          dispatch.opts.accountAbortSignal?.throwIfAborted();
-          assertCurrent(config);
-        },
       }),
     cancelLogin: () => cancelProviderLoginFlow(flow),
   });
@@ -190,15 +170,12 @@ export async function executeTelegramLoginCommand(params: {
         readConfig: getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: flowSignal,
-        assertCurrent,
         sendMessage: sendLoginMessage,
         sendReply: (reply) => sendLoginAction(() => sendLoginReply(reply)),
         sendDeviceCode: (deviceCode) =>
           sendLoginAction(() =>
             sendLoginMessage(formatTelegramLoginDeviceCode(deviceCode), "HTML"),
           ),
-        unsupportedPromptMessage:
-          "This provider needs input that Telegram cannot collect. Open Models in the OpenClaw app and choose Sign in.",
       });
       flowSignal.throwIfAborted();
       const nextProfileId = loginResult.profiles.find(
@@ -226,7 +203,6 @@ export async function executeTelegramLoginCommand(params: {
               kind: "host",
               assertCurrent() {
                 flowSignal.throwIfAborted();
-                assertCurrent();
               },
             },
             prepare: (entry) => {
@@ -277,7 +253,6 @@ export async function executeTelegramLoginCommand(params: {
       let blockedSelectionApplied = false;
       if (blockedSelection) {
         try {
-          assertCurrent();
           blockedSelectionApplied = await applyPendingTelegramPickerSelection({
             cfg: getRuntimeConfig(),
             agentId: dispatch.route.agentId,

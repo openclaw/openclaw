@@ -10,7 +10,7 @@ import type { ThinkingCatalogEntry } from "../auto-reply/thinking.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
-import { formatTokenCount } from "../utils/usage-format.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
 export type StatusMessageUsageArgs = {

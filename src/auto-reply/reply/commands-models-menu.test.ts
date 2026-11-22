@@ -72,7 +72,8 @@ describe("resolveModelSelectionAuthBlock", () => {
     });
     expect(block?.notice).toContain("API key");
     expect(block?.notice).toContain("the OpenClaw app under Models → Connect provider");
-    expect(block?.notice).toContain("`openclaw models auth login --provider opencode-go`");
+    // Chat never shows a terminal command.
+    expect(block?.notice).not.toContain("openclaw models auth login");
     expect(block?.notice).not.toContain("/login");
     // The key is entered in the app, so a chat sign-in cannot finish the selection.
     expect(block?.apiKeyLogin).toBe(true);
@@ -95,7 +96,7 @@ describe("resolveModelSelectionAuthBlock", () => {
     });
     expect(block?.notice).toContain("Sign-in failed");
     expect(block?.notice).toContain("API key");
-    expect(block?.notice).toContain("`openclaw models auth login --provider opencode-go`");
+    expect(block?.notice).not.toContain("openclaw models auth login");
   });
 
   it("points custom providers without a login route at the setup guide, with no sign-in button", () => {

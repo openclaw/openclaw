@@ -8,7 +8,11 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
   connectGatewayClient,
@@ -20,7 +24,11 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 type GatewayEvent = { event?: string; payload?: unknown };
 
-type GuestGatewayOptions = { origin?: string; others?: "none" | "view" | "invited" };
+type GuestGatewayOptions = {
+  origin?: string;
+  others?: "none" | "view" | "invited";
+  approvalOwnership?: boolean;
+};
 
 async function startInvitedGuestGateway(
   signal: AbortSignal,
@@ -42,11 +50,17 @@ async function startInvitedGuestGateway(
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");
   const carol = ensureProfileForEmail("carol@committed-mention.example.test");
   setDisplayName(alice.id, "Alice");
-  setUserProfileRole(alice.id, "administrator");
+  setUserProfileRole(alice.id, options.approvalOwnership ? "guest" : "administrator");
   setDisplayName(bob.id, "Bob");
   setUserProfileRole(bob.id, "guest");
   setDisplayName(carol.id, "Carol");
   setUserProfileRole(carol.id, "invited");
+  const senderEmail = options.approvalOwnership
+    ? "admin@committed-mention.example.test"
+    : "alice@committed-mention.example.test";
+  if (options.approvalOwnership) {
+    setUserProfileRole(ensureProfileForEmail(senderEmail).id, "administrator");
+  }
   const events: Record<"guest" | "invited" | "sender", GatewayEvent[]> = {
     guest: [],
     invited: [],
@@ -59,6 +73,16 @@ async function startInvitedGuestGateway(
       .then(async (body) => {
         providerRequests.push(body);
         await providerReplies.beforeReply?.();
+        const input = (JSON.parse(body) as { input?: Array<{ type?: string }> }).input ?? [];
+        const lastOutput = input.findLastIndex((item) => item.type === "function_call_output");
+        if (
+          options.approvalOwnership &&
+          !body.includes("Generate a concise session title") &&
+          JSON.stringify(input.slice(lastOutput + 1)).includes("RUN_EXEC")
+        ) {
+          writeToolCall(response, "exec", { command: "printf approval-proof" });
+          return;
+        }
         writeOpenAiResponsesText(response, {
           text: "Acknowledged.",
           messageId: "mention-reply",
@@ -73,7 +97,9 @@ async function startInvitedGuestGateway(
     "committed-mention",
   );
   const scopes: OperatorScope[] = ["operator.admin"];
-  const guestScopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+  const guestScopes: OperatorScope[] = options.approvalOwnership
+    ? ["operator.read", "operator.write", "operator.approvals"]
+    : ["operator.sessions.read", "operator.sessions.write"];
   const invitedScopes: OperatorScope[] = [
     "operator.read",
     "operator.write",
@@ -89,6 +115,7 @@ async function startInvitedGuestGateway(
         "alice@committed-mention.example.test",
         "bob@committed-mention.example.test",
         "carol@committed-mention.example.test",
+        ...(options.approvalOwnership ? [senderEmail] : []),
       ],
       allowLoopback: true,
       deviceAutoApprove: { enabled: true, scopes: [...scopes, ...guestScopes, ...invitedScopes] },
@@ -96,7 +123,8 @@ async function startInvitedGuestGateway(
     identityScopes: {
       "bob@committed-mention.example.test": guestScopes,
       "carol@committed-mention.example.test": invitedScopes,
-      "alice@committed-mention.example.test": scopes,
+      "alice@committed-mention.example.test": options.approvalOwnership ? guestScopes : scopes,
+      ...(options.approvalOwnership ? { [senderEmail]: scopes } : {}),
     },
   };
   const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
@@ -140,9 +168,16 @@ async function startInvitedGuestGateway(
         },
       },
       plugins: { slots: { memory: "none" } },
+      ...(options.approvalOwnership ? { session: { dmScope: "main" as const } } : {}),
       tools: {
         profile: "minimal",
-        alsoAllow: ["read", "sessions_history", "sessions_search"],
+        alsoAllow: [
+          "read",
+          "sessions_history",
+          "sessions_search",
+          ...(options.approvalOwnership ? ["exec"] : []),
+        ],
+        ...(options.approvalOwnership ? { exec: { host: "gateway" as const } } : {}),
       },
       gateway: {
         auth,
@@ -165,7 +200,9 @@ async function startInvitedGuestGateway(
             guest: {
               agents: ["main"],
               scopes: guestScopes,
-              sessions: { others: options.others ?? "invited" },
+              sessions: {
+                others: options.approvalOwnership ? "write" : (options.others ?? "invited"),
+              },
             },
           },
         },
@@ -179,7 +216,7 @@ async function startInvitedGuestGateway(
     url: `wss://127.0.0.1:${gateway.port}`,
     tlsFingerprint,
     origin,
-    edgeAuthHeaders: headers("alice@committed-mention.example.test"),
+    edgeAuthHeaders: headers(senderEmail),
     clientName: "openclaw-control-ui",
     mode: "webchat",
     scopes: ["operator.admin"],

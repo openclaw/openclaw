@@ -420,7 +420,7 @@ describe("Telegram model callback loopback", () => {
     {
       kind: "API-key",
       login: { methodId: "api-key", label: "API key" },
-      step: `openclaw models auth login --provider ${PROVIDER}`,
+      step: "Add the API key in the OpenClaw app under Models → Connect provider.",
       next: "Sign in below, then select the model again.",
       queued: false,
     },

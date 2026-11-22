@@ -24,6 +24,7 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
   registerUserTurnTranscriptAdmissionOwner,
@@ -57,7 +58,6 @@ import {
 } from "./user-turn-transcript.persistence.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
-  PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
   UserTurnOriginalInputCommit,
   UserTurnTranscriptPersistResult,
@@ -66,11 +66,7 @@ import type {
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
 
-export type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "./user-turn-transcript.types.js";
+export type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 export {
   buildLateMediaAttachedProjection,

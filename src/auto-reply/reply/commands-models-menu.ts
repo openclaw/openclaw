@@ -1,4 +1,3 @@
-import { resolveSafeProviderId } from "../../agents/failover/provider-auth-user-copy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   CLAUDE_CLI_SETUP_GUIDANCE,
@@ -61,16 +60,12 @@ function describeUnavailableModel(params: {
   loginSupported: boolean;
   apiKeyLogin: boolean;
   pending?: boolean;
-  agentId?: string;
 }): { label: string; recovery: string } {
   const { state, apiKeyLogin } = params;
   const loginCommand = formatProviderLoginCommand(params.provider);
-  const safeProvider = resolveSafeProviderId(params.provider);
-  const agentFlag = params.agentId ? ` --agent ${params.agentId}` : "";
+  // Chat shows no terminal commands; the key is entered in the app.
   const apiKeyRecovery = (verb: "Add" | "Update") =>
-    safeProvider
-      ? `${verb} the API key in the OpenClaw app under Models → Connect provider, or run \`openclaw models auth login --provider ${safeProvider}${agentFlag}\`.`
-      : `${verb} the API key in the OpenClaw app under Models → Connect provider.`;
+    `${verb} the API key in the OpenClaw app under Models → Connect provider.`;
   if (state.runtimeAuth?.source === "native" && state.availability === undefined) {
     return params.pending
       ? {
@@ -131,8 +126,6 @@ export function resolveModelSelectionAuthBlock(params: {
   menu?: ModelsMenu;
   provider: string;
   model: string;
-  /** Chat-bound agent, so shell recovery targets the same credential store. */
-  agentId?: string;
 }): ModelSelectionAuthBlock | undefined {
   // Old-shape plugin-constructed menus may lack readiness; never block on absence.
   // Block missing-auth/auth-failed whether availability is a definitive false
@@ -162,7 +155,6 @@ export function resolveModelSelectionAuthBlock(params: {
     route,
     loginSupported,
     apiKeyLogin,
-    agentId: params.agentId,
   });
   return {
     label,

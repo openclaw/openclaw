@@ -28,7 +28,7 @@ export function prepareTelegramPickerSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId });
   const isDefaultSelection =
-    selection.provider === resolvedDefault.provider && selection.model === resolvedDefault.model;
+    selection.provider === resolvedDefault?.provider && selection.model === resolvedDefault?.model;
   const sessionEntry = params.sessionEntry ?? { sessionId: randomUUID(), updatedAt: Date.now() };
   const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
   const sessionStore = { [sessionKey]: sessionEntry };
@@ -49,10 +49,10 @@ export function prepareTelegramPickerSelection(params: {
     sessionEntry,
     sessionStore,
     allowCreate: params.sessionEntry === undefined,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
-    currentProvider: current.provider,
-    currentModel: current.model,
+    defaultProvider: resolvedDefault?.provider ?? selection.provider,
+    defaultModel: resolvedDefault?.model,
+    currentProvider: current?.provider,
+    currentModel: current?.model,
     modelCatalog: params.modelData.modelCatalog,
     canPersistStickyModelSelection: false,
     // The shared selection owner enforces the picker auth policy from these

@@ -1,6 +1,9 @@
 import { Show } from "solid-js";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import type { ControlUiComposerDraft } from "../../../plugins/control-ui-actions.ts";
+import type {
+  BindComposerActionMenu,
+  ControlUiComposerDraft,
+} from "../../../plugins/control-ui-actions.ts";
 import { getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
@@ -19,6 +22,7 @@ export function ChatComposerPluginContributions(props: {
   presented: boolean;
   /** Composer kind only: false when no toolbar exists, so icon actions render as text buttons. */
   toolbar?: boolean;
+  bindActionMenu?: BindComposerActionMenu;
 }) {
   const application = useOptionalApplication();
   const handle: ControlUiComposerDraft = {
@@ -38,6 +42,7 @@ export function ChatComposerPluginContributions(props: {
         prop:agentId={props.composer.currentAgentId}
         prop:presented={props.presented}
         prop:composer={handle}
+        prop:bindActionMenu={props.bindActionMenu}
         prop:composerToolbar={props.toolbar ?? true}
       />
     </Show>

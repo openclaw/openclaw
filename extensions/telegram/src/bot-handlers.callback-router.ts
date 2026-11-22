@@ -492,7 +492,9 @@ export function createTelegramCallbackRouter({
           const safePage = Math.max(1, Math.min(page, totalPages));
           const currentModel =
             sessionState.model ||
-            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+            (activeResolvedDefault
+              ? `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`
+              : undefined);
           const availability = modelData.modelMenu?.byProvider.get(provider);
           const buttons = buildModelsKeyboard({
             provider,

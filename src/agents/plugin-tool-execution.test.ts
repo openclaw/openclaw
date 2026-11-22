@@ -5,10 +5,8 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeSkillsWatchers, prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "./admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -100,7 +98,7 @@ function modelExecution(
   return preparePluginToolExecutionCapabilities({
     agentId: "caller",
     config: { agents: { entries: { caller } } },
-    authority: createAdmittedRunOperatorAuthority({
+    authority: createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
       assertCurrent() {},

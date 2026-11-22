@@ -65,31 +65,7 @@ function openCertifiedShelf() {
 }
 
 describe("Templates discovery", () => {
-  it.each([
-    {
-      names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "View all"],
-    },
-    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "View all"] },
-    { names: ["templates/AGENTS.md", "fixtures/request.json"], ordered: ["View all"] },
-    { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
-  ])(
-    "lists only root agent documents and a View all row for $names",
-    async ({ names, ordered }) => {
-      const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
-      await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-      const section = detail.querySelector(".plugin-capabilities")!;
-      const titles = [...section.querySelectorAll(".settings-row__title")].map(
-        (node) => node.textContent,
-      );
-      expect(titles).toEqual(ordered);
-      expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(
-        ordered.filter((name) => name !== "View all").length,
-      );
-    },
-  );
-
-  it("opens named files and View all in the shared complete-file preview without navigating from help", async () => {
+  it("opens the complete workspace inventory from Personality and reads the selected file", async () => {
     const names = [
       "AGENTS.md",
       "SOUL.md",
@@ -102,14 +78,9 @@ describe("Templates discovery", () => {
     ];
     const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
-      expect(detail.querySelector(".templates-workspace-file__info")).not.toBeNull(),
+      expect(detail.querySelector(".templates-personality__file")?.textContent).toBe("SOUL.md"),
     );
-    const section = detail.querySelector(".plugin-capabilities")!;
-    section.querySelector<HTMLButtonElement>(".templates-workspace-file__info")!.click();
-    expect(
-      request.mock.calls.filter(([method]) => method === "templates.catalog.preview"),
-    ).toHaveLength(0);
-    section.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "templates.catalog.preview",
@@ -118,21 +89,8 @@ describe("Templates discovery", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(5);
-    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
-    await waitForSolid(() =>
-      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
-    );
-    [...section.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "View all")!
-      .click();
-    await waitForSolid(() =>
-      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
-    );
-    const allFilesPreview = detail.querySelector("openclaw-file-preview-modal")!;
-    expect(allFilesPreview.files.map((file) => file.path)).toEqual(names);
-    for (const name of names) {
-      allFilesPreview.dispatchEvent(
+    for (const name of names.filter((fileName) => fileName !== "SOUL.md")) {
+      preview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
       );
       await vi.waitFor(() =>
@@ -147,11 +105,11 @@ describe("Templates discovery", () => {
   it("releases a closed preview before transport settles and isolates its replacement", async () => {
     const { detail, request } = createDetail({ templatesEnabled: true });
     await waitForSolid(() =>
-      expect(detail.querySelector(".templates-workspace-file__open")).not.toBeNull(),
+      expect(detail.querySelector(".templates-personality__file")).not.toBeNull(),
     );
     const retired = createDeferredCore<unknown>();
     request.mockReturnValueOnce(retired.promise);
-    detail.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await waitForSolid(() =>
       expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
     );
@@ -166,7 +124,7 @@ describe("Templates discovery", () => {
 
     const replacement = createDeferredCore<unknown>();
     request.mockReturnValueOnce(replacement.promise);
-    detail.querySelector<HTMLButtonElement>(".templates-workspace-file__open")!.click();
+    detail.querySelector<HTMLButtonElement>(".templates-personality__file")!.click();
     await waitForSolid(() =>
       expect(
         detail.querySelector("openclaw-file-preview-modal .body")?.getAttribute("aria-busy"),
@@ -187,7 +145,7 @@ describe("Templates discovery", () => {
     "/templates",
     "/templates/workflow-operator",
     "/templates/packages/%40openclaw%2Fworkflow-operator",
-  ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
+  ])("rejects direct visits to %s while Templates is explicitly disabled", async (pathname) => {
     const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
     const location = { pathname, search: "", hash: "" };
     const result = await templatesRoute.loader!(
@@ -202,7 +160,7 @@ describe("Templates discovery", () => {
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
   });
 
-  it("removes discovery when the Labs toggle is disabled during a visit", async () => {
+  it("removes discovery when Templates is disabled during a visit", async () => {
     const { page, setTemplatesEnabled } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
@@ -749,11 +707,14 @@ it.each(["card", "detail"])(
     };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
-    // Only the Blobster fallback has two filled eyes; its stroke takes the container's color.
-    const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
+    const blobster = `${selector} svg[stroke="currentColor"]`;
+    const blobsterEyes = `${blobster} circle[fill="currentColor"]`;
     const withoutArtwork = create();
     await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
     expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+    const fallback = withoutArtwork.querySelector<SVGSVGElement>(blobster)!;
+    expect(fallback.style.strokeWidth).toBe("1.55px");
+    expect(fallback.style.color).toBe("rgb(156, 111, 62)");
 
     const container = create(templateIconUrl);
     await waitForSolid(() =>
@@ -762,9 +723,13 @@ it.each(["card", "detail"])(
     const image = container.querySelector(`${selector} img`)!;
     expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
+    expect(container.querySelector(blobster)).toBeNull();
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
     expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
+    const failedFallback = container.querySelector<SVGSVGElement>(blobster)!;
+    expect(failedFallback.style.strokeWidth).toBe(fallback.style.strokeWidth);
+    expect(failedFallback.style.color).toBe(fallback.style.color);
   },
 );
 

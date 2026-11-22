@@ -26,7 +26,7 @@ import type {
   MessageReceivedHookContext,
   MessageSentHookContext,
   MessageTranscribedHookContext,
-} from "./internal-hooks.js";
+} from "./internal-hook-types.js";
 import { projectMessageHookMediaFacts, type MessageHookMediaFact } from "./message-hook-media.js";
 
 type CanonicalSentMessageHookContext = MessageSentHookContext &

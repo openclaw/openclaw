@@ -81,12 +81,14 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
           lifecycleRevision: entry.lifecycleRevision,
         };
         const current = resolveSessionModelRef(params.cfg, entry, params.agentId);
-        validatedFallback = createAgentPatchedSessionModelFallback({
-          model: current.model,
-          provider: current.provider,
-          entry,
-          ts: markerTs,
-        });
+        validatedFallback =
+          current &&
+          createAgentPatchedSessionModelFallback({
+            model: current.model,
+            provider: current.provider,
+            entry,
+            ts: markerTs,
+          });
       }
     } catch (error) {
       rethrowIncognitoSessionError(error);
@@ -177,7 +179,7 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
               return { modelFallback: undefined };
             }
             const failed = resolveSessionModelRef(cfg, entry, agentId);
-            note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
+            note = `System note: model ${failed ? `${failed.provider}/${failed.model}` : "selection"} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
             return {
               model: marker.prevModel,
               modelProvider: marker.prevProvider,

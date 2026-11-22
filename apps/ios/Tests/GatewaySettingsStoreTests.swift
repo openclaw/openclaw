@@ -411,7 +411,10 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let firstGatewayID = "manual|first.example.com|443"
         let secondGatewayID = "manual|second.example.com|443"
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest("legacy-token", instanceId: instanceID)
+        #expect(GenericPasswordKeychainStore.saveString(
+            "legacy-token",
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
 
         GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
 
@@ -440,9 +443,10 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             gatewayStableID: gatewayID,
             suppressStoredDeviceAuth: true,
             instanceId: instanceID)
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "obsolete-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
 
         #expect(GatewaySettingsStore.migrateProvenRelayCredentials(
             instanceId: instanceID,
