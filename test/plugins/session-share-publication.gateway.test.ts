@@ -336,7 +336,9 @@ it.each([false, true])(
       );
     }
     for (const method of ["sessions.list", "chat.history", "config.get", "sessions.send"]) {
-      await expect(client.request(method, {})).rejects.toThrow("missing scope");
+      await expect(client.request(method, {})).rejects.toThrow(
+        "publication transport method denied",
+      );
     }
     await expect(
       client.request("session-share.list", { involvingProfileId: other.id }),
@@ -397,7 +399,7 @@ it.each([false, true])(
     await holdRead(() => {
       publishReaderEnabled(false);
     }, true);
-    await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
+    await expect(read()).rejects.toThrow("publication transport method denied");
     publishReaderEnabled(true);
     expect((await read()).items).toMatchObject([{ text: "SYNTHETIC_SHARED_MESSAGE" }]);
     await holdRead(() => {
@@ -416,7 +418,7 @@ it.each([false, true])(
         scopes: [scope],
       });
     });
-    await expect(list()).rejects.toThrow("Session Share request denied or source unavailable");
+    await expect(list()).rejects.toThrow("publication transport method denied");
     if (!rotated.ok) {
       throw new Error(`Fixture rotation refused: ${rotated.reason}`);
     }
