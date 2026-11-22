@@ -92,7 +92,9 @@ export function resolveGatewayRestartDecision(): GatewayRestartDecision {
 
 /**
  * Why an update cannot start its release in a new Gateway process, or undefined when it can. A
- * container's main process cannot hand off to a detached successor: its exit stops the container.
+ * container's main process (PID 1, or the direct child of its init shim or shell) cannot hand off
+ * to a detached successor: its exit stops the container. A Gateway started with `docker exec`
+ * has no parent inside the container and hands off as on a host.
  */
 export function describeUpdateRestartUnavailable(
   decision: GatewayRestartDecision = resolveGatewayRestartDecision(),
@@ -103,7 +105,7 @@ export function describeUpdateRestartUnavailable(
   if (decision.reason === "no-respawn") {
     return "This Gateway cannot restart because OPENCLAW_NO_RESPAWN is enabled. Stop the Gateway, run openclaw update, then start it again. To allow updates from the Gateway, relaunch it without OPENCLAW_NO_RESPAWN.";
   }
-  if (isContainerEnvironment()) {
+  if (isContainerEnvironment() && (process.pid === 1 || process.ppid === 1)) {
     return "This Gateway runs as the container's main process, so it cannot restart into a new release without stopping the container. Run `openclaw update --no-restart` in the container, then restart the container; the new release starts then.";
   }
   return undefined;

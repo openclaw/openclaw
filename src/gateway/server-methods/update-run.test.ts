@@ -53,6 +53,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   prepareUpdate.mockClear();
   host.container = false;
+  vi.restoreAllMocks();
 });
 
 async function invoke(params: object, client: unknown = null) {
@@ -80,6 +81,8 @@ it("refuses before preparing a release when the Gateway may not replace its proc
 
 it("refuses before preparing a release when the Gateway is a container's main process", async () => {
   host.container = true;
+  // The direct child of the container's init shim: its exit ends the container.
+  vi.spyOn(process, "ppid", "get").mockReturnValue(1);
   const { payload } = await invoke({});
   expect(payload).toMatchObject({ runId: null, ok: false, code: "restart-unavailable" });
   expect(payload.message).toContain("openclaw update --no-restart");
@@ -90,6 +93,15 @@ it("updates a Gateway inside a container that its supervisor restarts", async ()
   host.container = true;
   // The release launcher restarts its child, as a service manager would.
   vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "1");
+  const { payload } = await invoke({});
+  expect(payload).toMatchObject({ ok: true });
+  await vi.waitFor(() => expect(prepareUpdate).toHaveBeenCalled());
+});
+
+it("updates a Gateway started inside a container with docker exec", async () => {
+  host.container = true;
+  // An exec'd process has no parent inside the container's PID namespace.
+  vi.spyOn(process, "ppid", "get").mockReturnValue(0);
   const { payload } = await invoke({});
   expect(payload).toMatchObject({ ok: true });
   await vi.waitFor(() => expect(prepareUpdate).toHaveBeenCalled());
