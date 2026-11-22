@@ -112,10 +112,14 @@ export async function preserveImplicitOpenAIPrimary(
 
 async function hasOpenAIAuth(cfg: OpenClawConfig, agentId: string, env: NodeJS.ProcessEnv) {
   const agentDir = resolveAgentDir(cfg, agentId, env);
+  // Doctor is best effort: an unreadable store is reported by its own repair, not here.
   const authStore = await loadAuthProfileStoreForSecretsRuntimeAsync(agentDir, {
     config: cfg,
     externalCli: { mode: "scoped", providerIds: ["openai"], allowKeychainPrompt: false },
-  });
+  }).catch(() => undefined);
+  if (!authStore) {
+    return false;
+  }
   const evaluation = createModelAuthAvailabilityResolver({
     cfg,
     agentId,
@@ -124,5 +128,6 @@ async function hasOpenAIAuth(cfg: OpenClawConfig, agentId: string, env: NodeJS.P
     env,
     externalCliProviderIds: ["openai"],
   }).evaluateModelAuth("openai", { modelId: LEGACY_MODEL_ID });
-  return evaluation.availability !== false;
+  // Only positive evidence counts; an unknown credential leaves the setup message as the outcome.
+  return evaluation.availability === true;
 }

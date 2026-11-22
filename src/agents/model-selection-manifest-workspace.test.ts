@@ -160,13 +160,13 @@ describe("configured model manifest workspace scope", () => {
   it.each([
     ["openai/entry", "middle"],
     ["entry@", "entry@"],
-    ["/", "unused"],
+    ["/", undefined], // unresolvable primary: no implicit default model
   ])("normalizes captured selection %s once", (primary, model) => {
     expectConfiguredModelRef({
       cfg: modelConfig({ primary }),
       manifestPlugins: defaultNormalizationSnapshot,
       allowPluginNormalization: false,
-    }).toEqual({ provider: "openai", model });
+    }).toEqual(model && { provider: "openai", model });
     expectNoMetadataLoads();
   });
 

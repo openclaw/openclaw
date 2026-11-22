@@ -221,7 +221,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const modelContext = resolveModelContextTokenProjection({
     cfg: params.cfg,
     provider: params.provider,
-    model: model,
+    model,
     modelContextTokens: modelEntry?.contextTokens,
     modelContextWindow: resolveModelContextWindowProfile({
       catalogEntry: modelEntry,
@@ -238,7 +238,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       resolveProjectedSessionContextTokens({
         entry: targetSessionEntry,
         provider: params.provider,
-        model: model,
+        model,
         agentHarnessId: runtime,
         resolvedContextTokens: modelContext.contextTokens,
         authoredContextTokens: modelContext.authoredContextTokens,

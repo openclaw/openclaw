@@ -383,14 +383,15 @@ it.each<{
   authModes: PreparedModelRuntimeSnapshot["authModes"];
   acquired: boolean;
 }>([
+  // No configured primary: credentials or runtime policy alone never plan a model.
   { name: "no credentials", config: {}, authModes: {}, acquired: false },
   { name: "unrelated credentials", config: {}, authModes: { acme: "api_key" }, acquired: false },
-  { name: "API-key default", config: {}, authModes: { openai: "api_key" }, acquired: true },
+  { name: "API-key default", config: {}, authModes: { openai: "api_key" }, acquired: false },
   {
     name: "native sign-in default",
     config: {},
     authModes: { openai: { source: "native", mode: "oauth" } },
-    acquired: true,
+    acquired: false,
   },
   {
     name: "explicit runtime without a primary",
@@ -398,7 +399,7 @@ it.each<{
       agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "codex" } } } } },
     },
     authModes: {},
-    acquired: true,
+    acquired: false,
   },
 ])(
   "does not mistake the fallback model for configured demand: $name",

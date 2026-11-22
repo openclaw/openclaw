@@ -506,11 +506,11 @@ it.each([
     'Falling back to "google/claude-3-5-sonnet"',
   ],
   [
-    "warns when an unresolved model falls back to default",
+    "warns when a configured model cannot be resolved",
     "openai/",
     {},
-    ref("openai", "gpt-5.4"),
-    'Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
+    undefined,
+    'Model "openai/" could not be resolved. Choose a provider/model in Settings → Models.',
   ],
 ] as const)("%s", async (_name, primary, options, expected, warningText) => {
   const warnLogs = createWarnLogCapture("openclaw-model-selection-test");

@@ -360,20 +360,18 @@ export function repairStaleAgentModelRefs(
             : undefined
           : availableDefault;
         const fallbacks: unknown[] = Array.isArray(selector?.fallbacks) ? selector.fallbacks : [];
+        // No implicit model remains to fall back to, so a live fallback becomes the primary.
         replacement =
-          isDefault && !replaceMode
-            ? configuredReplacement
-            : (fallbacks.find(
-                (fallback): fallback is string =>
-                  typeof fallback === "string" && !isStale(fallback),
-              ) ?? configuredReplacement);
+          fallbacks.find(
+            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
+          ) ?? configuredReplacement;
         if (replacement) {
           container[key] = replacement;
           changed = true;
           changes.push(
             `Replaced stale ${primaryPath} "${primary}" with ${isDefault ? "default " : ""}"${replacement}" (provider "${provider}" is unavailable).`,
           );
-        } else if (isDefault) {
+        } else if (isDefault && replaceMode) {
           delete container[key];
           changed = true;
           changes.push(

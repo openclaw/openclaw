@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { LEGACY_IMPLICIT_PRIMARY_MODEL_REF } from "../../../config/utility-model-separation-migration.js";
 import { repairStaleAgentModelRefs } from "./stale-agent-model-ref-repair.js";
 
 describe("repairStaleAgentModelRefs catalog reading", () => {
@@ -119,8 +118,7 @@ describe("repairStaleAgentModelRefs catalog reading", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: LEGACY_IMPLICIT_PRIMARY_MODEL_REF,
-      fallbacks: ["agent-local/kept"],
+      primary: "agent-local/kept",
     });
     expect(fs.readFileSync(modelsPath, "utf8")).toBe(catalog);
   });
