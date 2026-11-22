@@ -57,6 +57,7 @@ export async function cloneManagedWorktreeTemplate(
     assertSource();
   });
   const gitOptions = {
+    idleIoPriority: options.idleIoPriority,
     signal: options.signal,
     beforeRun: assertCurrent,
     stateOwnerPath: options.workerAuthority?.stateOwnerPath,
@@ -216,6 +217,7 @@ export async function prepareClonedWorktreeIndex(
     );
   });
   const gitOptions = {
+    idleIoPriority: options.idleIoPriority,
     signal: options.signal,
     beforeRun: assertCurrent,
     stateOwnerPath: options.workerAuthority?.stateOwnerPath,

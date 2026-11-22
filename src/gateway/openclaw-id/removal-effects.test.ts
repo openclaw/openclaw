@@ -129,7 +129,11 @@ describe("removal effects", () => {
     effects.closeConnections(connections);
     expect(mocks.invalidate).toHaveBeenCalledWith(
       expect.objectContaining({ connId: "c-bob" }),
-      expect.objectContaining({ reason: "openclaw-id-removed", code: 1008 }),
+      expect.objectContaining({
+        reason: "openclaw-id-removed",
+        code: 1008,
+        message: "removed from this claw",
+      }),
     );
     expect(mocks.invalidate).toHaveBeenCalledTimes(1);
     await effects.revokeDeviceTokens([{ deviceId: "bob-device", role: "operator" }]);
@@ -172,6 +176,18 @@ describe("removal effects", () => {
       expect.objectContaining({ connId: "c-bob-2" }),
       expect.anything(),
     );
+  });
+
+  // OCF-595: sign-out closes the peer's connections without calling it a removal.
+  it("closes a signed-out peer's connections with the sign-out reason", () => {
+    const effects = effectsOver([client("c-bob", BOB), client("c-alice", ALICE)]);
+    effects.closeConnections(effects.captureConnections([BOB]), "signed-out");
+    expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidate).toHaveBeenCalledWith(expect.objectContaining({ connId: "c-bob" }), {
+      reason: "openclaw-id-signed-out",
+      code: 1008,
+      message: "signed out of OpenClaw ID",
+    });
   });
 
   it("forgets a closed connection once none of its runs is unsettled", () => {

@@ -4,6 +4,9 @@ import {
   checkRunMessage,
   defaultOptions,
   repairPrompt,
+  rescheduledRunMessage,
+  REVIEW_NIGHTLY_SCHEDULE,
+  REVIEW_WEEKLY_SCHEDULE,
   scribeById,
   scribeLabel,
   scribeSetup,
@@ -105,6 +108,31 @@ describe("scribes catalog", () => {
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
   });
 
+  it("moves a generated consolidation run message to the new schedule's run amounts", () => {
+    const generated = (schedule: typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE) =>
+      setupPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC")).match(
+        /Run message:\n\n```text\n([\s\S]+)\n```$/,
+      )![1]!;
+    const weekly = { kind: "cron", expr: REVIEW_WEEKLY_SCHEDULE };
+    const nightly = { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE };
+    const custom = { kind: "cron", expr: "0 6 * * 1" };
+    const move = (message: string, from: typeof weekly, to: typeof weekly) =>
+      rescheduledRunMessage("claim-consolidation", message, from, to);
+    expect(move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, nightly)).toBe(
+      generated(REVIEW_NIGHTLY_SCHEDULE),
+    );
+    // A custom schedule leaves the amounts to the skill, and an offered one brings them back.
+    const onCustom = move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, custom);
+    expect(onCustom).not.toContain("- Each run:");
+    expect(move(onCustom, custom, weekly)).toBe(generated(REVIEW_WEEKLY_SCHEDULE));
+    // An edited message, or another scribe's, is kept as it is.
+    const edited = `${generated(REVIEW_WEEKLY_SCHEDULE)}\nAlso tidy page titles.`;
+    expect(move(edited, weekly, nightly)).toBe(edited);
+    expect(rescheduledRunMessage("granola", "Granola message", weekly, nightly)).toBe(
+      "Granola message",
+    );
+  });
+
   it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {
     const prompt = setupPrompt(
       scribeSetup("granola", "ongoing", defaultOptions("granola"), "America/Los_Angeles"),
@@ -127,7 +155,41 @@ describe("scribes catalog", () => {
     expect(once).toContain("including notes others shared, from the last 30 days.");
   });
 
+  it("writes a Slack prompt that names the channels, the opt-ins and the source-ingest work", () => {
+    const prompt = setupPrompt(
+      scribeSetup("slack", "ongoing", defaultOptions("slack"), "America/Los_Angeles"),
+    );
+    expect(prompt).toContain(
+      [
+        "- Runs weekdays at 9:30 AM, 1:30 PM and 5:30 PM America/Los_Angeles (cron `30 9,13,17 * * 1-5`).",
+        "- Slack channels: every channel the Slack bot is a member of, from the last 7 days.",
+        "- Slack user token: not used; read only channels the Slack bot is a member of.",
+        "- Direct messages and group DMs: skipped.",
+        "- Each run: ingest 6 channels with new messages.",
+      ].join("\n"),
+    );
+    expect(prompt).toContain("declaration key `knowledge:scribe:slack`");
+    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    expect(runMessage).toContain(
+      'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill',
+    );
+    expect(checkRunMessage("slack", runMessage)).toEqual({ state: "current" });
+    const opted = { since: "30d", userToken: true, dms: true } as const;
+    const once = setupPrompt(scribeSetup("slack", "once", opted, "UTC"));
+    expect(once).toContain("Runs once, now, in this turn.");
+    expect(once).toContain("- Slack user token: also read every channel the owner's Slack user");
+    expect(once).toContain("- Direct messages and group DMs: included.");
+    expect(once).not.toContain("Each run:");
+    // Every choice the dialog offers is recognized, and an edited one keeps its settings.
+    const optedRun = setupPrompt(scribeSetup("slack", "ongoing", opted, "UTC")).match(
+      /Run message:\n\n```text\n([\s\S]+)\n```$/,
+    )![1]!;
+    expect(checkRunMessage("slack", optedRun)).toEqual({ state: "current" });
+    expect(checkRunMessage("slack", `${optedRun}\nSkip #random.`)).toEqual({ state: "custom" });
+  });
+
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {
+    const cron = (expr: string) => ({ kind: "cron", expr });
     const runMessage = (id: "claim-consolidation" | "granola", options: object) =>
       setupPrompt(scribeSetup(id, "ongoing", options as never, "UTC")).match(
         /Run message:\n\n```text\n([\s\S]+)\n```$/,
@@ -149,32 +211,120 @@ describe("scribes catalog", () => {
           "withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged",
           "withdrawn and left",
         );
+    // Consolidation runs before they named how many Timelines and pages to take on.
+    const withoutAmounts = (message: string) =>
+      message.replace(/\n\nSettings:\n- Each run: [^\n]+/, "");
     const current = runMessage("claim-consolidation", defaultOptions("claim-consolidation"));
     expect(current).toContain("Timelines retired and left; pages reviewed, changed");
-    const earlier = claimsOnly(earlierOf(current));
+    expect(current).toContain("- Each run: retire 15 written Timelines and review 6 pages.");
+    const nightly = runMessage("claim-consolidation", { schedule: REVIEW_NIGHTLY_SCHEDULE });
+    expect(nightly).toContain("- Each run: retire 10 written Timelines and review 5 pages.");
+    const beforeAmounts = withoutAmounts(current);
+    expect(beforeAmounts).not.toContain("Each run:");
+    const earlier = claimsOnly(earlierOf(beforeAmounts));
     expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
-    for (const message of [earlier, claimsOnly(current)]) {
+    expect(checkRunMessage("claim-consolidation", nightly, cron(REVIEW_NIGHTLY_SCHEDULE))).toEqual({
+      state: "current",
+    });
+    // An unedited message from before the amounts takes those of the schedule it runs on.
+    expect(
+      checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_NIGHTLY_SCHEDULE)),
+    ).toEqual({
+      state: "outdated",
+      current: nightly,
+    });
+    expect(
+      checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_WEEKLY_SCHEDULE)),
+    ).toEqual({
+      state: "outdated",
+      current,
+    });
+    // A custom schedule gets no amounts: its message without them is already current.
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, { kind: "every" })).toEqual({
+      state: "current",
+    });
+    expect(
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "every" },
+        runMessage: claimsOnly(beforeAmounts),
+      }),
+    ).toContain(`\`\`\`text\n${beforeAmounts}\n\`\`\``);
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, cron("5 1 * * 2"))).toEqual({
+      state: "current",
+    });
+    expect(
+      checkRunMessage("claim-consolidation", claimsOnly(beforeAmounts), cron("5 1 * * 2")),
+    ).toEqual({
+      state: "outdated",
+      current: beforeAmounts,
+    });
+    expect(
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE },
+        runMessage: beforeAmounts,
+      }),
+    ).toContain(`\`\`\`text\n${nightly}\n\`\`\``);
+    for (const message of [earlier, claimsOnly(beforeAmounts), beforeAmounts]) {
       expect(message).not.toBe(current);
       expect(checkRunMessage("claim-consolidation", message)).toEqual({
         state: "outdated",
         current,
       });
     }
-    expect(checkRunMessage("claim-consolidation", `${claimsOnly(current)}\nTidy titles.`)).toEqual({
+    expect(
+      checkRunMessage("claim-consolidation", `${claimsOnly(beforeAmounts)}\nTidy titles.`),
+    ).toEqual({
       state: "differs",
       current,
     });
     expect(checkRunMessage("claim-consolidation", `${current}\nTidy titles.`)).toEqual({
       state: "custom",
     });
+    // An edited message from the version just before amounts is offered them; its schedule picks
+    // which, a custom schedule gets none, and a message naming its own amount keeps it.
+    expect(checkRunMessage("claim-consolidation", `${beforeAmounts}\nTidy titles.`)).toEqual({
+      state: "differs",
+      current,
+    });
+    expect(
+      checkRunMessage(
+        "claim-consolidation",
+        `${beforeAmounts}\nTidy titles.`,
+        cron(REVIEW_NIGHTLY_SCHEDULE),
+      ),
+    ).toEqual({ state: "differs", current: nightly });
+    expect(
+      checkRunMessage("claim-consolidation", `${beforeAmounts}\nTidy titles.`, { kind: "every" }),
+    ).toEqual({ state: "custom" });
+    expect(
+      checkRunMessage(
+        "claim-consolidation",
+        current.replace("retire 15 written Timelines", "retire 3 written Timelines"),
+      ),
+    ).toEqual({ state: "custom" });
     const granola = runMessage("granola", { meetings: "all", since: "today" });
-    const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
+    expect(granola).toContain("- Each run: ingest 4 meetings.");
+    // A Granola message from before run amounts upgrades unedited, and an edited one keeps its
+    // meeting settings.
+    const granolaBeforeAmounts = granola.replace("\n- Each run: ingest 4 meetings.", "");
+    expect(checkRunMessage("granola", granolaBeforeAmounts)).toEqual({
+      state: "outdated",
+      current: granola,
+    });
+    const edited = earlierOf(granolaBeforeAmounts).replace(
+      "left pending",
+      "skipped and left for later",
+    );
     expect(checkRunMessage("granola", edited)).toEqual({ state: "differs", current: granola });
+    // A once run ingests everything pending; only scheduled runs carry a target.
+    expect(
+      setupPrompt(scribeSetup("granola", "once", defaultOptions("granola"), "UTC")),
+    ).not.toContain("Each run:");
     // Granola runs gained the needs-attention rule; a message from before it is upgraded.
     expect(granola).toContain("end with `Scribe status: needs attention — <why>` instead.");
-    const beforeAttention = granola.slice(
+    const beforeAttention = granolaBeforeAmounts.slice(
       0,
-      granola.lastIndexOf("\n\nIf meetings are left pending"),
+      granolaBeforeAmounts.lastIndexOf("\n\nIf meetings are left pending"),
     );
     expect(checkRunMessage("granola", beforeAttention)).toEqual({
       state: "outdated",
@@ -183,6 +333,17 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
       state: "custom",
     });
+    // The same for a Granola message that keeps the current access and attention rules.
+    expect(checkRunMessage("granola", `${granolaBeforeAmounts}\nAlso tag speakers.`)).toEqual({
+      state: "differs",
+      current: granola,
+    });
+    expect(
+      checkRunMessage(
+        "granola",
+        granola.replace("ingest 4 meetings", "ingest 2 meetings") + "\nAlso tag speakers.",
+      ),
+    ).toEqual({ state: "custom" });
     expect(
       repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, runMessage: earlier }),
     ).toContain(`\`\`\`text\n${current}\n\`\`\``);
@@ -338,6 +499,7 @@ describe("scribes state", () => {
       ["conversations", "available", undefined, undefined],
       ["granola", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
+      ["slack", "available", undefined, undefined],
     ]);
     expect(snapshots[3]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
@@ -446,6 +608,9 @@ describe("scribes state", () => {
       if (method === "plugins.inspect") {
         return { plugin: { installed: true, enabled: true }, mcpAuth: [{ state: "authorized" }] };
       }
+      if (method === "channels.status") {
+        throw new Error("missing scope");
+      }
       return { files: [{ name: "MEMORY.md", missing: false, size: 4096 }] };
     });
     expect(await detectSources({ request } as never, "main")).toEqual({
@@ -461,10 +626,13 @@ describe("scribes state", () => {
 });
 
 describe("plugin readiness", () => {
+  // Slack is installed with no readable account state, so only Granola's readiness is known.
   const read = async (answer: () => unknown) => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "plugins.inspect") {
-        return answer();
+        return params?.pluginId === "slack"
+          ? { plugin: { installed: true, enabled: true } }
+          : answer();
       }
       if (method === "sessions.list") {
         return { sessions: [], count: 0 };
@@ -512,6 +680,54 @@ describe("plugin readiness", () => {
         throw Object.assign(new Error("missing scope"), { gatewayCode: "UNAUTHORIZED" });
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("Slack readiness", () => {
+  const status = (account?: Record<string, unknown>) => ({
+    channelAccounts: { slack: account ? [{ accountId: "default", ...account }] : [] },
+    channelDefaultAccountId: { slack: "default" },
+  });
+  const read = async (channels: () => unknown) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "plugins.inspect") {
+        return { plugin: { installed: true, enabled: true } };
+      }
+      if (method === "channels.status") {
+        expect(params).toEqual({ channel: "slack" });
+        return channels();
+      }
+      return { sessions: [], files: [] };
+    });
+    const detection = await detectSources({ request } as never, "main");
+    return { slack: detection.plugins?.slack, tokens: detection.tokens };
+  };
+  const running = { enabled: true, configured: true, running: true };
+
+  const has = (bot: boolean, userToken: boolean) => ({
+    botTokenStatus: bot ? "available" : "missing",
+    userTokenStatus: userToken ? "available" : "missing",
+  });
+  // A user-only account (no bot token) is ready and says it has no bot token.
+  it.each([
+    [{ running: false }, "needs-sign-in", undefined],
+    [{ configured: false }, "needs-sign-in", undefined],
+    [has(true, false), "ready", { bot: true, user: false }],
+    [has(true, true), "ready", { bot: true, user: true }],
+    [has(false, true), "ready", { bot: false, user: true }],
+  ] as const)("reads Slack account %j as %s with tokens %j", async (account, slack, tokens) => {
+    expect(await read(() => status({ ...running, ...account }))).toEqual({
+      slack,
+      tokens: tokens && { slack: tokens },
+    });
+  });
+
+  it("needs a Slack account, and leaves Slack unknown when channels.status can't be read", async () => {
+    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", tokens: undefined });
+    const unreadable = () => {
+      throw new Error("missing scope");
+    };
+    expect(await read(unreadable)).toEqual({ slack: undefined, tokens: undefined });
   });
 });
 

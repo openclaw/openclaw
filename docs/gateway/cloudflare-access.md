@@ -29,10 +29,10 @@ stable public HTTPS URL and identity-provider SSO in front of the Control UI.
 browser / CLI / node  ->  Cloudflare Access (identity)  ->  Tunnel  ->  127.0.0.1:18789
 ```
 
-Access authenticates the request and injects identity headers. The Gateway does not
-re-authenticate the person or verify the Access JWT signature; it checks the trusted
-proxy source and configured header presence, then trusts the user header. Because
-`allowLoopback` also lets other local processes present those headers, keep the Gateway
+Access authenticates the request and injects identity headers. By default the Gateway
+checks the trusted proxy source and configured header presence, then trusts the user
+header. Because `allowLoopback` also lets other local processes present those headers,
+either turn on [Access JWT verification](#verify-the-access-jwt) or keep the Gateway
 port private to the host and run only trusted workloads there.
 
 ## Step 1: Route the tunnel to loopback
@@ -58,8 +58,9 @@ users. Note the two headers Access adds to authenticated requests, because the G
 consumes them in the next step:
 
 - `cf-access-authenticated-user-email` — the authenticated identity.
-- `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
-  header is present and non-blank; it does not verify the JWT signature.
+- `cf-access-jwt-assertion` — Access's signed assertion. By default OpenClaw checks only
+  that this header is present and non-blank. Turn on
+  [Access JWT verification](#verify-the-access-jwt) to check its signature.
 
 ### Email-code sign-in
 
@@ -181,9 +182,57 @@ otherwise expects a non-loopback proxy.
 
 Requiring `cf-access-jwt-assertion` adds a second presence check, not cryptographic
 verification. A local process that can connect to the Gateway can submit both headers,
-so do not treat this setting as a defense against untrusted local code. The security
+so do not treat this setting alone as a defense against untrusted local code. The security
 boundary is the locked-down loopback port plus Cloudflare Access and the tunnel being
-the only path for external traffic.
+the only path for external traffic, unless you also verify the Access JWT.
+
+### Verify the Access JWT
+
+Add `cloudflareAccessJwt` to check every request's assertion against your Access team's
+signing keys. This is off by default and existing configurations keep working unchanged.
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        allowLoopback: true,
+        cloudflareAccessJwt: {
+          issuer: "https://example.cloudflareaccess.com",
+          audience: "your-application-aud-tag",
+        },
+      },
+    },
+  },
+}
+```
+
+- `issuer` is your team domain without a trailing slash. OpenClaw fetches the signing keys
+  from `<issuer>/cdn-cgi/access/certs` when it first needs them. It fetches them again on the
+  first request after they are ten minutes old, or when an assertion names a key it has not
+  seen, but at most once every 30 seconds. A successful response with usable RSA keys
+  (2048-bit or larger, the minimum RS256 permits per RFC 7518) replaces the previous set.
+  If a fetch fails or returns no usable RSA keys, the last good
+  set remains usable for up to 24 hours from its last successful fetch. The Gateway logs
+  a warning the first time it uses that set at least one hour after fetching it.
+- `audience` is the Application Audience (AUD) tag from the Access application's overview page.
+
+With verification on, OpenClaw admits a request only when the assertion is signed by the team
+key (RS256), was issued by `issuer` for `audience`, and has not expired. Expiry and `nbf`
+allow 60 seconds of clock skew between the Gateway host and Cloudflare. The user comes from the
+signed `email` claim, and the user header must match it. Forged, expired, or other-application
+assertions are rejected with `trusted_proxy_access_invalid`, a header that disagrees with the claim
+with `trusted_proxy_access_user_mismatch`. When a refresh fails and the Gateway has no
+usable cached set, it returns `trusted_proxy_access_keys_unavailable`.
+
+Verification does not combine with [enterprise browser delegation](/gateway/trusted-proxy-auth):
+delegated identities are not Access emails, so they are refused while it is on.
+
+Service-token requests from nodes are unaffected: their assertion carries no email, Access sends
+no user header for them, and the node authenticates with its own credentials as before.
 
 `publicOrigin` supplies external session links, agent link instructions, and the
 browser-origin default when `controlUi.allowedOrigins` is omitted. You only need

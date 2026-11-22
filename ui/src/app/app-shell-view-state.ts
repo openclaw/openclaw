@@ -30,6 +30,7 @@ import {
   isMobileNavLayout,
   shouldFloatShellHeader,
   shouldMergeChatChrome,
+  usesBrowserDrawer,
 } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -61,6 +62,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
+  readonly firstUse: boolean;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -168,7 +170,6 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "cron");
   const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
-  const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
   const navDrawerOpen = () => {
     host.navigationRevision();
@@ -275,6 +276,7 @@ export function readShellView(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
   const sidebarProperties = {
+    newSessionInRail: usesBrowserDrawer(mobileNavLayout),
     connectionPending: initialGatewayConnection,
     basePath: context.basePath,
     activeRouteId: activeRoute,
@@ -286,6 +288,7 @@ export function readShellView(host: ShellViewHost) {
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "templates"),
     sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
+    communityInviteAllowed: host.shellNavigation.communityInviteAllowed,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
@@ -413,6 +416,7 @@ export function readShellView(host: ShellViewHost) {
     desktopPanelAvailable,
     homePanelAvailable,
     custodianPanelAvailable,
+    firstUse: host.firstUse,
     activeRoute,
     workboardLayout,
     sessionRoute,
@@ -425,7 +429,6 @@ export function readShellView(host: ShellViewHost) {
     embedSettings,
     settingsTakeover,
     onboarding,
-    memoryImportActive,
     get navDrawerOpen() {
       return navDrawerOpen();
     },

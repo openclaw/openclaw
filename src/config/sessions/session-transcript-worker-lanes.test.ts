@@ -546,7 +546,7 @@ it("maintenance cleanup preserves the independent foreground reader", async () =
   assert(retained);
   await retained.close();
   expect(observed.rotate).not.toHaveBeenCalled();
-  expect(observed.closeResources).toHaveBeenCalledTimes(3);
+  expect(observed.closeResources).toHaveBeenCalledTimes(2);
   expect(observed.unregister).toHaveBeenCalledTimes(2);
 });
 
@@ -564,11 +564,20 @@ it("joins sibling reader cleanup for an eviction reported during discovery clean
     await cleanupFinished.promise;
   });
   let missingRead: Promise<boolean> | undefined;
-  const discovery = withSessionHistoryWorkerReadCandidates(request.candidates, async (owner) => {
-    const selected = await owner.readStoreTarget(request.targetInput);
-    missingRead = request.read();
-    return selected;
-  });
+  const discovery = withSessionHistoryWorkerReadCandidates(
+    [
+      ...request.candidates,
+      {
+        path: "/synthetic/unretained.sqlite",
+        physicalPath: "/synthetic/unretained.sqlite",
+      },
+    ],
+    async (owner) => {
+      const selected = await owner.readStoreTarget(request.targetInput);
+      missingRead = request.read();
+      return selected;
+    },
+  );
   try {
     await cleanupStarted.promise;
     readerReply.resolve({ ok: true, value: false, closedHistoryDatabase: request.database });

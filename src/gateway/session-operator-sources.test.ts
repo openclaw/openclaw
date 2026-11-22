@@ -8,9 +8,14 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import {
   pairedOperator,
@@ -185,6 +190,7 @@ it.each([
       };
       const config: OpenClawConfig = {
         gateway: {
+          openclawId: { enabled: true },
           roles: {
             ...(enforced ? { default: "reader" } : {}),
             definitions: {
@@ -198,6 +204,12 @@ it.each([
           },
         },
       };
+      setUserProfileRole(profile.id, "limited");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
       setRuntimeConfigSnapshot(config);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
@@ -234,6 +246,7 @@ it.each([
         }
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     }),
 );

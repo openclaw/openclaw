@@ -1,14 +1,18 @@
 /** Preserves recent turns and renders bounded, atomic verbatim context sections. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
   extractCompactionMessageText as extractMessageText,
   formatCompactionUserLabel,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  classifyToolPairingFacts,
+  type ToolPairingMessageFact,
+} from "../../../packages/agent-core/src/harness/session/tool-pairing-facts.js";
+import { collectToolPairingMessageFact } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { copyString } from "../../../packages/agent-core/src/harness/utils/truncate.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 // Split-turn context supplements the generated summary and must not claim its
 // guaranteed half of the final artifact before common finalization runs.
@@ -66,24 +70,58 @@ function formatNonTextPlaceholder(content: unknown): string | null {
     : null;
 }
 
-export function splitPreservedRecentTurns(params: {
-  messages: AgentMessage[];
-  recentTurnsPreserve: number;
-}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = params.recentTurnsPreserve;
-  if (preserveTurns <= 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
+/** No bodies/arguments: exact pairing inventory plus a detached, bounded text excerpt. */
+export type CompactionContextMessageFact = {
+  role: AgentMessage["role"];
+  pairing: ToolPairingMessageFact | undefined;
+  line: string | null;
+};
+
+export function collectCompactionContextMessageIdentity(
+  message: AgentMessage,
+): Pick<CompactionContextMessageFact, "role" | "pairing"> {
+  const pairing = collectToolPairingMessageFact(message);
+  if (pairing?.role === "assistant") {
+    pairing.calls = pairing.calls.map((call) => ({
+      ...call,
+      id: copyString(call.id),
+      name: call.name === undefined ? undefined : copyString(call.name),
+    }));
+  } else if (pairing?.role === "toolResult") {
+    pairing.id = pairing.id === null ? null : copyString(pairing.id);
+    pairing.name = pairing.name === undefined ? undefined : copyString(pairing.name);
   }
-  const conversationIndexes = params.messages.flatMap((message, index) =>
+  return {
+    role: message.role,
+    pairing,
+  };
+}
+
+export function collectCompactionContextMessageFact(
+  message: AgentMessage,
+): CompactionContextMessageFact {
+  return {
+    ...collectCompactionContextMessageIdentity(message),
+    line: formatContextMessage(message),
+  };
+}
+
+/** Indexes are relative to the selected sequence, before summarizable pairing repair. */
+export function selectPreservedRecentTurnIndexes(
+  messages: readonly Pick<CompactionContextMessageFact, "role" | "pairing">[],
+  preserveTurns: number,
+): Set<number> {
+  if (preserveTurns <= 0) {
+    return new Set();
+  }
+  const conversationIndexes = messages.flatMap((message, index) =>
     message.role === "user" || message.role === "assistant" ? [index] : [],
   );
   if (conversationIndexes.length === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
+    return new Set();
   }
 
-  const userIndexes = conversationIndexes.filter(
-    (index) => params.messages[index]?.role === "user",
-  );
+  const userIndexes = conversationIndexes.filter((index) => messages[index]?.role === "user");
   const boundaryStartIndex = userIndexes.at(-preserveTurns);
   const preservedIndexSet = new Set(
     boundaryStartIndex === undefined
@@ -100,25 +138,43 @@ export function splitPreservedRecentTurns(params: {
   }
   const preservedToolCallIds = new Set<string>();
   for (const index of preservedIndexSet) {
-    const message = params.messages[index];
+    const message = messages[index];
     if (message?.role === "assistant") {
-      for (const toolCall of extractToolCallsFromAssistant(message)) {
+      for (const toolCall of message.pairing?.role === "assistant" ? message.pairing.calls : []) {
         preservedToolCallIds.add(toolCall.id);
       }
     }
   }
   if (preservedToolCallIds.size > 0) {
     const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
-    for (let index = preservedStartIndex; index < params.messages.length; index += 1) {
-      const message = params.messages[index];
+    for (let index = preservedStartIndex; index < messages.length; index += 1) {
+      const message = messages[index];
       if (message?.role !== "toolResult") {
         continue;
       }
-      const toolResultId = extractToolResultId(message);
+      const toolResultId = message.pairing?.role === "toolResult" ? message.pairing.id : null;
       if (toolResultId && preservedToolCallIds.has(toolResultId)) {
         preservedIndexSet.add(index);
       }
     }
+  }
+  return preservedIndexSet;
+}
+
+export function splitPreservedRecentTurns(params: {
+  messages: AgentMessage[];
+  recentTurnsPreserve: number;
+}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
+  if (params.recentTurnsPreserve <= 0) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
+  }
+  const facts = params.messages.map((message) => ({
+    role: message.role,
+    pairing: collectToolPairingMessageFact(message),
+  }));
+  const preservedIndexSet = selectPreservedRecentTurnIndexes(facts, params.recentTurnsPreserve);
+  if (!facts.some((fact) => fact.role === "user" || fact.role === "assistant")) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const summarizableMessages: AgentMessage[] = [];
   const preservedMessages: AgentMessage[] = [];
@@ -162,39 +218,36 @@ function formatContextMessage(message: AgentMessage): string | null {
       : message.role === "toolResult"
         ? `${truncateUtf16Safe(rendered, limit)} [${rendered.length - limit} more chars omitted at compaction]`
         : `${truncateUtf16Safe(rendered, limit)}...`;
-  return `- ${roleLabel}: ${trimmed}`;
+  return copyString(`- ${roleLabel}: ${trimmed}`);
 }
 
-function formatContextSegments(messages: AgentMessage[]): string[] {
-  const frames = classifyToolUseResultPairing(messages);
-  // A call-bearing assistant and all occurrence-matched results are one context
-  // atom; keeping remainder messages separate lets later terminal text survive.
-  const toolSegments = new Map<AgentMessage, AgentMessage[]>(
+function formatContextSegments(messages: readonly CompactionContextMessageFact[]): string[] {
+  const frames = classifyToolPairingFacts(messages.map((message) => message.pairing));
+  // Occurrence ownership is recomputed for this selection, never sliced from another sequence.
+  const toolSegments = new Map(
     frames.map((frame) => [
-      frame.assistant,
+      messages[frame.startIndex],
       [
-        frame.assistant,
+        frame.startIndex,
         ...frame.occurrences.flatMap((occurrence) =>
-          occurrence.sourceResult ? [occurrence.sourceResult] : [],
+          occurrence.result ? [occurrence.result.index] : [],
         ),
       ],
     ]),
   );
-  return messages.flatMap((message) => {
+  return messages.flatMap((message, index) => {
     if (message.role === "toolResult") {
-      // Paired results render with their assistant message; unclaimed results
-      // are unsafe context because their owning call is absent or ambiguous.
       return [];
     }
-    const lines = (toolSegments.get(message) ?? [message])
-      .map(formatContextMessage)
+    const lines = (toolSegments.get(message) ?? [index])
+      .map((sourceIndex) => messages[sourceIndex]?.line)
       .filter((line): line is string => Boolean(line));
     return lines.length > 0 ? [lines.join("\n")] : [];
   });
 }
 
 function formatBoundedContextSection(params: {
-  messages: AgentMessage[];
+  messages: readonly CompactionContextMessageFact[];
   heading: string;
   truncatedMarker: string;
   truncatedLoss: NonNullable<ContextSection["truncatedLoss"]>;
@@ -233,8 +286,8 @@ function formatBoundedContextSection(params: {
   };
 }
 
-export function buildPreservedTurnsSection(
-  messages: AgentMessage[],
+export function buildPreservedTurnsSectionFromFacts(
+  messages: readonly CompactionContextMessageFact[],
   maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
   return formatBoundedContextSection({
@@ -246,8 +299,8 @@ export function buildPreservedTurnsSection(
   });
 }
 
-export function buildSplitTurnContextSection(
-  messages: AgentMessage[],
+function buildSplitTurnContextSectionFromFacts(
+  messages: readonly CompactionContextMessageFact[],
   maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
   return formatBoundedContextSection({
@@ -256,5 +309,28 @@ export function buildSplitTurnContextSection(
     heading: "**Turn Context (split turn):**\n",
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
+  });
+}
+
+export function buildPreservedTurnsSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
+  return buildPreservedTurnsSectionFromFacts(collectContextSequence(messages), maxChars);
+}
+
+export function buildSplitTurnContextSection(
+  messages: AgentMessage[],
+  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
+  return buildSplitTurnContextSectionFromFacts(collectContextSequence(messages), maxChars);
+}
+
+function collectContextSequence(messages: AgentMessage[]): CompactionContextMessageFact[] {
+  const identities = new Map<AgentMessage, CompactionContextMessageFact>();
+  return messages.map((message) => {
+    const fact = identities.get(message) ?? collectCompactionContextMessageFact(message);
+    identities.set(message, fact);
+    return fact;
   });
 }

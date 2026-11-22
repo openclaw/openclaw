@@ -13,10 +13,13 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   prepareSessionManagerEntries,
+  reuseResidentSessionEntryStrings,
+  ownSessionTranscriptEntries,
 } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { toolResult as makeToolResult } from "./session-message-fixtures.test-support.js";
 
@@ -83,7 +86,11 @@ describe("session manager codec compatibility", () => {
   );
 
   it.each([true, false])("loads history after freezer memo rotation (owner-sealed=%s)", (owned) => {
-    const entry = messageEntry(makeToolResult("retained"));
+    const details = { evidence: [{ path: "synthetic.ts", lines: [1, 2] }] };
+    const entry = messageEntry({
+      ...makeToolResult("retained"),
+      details,
+    });
     const snapshot = {
       events: [sessionHeader("owned-history"), entry],
       version: { generation: "owned", rawSeq: 1, updatedAt: 1 },
@@ -99,11 +106,13 @@ describe("session manager codec compatibility", () => {
     const inspect = vi.spyOn(Reflect, "ownKeys");
     let first: SessionManagerCore;
     let second: SessionManagerCore;
+    let context: SessionEntry[];
     try {
       first = new SessionManagerCore("/tmp", undefined, snapshot.events);
       second = new SessionManagerCore("/tmp", undefined, snapshot.events);
-      const inspections = inspect.mock.calls.filter(([value]) =>
-        snapshot.events.some((event) => event === value),
+      context = projectSessionModelContextEntries(first[sessionManagerReadTranscriptBranch]());
+      const inspections = inspect.mock.calls.filter(
+        ([value]) => details === value || snapshot.events.some((event) => event === value),
       );
       expect(inspections.length === 0).toBe(owned);
     } finally {
@@ -115,6 +124,11 @@ describe("session manager codec compatibility", () => {
     writable.parentId = "caller-parent";
     expect(second.getEntry("entry")).toEqual(entry);
     expect(JSON.stringify(snapshot)).toBe(before);
+    expect(context).toEqual([messageEntry(makeToolResult("retained"))]);
+    const projected = context[0];
+    assert(projected?.type === "message" && projected.message.role === "toolResult");
+    const content = projected.message.content;
+    expect(() => content.push({ type: "text", text: "shared edit" })).toThrow(TypeError);
   });
 
   it("selects the new projection only for a genuinely new session", () => {
@@ -297,6 +311,50 @@ const parentTraversalCases: Array<
 ];
 
 describe("model context projection isolation", () => {
+  it.each(["equal", "changed", "reordered", "mutable"])(
+    "preserves reload bytes and writable isolation with %s resident payloads",
+    (kind) => {
+      const incoming = messageEntry(makeToolResult("original"));
+      const resident = structuredClone(incoming);
+      assert(resident.message.role === "toolResult");
+      if (kind === "changed") {
+        resident.message.content = [{ type: "text", text: "older" }];
+      } else if (kind === "reordered") {
+        const { content, ...rest } = resident.message;
+        resident.message = { content, ...rest };
+      }
+      const version = { generation: "reload", rawSeq: 1, updatedAt: 1 };
+      freezeTranscriptSnapshot({ events: [incoming], version });
+      if (kind !== "mutable") {
+        freezeTranscriptSnapshot({ events: [resident], version });
+      }
+      const bytes = JSON.stringify(incoming);
+      const prepared = prepareSessionManagerEntries([sessionHeader("reload"), incoming]);
+      reuseResidentSessionEntryStrings(prepared.fileEntries, new Map([[resident.id, resident]]));
+      const adopted = prepared.fileEntries[1];
+      assert(adopted?.type === "message");
+      expect(JSON.stringify(adopted)).toBe(bytes);
+      expect(adopted.message === resident.message).toBe(kind === "equal");
+      const context = projectSessionModelContextEntries([adopted]);
+      const contextBytes = JSON.stringify(context);
+      const residentBytes = JSON.stringify(resident);
+      ownSessionTranscriptEntries([adopted], prepared.pendingWritableTranscriptEntries);
+      assert(adopted.message.role === "toolResult");
+      adopted.message.content.push({ type: "text", text: "SDK edit after publication" });
+      expect(JSON.stringify(incoming)).toBe(bytes);
+      expect(JSON.stringify(resident)).toBe(residentBytes);
+      expect(JSON.stringify(context)).toBe(contextBytes);
+      if (kind === "mutable") {
+        assert(resident.message.role === "toolResult");
+        resident.message.content.push({ type: "text", text: "old SDK reference edit" });
+        expect(adopted.message.content).toEqual([
+          { type: "text", text: "original" },
+          { type: "text", text: "SDK edit after publication" },
+        ]);
+      }
+    },
+  );
+
   it("isolates SDK edits from published context, including opaque values and symbols", async () => {
     const manager = SessionManager.fromEntries([
       sessionHeader("sdk-context"),

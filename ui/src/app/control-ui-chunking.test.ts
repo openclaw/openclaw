@@ -179,7 +179,7 @@ describe("Control UI build chunking", () => {
 
   it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
     const discovery = modulePath("../pages/skills/discovery-view.tsx");
-    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const reader = modulePath("../pages/skills/clawhub-skill-page.tsx");
     const grid = modulePath("../pages/plugins/catalog-grid.tsx");
     const card = modulePath("../pages/plugins/plugin-card.tsx");
     const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
@@ -971,6 +971,8 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
+    // Provider account labels belong to the opened picker, not either route's boot.
+    expect(bootGroup.test(`${repoRoot}/ui/src/lib/model-provider-auth-label.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);

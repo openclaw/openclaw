@@ -7,34 +7,36 @@ import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-r
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
 import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
 import { jsonResult } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-helpers.js";
-
-type SessionsSendResumeCaller = TrustedAgentToolCaller & {
-  readonly assertCurrent: () => void;
-};
 
 /** Retain the admitted caller before asynchronous session resolution. */
 export function captureSessionsSendResumeCaller(
   retainedSourceAssertion?: () => void,
-): SessionsSendResumeCaller | undefined {
+): TrustedAgentToolCaller | undefined {
   const caller = getGatewayToolCallerIdentity();
+  if (!caller) {
+    return undefined;
+  }
   // A host-retained replay has no live model turn. Its existing handoff supplies
   // the independently retained source + original conversation fence instead.
-  const assertCurrent = captureGatewayToolCallerAssertion() ?? retainedSourceAssertion;
-  return caller && assertCurrent
-    ? { agentId: caller.agentId, sessionKey: caller.sessionKey, assertCurrent }
+  if (caller.operationalRunInstance) {
+    return { agentId: caller.agentId, sessionKey: caller.sessionKey };
+  }
+  return retainedSourceAssertion
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        assertCurrent: retainedSourceAssertion,
+      }
     : undefined;
 }
 
 /** Dispatches one exact paused-task successor and leaves final delivery to its registry owner. */
 export async function resumeSessionsSendTask(params: {
   cfg: OpenClawConfig;
-  caller: SessionsSendResumeCaller;
+  caller: TrustedAgentToolCaller;
   assertCurrent?: () => void;
   targetAgentId: string;
   sessionKey: string;
@@ -44,18 +46,14 @@ export async function resumeSessionsSendTask(params: {
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   try {
-    const assertCurrent = () => {
-      params.caller.assertCurrent();
-      params.assertCurrent?.();
-    };
-    assertCurrent();
+    params.assertCurrent?.();
     const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       sessionKey: params.sessionKey,
-      assertCurrent,
+      assertCurrent: params.assertCurrent,
     });
-    assertCurrent();
+    params.assertCurrent?.();
     const entry = session?.entry;
     if (!entry || entry.archivedAt !== undefined || session.acp) {
       throw new Error("Task resume requires the existing, unarchived native child session.");
@@ -80,7 +78,6 @@ export async function resumeSessionsSendTask(params: {
             ...params.sendParams,
             expectedExistingSessionId: subagentResume.childSessionId,
           },
-          assertDispatchCurrent: params.caller.assertCurrent,
           sessionMutationCommitGuard: params.assertCurrent,
           timeoutMs: 10_000,
         },

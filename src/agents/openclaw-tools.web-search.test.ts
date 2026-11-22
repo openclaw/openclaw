@@ -206,12 +206,7 @@ it.each([true, false])(
     using sourceProbe = vi
       .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
       .mockResolvedValue(false);
-    await expectSearch(
-      prepared,
-      prepared,
-      { config: {}, agentDir, authProfileStoreSource: false },
-      { reader },
-    );
+    await expectSearch(prepared, prepared, { config: {}, agentDir }, { reader });
     expect(
       authStore.ensureAuthProfileStoreWithoutExternalProfilesAsync,
     ).toHaveBeenCalledExactlyOnceWith(agentDir, { allowKeychainPrompt: false });

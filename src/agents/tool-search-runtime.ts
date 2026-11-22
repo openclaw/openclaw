@@ -17,6 +17,7 @@ import {
 } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { TOOL_IMAGE_CHARS } from "./embedded-agent-runner/tool-result-char-estimator.js";
 import { resolveAgentHarnessToolResultPresentation } from "./harness/tool-result-facts.js";
 import { createAgentToolResultMiddlewareApplier } from "./harness/tool-result-middleware.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
@@ -37,7 +38,11 @@ import {
 } from "./tool-execution-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
-import { runWithToolResultDelivery } from "./tool-result-limits.js";
+import {
+  resolveToolResultBudget,
+  runWithToolResultDelivery,
+  type ToolResultBudget,
+} from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   describeToolSearchCatalogEntry,
@@ -159,11 +164,12 @@ async function validateCatalogSchemaValue(
 async function assertCatalogInputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   value: unknown,
+  recoverySurface?: ToolSearchExactCallOptions["recoverySurface"],
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
     throw markToolContractFailure(
-      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value, recoverySurface)),
       "input_contract",
     );
   }
@@ -215,6 +221,7 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   readonly sourceReplyCell = new ToolSourceReplyCell();
+  readonly resultBudget: ToolResultBudget | undefined;
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private readonly applyToolResultMiddleware;
   private callSequence = 0;
@@ -231,6 +238,7 @@ export class ToolSearchRuntime {
     } = {},
   ) {
     const { agentId, sessionId, sessionKey, runId } = ctx;
+    this.resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
     this.applyToolResultMiddleware = createAgentToolResultMiddlewareApplier({
       runtime: "openclaw",
       agentId,
@@ -400,10 +408,7 @@ export class ToolSearchRuntime {
     catalog: ToolSearchCatalogSession,
     entry: ToolSearchCatalogEntry,
     input?: unknown,
-    options?: Pick<
-      ToolSearchCallOptions,
-      "parentToolCallId" | "signal" | "onUpdate" | "mcpNamespaceGuest"
-    >,
+    options?: ToolSearchExactCallOptions,
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
@@ -556,7 +561,7 @@ export class ToolSearchRuntime {
             toolCallId,
             async (finalInput) => {
               if (validateInput) {
-                await assertCatalogInputMatchesSchema(entry, finalInput);
+                await assertCatalogInputMatchesSchema(entry, finalInput, options?.recoverySurface);
               }
               executedInput = asOptionalRecord(structuredClone(finalInput));
               if (outputVariants) {
@@ -604,6 +609,8 @@ export function formatToolSearchControlResult<T>(
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     /** Model-facing projection of payload; details keep the full payload. */
     modelPayload?: unknown;
+    /** Discovery metadata may retain a schema prefix; execution results must stay whole. */
+    allowPartial?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
@@ -611,7 +618,21 @@ export function formatToolSearchControlResult<T>(
     "modelPayload" in options ? options.modelPayload : payload,
   );
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
-  const { text } = renderToolSearchControlText(serialized, networkContent);
+  const budget = runtime?.resultBudget;
+  const textBudget =
+    budget && options.images?.length
+      ? {
+          ...budget,
+          maxContextChars: Math.max(
+            0,
+            budget.maxContextChars - options.images.length * TOOL_IMAGE_CHARS,
+          ),
+        }
+      : budget;
+  const { text } = renderToolSearchControlText(serialized, networkContent, {
+    budget: textBudget,
+    allowPartial: options.allowPartial,
+  });
   const result = textResult(text, payload);
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.

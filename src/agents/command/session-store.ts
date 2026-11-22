@@ -15,10 +15,8 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  estimateAggregateUsageCostAsync,
-  resolveModelCostConfig,
-} from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";

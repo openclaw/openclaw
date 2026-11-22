@@ -8,6 +8,7 @@ export type ChatModelSearchRow = {
   keywords?: string;
   providerLabel: string;
   reference: string;
+  recommended?: boolean;
   disabled: boolean;
   selected: boolean;
   /** Rows without global shortcuts still consume digit positions. */

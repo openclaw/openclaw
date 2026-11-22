@@ -7,6 +7,7 @@ import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-
 import { applyJobPatch } from "../cron/service/jobs.js";
 import { loadCronStore } from "../cron/store.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -15,16 +16,25 @@ import {
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createCronStreamWatcherFixture, job } from "./cron-stream-watchers.test-helpers.js";
+import {
+  createCronStreamWatcherFixture,
+  exitResult,
+  job,
+  settle,
+} from "./cron-stream-watchers.test-helpers.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import type { OperatorRunRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
-import { recoveryFixture } from "./operator-run-recovery.test-support.js";
+import { recoveryFixture, pairedOperator } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   SharedGatewaySessionGenerationState,
@@ -58,7 +68,7 @@ function createCron(storePath: string) {
   });
 }
 
-it("keeps process A through payload B edits and durable recovery, then accepts explicit ordinary reauthorization", async () => {
+it("retains admitted stream grants across payload edits and recovery, but reauthorizes every fresh start", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const profile = await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
     const a = principal("da"),
@@ -91,7 +101,8 @@ it("keeps process A through payload B edits and durable recovery, then accepts e
     const live = createWatchers(),
       restarted = createWatchers(),
       refused = createWatchers(),
-      reauthorized = createWatchers();
+      reauthorized = createWatchers(),
+      ordinaryRefused = createWatchers();
     const execCheck = vi.fn();
     const execPolicy = { kind: "resolved" as const, assertCurrent: execCheck };
     try {
@@ -142,11 +153,33 @@ it("keeps process A through payload B edits and durable recovery, then accepts e
       expect(restarted.fake.spawn).toHaveBeenCalledOnce();
       peers.delete(a.peerKey);
       setOpenClawIdTunnelPrincipalLookup((peer) => peers.get(peer));
-      expect(restarted.fake.runs[0]?.cancel).toHaveBeenCalled();
+      const recoveredRun = expectDefined(restarted.fake.runs[0], "recovered native process");
+      expect(recoveredRun.cancel).not.toHaveBeenCalled();
+      await restarted.watchers.start(stored);
+      expect(restarted.fake.spawn).toHaveBeenCalledOnce();
+      expect(recoveredRun.cancel).not.toHaveBeenCalled();
+      expect(restarted.watchers.inspect(stored.id)).toMatchObject({
+        state: "running",
+        processAlive: true,
+      });
       await restarted.watchers.stopAll("shutdown");
+      expect(recoveredRun.cancel).toHaveBeenCalled();
+      expect(restarted.watchers.inspect(stored.id)).toMatchObject({
+        state: "stopped",
+        processAlive: false,
+      });
       await refused.watchers.start(stored);
       await refused.watchers.stopAll("shutdown");
       expect(refused.fake.spawn).not.toHaveBeenCalled();
+      expect(refused.recordFailure).toHaveBeenCalledWith(
+        stored.id,
+        expect.stringContaining(
+          "operator authority that authorized this stream is no longer current",
+        ),
+        expect.objectContaining({ streamRestartExhausted: true }),
+        expect.any(String),
+        stored.state.streamSourceIdentity,
+      );
 
       // A current ordinary Gateway owner may replace the original OCID grant at enable.
       const enabled = await recovered.update(
@@ -173,9 +206,31 @@ it("keeps process A through payload B edits and durable recovery, then accepts e
         clients: [],
       });
       publishOperatorRoleConfigChange(context);
-      expect(reauthorized.fake.runs[0]?.cancel).toHaveBeenCalled();
+      const ordinaryRun = expectDefined(reauthorized.fake.runs[0], "ordinary native process");
+      expect(ordinaryRun.cancel).not.toHaveBeenCalled();
+      await reauthorized.watchers.start(enabled);
+      expect(reauthorized.fake.spawn).toHaveBeenCalledOnce();
+      expect(ordinaryRun.cancel).not.toHaveBeenCalled();
+      expect(reauthorized.watchers.inspect(enabled.id)).toMatchObject({
+        state: "running",
+        processAlive: true,
+      });
+      await reauthorized.watchers.stopAll("shutdown");
+      expect(ordinaryRun.cancel).toHaveBeenCalled();
+      await ordinaryRefused.watchers.start(enabled);
+      await ordinaryRefused.watchers.stopAll("shutdown");
+      expect(ordinaryRefused.fake.spawn).not.toHaveBeenCalled();
+      expect(ordinaryRefused.recordFailure).toHaveBeenCalledWith(
+        enabled.id,
+        expect.stringContaining(
+          "operator authority that authorized this stream is no longer current",
+        ),
+        expect.objectContaining({ streamRestartExhausted: true }),
+        expect.any(String),
+        enabled.state.streamSourceIdentity,
+      );
     } finally {
-      for (const fixture of [live, restarted, refused, reauthorized]) {
+      for (const fixture of [live, restarted, refused, reauthorized, ordinaryRefused]) {
         await fixture.watchers.stopAll("shutdown");
       }
       cron.stop();
@@ -185,58 +240,139 @@ it("keeps process A through payload B edits and durable recovery, then accepts e
   });
 });
 
-it("cancels an unchanged OCID native process when its original app grant is revoked", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-    const original = { pluginId: "stream-access", grantId: "original-stream-grant" };
-    const controller = new AbortController();
-    const grant = {
-      grantId: original.grantId,
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-    };
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(createPluginRecord({ id: original.pluginId }));
-    const resume = vi.fn(() => grant);
-    registry.gatewayAccessPolicies.push({
-      pluginId: original.pluginId,
-      source: "fixture",
-      policy: { authorize: () => grant, resume },
+it.each(["revoked", "unavailable"] as const)(
+  "keeps admitted stream work and checks current access at the next start: %s",
+  async (failure) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const original = { pluginId: "stream-access", grantId: "original-stream-grant" };
+      const controller = new AbortController();
+      let unavailable = false;
+      const grant = {
+        grantId: original.grantId,
+        signal: controller.signal,
+        assertCurrent: () => controller.signal.throwIfAborted(),
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(createPluginRecord({ id: original.pluginId }));
+      registry.gatewayAccessPolicies.push({
+        pluginId: original.pluginId,
+        source: "fixture",
+        policy: {
+          authorize: () => {
+            if (unavailable) {
+              throw new Error("Synthetic policy service outage");
+            }
+            return grant;
+          },
+        },
+      });
+      const previous = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(registry, null, "default");
+      const context = createContext();
+      const cron = createCron(path.join(stateDir, "cron", "jobs.json"));
+      context.cron = cron;
+      context.resolveGatewayContext = () => context;
+      const clock = createGatewaySchedulerClock(Date.now());
+      const fixture = createCronStreamWatcherFixture({
+        resolveGatewayContext: () => context,
+        scheduler: createTestGatewayScheduler(clock.clock),
+      });
+      const retry = createCronStreamWatcherFixture({
+        resolveGatewayContext: () => context,
+        scheduler: createTestGatewayScheduler(clock.clock),
+      });
+      try {
+        const profile = ensureProfileForEmail("stream-operator@example.test");
+        const captured = await recoveryFixture(stateDir, profile.id, {
+          context,
+          device: pairedOperator(),
+          gatewayAccessGrant: original,
+        });
+        const created: CronStoredJob = await cron.add(job(), {
+          operatorSource: source(captured.snapshot),
+          streamOperatorSource: captured.snapshot,
+        });
+        await fixture.watchers.start(created);
+        expect(fixture.fake.spawn).toHaveBeenCalledOnce();
+        if (failure === "revoked") {
+          controller.abort(new Error("Original stream grant revoked"));
+        } else {
+          unavailable = true;
+        }
+        const run = expectDefined(fixture.fake.runs[0], "admitted native process");
+        expect(run.cancel).not.toHaveBeenCalled();
+        await fixture.watchers.start(created);
+        expect(fixture.fake.spawn).toHaveBeenCalledOnce();
+        expect(fixture.watchers.inspect(created.id)).toMatchObject({
+          state: "running",
+          processAlive: true,
+        });
+        const assertCurrent = expectDefined(
+          fixture.fake.inputs[0]?.assertCurrent,
+          "native process authority",
+        );
+        expect(assertCurrent).not.toThrow();
+        if (failure === "unavailable") {
+          await fixture.watchers.stopAll("shutdown");
+          await expect(retry.watchers.start(created)).rejects.toSatisfy(
+            isOperatorAuthorityUnavailable,
+          );
+          expect(retry.fake.spawn).not.toHaveBeenCalled();
+          expect(retry.recordFailure).not.toHaveBeenCalled();
+          expect(cron.getJob(created.id)?.enabled).toBe(true);
+          await settle();
+          expect(retry.watchers.inspect(created.id)).toMatchObject({
+            state: "backoff",
+            processAlive: false,
+            restartTimerPending: true,
+          });
+          unavailable = false;
+          await clock.advanceTo(expectDefined(clock.armedAtMs, "policy recovery retry"));
+          expect(retry.fake.spawn).toHaveBeenCalledOnce();
+          return;
+        }
+
+        // The real owner observes a normal supervised exit, releases its scope, then retries.
+        expectDefined(fixture.fake.exits[0], "supervised process exit")(exitResult());
+        await settle();
+        await fixture.watchers.start(created);
+        await settle();
+        expect(run.cancel).not.toHaveBeenCalled();
+        expect(run.detachOutput).toHaveBeenCalled();
+        expect(fixture.watchers.inspect(created.id)).toMatchObject({
+          state: "backoff",
+          processAlive: false,
+          restartTimerPending: true,
+        });
+        expect(
+          expectDefined(
+            fixture.fake.supervisor.acquireScopeCleanup.mock.results[0]?.value,
+            "native scope cleanup",
+          ),
+        ).toHaveBeenCalledOnce();
+        await clock.advanceTo(expectDefined(clock.armedAtMs, "next native process start"));
+        await fixture.watchers.stopAll("shutdown");
+        expect(fixture.watchers.inspect(created.id)).toMatchObject({
+          state: "stopped",
+          processAlive: false,
+        });
+        expect(fixture.fake.spawn).toHaveBeenCalledOnce();
+        expect(fixture.recordFailure).toHaveBeenCalledWith(
+          created.id,
+          expect.stringContaining(
+            "operator authority that authorized this stream is no longer current",
+          ),
+          expect.objectContaining({ streamRestartExhausted: true }),
+          expect.any(String),
+          created.state.streamSourceIdentity,
+        );
+        expect(run.cancel).not.toHaveBeenCalled();
+      } finally {
+        await fixture.watchers.stopAll("shutdown");
+        await retry.watchers.stopAll("shutdown");
+        cron.stop();
+        restoreActivePluginRegistrySnapshot(previous);
+      }
     });
-    const previous = captureActivePluginRegistrySnapshot();
-    stageActivePluginRegistry(registry, null, "default");
-    const peer = principal("dc");
-    setOpenClawIdTunnelPrincipalLookup(() => peer);
-    const context = createContext();
-    const cron = createCron(path.join(stateDir, "cron", "jobs.json"));
-    context.cron = cron;
-    context.resolveGatewayContext = () => context;
-    const fixture = createCronStreamWatcherFixture({ resolveGatewayContext: () => context });
-    try {
-      const profile = await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
-      const captured = await recoveryFixture(stateDir, profile.id, {
-        context,
-        openclawIdPrincipal: peer,
-        gatewayAccessGrant: original,
-      });
-      const created: CronStoredJob = await cron.add(job(), {
-        operatorSource: source(captured.snapshot),
-        streamOperatorSource: captured.snapshot,
-      });
-      await fixture.watchers.start(created);
-      expect(fixture.fake.spawn).toHaveBeenCalledOnce();
-      expect(resume).toHaveBeenCalledWith(expect.objectContaining({ grantId: original.grantId }));
-      controller.abort(new Error("Original stream grant revoked"));
-      expect(fixture.fake.runs[0]?.cancel).toHaveBeenCalled();
-      await fixture.watchers.stopAll("shutdown");
-      expect(fixture.watchers.inspect(created.id)).toMatchObject({
-        state: "stopped",
-        processAlive: false,
-      });
-    } finally {
-      await fixture.watchers.stopAll("shutdown");
-      cron.stop();
-      setOpenClawIdTunnelPrincipalLookup(undefined);
-      restoreActivePluginRegistrySnapshot(previous);
-    }
-  });
-});
+  },
+);

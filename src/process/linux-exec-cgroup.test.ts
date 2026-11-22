@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -9,18 +10,28 @@ import {
 } from "../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { initializeGatewayExecCgroup } from "./linux-exec-cgroup-startup.js";
-import { getAgentExecCgroup, spawnInAgentExecCgroup } from "./linux-exec-cgroup.js";
+import {
+  applyAgentExecMemoryBudget,
+  getAgentExecCgroup,
+  releaseAgentExecCgroupScope,
+  reclaimAgentExecCgroup,
+  startAgentExecCgroupCleanup,
+  sweepAgentExecCgroups,
+  spawnInAgentExecCgroup,
+} from "./linux-exec-cgroup.js";
 import { createProcessSupervisor } from "./supervisor/supervisor.js";
 import { createStubChildAdapter } from "./supervisor/supervisor.test-support.js";
 
 const fixture = vi.hoisted(() => ({
   files: {} as Record<string, string>,
+  memoryBytes: 1800 * 1024 ** 2,
   devices: ["9:127", "8:0"],
   denied: "",
   writable: true,
   mkdir: vi.fn(),
   write: vi.fn<(file: string, value: string) => void>(),
   spawn: vi.fn(),
+  remove: vi.fn<(directory: string) => void>(),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -38,7 +49,19 @@ vi.mock("node:fs", async (importOriginal) => {
       writeFileSync: fixture.write,
       promises: {
         ...original.promises,
+        readFile: async (file: string) => {
+          const value = fixture.files[file];
+          if (value === undefined) {
+            throw Object.assign(new Error(`Missing ${file}`), { code: "ENOENT" });
+          }
+          return value;
+        },
         writeFile: async (file: string, value: string) => fixture.write(file, value),
+        rmdir: async (directory: string) => fixture.remove(directory),
+        readdir: async (directory: string) =>
+          Object.keys(fixture.files)
+            .filter((file) => file.startsWith(`${directory}/`) && file.endsWith("/cgroup.events"))
+            .map((file) => file.slice(directory.length + 1).split("/")[0]!),
       },
       mkdirSync: fixture.mkdir,
       accessSync: (file: string) => {
@@ -55,7 +78,7 @@ vi.mock("./linux-exec-cgroup-device.js", async (importOriginal) => ({
 }));
 vi.mock("./child-memory.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./child-memory.js")>()),
-  getHostExecMemoryBudget: () => ({ memoryBytes: 1800 * 1024 ** 2, swapBytes: 0 }),
+  getHostExecMemoryBudget: () => ({ memoryBytes: fixture.memoryBytes, swapBytes: 0 }),
 }));
 vi.mock("./supervisor/adapters/child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./supervisor/adapters/child.js")>()),
@@ -66,11 +89,43 @@ const root = "/sys/fs/cgroup/system.slice/openclaw.service";
 const exec = `${root}/agent-exec`;
 const unscoped = `${exec}/unscoped`;
 const MiB = 1024 ** 2;
+class CgroupWatcher extends EventEmitter implements fs.FSWatcher {
+  close = vi.fn(() => this.removeAllListeners());
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+const watchers = new Map<string, CgroupWatcher>();
+let cleanupController: AbortController;
+const cleanupLog = { info: vi.fn() };
 beforeEach(() => {
+  cleanupController = new AbortController();
+  startAgentExecCgroupCleanup(cleanupController.signal, cleanupLog);
+  cleanupLog.info.mockClear();
+  watchers.clear();
+  vi.spyOn(fs, "watch").mockImplementation(
+    (
+      file: fs.PathLike,
+      options: fs.WatchOptions | fs.WatchListener<string>,
+      listener?: fs.WatchListener<string>,
+    ) => {
+      const watcher = new CgroupWatcher();
+      const callback = typeof options === "function" ? options : listener;
+      if (callback) {
+        watcher.on("change", callback);
+      }
+      watchers.set(String(file), watcher);
+      return watcher;
+    },
+  );
   mockProcessPlatform("linux");
   vi.spyOn(os, "totalmem").mockReturnValue(2400 * MiB);
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   vi.spyOn(process.memoryUsage, "rss").mockReturnValue(0);
+  fixture.memoryBytes = 1800 * MiB;
   fixture.devices = ["9:127", "8:0"];
   fixture.denied = "";
   fixture.writable = true;
@@ -87,15 +142,293 @@ beforeEach(() => {
       ? value.replaceAll("+", "")
       : value;
   });
+  fixture.remove.mockImplementation((directory) => {
+    for (const file of Object.keys(fixture.files)) {
+      if (file.startsWith(`${directory}/`)) {
+        delete fixture.files[file];
+      }
+    }
+  });
 });
 afterEach(async () => {
+  cleanupController.abort();
   fixture.files["/proc/self/cgroup"] = "0::/\n";
   await initializeGatewayExecCgroup("/state");
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
-  for (const mock of [fixture.write, fixture.mkdir, fixture.spawn]) {
+  for (const mock of [fixture.write, fixture.mkdir, fixture.spawn, fixture.remove]) {
     mock.mockReset();
   }
+});
+
+it.each([true, false])(
+  "reuses service discovery across exec start/release (delegated=%s)",
+  async (delegated) => {
+    if (!delegated) {
+      fixture.files[`${root}/cgroup.controllers`] = "cpu memory";
+    }
+    await initializeGatewayExecCgroup("/state");
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    await applyAgentExecMemoryBudget();
+    getAgentExecCgroup("warmup");
+    const reads = vi.spyOn(fs, "readFileSync");
+    const access = vi.spyOn(fs, "accessSync");
+    fixture.write.mockClear();
+    const supervisor = createProcessSupervisor();
+    fixture.spawn.mockImplementation(async () => {
+      const adapter = createStubChildAdapter();
+      adapter.pid = undefined;
+      adapter.settle(0);
+      return { adapter, ready: Promise.resolve() };
+    });
+    try {
+      for (let index = 0; index < 3; index++) {
+        const scope = `cycle-${index}`;
+        const directory = getAgentExecCgroup(scope);
+        expect(Boolean(directory)).toBe(delegated);
+        const run = await supervisor.spawn({
+          mode: "child",
+          argv: ["fixture"],
+          executionIntent: "agent-tool",
+        });
+        expect((await run.wait()).exitCode).toBe(0);
+        await releaseAgentExecCgroupScope(scope);
+      }
+      expect(reads.mock.calls.filter(([file]) => file !== `${exec}/io.max`)).toEqual([]);
+      expect(access).not.toHaveBeenCalled();
+      expect(fixture.write.mock.calls.filter(([file]) => file === `${exec}/memory.high`)).toEqual(
+        [],
+      );
+    } finally {
+      await supervisor.shutdown();
+      warning.mockRestore();
+    }
+  },
+);
+
+it("retires a leaf that is populated at command close and becomes idle later", async () => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const directory = getAgentExecCgroup("late-idle")!;
+  fixture.files[`${directory}/cgroup.events`] = "populated 1\n";
+  fixture.files[`${directory}/cgroup.procs`] = "123\n";
+  fixture.files[`${directory}/memory.current`] = String(2 * 1024 ** 3);
+  fixture.write.mockImplementation((file) => {
+    expect(file).toBe(`${directory}/memory.reclaim`);
+    fixture.files[`${directory}/memory.current`] = "0";
+  });
+  await reclaimAgentExecCgroup(directory);
+  expect(fixture.remove).not.toHaveBeenCalled();
+  fixture.files[`${directory}/cgroup.events`] = "populated 0\n";
+  fixture.files[`${directory}/cgroup.procs`] = "";
+  watchers.get(`${directory}/cgroup.events`)?.emit("change", "change", "cgroup.events");
+  await vi.runAllTimersAsync();
+  expect(fixture.remove).toHaveBeenCalledWith(directory);
+  expect(watchers.get(`${directory}/cgroup.events`)?.close).toHaveBeenCalledOnce();
+  expect(cleanupLog.info).toHaveBeenLastCalledWith(
+    expect.stringContaining(
+      "source=watcher reclaimed=1 removed=1 skippedPopulated=0 errors=0 watching=0",
+    ),
+  );
+});
+
+it("sweeps orphaned session leaves without touching live or shared cgroups", async () => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const dead = getAgentExecCgroup("orphan")!;
+  const live = getAgentExecCgroup("active")!;
+  for (const directory of [dead, live, unscoped, exec]) {
+    fixture.files[`${directory}/cgroup.events`] =
+      directory === live ? "populated 1\n" : "populated 0\n";
+    fixture.files[`${directory}/cgroup.procs`] = "";
+    fixture.files[`${directory}/memory.current`] = "0";
+  }
+  await sweepAgentExecCgroups();
+  expect(fixture.remove.mock.calls).toEqual([[dead]]);
+  expect(cleanupLog.info).toHaveBeenLastCalledWith(
+    expect.stringContaining(
+      "source=sweep reclaimed=0 removed=1 skippedPopulated=1 errors=0 watching=1",
+    ),
+  );
+});
+
+it("deduplicates and caps watches, rotates sweep overflow, and closes on shutdown", async () => {
+  await initializeGatewayExecCgroup("/state");
+  const directories = Array.from(
+    { length: 257 },
+    (_, i) => `${exec}/session-${i.toString(16).padStart(32, "0")}`,
+  );
+  for (const directory of directories) {
+    fixture.files[`${directory}/cgroup.events`] = "populated 1\n";
+    fixture.files[`${directory}/cgroup.procs`] = "";
+    fixture.files[`${directory}/memory.current`] = "0";
+  }
+  await Promise.all(directories.map(reclaimAgentExecCgroup));
+  await reclaimAgentExecCgroup(directories[0]);
+  expect(fs.watch).toHaveBeenCalledTimes(256);
+  const overflow = directories[256]!;
+  fixture.files[`${overflow}/cgroup.events`] = "populated 0\n";
+  await sweepAgentExecCgroups();
+  expect(fixture.remove).not.toHaveBeenCalled();
+  await sweepAgentExecCgroups();
+  expect(fixture.remove.mock.calls).toEqual([[overflow]]);
+  cleanupController.abort();
+  expect([...watchers.values()].every((watcher) => watcher.close.mock.calls.length === 1)).toBe(
+    true,
+  );
+  await reclaimAgentExecCgroup(directories[0]);
+  expect(fs.watch).toHaveBeenCalledTimes(256);
+});
+
+it("reclaims after exec extinction without blocking completion or shutdown", async ({ signal }) => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const directory = getAgentExecCgroup("completed-session")!;
+  fixture.files[`${directory}/cgroup.procs`] = "";
+  fixture.files[`${directory}/cgroup.events`] = "populated 0\nfrozen 0\n";
+  fixture.files[`${directory}/memory.current`] = "19219978649";
+  const operations: string[] = [];
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, value) => {
+    if (file === `${directory}/memory.reclaim`) {
+      if (typeof value !== "string") {
+        throw new Error("Expected a byte count");
+      }
+      operations.push(`reclaim ${value}`);
+      entered.resolve();
+      await release.promise;
+      fixture.files[`${directory}/memory.current`] = "0";
+    }
+  });
+  fixture.remove.mockImplementation((target) => {
+    expect(target).toBe(directory);
+    operations.push("remove");
+  });
+  const adapter = createStubChildAdapter();
+  adapter.pid = undefined;
+  fixture.spawn.mockResolvedValue({ adapter, ready: Promise.resolve() });
+  const supervisor = createProcessSupervisor();
+  const run = await supervisor.spawn({
+    mode: "child",
+    argv: ["fixture"],
+    executionIntent: "agent-tool",
+    executionScopeKey: "completed-session",
+  });
+  expect(operations).toEqual([]);
+  adapter.settle(0);
+  try {
+    await withinTest(entered.promise, signal);
+    await withinTest(
+      Promise.all([run.wait(), run.waitForExtinction?.(), supervisor.shutdown()]),
+      signal,
+    );
+    expect(operations).toEqual(["reclaim 19219978649"]);
+  } finally {
+    release.resolve();
+    await vi.runAllTimersAsync();
+  }
+  expect(operations).toEqual(["reclaim 19219978649", "remove"]);
+});
+
+it.each(["process", "descendant", "busy race", "missing reclaim", "partial reclaim", "macOS"])(
+  "handles session cgroup teardown with %s",
+  async (mode) => {
+    vi.useFakeTimers();
+    await initializeGatewayExecCgroup("/state");
+    const directory = getAgentExecCgroup("teardown")!;
+    fixture.files[`${directory}/cgroup.procs`] = mode === "process" ? "123\n" : "";
+    fixture.files[`${directory}/cgroup.events`] =
+      `populated ${mode === "descendant" ? 1 : 0}\nfrozen 0\n`;
+    fixture.files[`${directory}/memory.current`] = String(2 * 1024 ** 3);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const reclaims: string[] = [];
+    fixture.write.mockImplementation((file, value) => {
+      if (file !== `${directory}/memory.reclaim`) {
+        throw new Error(`Unexpected write ${file}`);
+      }
+      reclaims.push(value);
+      if (mode === "missing reclaim") {
+        throw Object.assign(new Error("unsupported"), { code: "ENOENT" });
+      }
+      if (mode === "partial reclaim") {
+        throw Object.assign(new Error("partial reclaim"), { code: "EAGAIN" });
+      }
+      fixture.files[`${directory}/memory.current`] = "0";
+    });
+    fixture.remove.mockImplementation(() => {
+      if (mode === "busy race") {
+        throw Object.assign(new Error("new exec joined"), { code: "EBUSY" });
+      }
+    });
+    if (mode === "macOS") {
+      mockProcessPlatform("darwin");
+    }
+    const cleanup = reclaimAgentExecCgroup(directory);
+    await vi.runAllTimersAsync();
+    await cleanup;
+    const untouched = ["process", "descendant", "macOS"].includes(mode);
+    expect(reclaims).toHaveLength(untouched ? 0 : mode === "partial reclaim" ? 5 : 1);
+    expect(fixture.remove).toHaveBeenCalledTimes(untouched ? 0 : 1);
+    expect(warning).toHaveBeenCalledTimes(mode === "missing reclaim" ? 1 : 0);
+  },
+);
+
+it("serializes reclamation across completed sessions", async () => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const directories = [getAgentExecCgroup("first")!, getAgentExecCgroup("second")!];
+  for (const directory of directories) {
+    fixture.files[`${directory}/cgroup.procs`] = "";
+    fixture.files[`${directory}/cgroup.events`] = "populated 0\n";
+    fixture.files[`${directory}/memory.current`] = String(2 * 1024 ** 3);
+  }
+  const entered = createDeferred();
+  const release = createDeferred();
+  const writes: string[] = [];
+  vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file) => {
+    if (typeof file !== "string") {
+      throw new Error("Expected a cgroup path");
+    }
+    writes.push(file);
+    if (writes.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    fixture.files[file.replace("memory.reclaim", "memory.current")] = "0";
+  });
+  const cleanups = directories.map(reclaimAgentExecCgroup);
+  await entered.promise;
+  expect(writes).toEqual([`${directories[0]}/memory.reclaim`]);
+  release.resolve();
+  await vi.runAllTimersAsync();
+  await Promise.all(cleanups);
+  expect(writes).toEqual(directories.map((directory) => `${directory}/memory.reclaim`));
+  expect(fixture.remove.mock.calls).toEqual(directories.map((directory) => [directory]));
+});
+
+it("recreates an empty session leaf removed between launch preparation and broker join", async () => {
+  await initializeGatewayExecCgroup("/state");
+  const directory = getAgentExecCgroup("joining-session")!;
+  const write = fixture.write.getMockImplementation()!;
+  let joined = false;
+  let removed = true;
+  fixture.mkdir.mockClear();
+  fixture.write.mockImplementation((file, value) => {
+    if (file === `${directory}/cgroup.procs`) {
+      if (removed) {
+        removed = false;
+        throw Object.assign(new Error("retired before join"), { code: "ENOENT" });
+      }
+      joined = true;
+    }
+    write(file, value);
+  });
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  spawnInAgentExecCgroup(directory, () => expect(joined).toBe(true));
+  expect(fixture.mkdir).toHaveBeenCalledWith(directory, { recursive: true });
+  expect(warning).not.toHaveBeenCalled();
 });
 
 it.each(["owned", "internal", "external", "nested Gateway", "write failure"])(
@@ -173,7 +506,7 @@ it.for(["cancellation", "authority revocation"])(
       scopeKey: "scope",
     };
     const active = await supervisor.spawn(input);
-    fixture.files[`${exec}/memory.high`] = "max";
+    fixture.memoryBytes += MiB;
     const entered = createDeferred();
     const release = createDeferred();
     vi.spyOn(fs.promises, "writeFile").mockImplementationOnce(async (file, value) => {
@@ -333,13 +666,14 @@ it("preserves working IO and helper placement when state-device resolution is un
   expect(getAgentExecCgroup()).toBe(unscoped);
 });
 
-it("discovers helper placement from its own delegated service and rechecks writability", async () => {
+it("discovers helper placement once and refreshes only through startup", async () => {
   expect(getAgentExecCgroup()).toBeUndefined();
   await initializeGatewayExecCgroup("/state");
   expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.files["/proc/self/cgroup"] = "0::/system.slice/openclaw.service/agent-exec\n";
   expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.writable = false;
+  await initializeGatewayExecCgroup("/state");
   expect(getAgentExecCgroup()).toBeUndefined();
 });
 
