@@ -15,6 +15,8 @@ export type AcceptedSessionSpawn = {
   expectsCompletionMessage?: boolean;
   /** Host-recorded: the requester collects this child itself (sessions_spawn collect=true). */
   collector?: true;
+  /** Host-recorded on the run's receipt: its agents_wait returned this collector as done. */
+  collected?: true;
 };
 
 // Accounting follows the exact admission through provider fallback and plugin
@@ -88,6 +90,20 @@ export function hasAcceptedSessionSpawn(
   return Boolean(acceptedSessionSpawns?.length);
 }
 
+/** Record that this run's agents_wait returned these accepted collectors as done. */
+export function markCollectedSessionSpawnsForRun(
+  instance: OperationalRunInstanceRef,
+  collectedRunIds: readonly string[],
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  for (const runId of collectedRunIds) {
+    const receipt = receipts?.get(runId);
+    if (receipt && !receipt.collected) {
+      receipts?.set(runId, { ...receipt, collected: true });
+    }
+  }
+}
+
 /** Return true when an accepted child owns the requester's terminal completion. */
 export function hasCompletionMessageSessionSpawn(
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
@@ -99,7 +115,9 @@ export function hasCompletionMessageSessionSpawn(
 export function hasOwedSessionSpawn(acceptedSessionSpawns?: readonly AcceptedSessionSpawn[]) {
   return (
     acceptedSessionSpawns?.some(
-      (spawn) => spawn.expectsCompletionMessage === true || spawn.collector === true,
+      (spawn) =>
+        spawn.expectsCompletionMessage === true ||
+        (spawn.collector === true && spawn.collected !== true),
     ) === true
   );
 }
