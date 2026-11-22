@@ -246,6 +246,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           ? { ...chatProps.disabledBanner, stop: subagentStop }
           : chatProps.disabledBanner,
       mobileComposer: Boolean(mobileHost),
+      // Composer extensions build session authority from the row; they mount once it exists.
+      sessionAdmitted: Boolean(selectedSession),
       get showNewMessages() {
         return canShowNewMessages && chatProps.showNewMessages;
       },
@@ -290,7 +292,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? this.processesOpener(state, selectedSession)
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {

@@ -122,7 +122,7 @@ export function sidebarPresentationProbe() {
             }),
             ...[
               ...row.querySelectorAll(
-                ".sidebar-session-team-state__status svg,.sidebar-child-session__status svg,.sidebar-session-team-state__status .session-css-icon,.sidebar-child-session__status .session-css-icon",
+                ".sidebar-session-team-state__status svg,.sidebar-session-team-state__status .session-css-icon",
               ),
             ]
               .filter((svg) => !svg.closest(".session-glyph"))

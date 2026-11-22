@@ -153,6 +153,8 @@ export type DiagnosticWorkerCensus = {
   burstIdleTimeoutMs?: number;
   heapUsedBytes: number | null;
   heapSampledCount: number;
+  /** Logical endpoints inside a shared worker host; they are not additional workers. */
+  hostedEndpoints?: number;
 };
 
 export type DiagnosticMemoryUsage = {

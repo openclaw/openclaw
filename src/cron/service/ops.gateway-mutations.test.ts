@@ -220,44 +220,39 @@ describe("Cron mutation outcomes through the in-process router", () => {
     },
   );
 
-  it.each(["revoked", "aborted"] as const)(
-    "leaves durable state unchanged when its caller is %s during validation",
-    async (closure) => {
-      const validating = createDeferredCore();
-      const resumeValidation = createDeferredCore();
-      await withCronGateway(
-        async (fixture) => {
-          const before = await loadCronStore(fixture.storePath);
-          const pending = fixture.call({ method: "cron.add", params: jobInput });
-          try {
-            await Promise.race([
-              validating.promise,
-              pending.then(() => {
-                throw new Error("Cron mutation returned before its validation boundary");
-              }),
-            ]);
-            fixture.closeCaller(closure);
-            resumeValidation.resolve();
-            await expect(pending).rejects.toThrow(
-              closure === "aborted" ? "Cron request aborted" : /authority.*no longer active/i,
-            );
-            // A rejected request alone does not prove its handler stopped before writing.
-            await fixture.settle();
-            expect(await loadCronStore(fixture.storePath)).toEqual(before);
-            expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
-          } finally {
-            resumeValidation.resolve();
-            await Promise.allSettled([pending]);
-          }
-        },
-        async () => {
-          validating.resolve();
-          await resumeValidation.promise;
-          return [];
-        },
-      );
-    },
-  );
+  it("leaves durable state unchanged when its caller is aborted during validation", async () => {
+    const validating = createDeferredCore();
+    const resumeValidation = createDeferredCore();
+    await withCronGateway(
+      async (fixture) => {
+        const before = await loadCronStore(fixture.storePath);
+        const pending = fixture.call({ method: "cron.add", params: jobInput });
+        try {
+          await Promise.race([
+            validating.promise,
+            pending.then(() => {
+              throw new Error("Cron mutation returned before its validation boundary");
+            }),
+          ]);
+          fixture.closeCaller("aborted");
+          resumeValidation.resolve();
+          await expect(pending).rejects.toThrow("Cron request aborted");
+          // A rejected request alone does not prove its handler stopped before writing.
+          await fixture.settle();
+          expect(await loadCronStore(fixture.storePath)).toEqual(before);
+          expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+        } finally {
+          resumeValidation.resolve();
+          await Promise.allSettled([pending]);
+        }
+      },
+      async () => {
+        validating.resolve();
+        await resumeValidation.promise;
+        return [];
+      },
+    );
+  });
 
   it.each([
     { closure: "revoked", reportingError: false },

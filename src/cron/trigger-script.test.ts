@@ -268,6 +268,27 @@ it("projects typed exec details into trigger scripts without content wrappers", 
 });
 
 it.skipIf(process.platform === "win32")(
+  "waits for a slow trigger command instead of handing back a running process",
+  async () => {
+    // The incident shape: a yield window shorter than the command, then a check for "completed".
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const result = await exec({ command: "sleep 0.5; printf '[]'", yieldMs: 10 });
+          if (result.status !== "completed" || result.exitCode !== 0) {
+            throw new Error("GitHub search failed: " + JSON.stringify(result).slice(0, 200));
+          }
+          return { fire: false, state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: false, state: [] });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "gives a trigger only the command's output when the command leaves a process running",
   async () => {
     // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
@@ -280,13 +301,12 @@ it.skipIf(process.platform === "win32")(
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         script: `
           const result = await exec({ command: ${JSON.stringify(command)} });
-          const observed = JSON.parse(result.aggregated);
+          // Where the host hands a survivor off, the script can still stop it.
           const left = /keeps running as background session (\\S+):/.exec(result.warningText ?? "");
-          if (!left) {
-            throw new Error("the process left running was not reported");
+          if (left) {
+            await process({ action: "kill", sessionId: left[1] });
           }
-          await process({ action: "kill", sessionId: left[1] });
-          return { fire: false, state: observed };
+          return { fire: false, state: JSON.parse(result.aggregated) };
         `,
       }),
     ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
