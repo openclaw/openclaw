@@ -337,6 +337,7 @@ export async function maybeRestartService(
       serviceEnv: activation.serviceEnv,
       gatewayPort: activation.gatewayPort,
       timeoutMs: activation.timeoutMs,
+      rollbackBlockedReason: activation.rollbackBlockedReason,
       onProgress,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
