@@ -59,6 +59,17 @@ This skill does not install a migration phase. Missing access or a safe capabili
 
 ## Retain ownership through acceptance
 
+Successful retained fix-forward activation leaves `REPAIR_COMPLETED` in the
+canonical slot. Finish that flow with
+`openclaw-release-deploy --retire-retained-repair OPERATION COMPLETED_JOURNAL_SHA256`
+using the same operation and reviewed completed journal digest. Follow the
+[completed-repair retirement contract](controller/RETAINED-REPAIR.md#retire-a-completed-repair)
+for acceptance, live-generation and pointer bindings, durable archival, and
+same-command interrupted replay. Require its retirement receipt before handing
+back ordinary deploy admission. Never substitute ordinary `--recover` or manual
+journal removal; `REPAIR_FAILED` has no retirement through this action. Retirement
+does not authorize a new deployment or enable unattended scheduling.
+
 Treat every authorized update request, including a brief ping to update, as an execution obligation until the requested release passes full native acceptance. An acknowledgment, status reply, successful build, restored incumbent, blocker report, or landed repair PR does not complete that obligation. Follow-up pings and clarifications retain the same request and approval; they do not reset ownership or require the requester to ask again. Respect an explicit pause or cancellation.
 
 When the update fails or defers, repeat this loop until it succeeds:

@@ -14,6 +14,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -123,6 +127,79 @@ afterEach(() => {
   resetAgentEventsForTest();
   vi.restoreAllMocks();
 });
+
+it.each([
+  { name: "broad", scopes: ["operator.read", "operator.write"] as const },
+  { name: "session-only", scopes: ["operator.sessions.write"] as const },
+])(
+  "rechecks invitation membership in a warm $name sidebar without exposing foreign drafts",
+  async ({ scopes }) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const profileId = ensureProfileForEmail("invited-reader@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const context = requestContext(cfg);
+      const client = identifiedClient(profileId);
+      client.connect.scopes = [...scopes];
+      for (const [index, name] of ["own", "foreign", "invited", "draft"].entries()) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: `agent:main:${name}` },
+          {
+            sessionId: name,
+            updatedAt: index + 1,
+            visibility: name === "own" || name === "draft" ? "draft" : "shared",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: name === "own" ? profileId : "creator",
+            },
+          },
+        );
+        if (name === "invited" || name === "draft") {
+          await addSessionMember(
+            { agentId: "main", sessionKey: `agent:main:${name}` },
+            { identityId: profileId, addedBy: "creator" },
+          );
+        }
+      }
+      const list = (ifRowsRevision?: string) =>
+        listSessions({
+          client,
+          context,
+          request: { agentId: "main", rowMode: "sidebar", limit: 50, ifRowsRevision },
+        });
+      await list();
+      const initial = await list();
+      expect(keys(initial).toSorted()).toEqual(["agent:main:invited", "agent:main:own"]);
+      expect(initial.totalCount).toBe(2);
+      expect((await list(initial.rowsRevision)).rowsUnchanged).toBe(true);
+      await removeSessionMember({ agentId: "main", sessionKey: "agent:main:invited" }, profileId);
+      const revoked = await list(initial.rowsRevision);
+      expect(revoked.rowsUnchanged).toBeUndefined();
+      expect(revoked.rowsRevision).not.toBe(initial.rowsRevision);
+      expect(keys(revoked)).toEqual(["agent:main:own"]);
+      expect(revoked.totalCount).toBe(1);
+      await addSessionMember(
+        { agentId: "main", sessionKey: "agent:main:invited" },
+        { identityId: profileId, addedBy: "creator" },
+      );
+      expect(keys(await list(revoked.rowsRevision)).toSorted()).toEqual([
+        "agent:main:invited",
+        "agent:main:own",
+      ]);
+    });
+  },
+);
 
 it("omits unchanged sidebar rows without reusing membership or revoked access", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

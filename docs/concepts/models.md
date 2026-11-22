@@ -61,6 +61,33 @@ the session.
   </Step>
 </Steps>
 
+### No model configured
+
+OpenClaw does not pick a model for you. When no primary is set and no
+configured provider lists a model, the agent has no model:
+
+- Agent turns stop before any model call and reply with how to choose one:
+  pick a model in **Settings → Models**, send `/model <provider/model>` in
+  chat, or run `openclaw models set <provider/model>`. Attachment
+  preprocessing, such as audio transcription with a configured or detected
+  media provider, runs earlier in the turn and can still run.
+- Chat commands that need no model, such as `/help`, `/status`, `/models`,
+  `/model` and `/new`, still run. `/status` shows the model as not configured.
+  Commands that change model settings, such as `/think` and `/fast`, reply with
+  the setup message.
+- `openclaw models status` and the Gateway startup log report the model as not
+  configured.
+- No utility model is derived and no provider catalog is loaded on behalf of
+  an unconfigured primary.
+
+Signing in to a provider during onboarding writes its default model as the
+primary. Releases through 2026.11.6 picked a model when none was configured:
+`openai/gpt-6-astra`, or the first configured provider model when OpenAI did
+not list it. On update from those releases, `openclaw doctor --fix` writes the
+model the install was running as `agents.defaults.model.primary`, so it keeps
+working unchanged. The OpenAI model is written only when OpenAI credentials are
+available.
+
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. After legacy-policy migration, adding an entry does not restrict model overrides.
@@ -130,6 +157,7 @@ Other selection rules:
 - Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, or exact policy entry. An alias or settings entry under `agents.defaults.models` does not keep it visible. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI chat model picker and selected-model button omit redundant family aliases, such as `opus` for `Opus 5.5`. Aliases remain searchable and selectable, and distinctive custom aliases stay in the label.
 - When a chat already has messages, the Control UI asks before switching models. Local models skip the confirmation. Choose **Don’t ask again** to skip future confirmations for this Gateway in this browser. A change appears in the chat history with the next message you send. Changing the selection alone does not add a notice.
 - Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and exact `modelPolicy.allow` refs. Entries under `agents.defaults.models` or per-agent `models` only hold aliases and per-model settings; they do not add a model to the picker.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
@@ -150,10 +178,14 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Ordinary `models.list` requests reuse the published catalog;
-provider response-cache expiry alone does not rebuild it. Startup, changed
-configuration or credentials, plugin and hosted metadata updates, and explicit
-**Refresh** own provider catalog acquisition. Startup discovers provider inventory
+provider discovery. Ordinary `models.list` requests return the published catalog
+immediately. When a provider's live model list is older than 15 minutes and its
+response cache has expired, the request also lists that provider again in the
+background without marking it pending, so pickers show no loading state; newly
+launched provider models appear without a restart, and open pickers update when
+the new list is published. A provider that caches its list
+for longer than 15 minutes keeps that longer lifetime. Startup, changed configuration or credentials, plugin and hosted metadata
+updates, and explicit **Refresh** also acquire the provider catalog. Startup discovers provider inventory
 in the background; a later configuration or credential change rediscovers only
 the affected providers. Native harnesses such as Codex discover models and account
 readiness on demand for the selected agent: opening its model picker or catalog,
@@ -195,9 +227,10 @@ a background refresh. Hover, focus, or tap it to see which providers are refresh
 existing models stay usable, and the open picker updates when discovery completes.
 An empty picker shows “Loading models…” until its first models arrive.
 Gateway startup and credential changes
-also refresh the affected catalog. Use **Refresh** in Models or
-`openclaw models list --refresh` to request another refresh, including newly
-released models. **Retry** requests discovery again after a failure.
+also refresh the affected catalog, and opening a picker relists any provider list
+older than 15 minutes whose response cache has expired. Use **Refresh** in Models or
+`openclaw models list --refresh` to request a refresh right away. **Retry**
+requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
 once against current plugins. If a newer publication supersedes that refresh,
@@ -359,6 +392,11 @@ configured `agentRuntime` remains the default:
 }
 ```
 
+In **Settings → Models**, the **Model** and **Fallback model** menus show the
+available harness choices. Choosing one saves it as the global default for that
+specific model. Other models keep their own settings, and agent-specific
+overrides still take precedence. Choosing a harness in chat changes only that session.
+
 The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
 change credentials, or rename the upstream model. Each runtime supplies its own
@@ -516,13 +554,24 @@ catalog refresh; correct authored `models.json` pricing directly. Other schema
 errors and invalid model API or token limits still reject the affected catalog,
 even on a model with malformed pricing.
 
+Usage reports capture local pricing before rendering and keep those prices for
+the operation. Gateway catalog publication updates the retained local source,
+including an absent file. After editing `models.json` externally, restart the
+Gateway to publish the new prices.
+
 ### Hosted catalog updates
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
 without waiting for a new OpenClaw release. The Gateway makes one background
-JSON `GET` at startup and then checks at most every six hours. The request sends
-no prompts, credentials, model usage, or configuration payload beyond the
-normal HTTP user agent and conditional cache headers.
+JSON `GET` at startup and then checks at most every six hours. Changing
+`models.catalogRefresh.url` or `models.catalogRefresh.enabled` on a running
+Gateway checks the new source at once. The request sends no prompts,
+credentials, model usage, or configuration payload beyond the normal HTTP user
+agent and conditional cache headers.
+
+On memory-constrained hosts, automatic checks wait while available memory is at
+or below 20% of the process limit and retry after one minute. The current catalog
+stays available; manual `openclaw models refresh` remains immediate.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's
@@ -552,7 +601,9 @@ rules.
 
 The Gateway owns catalog writes while it is running. `openclaw models refresh`
 requires exclusive offline ownership and reports the saved download; the next
-Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+Gateway start loads compatible metadata. Without a running Gateway, local
+catalog reads such as `openclaw models list` describe listed models with the
+saved hosted metadata too. An explicit Gateway model-list refresh
 triggers adoption after returning the current rows; it does not wait for adoption
 or another agent's discovery. A corrupt saved bundle leaves the accepted
 generation serving.

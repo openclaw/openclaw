@@ -40,8 +40,10 @@ import {
   prepareChat,
   scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -1814,7 +1816,7 @@ async function openProviderModelPicker(page: Page) {
 async function focusProviderModelSearch(page: Page) {
   const picker = providerModelPicker(page);
   const toggle = picker.locator(".header-search__toggle");
-  // Historical bundles focus search on open; current bundles expose a Search action.
+  // Bundles with a collapsed header search expose a Search action; the rest focus search on open.
   if (await toggle.isVisible()) {
     await toggle.click();
   }
@@ -1870,11 +1872,13 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(

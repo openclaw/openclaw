@@ -66,9 +66,6 @@ export function createGatewayInflightFailure(
   },
   isAuthorized: () => boolean,
 ): GatewayInflightResult {
-  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
-    return createGatewayInflightAuthorityFailure(params);
-  }
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
     params.err instanceof OutboundDeliveryError &&
@@ -76,8 +73,23 @@ export function createGatewayInflightFailure(
     params.err.queueCustody !== "held"
       ? params.err.cause
       : params.err;
-  const authorizationError =
+  let authorizationError =
     unsentError instanceof OutboundHandoffRejectedError ? unsentError.cause : unsentError;
+  if (
+    !(authorizationError instanceof SessionMutationAuthorizationChangedError) &&
+    !isChannelPartialDeliveryError(params.err)
+  ) {
+    try {
+      if (!isAuthorized()) {
+        return createGatewayInflightAuthorityFailure(params);
+      }
+    } catch (error) {
+      if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+        throw error;
+      }
+      authorizationError = error;
+    }
+  }
   if (authorizationError instanceof SessionMutationAuthorizationChangedError) {
     return createGatewayInflightResult({
       ...params,
@@ -121,7 +133,10 @@ export function createGatewayInflightAuthorityFailure(params: {
     ...params,
     result: {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "The message turn has ended. Start a new turn to retry.",
+      ),
     },
   });
 }
@@ -141,7 +156,7 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
       if (!mirrored && params.mirror.sourceReplyFinal === true) {
         params.context.logGateway?.warn?.(
-          "Final source reply was delivered but could not be mirrored to the session transcript.",
+          "Final source reply was delivered but could not be mirrored to the chat history.",
           {
             channel: params.mirror.channel,
             sessionKey: params.mirror.sessionKey,

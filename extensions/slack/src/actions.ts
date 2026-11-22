@@ -13,9 +13,19 @@ import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
+import {
+  appendSlackNativeDataFallbackText,
+  buildSlackBlocksFallbackText,
+  hasSlackNativeDataBlock,
+  stripSlackNativeDataBlocks,
+} from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
+import {
+  listSlackConversationsWithClient,
+  resolveSlackTokenWorkspaceWithClient,
+  type SlackConversationListOptions,
+} from "./conversation-list.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
@@ -29,12 +39,7 @@ import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/bl
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
-import {
-  appendSlackNativeDataFallbackText,
-  hasSlackNativeDataBlock,
-  isSlackInvalidBlocksError,
-  stripSlackNativeDataBlocks,
-} from "./native-data-blocks.js";
+import { isSlackInvalidBlocksError } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { formatSlackTarget } from "./target-parsing.js";
@@ -564,6 +569,16 @@ export async function readSlackMessages(
     hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
 }
+
+export async function listSlackConversations(
+  opts: SlackActionClientOpts & SlackConversationListOptions,
+) {
+  slackTeamIdSchema.parse(opts.teamId);
+  return await listSlackConversationsWithClient(await getClient(opts), opts);
+}
+
+export const resolveSlackTokenWorkspace = async (opts: SlackActionClientOpts = {}) =>
+  await resolveSlackTokenWorkspaceWithClient(await getClient(opts));
 
 export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {
   const client = await getClient(opts);

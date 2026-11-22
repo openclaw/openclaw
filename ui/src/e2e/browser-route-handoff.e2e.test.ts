@@ -37,6 +37,7 @@ function browserCases(
     browserCase("/tabs", { running: true, tabs }, address),
     browserCase("/screenshot", screenshot, address),
     browserCase("/act", { result }, address),
+    browserCase("/operator/input", { sent: 1, navigated: false, blockedByDialog: false }, address),
   ];
 }
 const png = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
@@ -81,7 +82,10 @@ suite.define(() => {
         await panel.locator(".bp-input").click({ position: { x: 20, y: 20 } });
         await panel.locator(".bp-input").press("Enter");
         await gateway.waitForRequest("browser.request", {
-          match: { path: "/act", body: { kind: "press", targetId: "existing", key: "Enter" } },
+          match: {
+            path: "/operator/input",
+            body: { targetId: "existing", inputs: [{ kind: "press", key: "Enter" }] },
+          },
         });
         const requests = await gateway.getRequests("browser.request");
         for (const request of requests) {
@@ -324,7 +328,7 @@ suite.define(() => {
               url: "https://default.example/",
             },
           });
-          await page.locator("openclaw-browser-tab-card").waitFor();
+          expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
           await expect.poll(() => panel.locator(".bp-profile").textContent()).toBe("managed");
           await expect
             .poll(async () =>
@@ -346,9 +350,9 @@ suite.define(() => {
     },
   );
 
-  it.each(["panel", "older card"])(
-    "preserves browser routes after explicit opening through %s",
-    async (firstOpen) => {
+  it.each(["host", "node"])(
+    "preserves the latest successful %s route when opening the browser panel",
+    async (latestRoute) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
         async ({ page }) => {
@@ -378,13 +382,14 @@ suite.define(() => {
             isError,
             details: { browserTab },
           });
-          const routes = [hostTab, nodeTab];
+          const routes = latestRoute === "node" ? [hostTab, nodeTab] : [nodeTab, hostTab];
+          const selected = routes[1]!;
           const gateway = await installMockGateway(page, {
             featureMethods: ["chat.metadata", "chat.startup", "browser.request"],
             historyMessages: [
               { role: "user", content: "Open the pages", timestamp: 1_000 },
-              result(hostTab, "host-open", 2_000),
-              result(nodeTab, "node-open", 3_000),
+              result(routes[0]!, "first-open", 2_000),
+              result(selected, "latest-open", 3_000),
               result(hostTab, "failed-host-open", 4_000, true),
               { role: "assistant", content: "The pages are ready.", timestamp: 5_000 },
             ],
@@ -420,54 +425,20 @@ suite.define(() => {
               .filter((request) => requestPath(request) === "/tabs/focus");
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.getByText("The pages are ready.", { exact: true }).waitFor();
-          const hostCard = page
-            .locator("openclaw-browser-tab-card")
-            .filter({ hasText: "Managed tab" });
-          // Thumbnails may capture both routes without opening the side panel.
-          await hostCard.locator(".shot img").waitFor();
-          await page
-            .locator("openclaw-browser-tab-card")
-            .filter({ hasText: "Node tab" })
-            .locator(".shot img")
-            .waitFor();
+          expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await page.locator("section.bp").count()).toBe(0);
-          expect(await focusRequests()).toEqual([]);
+          expect(await browserRequests()).toEqual([]);
           const panel = page.locator("section.bp");
-          if (firstOpen === "panel") {
-            const beforePanelOpen = (await browserRequests()).length;
-            await openChatSidePanelType(page, "Browser");
-            await panel.locator('.bp-shot[alt="Node tab"]').waitFor();
-            expect(await panel.locator(".bp-profile").textContent()).toBe("work");
-            expect(await focusRequests(beforePanelOpen)).toEqual([]);
-          }
-          const beforeHostOpen = (await browserRequests()).length;
-          await hostCard.getByRole("button", { name: "Open", exact: true }).click();
-          await panel.locator('.bp-shot[alt="Managed tab"]').waitFor();
-          expect(await panel.locator(".bp-profile").textContent()).toBe("managed");
-          await expect
-            .poll(async () => (await browserRequests()).map((request) => request.params))
-            .toContainEqual({
-              method: "POST",
-              path: "/screenshot",
-              target: "host",
-              query: { profile: "managed" },
-              body: { targetId: "t1", type: "png" },
-              tabScope: { sessionKey: "agent:main:main" },
+          await openChatSidePanelType(page, "Browser");
+          await panel.locator('.bp-shot[alt="' + selected.title + '"]').waitFor();
+          expect(await panel.locator(".bp-profile").textContent()).toBe(selected.profile);
+          expect(await focusRequests()).toEqual([]);
+          for (const request of await browserRequests()) {
+            expect(request.params).toMatchObject({
+              target: selected.target,
+              query: { profile: selected.profile },
+              ...("node" in selected ? { node: selected.node } : {}),
             });
-          const afterHostOpen = (await browserRequests()).slice(beforeHostOpen);
-          // The old view can resize while Playwright delivers the click. Selection
-          // starts with /tabs; validate its route and every request after it.
-          const selectionStart = afterHostOpen.findIndex(
-            (request) => requestPath(request) === "/tabs",
-          );
-          expect(selectionStart).toBeGreaterThanOrEqual(0);
-          const hostRequests = afterHostOpen.slice(selectionStart);
-          expect(hostRequests.map(requestPath)).toEqual(
-            expect.arrayContaining(["/tabs", "/tabs/focus", "/screenshot", "/act"]),
-          );
-          for (const request of hostRequests) {
-            expect(request.params).toMatchObject({ target: "host", query: { profile: "managed" } });
-            expect(request.params).not.toHaveProperty("node");
           }
           expect(await gateway.getRequests("config.set")).toEqual([]);
           expect(await gateway.getRequests("config.patch")).toEqual([]);

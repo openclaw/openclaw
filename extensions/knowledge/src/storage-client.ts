@@ -8,6 +8,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
+import type { LiveState } from "./live-state.js";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
 import { KnowledgeRestartError } from "./restart-error.js";
@@ -62,7 +63,14 @@ export class StorageClient {
   private readonly signal = new Int32Array(new SharedArrayBuffer(8));
   private readonly calls = new Map<number, Call>();
   private nextId = 0;
-  constructor(readonly config: StoreConfig) {}
+  liveState: LiveState["state"] = "stopped";
+  constructor(
+    readonly config: StoreConfig,
+    private readonly changed?: () => void,
+  ) {}
+  invalidate() {
+    this.worker?.postMessage({ type: "invalidate" } satisfies HostMessage);
+  }
   call<Op extends keyof StorageOperations>(
     op: Op,
     access: VaultAccess,
@@ -100,6 +108,7 @@ export class StorageClient {
   async close() {
     const worker = this.worker;
     this.worker = undefined;
+    this.liveState = "stopped";
     this.fail(
       new KnowledgeRestartError(
         "storage-stopped",
@@ -118,6 +127,7 @@ export class StorageClient {
         files: pluginFilesLocation(),
         config: this.config,
         signal: this.signal.buffer,
+        watch: Boolean(this.changed),
       },
     });
     worker.unref();
@@ -138,6 +148,12 @@ export class StorageClient {
     return worker;
   }
   private receive(message: WorkerMessage, worker: Worker) {
+    if (message.type === "changed") {
+      if (this.worker === worker) {
+        this.changed?.();
+      }
+      return;
+    }
     const call = this.calls.get(message.id);
     if (message.type === "assert") {
       // Answer through shared memory: the worker is blocked waiting for it.
@@ -165,6 +181,7 @@ export class StorageClient {
       worker.unref();
     }
     if (message.ok) {
+      this.liveState = message.live;
       call.resolve(message.value);
       return;
     }

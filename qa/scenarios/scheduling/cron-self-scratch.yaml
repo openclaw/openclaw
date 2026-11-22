@@ -1,0 +1,76 @@
+title: Cron self scratch
+
+scenario:
+  id: cron-self-scratch
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.cron-rpcs
+  objective: Verify an isolated run of an operator-created automation that names an owner conversation can read and replace its own scratch through the automations tool.
+  successCriteria:
+    - The operator job keeps trusted scheduled authority and its owner conversation.
+    - The run's scratch_get returns the operator-written scratch and its revision.
+    - The run's scratch_set at that revision stores the new content as the next revision.
+    - The run completes successfully.
+  docsRefs:
+    - docs/automation/cron-jobs/payloads.md
+    - docs/automation/cron-jobs/managing-jobs.md
+  codeRefs:
+    - src/gateway/server-methods/cron-scratch.ts
+    - src/gateway/server-methods/cron-caller-scope.ts
+    - src/agents/tools/cron-tool-automation.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-self-scratch.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns an operator-created cron job and its scratch.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 240000
+    summary: Run a trusted isolated job with mock-openai whose turn calls scratch_get then scratch_set, and read the stored scratch back as the operator.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-self-scratch-owner
+      seedContent: qa-self-scratch-seed
+      runContent: qa-self-scratch-written-by-run
+      marker: QA-CRON-SELF-SCRATCH-DONE
+
+flow:
+  steps:
+    - name: a trusted job's isolated run reads and replaces its own scratch
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: cron self scratch proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: job
+          value:
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-self-scratch-${randomUUID()}`, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: `agent:qa:qa-channel:group:group:${config.conversationId}`, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Automation self scratch QA check: content=${config.runContent} marker=${config.marker}`, toolsAllow: ['automations'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "job.scheduledToolPolicy?.mode === 'trusted'"
+            message:
+              expr: "`operator job did not keep trusted authority: ${JSON.stringify({ owner: job.owner, policy: job.scheduledToolPolicy })}`"
+        - set: seeded
+          value:
+            expr: "await env.gateway.call('cron.scratch.set', { id: job.id, content: config.seedContent, expectedRevision: 0 }, { timeoutMs: 30000 })"
+        - set: run
+          value:
+            expr: "await (async () => { const runStartedAt = Date.now(); await env.gateway.call('cron.run', { id: job.id, mode: 'force' }, { timeoutMs: 30000 }); return await waitForCronRunCompletion({ callGateway: env.gateway.call.bind(env.gateway), jobId: job.id, afterTs: runStartedAt, timeoutMs: liveTurnTimeoutMs(env, 120000) }); })()"
+        - set: toolOutputs
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes('Automation self scratch QA check') && request.toolOutput).map((request) => String(request.toolOutput).slice(0, 600))"
+        - set: stored
+          value:
+            expr: "await env.gateway.call('cron.scratch.get', { id: job.id }, { timeoutMs: 30000 })"
+        - assert:
+            expr: "seeded.currentRevision === 1 && run.status === 'ok' && stored.currentRevision === 2 && stored.scratch?.content === config.runContent"
+            message:
+              expr: "`run did not replace its own scratch: ${JSON.stringify({ seeded: seeded.currentRevision, run: { status: run.status, error: run.error, summary: run.summary }, stored, toolOutputs })}`"
+      detailsExpr: "`run=${run.status} revision=${stored.currentRevision} content=${stored.scratch?.content} tools=${JSON.stringify(toolOutputs)}`"

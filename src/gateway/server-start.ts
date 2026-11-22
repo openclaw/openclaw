@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
@@ -24,7 +25,7 @@ export async function startGatewayServerCore(
     opts.startupConfigSnapshotRead?.snapshot,
     opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   // Join startup through its returned promise without giving resident listeners the boot scope.
   const start = (signal?: AbortSignal) =>
     runOutsideAsyncWorkScope(() =>
@@ -161,8 +162,8 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost
-          .run(async () => {
+        closePromise = gatewayKernel
+          .runClose(async () => {
             const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
             await runGatewayCloseSteps({

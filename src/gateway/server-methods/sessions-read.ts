@@ -59,6 +59,7 @@ import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
+import { searchRecallSessionTranscripts } from "./sessions-search-recall.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
@@ -71,6 +72,20 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const query = params.query.trim();
     if (!query) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
+      return;
+    }
+    if (params.recall) {
+      await searchRecallSessionTranscripts({
+        query,
+        limit: params.limit,
+        recall: params.recall,
+        projection: requireSessionRowProjection(context),
+        client: client ?? null,
+        onResult: (result) => {
+          sessionMutationAuthorization?.assertCurrent();
+          respond(true, result);
+        },
+      });
       return;
     }
     if (params.scope !== undefined) {

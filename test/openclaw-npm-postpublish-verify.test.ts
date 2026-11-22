@@ -180,6 +180,42 @@ it.each<[() => Response, { maxBodyBytes?: number; timeoutMs: number }, string]>(
   ).rejects.toThrow(error);
 });
 
+it.each(["", "private-user:private-token@"])(
+  "reports the registry endpoint and nested cause without credentials (%s)",
+  (credentials) => {
+    const root = makeInstalledPackageRoot({ name: "openclaw", version });
+    const preload = writeInstalledFile(
+      root,
+      "fetch-failure.mjs",
+      'globalThis.fetch = async () => { throw new Error("registry connection rejected", { cause: new Error("certificate has expired") }); };',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        join(process.cwd(), "scripts/tsx.mjs"),
+        "--import",
+        preload,
+        join(process.cwd(), "scripts/openclaw-npm-postpublish-verify.ts"),
+        version,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        // "network" in the endpoint must not turn this terminal failure into retries.
+        env: { ...process.env, npm_config_registry: `https://${credentials}network.example/` },
+      },
+    );
+    expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
+    expect(result.stderr).toContain("https://network.example/openclaw/2026.3.23");
+    expect(result.stderr).toContain("registry connection rejected");
+    expect(result.stderr).toContain("Caused by: certificate has expired");
+    expect(result.stderr).not.toContain("private-user");
+    expect(result.stderr).not.toContain("private-token");
+  },
+);
+
 it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {
   const verifyBundle = makeBundleVerifier();
   await verifyProvenance({ verifyBundle }).resolves.toBeUndefined();
@@ -524,12 +560,12 @@ function makeLegacyFixture(source = legacyCompanionSource, fileName?: string) {
   };
 }
 
-it.each(["//#region", "//"])(
+it.each(["//#region", "//", "//!"])(
   "uses generated source ownership only when the compatibility gate is enabled (%s)",
   (label) => {
     const source = legacyCompanionSource
-      .replace("//#region", label)
-      .replace("//#endregion", label === "//" ? "" : "//#endregion");
+      .replace("//#region ", label === "//!" ? label : `${label} `)
+      .replace("//#endregion", label === "//#region" ? "//#endregion" : "");
     const { packageRoot, legacyErrors } = makeLegacyFixture(source);
     expectDependencyErrors(packageRoot, "@discordjs/voice");
     expect(legacyErrors()).toStrictEqual([]);

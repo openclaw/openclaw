@@ -114,11 +114,6 @@ export function ChatSubagentActivity(props: SubagentActivityProps) {
           live && digest === live && live.planProgress?.total ? live.planProgress : undefined,
       };
     });
-    onSettled(() => {
-      if (!props.presentation) {
-        props.onPresentation?.(value);
-      }
-    });
     return value;
   });
   return <SubagentActivity {...props} rows={rows()} />;

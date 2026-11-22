@@ -1,2 +1,0 @@
-1
-# Register the unchanged Chromium retention proof in the explicit standalone ownership oracle.

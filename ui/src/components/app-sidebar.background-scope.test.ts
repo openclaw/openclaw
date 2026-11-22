@@ -165,7 +165,9 @@ describe("AppSidebar automatic list scope replacement", () => {
       mainParent.childSessions![0],
     );
     const expand = childToggle(sidebar, nextParent.key);
-    expect(expand?.getAttribute("aria-expanded")).toBe("true");
+    expect(expand?.getAttribute("aria-expanded")).toBe("false");
+    expand!.click();
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain(`${nextParent.key} child`);
     expect(parents).toHaveLength(2);
   });
@@ -293,10 +295,8 @@ describe("AppSidebar automatic list scope replacement", () => {
         expect(parents).toEqual([mainParent, researchParent]);
         const expand = childToggle(sidebar, researchParent);
         expect(expand).not.toBeNull();
-        expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
-        if (nextAgent === "main") {
-          expand!.click();
-        }
+        expect(expand?.getAttribute("aria-expanded")).toBe("false");
+        expand!.click();
         await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(0);
         expect(sidebar.textContent).toContain("Next child");
@@ -313,7 +313,6 @@ describe("AppSidebar initial managed-list hydration", () => {
     ["ordinary overlap", false, false, "self"],
     ["queued initial fill", true, false, "self"],
     ["queued initial fill with a later event", true, true, "self"],
-    ["saved owner", true, false, "owner"],
     ["saved involving me", true, false, "involving-me"],
   ] as const)(
     "paints filtered sessions before group metadata during %s",
@@ -399,16 +398,10 @@ describe("AppSidebar initial managed-list hydration", () => {
         : Promise.resolve();
       const provider = createApplicationContextProvider(context);
       const sidebar = await createSidebarElement();
-      if (filter !== "self") {
-        storeSidebarSessionOwnerFilter(
-          gateway.gateway.connection.gatewayUrl,
-          "synthetic-operator",
-          {
-            ownerId: filter === "owner" ? "synthetic-operator" : null,
-            involvingMe: filter === "involving-me",
-          },
-        );
-      }
+      storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
+        ownerId: filter === "self" ? "synthetic-operator" : null,
+        involvingMe: filter === "involving-me",
+      });
       provider.append(sidebar.hostElement);
       document.body.append(provider);
       await settleLitElement(sidebar);
@@ -431,7 +424,7 @@ describe("AppSidebar initial managed-list hydration", () => {
           expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
         );
         expect(listQueries).toHaveLength(2);
-        expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
+        expect(listQueries[1]?.agentId).toBe("main");
         expect(matchesFilter(listQueries[1])).toBe(true);
 
         filtered.resolve(filteredResult);

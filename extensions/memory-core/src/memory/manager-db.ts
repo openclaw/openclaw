@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStoreV2,
   openNodeSqliteDatabase,
+  retireSqliteDatabaseAdmissionForPath,
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -183,6 +184,8 @@ export async function resetMemoryDatabase(params: {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
+  // Its consumers have closed; the retained identity descriptor would keep the unlinked file allocated.
+  retireSqliteDatabaseAdmissionForPath(dbPath);
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
     await fs.rm(`${dbPath}${suffix}`, { force: true });
   }

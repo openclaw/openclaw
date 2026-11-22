@@ -29,6 +29,8 @@ import {
   launchAgentControlFixture,
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
+import { parseLaunchAgentEnabled } from "./launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   disableCurrentOpenClawUpdateLaunchdJob,
@@ -36,10 +38,8 @@ import {
   isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
-  parseLaunchAgentEnabled,
   readLaunchAgentRuntime,
   restartLaunchAgent,
-  resolveLaunchAgentPlistPath,
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
@@ -394,12 +394,13 @@ describe("launchd process ancestry guards", () => {
         mode: "kickstart",
         waitForPid: process.pid,
       });
-      expectServiceCalls("print");
+      // The second print compares the loaded command with the plist before choosing kickstart.
+      expectServiceCalls("print", "print");
       expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
     } else {
       expect(result).toEqual({ outcome: "completed" });
       expect(handoff).not.toHaveBeenCalled();
-      expectServiceCalls("print", "enable", ["kickstart", "-k"]);
+      expectServiceCalls("print", "print", "enable", ["kickstart", "-k"]);
     }
   });
 

@@ -201,7 +201,9 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       expect(await fadeContent()).toBe("none");
       expect(await editorCap()).toBeLessThan(tallEditorCap);
       expect(thread.height).toBeGreaterThan(0);
-      expect(thread.bottom).toBeLessThanOrEqual(footer.top);
+      await page.locator(".chat-thread").evaluate((node) => node.scrollTo(0, node.scrollHeight));
+      const lastMessage = await getRect(page, ".chat-thread > p:last-child");
+      expect(lastMessage.bottom).toBeLessThanOrEqual(footer.top);
       expect(footer.bottom).toBeLessThanOrEqual(shortConversation.bottom);
     });
   });
@@ -456,6 +458,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
               input: rect(".agent-chat__input"),
               fadeContent: fade.content,
               thread: rect(".chat-thread"),
+              content: rect(".chat-thread-inner"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
@@ -492,7 +495,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
         expect(before.fadeContent).toBe("none");
-        expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
+        expect(before.content.bottom).toBeLessThanOrEqual(before.footer.top);
         await setHtml(
           page,
           ".chat-topbar-notices",
@@ -515,7 +518,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(after.input).toEqual(before.input);
         expect(after.footer.height).toBeGreaterThan(before.footer.height);
         expect(after.thread.height).toBeLessThan(before.thread.height);
-        expect(after.thread.bottom).toBeLessThanOrEqual(after.footer.top);
+        expect(after.content.bottom).toBeLessThanOrEqual(after.footer.top);
         const notices = await getRect(page, ".agent-chat__composer-notices");
         expect(notices.top).toBeGreaterThanOrEqual(after.footer.top);
         expect(notices.bottom).toBeLessThanOrEqual(after.input.top);
@@ -528,7 +531,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         ).toBe(false);
         if (withPullRequest) {
           const pullRequest = await getRect(page, ".chat-pr");
-          expect(pullRequest.top).toBeGreaterThanOrEqual(after.thread.bottom);
+          expect(pullRequest.top).toBeGreaterThanOrEqual(after.content.bottom);
           expect(pullRequest.bottom).toBeLessThanOrEqual(notices.top);
           await page.getByRole("link", { name: "PR #42" }).click({ trial: true });
         }

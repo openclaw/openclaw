@@ -38,6 +38,7 @@ export type ExecPolicyToolAccess = {
 export async function buildExecPolicyToolAccess(
   config: OpenClawConfig,
   options: ExecPolicyShowOptions,
+  signal?: AbortSignal,
 ): Promise<ExecPolicyToolAccess> {
   const requestedAgent = options.agent?.trim();
   const sessionKey = options.session?.trim();
@@ -72,7 +73,7 @@ export async function buildExecPolicyToolAccess(
         "tools.effective",
         options,
         { ...(agentId ? { agentId } : {}), sessionKey },
-        { progress: false, sharedStateMode: "read-only" },
+        { progress: false, sharedStateMode: "read-only", signal },
       );
       if (agentId && result.agentId !== agentId) {
         throw new Error("The Gateway returned tool access for a different agent.");

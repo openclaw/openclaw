@@ -1,10 +1,11 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import photon from "@silvia-odwyer/photon-node";
-import { stopChild } from "../lib/gateway-bench-child.ts";
+import { hasUnjoinedWork, runManagedCommand } from "../lib/managed-child-process.mts";
+import { failManagedCleanup } from "../lib/managed-cleanup-handoff.mts";
 import type { summarizeDetailsGeometry } from "./warm-reload-browser-probe.ts";
 
 type Arm = "base" | "candidate";
@@ -33,7 +34,7 @@ type ComparisonRun = {
     firstDashboardContentDomMs?: number | null;
   };
   auditedPaint?: { main: { atMs: number }; dashboard: { atMs: number } | null };
-  visual: Census & { unmasked: Census; visibleChangeCensus?: Census };
+  visual?: Census & { unmasked: Census; visibleChangeCensus?: Census };
 };
 type ComparisonResult = { arm: string; route: string; runs: ComparisonRun[] };
 type ComparisonPair = {
@@ -45,41 +46,27 @@ type ComparisonPair = {
 };
 const exec = promisify(execFile);
 
-async function runBuildCommand(command: string, args: string[], cwd: string) {
-  const child = spawn(command, args, {
+async function runBuildCommand(command: string, args: string[], cwd: string, signal?: AbortSignal) {
+  const code = await runManagedCommand({
+    bin: command,
+    args,
     cwd,
     stdio: "inherit",
-    detached: process.platform !== "win32",
+    signal,
+    requireProcessTreeExit: process.platform !== "win32",
   });
-  let stopping: ReturnType<typeof stopChild> | undefined;
-  const interrupt = () => {
-    stopping ??= stopChild(child);
-  };
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`${command} failed (${signal ?? code}); see build output`));
-        }
-      });
-    });
-  } finally {
-    process.off("SIGINT", interrupt);
-    process.off("SIGTERM", interrupt);
-    await (stopping ?? stopChild(child));
+  signal?.throwIfAborted();
+  if (code !== 0) {
+    throw new Error(`${command} failed (${code}); see build output`);
   }
 }
 
 /** Existing UI/full-dist directory, or one pinned ref built in an owned detached checkout. */
 export async function prepareWarmReloadBuild(
   input: string,
-  options: { directory: string; label: string },
+  options: { directory: string; label: string; signal?: AbortSignal },
 ) {
+  options.signal?.throwIfAborted();
   const inputPath = path.resolve(input);
   let existingDirectory = false;
   try {
@@ -115,13 +102,20 @@ export async function prepareWarmReloadBuild(
       }
       await mkdir(directory, { recursive: true });
       const checkout = path.join(directory, `${options.label}-source`);
+      options.signal?.throwIfAborted();
       await exec("git", ["worktree", "add", "--detach", checkout, revision]);
       sourceDirectory = checkout;
-      await runBuildCommand("corepack", ["pnpm", "install", "--frozen-lockfile"], checkout);
-      await runBuildCommand("corepack", ["pnpm", "build"], checkout);
+      await runBuildCommand(
+        "corepack",
+        ["pnpm", "install", "--frozen-lockfile"],
+        checkout,
+        options.signal,
+      );
+      await runBuildCommand("corepack", ["pnpm", "build"], checkout, options.signal);
       uiRoot = path.join(checkout, "dist", "control-ui");
     }
     const index = await readFile(path.join(uiRoot, "index.html"));
+    options.signal?.throwIfAborted();
     return {
       input,
       uiRoot,
@@ -131,7 +125,20 @@ export async function prepareWarmReloadBuild(
       cleanup,
     };
   } catch (error) {
-    await cleanup();
+    // A failed build can still own detached children. Main has no returned handle
+    // yet, so this producer must preserve the checkout and original failure.
+    if (hasUnjoinedWork(error)) {
+      failManagedCleanup();
+    } else {
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        failManagedCleanup();
+        throw new AggregateError([error, cleanupError], "Warm reload build cleanup failed", {
+          cause: cleanupError,
+        });
+      }
+    }
     throw error;
   }
 }
@@ -155,14 +162,14 @@ function metrics(
 ): Record<string, number | null> {
   const geometry = run.probe.detailsGeometry;
   return {
-    visibleStates: run.visual.visibleChangeCensus?.distinctStates ?? null,
-    visibleStateOccurrences: run.visual.visibleChangeCensus?.timeline.length ?? null,
-    pixelStates: run.visual.distinctStates,
-    pixelStateOccurrences: run.visual.timeline.length,
-    unmaskedPixelStates: run.visual.unmasked.distinctStates,
-    unmaskedPixelStateOccurrences: run.visual.unmasked.timeline.length,
-    lastVisibleChangeMs: run.visual.visibleChangeCensus?.lastVisualChangeMs ?? null,
-    lastPixelChangeMs: run.visual.lastVisualChangeMs,
+    visibleStates: run.visual?.visibleChangeCensus?.distinctStates ?? null,
+    visibleStateOccurrences: run.visual?.visibleChangeCensus?.timeline.length ?? null,
+    pixelStates: run.visual?.distinctStates ?? null,
+    pixelStateOccurrences: run.visual?.timeline.length ?? null,
+    unmaskedPixelStates: run.visual?.unmasked.distinctStates ?? null,
+    unmaskedPixelStateOccurrences: run.visual?.unmasked.timeline.length ?? null,
+    lastVisibleChangeMs: run.visual?.visibleChangeCensus?.lastVisualChangeMs ?? null,
+    lastPixelChangeMs: run.visual?.lastVisualChangeMs ?? null,
     boardWidgetSkeletonMs: run.probe.boardWidgetSkeletonMs ?? null,
     allBoardWidgetsVisibleMs: run.probe.allBoardWidgetsVisibleMs ?? null,
     cachedBoardLayoutMs: run.probe.cachedBoardLayoutMs ?? null,
@@ -200,8 +207,12 @@ function metrics(
 }
 
 async function comparisonSheets(base: ComparisonRun, candidate: ComparisonRun, directory: string) {
-  const census = (run: ComparisonRun) => run.visual.visibleChangeCensus ?? run.visual;
-  const timelines = [census(base).timeline, census(candidate).timeline];
+  if (!base.visual || !candidate.visual) {
+    return [];
+  }
+  const timelines = [base.visual, candidate.visual].map(
+    (visual) => (visual.visibleChangeCensus ?? visual).timeline,
+  );
   const times = [...new Set(timelines.flatMap((timeline) => timeline.map((entry) => entry.atMs)))];
   times.sort((a, b) => a - b);
   const files: string[] = [];

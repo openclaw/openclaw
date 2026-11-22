@@ -25,7 +25,10 @@ import {
   publishPreparedSessionStateArchives,
   publishSessionStateArchivesInWorker,
 } from "./session-archive-publication.js";
-import { ARCHIVE_RETENTION_BATCH_SIZE } from "./session-history-archive-pruning.types.js";
+import {
+  ARCHIVE_RETENTION_BATCH_SIZE,
+  type SessionArchivePruningSource,
+} from "./session-history-archive-pruning.types.js";
 
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
@@ -172,6 +175,7 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   rules: readonly { olderThanMs: number; reason: "deleted" | "reset" }[];
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
   assertCurrent?: () => void;
+  source?: SessionArchivePruningSource;
 }): Promise<number> {
   const rules = new Map(
     params.rules
@@ -239,5 +243,6 @@ export async function prunePublishedSessionArchivesByRetention(params: {
       return removed;
     },
     params.assertCurrent,
+    params.source,
   );
 }

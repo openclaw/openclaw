@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { hash, terminal, type ResearchJob } from "./job-state.js";
 import type { ResearchView, ResearchViewSource } from "./view-contract.js";
 
@@ -36,7 +37,7 @@ export function projectResearchJob(job: ResearchJob): ResearchView {
     version: 1 as const,
     jobId: job.id,
     question: job.request.question,
-    title: job.request.question.slice(0, 160),
+    title: truncateUtf16Safe(job.request.question, 160),
     state: job.state,
     phase: terminal(job) ? job.state : (job.observation?.phase ?? job.state),
     summary: job.progress,

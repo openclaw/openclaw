@@ -332,6 +332,13 @@ it.each<[number, number, FixtureOptions]>([
       return await runBuffered(argv, options);
     });
     let stagingRoot = "";
+    const rm = fs.rm;
+    using _ = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+      if (String(target) === stagingRoot && options?.recursive) {
+        throw new Error("Bulk staged cleanup entered the Gateway libuv pool");
+      }
+      return rm(target, options);
+    });
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
       expect((await fs.readdir(stagingRoot)).toSorted()).toEqual(

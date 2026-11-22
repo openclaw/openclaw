@@ -422,6 +422,13 @@ export async function finalizeWorkerTurnResult(
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
   }
+  // The turn's rows, including any prompt delta on its user row, are committed: advance the series.
+  if (promptContext.commitSystemPrompt) {
+    await promptContext.commitSystemPrompt(completed, (run) =>
+      withSessionTranscriptWriteAssertion(resultTarget, assertResultCurrent, run),
+    );
+    assertResultCurrent();
+  }
   // Reply accounting needs the admitted writer even when this turn did not compact.
   if (transcriptTarget.expectedWriterRunId !== undefined) {
     turn.onCompactionAccounting?.({

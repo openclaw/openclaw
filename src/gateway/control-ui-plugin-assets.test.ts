@@ -17,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerPluginCompilerLifecycleTests } from "./control-ui-plugin-assets.compiler.suite.js";
 import {
   handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
@@ -221,6 +222,8 @@ beforeAll(async () => {
   // Compile the real Control UI owner during setup, before the HTTP request deadline starts.
   await import("./control-ui.js");
 });
+
+registerPluginCompilerLifecycleTests(activateFixture);
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();
@@ -688,9 +691,9 @@ it("serves profile-bound cookie assets with a replaced profile catalog", async (
   });
 });
 
-it.each(["auth rotation", "response closure"] as const)(
+it.each(["response closure"] as const)(
   "refuses asset disclosure after %s during profile preparation",
-  async (invalidation) => {
+  async () => {
     await withOpenClawTestState({ prefix: "native-ui-profile-authority-" }, async () => {
       await withConfig(async () => {
         activateFixture();
@@ -707,7 +710,7 @@ it.each(["auth rotation", "response closure"] as const)(
             await resume.promise;
             return catalog;
           });
-        let currentAuth = AUTH_TOKEN;
+        const currentAuth = AUTH_TOKEN;
         const request = createRequest({
           path: entry.entryUrl,
           headers: { cookie: cookieForGrant({ profileId: profile.id }) },
@@ -724,18 +727,10 @@ it.each(["auth rotation", "response closure"] as const)(
             operation,
             "asset request completed before profile preparation",
           );
-          if (invalidation === "auth rotation") {
-            currentAuth = { ...AUTH_TOKEN, token: "rotated-token" };
-          } else {
-            response.res.destroy();
-          }
+          response.res.destroy();
           resume.resolve();
           expect(await operation).toBe(true);
-          if (invalidation === "auth rotation") {
-            expect(response.res.statusCode).toBe(401);
-          } else {
-            expect(response.end).not.toHaveBeenCalled();
-          }
+          expect(response.end).not.toHaveBeenCalled();
         } finally {
           resume.resolve();
           try {

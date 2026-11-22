@@ -15,7 +15,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { capFrozenResultText } from "../subagents/registry/subagent-registry-helpers.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
-import { matchesSubagentRequesterSession } from "../subagents/registry/subagent-registry-queries.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -23,10 +22,7 @@ import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const MAX_WAIT_IDS = 1_000;
 
@@ -103,7 +99,6 @@ type CollectorOwnerScope = {
   currentSessionKeys: ReadonlySet<string>;
   currentAgentId?: string;
   config?: OpenClawConfig;
-  expectedRequester?: { sessionId: string; lifecycleRevision?: string };
 };
 
 // Hooks see the call ID and may invoke other tools with it. The per-tool marker
@@ -147,11 +142,8 @@ export function readNativeSubagentCollection(details: unknown) {
 
 function ownsRun(
   entry: SubagentRunRecord,
-  { currentSessionKeys, currentAgentId, config, expectedRequester }: CollectorOwnerScope,
+  { currentSessionKeys, currentAgentId, config }: CollectorOwnerScope,
 ): boolean {
-  if (expectedRequester && !matchesSubagentRequesterSession(entry, expectedRequester)) {
-    return false;
-  }
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
     return false;
@@ -355,7 +347,6 @@ async function waitForCollector(params: CollectorWaitParams) {
 
 async function waitForCollectorState(params: CollectorWaitParams) {
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
-  const assertCurrent = captureGatewayToolCallerAssertion();
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
@@ -428,7 +419,6 @@ async function waitForCollectorState(params: CollectorWaitParams) {
               return false;
             }
             params.assertCurrent?.();
-            assertCurrent?.();
             return true;
           },
         });
@@ -462,6 +452,7 @@ export function createAgentsWaitTool(opts: {
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
+    repeatable: true,
     description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
     outputSchema: AgentsWaitOutputSchema,
@@ -530,7 +521,6 @@ async function collectNativeSubagentResults(
     waitForAll: params.awaitResults,
     signal: params.signal,
     assertCurrent: params.assertCurrent,
-    expectedRequester: params.expectedRequester,
     abortError: () => createAbortError("agents_wait aborted."),
   });
   const noAuthorizedTargets =

@@ -4,14 +4,15 @@ import { getEventListeners, once } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as nextTimerTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { forceFullGc } from "../../../../src/test-utils/retention.js";
 import { createApiRegistry } from "../api-registry.js";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -70,6 +71,7 @@ describe("ChatGPT Responses cached transport", () => {
     const options = {
       apiKey: createJwt(),
       sessionId: "caller-retention",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("caller-retention"),
       transport: "websocket-cached" as const,
     };
     let reference: WeakRef<object> | undefined;
@@ -86,7 +88,7 @@ describe("ChatGPT Responses cached transport", () => {
       // This later timer follows the stream's cooperative timer; the cached native
       // socket and its real expiry timer remain live through GC.
       await nextTimerTurn(0);
-      queryObjects(WeakRef);
+      forceFullGc();
       expect(control.deref()).toBeUndefined();
       assert.ok(reference);
       expect(reference.deref()).toBeUndefined();
@@ -141,7 +143,12 @@ describe("ChatGPT Responses cached transport", () => {
 
     await once(server, "listening");
     const loopbackModel = createLoopbackModel(server);
-    const options = { apiKey, sessionId, transport: "websocket-cached" as const };
+    const options = {
+      apiKey,
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "websocket-cached" as const,
+    };
 
     try {
       await expectStopped(runChatgpt(options, simpleContext, loopbackModel));
@@ -191,6 +198,7 @@ describe("ChatGPT Responses cached transport", () => {
     const options = {
       apiKey: createJwt(),
       sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
       transport: "websocket-cached" as const,
     };
 
@@ -230,6 +238,7 @@ describe("ChatGPT Responses cached transport", () => {
     const options = {
       apiKey: createJwt(),
       sessionId: "binary-frame",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("binary-frame"),
       transport: "websocket-cached" as const,
     };
     const followUpContext = {
@@ -299,7 +308,12 @@ describe("ChatGPT Responses cached transport", () => {
 
     await once(server, "listening");
     const loopbackModel = createLoopbackModel(server);
-    const options = { apiKey, sessionId, transport: "websocket-cached" as const };
+    const options = {
+      apiKey,
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "websocket-cached" as const,
+    };
 
     try {
       await expectStopped(runChatgpt(options, simpleContext, loopbackModel));
@@ -397,7 +411,12 @@ describe("ChatGPT Responses cached transport", () => {
       resolveSecretSentinel: (value) => (value === "opaque" ? secondToken : value),
     });
     const sessionId = "runtime-fallback-authority";
-    const options = { apiKey: "opaque", sessionId, transport: "auto" as const };
+    const options = {
+      apiKey: "opaque",
+      sessionId,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      transport: "auto" as const,
+    };
 
     try {
       await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
@@ -443,7 +462,11 @@ describe("ChatGPT Responses cached transport", () => {
     vi.stubGlobal("WebSocket", WebSocket);
     const apiKey = createJwt();
     const runSession = (sessionId: string) =>
-      streamOpenAICodexResponses(loopbackModel, simpleContext, { apiKey, sessionId }).result();
+      streamOpenAICodexResponses(loopbackModel, simpleContext, {
+        apiKey,
+        sessionId,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+      }).result();
 
     const terminal = {
       type: "openai_responses_terminal",
@@ -566,7 +589,10 @@ describe("ChatGPT Responses cached transport", () => {
   const REASONING_CIPHERTEXT = "opaque-reasoning-replay";
   const COMPACTION_CIPHERTEXT = "opaque-compaction-replay";
   const FULL_HISTORY_PREFIX = "native full history before compaction";
-  const REPLAY_IDENTITY = { sessionId: "retry-session", authProfileId: "retry-profile" };
+  const REPLAY_IDENTITY = {
+    sessionId: "retry-session",
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState("retry-session"),
+  };
 
   function createReplayContext(kind: "compaction" | "mixed"): Context {
     const content: AssistantMessage["content"] = [];

@@ -1,11 +1,13 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { cdp } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
+import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-function mount() {
+function mount(overrides: Partial<ChatDetailsProps> = {}, cachedReady = true) {
   const container = document.body.appendChild(document.createElement("div"));
   const chat: ChatDetailsProps = {
     sessionKey: "agent:main:cached-details-scroll",
@@ -15,6 +17,7 @@ function mount() {
     cachedDetails: { locale: "en", environment: { branch: "feature/cached", worktree: false } },
     sessionFactsReady: false,
     detailsWorkspace: { root: "/workspace/details", label: "details", branch: "feature/cached" },
+    ...overrides,
   };
   function Content(props: { chat: ChatDetailsProps }) {
     return (
@@ -22,7 +25,7 @@ function mount() {
         chat={props.chat}
         presented
         dismissed={false}
-        cachedReady
+        cachedReady={cachedReady}
         progressMenuRef={() => {}}
         onHideProgress={() => {}}
       />
@@ -59,7 +62,65 @@ async function nextFrame() {
   flush();
 }
 
+it("scrolls Details vertically without panning sideways when content overflows", async () => {
+  const { body } = mount();
+  body.style.width = "300px";
+  body.style.height = "100px";
+  const oversized = document.createElement("div");
+  oversized.style.width = "400px";
+  oversized.style.height = "200px";
+  body.firstElementChild!.append(oversized);
+  expect(body.scrollWidth).toBeGreaterThan(body.clientWidth);
+  expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+
+  const { left, top } = body.getBoundingClientRect();
+  await cdp().send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: left + 40,
+    y: top + 40,
+    deltaX: 64,
+    deltaY: 64,
+  });
+  await expect.poll(() => body.scrollTop).toBeGreaterThan(0);
+  expect(body.scrollLeft).toBe(0);
+});
+
+it("keeps the compact floor when first facts and Environment arrive together", async () => {
+  await loadChatDetailsDesktopComposition();
+  const view = mount(
+    { cachedDetails: undefined, detailsWorkspace: undefined, sessionFactsReady: false },
+    false,
+  );
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-details-desktop-loading")).not.toBeNull(),
+  );
+  const floor = view.body.getBoundingClientRect().height;
+  expect(floor).toBeGreaterThan(0);
+  view.update({
+    chat: {
+      ...view.chat,
+      sessionFactsReady: true,
+      selectedSession: { key: view.chat.sessionKey, kind: "direct", sessionId: "arrived" },
+      detailsWorkspace: { root: "/workspace/details", label: "details", branch: "feature/arrived" },
+    },
+  });
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
+      "feature/arrived",
+    ),
+  );
+  const heights = [view.body.getBoundingClientRect().height];
+  for (let frame = 0; frame < 20; frame++) {
+    await nextFrame();
+    heights.push(view.body.getBoundingClientRect().height);
+  }
+  expect(Math.min(...heights)).toBeGreaterThanOrEqual(floor - 1);
+  expect(heights.at(-1)).toBeGreaterThan(floor);
+});
+
 it("adds no handoff measurements or animations to cached and settled scrolling", async () => {
+  // Cached admission resolves both real lazy modules before interaction measurement.
+  await loadChatDetailsDesktopComposition();
   const animations = vi.spyOn(Element.prototype, "animate");
   onTestFinished(() => animations.mockRestore());
   // The shared browser graph may already have loaded these modules in another file.

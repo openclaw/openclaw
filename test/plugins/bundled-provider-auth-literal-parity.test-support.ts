@@ -7,7 +7,7 @@ import { afterAll, expect, it } from "vitest";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/plugin-test-runtime.js";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
 import type { OpenClawPluginDefinition } from "../../src/plugins/plugin-definition.types.js";
-import type { ProviderResolveNonInteractiveApiKeyParams } from "../../src/plugins/types.js";
+import type { ProviderResolveNonInteractiveApiKeyParams } from "../../src/plugins/provider-auth-types.js";
 import { createNonExitingRuntime } from "../../src/runtime.js";
 import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 

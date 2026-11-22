@@ -32,7 +32,6 @@ function renderDailyChart(
         selectedDays: [],
         chartMode,
         dailyChartMode,
-        onDailyChartModeChange: () => {},
         providerSeries,
         onSelectDay,
         range: {
@@ -74,7 +73,6 @@ describe("DailyChartCompact", () => {
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "total",
-        onDailyChartModeChange: () => {},
         providerSeries: [],
         onSelectDay: () => {},
         get range() {
@@ -257,7 +255,6 @@ describe("DailyChartCompact", () => {
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "by-provider",
-        onDailyChartModeChange: () => {},
         get providerSeries() {
           return series();
         },
@@ -327,8 +324,7 @@ describe("DailyChartCompact", () => {
       preset.click();
       flush();
       expect(onDatesChange.mock.calls.map(([patch]) => patch)).toEqual([
-        { startDate: "2026-05-08" },
-        { endDate: "2026-05-14" },
+        { startDate: "2026-05-08", endDate: "2026-05-14" },
       ]);
       expect([...container.querySelectorAll(".usage-presets button")]).toContain(preset);
       expect(document.activeElement).toBe(preset);

@@ -9,18 +9,34 @@ import {
   listRpcSourceEntries,
   resolveRpcSourceSessionProgressState,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
+import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { invalidateGatewayPolicyClient } from "../server/ws-policy-close.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import type { OpenClawIdEffects } from "./service.js";
+import { removeNodePairings, reconcileNodePairings } from "./node-pairing.js";
+import type { OpenClawIdConnectionCloseCause, OpenClawIdEffects } from "./service.js";
 import {
   openclawIdTunnelConnectionsOf,
   setOpenClawIdRunOwnerConnections,
 } from "./tunnel-connections.js";
 
 type EffectsLogger = { warn: (message: string) => void };
+
+// Both causes are policy closes (1008); the reason tells removal and sign-out apart.
+const CLOSE_POLICIES: Record<
+  OpenClawIdConnectionCloseCause,
+  { reason: string; code: number; message: string }
+> = {
+  removed: { reason: "openclaw-id-removed", code: 1008, message: "removed from this claw" },
+  "signed-out": {
+    reason: "openclaw-id-signed-out",
+    code: 1008,
+    message: "signed out of OpenClaw ID",
+  },
+};
 
 // Connection ids that still own a registered (queued or running) run source.
 function runOwnerConnections(): Set<string> {
@@ -42,7 +58,33 @@ export function createOpenClawIdRemovalEffects(params: {
 }): OpenClawIdEffects {
   const byConnection = new Map<string, GatewayWsClient>();
   setOpenClawIdRunOwnerConnections(runOwnerConnections);
+  const clearRemovedNodes = async (deviceIds: readonly string[]) => {
+    const context = params.context();
+    for (const deviceId of deviceIds) {
+      context.invalidateClientsForDevice?.(deviceId, {
+        role: "node",
+        reason: "device-pair-removed",
+      });
+      try {
+        clearRemovedNodeRuntimeState({ nodeId: deviceId, context });
+        await reconcileRevokedDeviceWorker(context, deviceId);
+        context.broadcast(
+          "node.pair.resolved",
+          { requestId: "", nodeId: deviceId, decision: "removed", ts: Date.now() },
+          { dropIfSlow: true },
+        );
+      } finally {
+        context.disconnectClientsForDevice?.(deviceId, { role: "node" });
+      }
+    }
+  };
   return {
+    async removeNodePairings(peerKeys) {
+      await clearRemovedNodes(await removeNodePairings(peerKeys));
+    },
+    async reconcileNodePairings(isCurrent) {
+      await clearRemovedNodes(await reconcileNodePairings(isCurrent));
+    },
     captureConnections(peerKeys) {
       const ids = new Set<string>();
       for (const client of params.clients()) {
@@ -89,16 +131,13 @@ export function createOpenClawIdRemovalEffects(params: {
       return cancelled;
     },
 
-    closeConnections(connectionIds) {
+    closeConnections(connectionIds, cause = "removed") {
+      const policy = CLOSE_POLICIES[cause];
       for (const id of connectionIds) {
         const client = byConnection.get(id);
         byConnection.delete(id);
         if (client) {
-          invalidateGatewayPolicyClient(client, {
-            reason: "openclaw-id-removed",
-            code: 1008,
-            message: "removed from this claw",
-          });
+          invalidateGatewayPolicyClient(client, policy);
         }
       }
     },

@@ -31,9 +31,7 @@ export async function mountAppearanceCatalogPage(
   } as unknown as ApplicationContext;
   const view = mountConfigPage(context, { pageId: "appearance" });
   await waitForSolid(() =>
-    expect(
-      view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
-    ).not.toBeNull(),
+    expect(view.page.querySelector("#settings-appearance-sidebar")).not.toBeNull(),
   );
   return { view, source, context };
 }

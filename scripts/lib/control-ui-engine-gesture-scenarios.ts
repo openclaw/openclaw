@@ -442,31 +442,49 @@ export function createEngineGestureScenarios(): readonly EngineScenario[] {
         },
       });
     }
+    const windowResize: EngineScenario = {
+      ...base,
+      id: `gesture-window-resize-${size}`,
+      ...splitFixture(base),
+      viewports: ["desktop"],
+      expected:
+        "Native viewport resizing crosses responsive breakpoints with split and Review state retained.",
+      run: async (page) => {
+        const original = page.viewportSize()!;
+        const evidence = await pacedInput(
+          (index) =>
+            page.setViewportSize({
+              width: Math.round(
+                original.width -
+                  (original.width - 580) * Math.sin((index / (samples - 1)) * Math.PI),
+              ),
+              height: original.height,
+            }),
+          true,
+        );
+        await frames(page);
+        assert.equal(await page.locator(".chat-split-view__cell").count(), 2);
+        await page.locator(`${pane} [data-panel-slot="detail"]`).waitFor({ state: "visible" });
+        return { ...evidence, viewportUpdates: samples, retainedPanes: 2, reviewVisible: true };
+      },
+    };
     scenarios.push(
+      windowResize,
       {
-        ...base,
-        id: `gesture-window-resize-${size}`,
-        ...splitFixture(base),
-        viewports: ["desktop"],
+        ...windowResize,
+        id: `gesture-window-resize-details-${size}`,
         expected:
-          "Native viewport resizing crosses responsive breakpoints with split and Details state retained.",
-        run: async (page) => {
-          const original = page.viewportSize()!;
-          const evidence = await pacedInput(
-            (index) =>
-              page.setViewportSize({
-                width: Math.round(
-                  original.width -
-                    (original.width - 580) * Math.sin((index / (samples - 1)) * Math.PI),
-                ),
-                height: original.height,
-              }),
-            true,
-          );
+          "The explicitly opened session Details inspector survives viewport resizing with both split panes retained.",
+        prepare: async (page, gateway) => {
+          await base.prepare(page, gateway);
+          await page.locator(`${pane} .chat-details-toggle`).click();
+          await page.locator(`${pane} .chat-details[data-open]`).waitFor({ state: "visible" });
           await frames(page);
-          assert.equal(await page.locator(".chat-split-view__cell").count(), 2);
-          await page.locator(`${pane} [data-panel-slot="detail"]`).waitFor({ state: "visible" });
-          return { ...evidence, viewportUpdates: samples, retainedPanes: 2, detailsVisible: true };
+        },
+        run: async (page, gateway) => {
+          const evidence = await windowResize.run(page, gateway);
+          await page.locator(`${pane} .chat-details[data-open]`).waitFor({ state: "visible" });
+          return { ...evidence, sessionDetailsVisible: true };
         },
       },
       {

@@ -135,8 +135,9 @@ it.each([
       } else {
         send("/messages/1", { jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         await vi.advanceTimersByTimeAsync(0);
+        expect((await runtime.getCatalog()).tools).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(0);
         const failedCatalog = await runtime.getCatalog();
-        expect(failedCatalog.tools).toHaveLength(1);
         expect(await toolBytes()).toBe(originalTools);
         expect(failedCatalog.diagnostics?.[0]?.message).toContain(`HTTP ${status}`);
         expect(streams.size).toBe(reconnects ? 0 : 1);

@@ -10,6 +10,7 @@ import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -65,7 +66,7 @@ async function startProvider() {
                 command: `node -e '${source}'`,
                 host: "gateway",
                 awaitResults: true,
-                timeoutSeconds: 120,
+                timeoutSeconds: variant === "fallback" ? 300 : 120,
               }),
             };
             writeToolCallResponse(response, item, "response_check", 1, 1);
@@ -110,8 +111,8 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
     name: "Send now real Gateway",
     startServerBeforeBrowser: true,
     async startServer() {
-      if (variant !== "baseline" && variant !== "fixed") {
-        throw new Error("OPENCLAW_STEER_NOW_PROOF must be baseline or fixed");
+      if (variant !== "baseline" && variant !== "fixed" && variant !== "fallback") {
+        throw new Error("OPENCLAW_STEER_NOW_PROOF must be baseline, fixed, or fallback");
       }
       provider = await startProvider();
       const close = () =>
@@ -155,7 +156,7 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
   });
   suite.define(() => {
     it(
-      "keeps the user bubble, interrupts its running tool, and continues the same turn",
+      "keeps the user bubble and interrupts its running tool for exactly one correction delivery",
       (test) =>
         suite.runScenario(test, {
           retainedState: () => instance.stateDir,
@@ -188,6 +189,7 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
                 await send.click();
                 await provider.waitStarted(signal);
                 await composer.fill(correction);
+                const steerStartedAt = performance.now();
                 await composer.press("Control+Enter");
                 const accepted = await wire.waitFor(
                   (rpc) =>
@@ -195,11 +197,13 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
                     (rpc.request.params as { message?: string }).message === correction,
                 );
                 expect(accepted.response.ok).toBe(true);
+                const steerRunId = (accepted.request.params as { idempotencyKey: string })
+                  .idempotencyKey;
                 expect(provider.requests()).toBe(1);
                 const bubble = pane.locator(".chat-group.user", { hasText: correction });
                 await bubble.waitFor();
                 const link = bubble.getByRole("button", { name: "Send now", exact: true });
-                if (variant === "fixed") {
+                if (variant !== "baseline") {
                   await link.waitFor();
                 } else {
                   expect(await link.count()).toBe(0);
@@ -220,7 +224,37 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
                   await provider.waitClosed(signal);
                   return;
                 }
+                if (variant === "fallback") {
+                  await wire.waitFor((rpc) => {
+                    const history = rpc.response.payload as ChatHistoryResult | undefined;
+                    return (
+                      rpc.request.method === "chat.history" &&
+                      Boolean(
+                        history?.pendingInputs?.items.some(
+                          (input) => input.runId === steerRunId && input.queued,
+                        ),
+                      )
+                    );
+                  });
+                  expect(performance.now() - steerStartedAt).toBeGreaterThanOrEqual(120_000);
+                  await link.waitFor();
+                  expect(provider.requests()).toBe(1);
+                  const fallbackFrame = await takeControlUiScreenshotFrame(page, bubble, [link], {
+                    animations: "disabled",
+                    scrollTo: bubble,
+                  });
+                  await writeFile(
+                    path.join(suite.artifactDir, "fallback-queued.png"),
+                    fallbackFrame.png,
+                  );
+                }
                 await link.click();
+                const sentNow = await wire.waitFor((rpc) => rpc.request.method === "chat.steerNow");
+                expect(sentNow.request.params).toMatchObject({ sessionKey, runId: steerRunId });
+                expect(sentNow.response).toMatchObject({
+                  ok: true,
+                  payload: { status: "interrupted" },
+                });
                 await provider.waitClosed(signal);
                 await pane.getByRole("paragraph").filter({ hasText: answer }).waitFor();
                 await stop.waitFor({ state: "hidden" });
@@ -237,7 +271,7 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
               },
             ),
         }),
-      120000,
+      variant === "fallback" ? 240000 : 120000,
     );
   });
 });

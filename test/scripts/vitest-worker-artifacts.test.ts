@@ -278,46 +278,81 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(directory)).toBe(false);
     }));
 
-  it("rejects compiler output altered before publishing a manifest", ({ workerArtifacts }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node } = workerArtifacts.createFixtureCommands();
-      const directory = workerArtifacts.fixtureDirectory();
-      const altered = path.join(directory, "altered");
-      const preload = writeFixture(
-        directory,
-        "compiler-fault.mjs",
-        interceptCompilerBuild(
-          directory,
-          `
+  it.for([false, true])(
+    "publishes one verified compiler manifest (altered output: %s)",
+    (alterOutput, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
+        const altered = path.join(directory, "altered");
+        const writes = path.join(directory, "manifest-writes.json");
+        const owner = workerArtifacts.createWorkerRun();
+        try {
+          const preload = writeFixture(
+            directory,
+            "compiler-fault.mjs",
+            interceptCompilerBuild(
+              directory,
+              `
         import fs from 'node:fs';
         import path from 'node:path';
+        const manifestPath = ${JSON.stringify(path.join(owner.descriptor.directory, "manifest.json"))};
+        const publications = [];
+        let serializations = 0;
+        const stringify = JSON.stringify;
+        JSON.stringify = (value, ...options) => {
+          if (value?.inputs && value?.outputs && typeof value.identity === 'string' && typeof value.durationMs === 'number') serializations++;
+          return stringify(value, ...options);
+        };
+        const writeFile = fs.writeFileSync;
+        fs.writeFileSync = (filename, contents, ...options) => {
+          const result = writeFile(filename, contents, ...options);
+          if (filename === manifestPath) publications.push(Buffer.byteLength(contents));
+          return result;
+        };
+        process.on('exit', () => writeFile(${JSON.stringify(writes)}, stringify({publications, serializations})));
         export async function build(options) {
           const result = await compile(options);
-          fs.appendFileSync(path.join(options.outDir,options.unbundle?'src/infra/runtime-process-entrypoints.js':'infra/runtime-process-entrypoints.js'),'altered after compile');
-          fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          if (${alterOutput}) {
+            fs.appendFileSync(path.join(options.outDir,options.unbundle?'src/infra/runtime-process-entrypoints.js':'infra/runtime-process-entrypoints.js'),'altered after compile');
+            fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          }
           return result;
         }
         `,
-        ),
-      );
-      const owner = workerArtifacts.createWorkerRun();
-      try {
-        // Inject only into the actual native compiler entry, never the parent's
-        // module cache or a production build flag. node() joins this direct child.
-        const result = await node([
-          ...fixturePreloadArgs(preload),
-          path.join(root, compilerEntry),
-          owner.descriptor.directory,
-        ]);
-        expect(result.code).not.toBe(0);
-        expect(result.stderr).toContain("Compiled subprocess artifact changed");
-        expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
-        expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
+            ),
+          );
+          // Inject only into the actual native compiler entry, never the parent's
+          // module cache or a production build flag. node() joins this direct child.
+          const result = await node([
+            ...fixturePreloadArgs(preload),
+            path.join(root, compilerEntry),
+            owner.descriptor.directory,
+          ]);
+          const publication: { publications: number[]; serializations: number } = JSON.parse(
+            fs.readFileSync(writes, "utf8"),
+          );
+          const manifestPath = path.join(owner.descriptor.directory, "manifest.json");
+          if (alterOutput) {
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toContain("Compiled subprocess artifact changed");
+            expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
+            expect(fs.existsSync(manifestPath)).toBe(false);
+            expect(publication).toEqual({ publications: [], serializations: 0 });
+          } else {
+            expect(result.code, result.stderr).toBe(0);
+            await verifyVitestWorkerArtifacts(owner.descriptor.directory);
+            expect(publication).toEqual({
+              publications: [fs.statSync(manifestPath).size],
+              serializations: 1,
+            });
+          }
+        } finally {
+          await owner.dispose();
+        }
+        expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+      }),
+  );
 
   it
     .runIf(process.platform !== "win32")
@@ -826,7 +861,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
+            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {

@@ -1,4 +1,5 @@
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import type { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
@@ -60,7 +61,7 @@ export function createPreparedSessionTargetAssertion(input: {
     }
     if (reason) {
       recordTargetRefusal(reason, field);
-      throw new Error("Session target preparation outlived its attempt");
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt");
     }
   };
   return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
@@ -69,7 +70,9 @@ export function createPreparedSessionTargetAssertion(input: {
       assertSource();
     } catch (cause) {
       recordTargetRefusal("source_authority_refused");
-      throw new Error("Session target preparation outlived its attempt", { cause });
+      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
+        cause,
+      });
     }
     // Source callbacks can retire this attempt or replace its selected target.
     assertTargetCurrent();
@@ -77,7 +80,9 @@ export function createPreparedSessionTargetAssertion(input: {
       assertActiveRun.assertScopeCurrent();
     } catch (cause) {
       recordTargetRefusal("scope_authority_refused");
-      throw cause;
+      throw new SessionWorkStartChangedError("Session target scope authority is no longer active", {
+        cause,
+      });
     }
   });
 }

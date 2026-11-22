@@ -16,6 +16,7 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
+import { authorizeOwnSessionMutation } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -25,6 +26,7 @@ import {
 } from "../session-sharing.js";
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
@@ -37,13 +39,10 @@ import { readCollaborationTarget } from "./sessions-suggestions-access.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
-  params: requestParams,
-  respond,
-  client,
-  context,
-  hasCurrentClientAuthority,
-}) => {
+export const sessionTypingHandler: GatewayRequestHandlers[string] = async (options) => {
+  const { params: requestParams, respond, client, context, hasCurrentClientAuthority } = options;
+  const ownSessionOnly =
+    readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.write";
   const params = normalizeTypingRequestParams(requestParams);
   if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
     return;
@@ -114,8 +113,18 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
     respond(false, undefined, denied);
     return;
   }
+  const actor = gatewayClientSessionCreator(client);
   const canType = (current: NonNullable<ReturnType<typeof readTarget>>, access = sharing()) => {
+    // Throttled refreshes keep the original narrow grant bound to its creator.
     if (
+      (ownSessionOnly &&
+        (!actor ||
+          authorizeOwnSessionMutation({
+            client,
+            target: current,
+            expectedProfileId: actor.id,
+            isCreator: access.isCreator,
+          }))) ||
       authorizeIncognitoSessionTarget({ client, sessionKey: query.key, target: current }) ||
       (hasOperatorBoundary(client, projection.getPolicyConfig()) && !access.canReadTarget(current))
     ) {
@@ -129,7 +138,6 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
       (role !== "viewer" || visibility === "shared" || visibility === "suggest")
     );
   };
-  const actor = gatewayClientSessionCreator(client);
   if (
     params.sessionId !== target.entry.sessionId ||
     !actor ||

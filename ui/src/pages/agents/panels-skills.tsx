@@ -178,16 +178,15 @@ function AgentSkillsContent(
 
   return (
     <>
-      {!params.configForm ? (
-        <InlineAlert tone="info">{t("agents.skillsPanel.loadConfig")}</InlineAlert>
-      ) : undefined}
       <InlineAlert tone="info">
         {t(
-          usingAllowlist()
-            ? !params.explicit
-              ? "agents.skillsPanel.inheritedAllowlist"
-              : "agents.skillsPanel.customAllowlist"
-            : "agents.skillsPanel.allEnabled",
+          !params.configForm
+            ? "agents.skillsPanel.loadConfig"
+            : usingAllowlist()
+              ? !params.explicit
+                ? "agents.skillsPanel.inheritedAllowlist"
+                : "agents.skillsPanel.customAllowlist"
+              : "agents.skillsPanel.allEnabled",
         )}
       </InlineAlert>
       {!params.report && !params.pending ? (
@@ -213,7 +212,7 @@ function AgentSkillsContent(
         description={
           <>
             {t("agents.skillsPanel.subtitle")}{" "}
-            {rawSkills().length > 0 ? (
+            {params.configForm && rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}
               </span>

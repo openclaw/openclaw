@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as worktreeRegistry from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -580,28 +581,27 @@ describe("loadSessionDiff", () => {
       const archived = await readDiff();
       expect(filePaths(archived)).toEqual(["task.txt"]);
       expect(archived).toMatchObject({ additions: 2, deletions: 0, aheadCount: 2 });
-      for (const patch of [
-        { agent_id: "other" },
-        { session_key: "agent:main:other" },
-        { session_id: "replaced" },
-      ]) {
+      const owner = { agent_id: "main", session_key: sessionKey, session_id: "s1" };
+      for (const field of ["agent_id", "session_key", "session_id"] as const) {
         await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-          store.update(store.get()!, patch),
+          store.update(store.get()!, { [field]: "other" }),
         );
         await expect(readDiff()).rejects.toThrow(/workspace.*incarnation/i);
         await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-          store.update(store.get()!, {
-            agent_id: "main",
-            session_key: sessionKey,
-            session_id: "s1",
-          }),
+          store.update(store.get()!, owner),
         );
       }
       mockSession(path.dirname(repoRoot), { worktree, archivedAt: 1 });
       await expect(readDiff()).rejects.toThrow("Local workspace review owner changed");
       mockSession(repoRoot, { worktree, archivedAt: 1 });
+      const removedMessage = /worktree was removed.*Use Restore in Settings > Worktrees/;
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: 0 });
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
+      await worktreeRegistry.updateRegistryWorktree(process.env, id, { removedAt: undefined });
       await withLocalWorkspaceStore({ worktreeId: id }, (store) => store.delete(store.get()!));
       expect(filePaths(await readDiff())).toEqual(["task.txt", "upstream.txt"]);
+      await worktreeRegistry.deleteRegistryWorktree(process.env, id);
+      await expect(requestDiff({ sessionKey })).rejects.toThrow(removedMessage);
     } finally {
       await closeOpenClawStateDatabaseAsync();
       await drainGlobalSingletonLifecycleState("restart");

@@ -54,6 +54,25 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  codeMode: {
+    routeId: "ai-agents",
+    labelKey: "configView.toolWorkflows.codeMode",
+    search: "?section=tools",
+    hash: "#config-section-tools",
+    searchKeys: [
+      "configView.toolWorkflows.codeModeDescription",
+      "configView.toolWorkflows.executor",
+    ],
+    aliases: "code mode auto node quickjs executor",
+  },
+  toolSearch: {
+    routeId: "ai-agents",
+    labelKey: "configView.toolWorkflows.toolSearch",
+    search: "?section=tools",
+    hash: "#config-section-tools",
+    searchKeys: ["configView.toolWorkflows.toolSearchDescription"],
+    aliases: "tool search deferred schemas catalog",
+  },
   webSearch: {
     routeId: "search",
     labelKey: "tabs.search",
@@ -85,7 +104,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     search: "?section=session",
     hash: `#${SESSION_STORAGE_SETTINGS_TARGET_ID}`,
     searchKeys: ["configView.sessionStorage.automatic", "configView.sessionStorage.afterDays"],
-    aliases: "database disk size transcripts storage cleanup archive compression retention",
+    aliases:
+      "database disk size chats chat history transcripts storage cleanup archive compression retention",
   },
   meetingCapture: {
     routeId: "communications",
@@ -258,12 +278,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "profile",
     labelKey: "githubConnections.title",
     hash: `#${PROFILE_SETTINGS_TARGET_IDS.githubConnections}`,
-    searchKeys: [
-      "githubConnections.mine",
-      "githubConnections.system",
-      "githubConnections.forMe",
-      "githubConnections.forSystem",
-    ],
+    searchKeys: ["githubConnections.mine", "githubConnections.system"],
     aliases:
       "github oauth account connection publication authentication auth status dashboard actions",
   },
@@ -346,13 +361,7 @@ export const SETTINGS_SEARCH_TARGETS = {
   appearanceTabIcon: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
     labelKey: "configView.appearance.tabIcon.title",
-    searchKeys: [
-      "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.square",
-      "configView.appearance.tabIcon.rounded",
-      "configView.appearance.tabIcon.circle",
-      "configView.appearance.tabIcon.lobsterdex",
-    ],
+    searchKeys: ["configView.appearance.tabIcon.agent", "configView.appearance.tabIcon.lobsterdex"],
     aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {

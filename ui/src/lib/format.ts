@@ -303,12 +303,17 @@ export function formatDateTimeRangeMs(first: number, last: number): string {
 // Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
-  options: { thousandsSuffix?: string; trimTrailingZero?: boolean } = {},
+  options: {
+    thousandsPrecision?: 0 | 1;
+    thousandsSuffix?: string;
+    trimTrailingZero?: boolean;
+  } = {},
 ): string {
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
   return formatTokenUnits(tokens, {
+    thousandsPrecision: options.thousandsPrecision,
     thousandsSuffix: options.thousandsSuffix,
     millionsSuffix: "M",
     trimTrailingZero: options.trimTrailingZero ?? true,
@@ -316,9 +321,9 @@ export function formatCompactTokenCount(
   });
 }
 
-export function formatContextTokenCapacity(tokens: number): string {
+export function formatContextTokenCapacity(tokens: number, thousandsPrecision: 0 | 1 = 1): string {
   if (tokens < 1_000_000) {
-    return formatCompactTokenCount(tokens);
+    return formatCompactTokenCount(tokens, { thousandsPrecision });
   }
   return `${Math.floor(tokens / 100_000) / 10}M`;
 }

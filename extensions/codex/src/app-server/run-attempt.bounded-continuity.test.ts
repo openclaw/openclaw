@@ -61,9 +61,10 @@ function appendToolPair(manager: SessionManager, index: number) {
 describe("Codex bounded assistant continuity", () => {
   it("retains an assistant-only bounded suffix on a rotated native thread", async () => {
     const { params, manager } = await createHistory();
-    // Tool-body omission must not make this user turn fit the history budget.
+    // This user turn alone passes the shared 16 MiB history guard; tool-body omission cannot
+    // make it fit.
     manager.appendMessage(
-      userMessage("Explain the synthetic migration plan." + "x".repeat(16_384), 1),
+      userMessage("Explain the synthetic migration plan." + "x".repeat(16 * 1024 * 1024), 1),
     );
     for (let index = 0; index < 4; index++) {
       appendToolPair(manager, index);
@@ -182,8 +183,15 @@ describe("Codex bounded assistant continuity", () => {
     });
     const wrappedPluginSystemContext = (text: string) =>
       `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
-    expect(requestParams(harness, "thread/start").developerInstructions).toContain(
-      `custom codex system\n\n${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`,
+    const pluginSystemContexts = `${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`;
+    const developerInstructions = requestParams(harness, "thread/start").developerInstructions;
+    assert(typeof developerInstructions === "string");
+    // Plugin system context rides after the immutable thread policy, which can carry more
+    // than the hook's system prompt; each part is applied once.
+    expect(developerInstructions.split("custom codex system")).toHaveLength(2);
+    expect(developerInstructions.split(pluginSystemContexts)).toHaveLength(2);
+    expect(developerInstructions.indexOf("custom codex system")).toBeLessThan(
+      developerInstructions.indexOf(pluginSystemContexts),
     );
     expect(requestParams(harness, "turn/start").input).toEqual([
       { type: "text", text: expectedInput, text_elements: [] },

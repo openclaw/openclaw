@@ -21,11 +21,13 @@ vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
   loadWebMedia: vi.fn(),
 }));
 
+const ogg = (id: string) => `OggS${"\0".repeat(22)}\x01\x13${id}`.padEnd(64, "\0");
 describe("WhatsApp filename-only media delivery", () => {
   it.each([
     ["photo.png", undefined, "image/png", "image", "filename-only-media"],
     ["clip.mp4", undefined, "video/mp4", "video", "filename-only-media"],
-    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", "filename-only-media"],
+    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", ogg("OpusHead")],
+    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", "opus-output", ogg("\x01vorbis")],
     ["voice.mp3", undefined, "audio/ogg; codecs=opus", "audio", "opus-output"],
     ["report.pdf", undefined, "application/pdf", "document", "filename-only-media"],
     ["unknown.bin", undefined, "application/octet-stream", "document", "filename-only-media"],
@@ -33,11 +35,11 @@ describe("WhatsApp filename-only media delivery", () => {
     ["photo.png", "application/pdf", "application/pdf", "document", "filename-only-media"],
   ] as const)(
     "delivers %s with %s as native %s",
-    async (fileName, contentType, mimetype, payloadKey, expectedBuffer) => {
+    async (fileName, contentType, mimetype, payloadKey, expectedBuffer, input = expectedBuffer) => {
       vi.clearAllMocks();
       hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
       vi.mocked(loadWebMedia).mockResolvedValueOnce({
-        buffer: Buffer.from("filename-only-media"),
+        buffer: Buffer.from(input),
         contentType,
         fileName,
         kind: contentType ? "document" : undefined,
