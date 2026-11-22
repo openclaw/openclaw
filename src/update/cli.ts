@@ -2,7 +2,11 @@
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
-import { callGateway, isGatewayTransportError } from "../gateway/call.js";
+import {
+  callGateway,
+  isGatewayTransportError,
+  isImplicitLocalGatewayTarget,
+} from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
@@ -73,6 +77,11 @@ async function requestGatewayUpdate(
   target: { kind: "git"; upstreamRef: string; upstreamSha: string } | undefined,
   timeoutMs: number | undefined,
 ): Promise<string | null> {
+  // Only the local Gateway serves this checkout; a remote or overridden target would update
+  // another installation, so this checkout prepares its release here instead.
+  if (!(await isImplicitLocalGatewayTarget({}))) {
+    return null;
+  }
   try {
     const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
       method: "update.run",

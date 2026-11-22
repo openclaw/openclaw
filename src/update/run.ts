@@ -1,7 +1,6 @@
 // One update, as the running release does it: admit, resolve, preflight, prepare, check with
 // the new code, publish a pending trial. Everything after that belongs to the launcher (the
 // switch and its trial) and to the new build (migration at boot, `ready`).
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
@@ -430,24 +429,13 @@ async function runReleaseCommand(
   args: string[],
   timeoutMs: number,
 ) {
-  const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
-    (resolve) => {
-      const child = spawn(node, [path.join(root, "openclaw.mjs"), "update", ...args], {
-        cwd: root,
-        env: { ...env, OPENCLAW_LAUNCHER_IPC: undefined },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => (stdout += chunk));
-      child.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-8192)));
-      const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ code, stdout, stderr });
-      });
-      child.on("error", () => resolve({ code: null, stdout, stderr }));
-    },
+  // The child is not a launcher child, whatever this process is.
+  const childEnv = { ...env };
+  delete childEnv.OPENCLAW_LAUNCHER_IPC;
+  // The process owner ends the whole tree (npm and its children too) and waits for it at timeout.
+  const result = await runCommandWithTimeout(
+    [node, path.join(root, "openclaw.mjs"), "update", ...args],
+    { cwd: root, baseEnv: childEnv, timeoutMs, killProcessTree: true },
   );
   let parsed: unknown;
   try {
@@ -455,5 +443,9 @@ async function runReleaseCommand(
   } catch {
     parsed = undefined;
   }
-  return { code: result.code, parsed, stderr: result.stderr };
+  return {
+    code: result.termination === "exit" ? result.code : null,
+    parsed,
+    stderr: result.stderr.slice(-8192),
+  };
 }

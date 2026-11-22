@@ -87,6 +87,18 @@ it("keeps a stable-tag checkout on stable when it updates without the Gateway", 
   expect(prepared).toEqual([expect.objectContaining({ channel: "stable" })]);
 });
 
+it("prepares this checkout itself instead of updating a remote Gateway", async () => {
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://remote.example.invalid");
+  try {
+    const { runReleaseUpdateCli } = await import("./cli.js");
+    await runReleaseUpdateCli({ json: true, restart: true, runningRoot: "/tmp/openclaw-checkout" });
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([expect.objectContaining({ runningRoot: "/tmp/openclaw-checkout" })]);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 it("keeps following the run while the restarting Gateway refuses connections", async () => {
   const { GatewayClientRequestError } = await import("../gateway/client.js");
   const { runReleaseUpdateCli } = await import("./cli.js");
