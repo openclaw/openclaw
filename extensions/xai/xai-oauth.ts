@@ -540,6 +540,8 @@ export async function refreshXaiOAuthCredential(
   }
   const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential);
   const tokens = await requestXaiOAuthRefresh(tokenEndpoint, refreshToken);
+  // Token rotation must not overwrite or restore a locally managed account label.
+  const { displayName: _providerDisplayName, ...identity } = resolveXaiOAuthIdentity(tokens);
   return {
     ...credential,
     type: "oauth",
@@ -548,7 +550,7 @@ export async function refreshXaiOAuthCredential(
     refresh: tokens.refreshToken ?? refreshToken,
     expires: tokens.expires,
     ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
-    ...resolveXaiOAuthIdentity(tokens),
+    ...identity,
     tokenEndpoint,
     issuer: XAI_OAUTH_ISSUER,
   };

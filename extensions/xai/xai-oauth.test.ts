@@ -455,6 +455,38 @@ describe("xAI OAuth", () => {
     });
   });
 
+  it.each(["Work", undefined])(
+    "does not overwrite the saved label %s on refresh",
+    async (label) => {
+      mockResponses(
+        jsonResponse({
+          access_token: "access-2",
+          refresh_token: "refresh-2",
+          id_token: createJwt({ sub: "account-1", name: "Provider name" }),
+          expires_in: 120,
+        }),
+      );
+      const result = await refreshXaiOAuthCredential({
+        type: "oauth",
+        provider: "xai",
+        access: "access-1",
+        refresh: "refresh-1",
+        expires: 100,
+        accountId: "account-1",
+        tokenEndpoint: TOKEN_URL,
+        ...(label ? { displayName: label } : {}),
+      });
+
+      expect(result).toMatchObject({
+        access: "access-2",
+        refresh: "refresh-2",
+        accountId: "account-1",
+      });
+      expect(result.displayName).toBe(label);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     [LEGACY_TOKEN_URL, XAI_OAUTH_DISCOVERY_URL, "discovery unavailable"],
     [TOKEN_URL, TOKEN_URL, "socket hang up"],
