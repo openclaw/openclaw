@@ -1,15 +1,10 @@
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
-import {
-  composeSessionSourceAssertion,
-  type SessionSourceAssertion,
-} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -37,22 +32,6 @@ export function createMessageToolTurnAuthority(params: {
     agentId && sessionKey ? { token, agentId, runId, sessionKey, sessionId } : undefined;
   const resolve = () => lookup && resolveMessageActionTurnAuthorization(lookup);
   return {
-    captureCaller: (
-      signal: AbortSignal | undefined,
-      capture: () => SessionSourceAssertion | undefined,
-    ) => {
-      if (signal?.aborted) {
-        throw createAbortError("Message send aborted");
-      }
-      const assertCurrent = capture();
-      assertCurrent?.();
-      return composeSessionSourceAssertion([assertCurrent], (assertSource) => {
-        assertSource();
-        if (signal?.aborted) {
-          throw createAbortError("Message action aborted");
-        }
-      });
-    },
     beginInvocation: (action: string) => {
       // Native publication can follow tool construction; only the exact run may fill that gap.
       const sourceReplyOperation =

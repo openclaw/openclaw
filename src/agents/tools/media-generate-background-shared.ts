@@ -54,10 +54,7 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
@@ -177,22 +174,18 @@ export function captureMediaGenerationAdmission(
 ): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
-  const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
-  return composeSessionSourceAssertion(
-    [assertGatewayCallerCurrent, assertSourceCurrent],
-    (assertSource) => {
-      assertSource();
-      if (
-        generation !== getAgentRunLifecycleGeneration() ||
-        !sameSessionTranscriptStorageEnvironment(
-          env,
-          captureSessionTranscriptStorageEnvironment(process.env),
-        )
-      ) {
-        throw new Error("Media generation admission owner is no longer current");
-      }
-    },
-  );
+  return composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+    assertSource();
+    if (
+      generation !== getAgentRunLifecycleGeneration() ||
+      !sameSessionTranscriptStorageEnvironment(
+        env,
+        captureSessionTranscriptStorageEnvironment(process.env),
+      )
+    ) {
+      throw new Error("Media generation admission owner is no longer current");
+    }
+  });
 }
 
 async function createMediaGenerationTaskRun(

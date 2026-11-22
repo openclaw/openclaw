@@ -13,7 +13,6 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
@@ -73,10 +72,7 @@ export async function runAgentStep(params: {
     // not the completed tool's lifetime or authority reconstructed from metadata.
     const operatorSource =
       getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-    const assertSourceCurrent = composeSessionSourceAssertion([
-      captureGatewayToolCallerAssertion(),
-      operatorSource?.assertCurrent,
-    ]);
+    const assertSourceCurrent = composeSessionSourceAssertion([operatorSource?.assertCurrent]);
     const load = async (
       endpointAgentId: string,
       sessionKey: string,
