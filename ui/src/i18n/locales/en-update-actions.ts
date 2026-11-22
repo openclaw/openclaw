@@ -22,6 +22,15 @@ const enUpdateActions = {
     reviewUpdate: "Review update",
     run: {
       title: "Update progress",
+      toast: {
+        preparing: "Preparing OpenClaw update…",
+        processing: "Updating OpenClaw…",
+        succeeded: "OpenClaw updated",
+        failed: "OpenClaw update failed",
+        skipped: "OpenClaw update skipped",
+        "rolled-back": "OpenClaw update rolled back",
+        details: "View update details",
+      },
       phases: "Update phases",
       steps: "Installation steps",
       details: "Step details",

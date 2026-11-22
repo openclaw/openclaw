@@ -29,7 +29,7 @@ import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
  * including main for an agent the caller's role excludes, stays indistinguishable from a hidden
  * one for narrow readers.
  */
-function isStartableMainSession(params: {
+export function isStartableMainSession(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null | undefined;
   sessionKey: string;

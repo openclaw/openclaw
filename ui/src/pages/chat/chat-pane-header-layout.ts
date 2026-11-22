@@ -11,7 +11,7 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
+import { chatHistoryRequests, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { chatDetailsDockingLayout } from "./chat-snapshot-prewarm.ts";
@@ -66,6 +66,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
       backTo: { area: "details" },
     });
   };
+
+  /** A main conversation has no row, and so no processes, until its first turn creates it. */
+  protected processesOpener(state: ChatPageHost, session: GatewaySessionRow | undefined) {
+    return !session && isChatSessionProvenAbsent(state) ? undefined : this.showDetailsProcess;
+  }
 
   protected readonly returnToProcessDetails = () => {
     if (!this.state) {
@@ -393,7 +398,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 backTo: { area: "details" },
               });
             },
-            onOpenProcesses: this.showDetailsProcess,
+            onOpenProcesses: this.processesOpener(state, selectedSession),
           } satisfies Partial<ChatDetailsProps>),
           mobileBindings: {
             sharing: this.prepareSessionSharing(selectedSession, {
