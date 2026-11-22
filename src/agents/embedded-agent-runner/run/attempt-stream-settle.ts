@@ -26,7 +26,6 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
-import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -589,13 +588,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Provider-hosted search bypasses local execute hooks, so its request must
-    // honor the same execution cap without changing foreground function schemas.
-    webSearchEnabled:
-      attempt.disableTools !== true &&
-      attempt.toolOverrides?.webSearch !== false &&
-      (!attempt.toolExecutionAllow ||
-        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
+    // Hosted search follows the session's own policy, so a session fork lists exactly the
+    // session's tools and keeps its cached prefix. The fork's execution cap gates client tools;
+    // a fork may run the read-only hosted search the session allows (tool-free forks send none).
+    webSearchEnabled: attempt.disableTools !== true && attempt.toolOverrides?.webSearch !== false,
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
