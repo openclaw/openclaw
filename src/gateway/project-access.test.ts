@@ -11,6 +11,7 @@ import {
   canRequesterUseRepositoryUrl,
   filterProjectsForRequester,
   type ProjectRequester,
+  resolveProjectAccess,
   resolveRunProjectRequester,
 } from "./project-access.js";
 
@@ -24,6 +25,7 @@ const maintainer: ProjectRequester = { kind: "operator", scopes: ["operator.writ
 
 function project(name: string) {
   return {
+    id: name,
     source: "registered" as const,
     originUrl: `https://github.com/project-access-test/${name}.git`,
   };
@@ -69,18 +71,23 @@ describe("project access", () => {
       project("handbook"),
       project("gone"),
       {
+        id: "port",
         source: "registered" as const,
         originUrl: "https://github.com:8443/project-access-test/site.git",
       },
-      { source: "registered" as const, originUrl: "https://gitlab.com/openclaw/site.git" },
-      { source: "registered" as const },
-      { source: "workspace" as const },
+      {
+        id: "gitlab",
+        source: "registered" as const,
+        originUrl: "https://gitlab.com/openclaw/site.git",
+      },
+      { id: "local", source: "registered" as const },
+      { id: "workspace:main", source: "workspace" as const },
     ];
 
     for (const requester of [guest, contributor]) {
       await expect(filterProjectsForRequester(cfg, projects, requester)).resolves.toEqual([
         project("site"),
-        { source: "workspace" },
+        { id: "workspace:main", source: "workspace" },
       ]);
     }
     expect(fetchImpl).toHaveBeenCalledTimes(4);
@@ -90,6 +97,39 @@ describe("project access", () => {
     await expect(
       canRequesterUseRepositoryUrl(cfg, project("openclaworg").originUrl, { kind: "internal" }),
     ).resolves.toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("adds role-granted projects to the public fallback and marks grant-only access", async () => {
+    const fetchImpl = visibilityFetch({ site: "public", openclaworg: "private", handbook: 403 });
+    const projects = [project("site"), project("openclaworg"), project("handbook")];
+    const listed: ProjectRequester = { ...guest, projects: ["openclaworg", "stale-id"] };
+    await expect(filterProjectsForRequester(cfg, projects, listed)).resolves.toEqual([
+      project("site"),
+      project("openclaworg"),
+    ]);
+    await expect(
+      filterProjectsForRequester(cfg, projects, { ...guest, projects: "*" }),
+    ).resolves.toEqual(projects);
+    // Grants never widen repository URLs.
+    await expect(
+      canRequesterUseRepositoryUrl(cfg, project("openclaworg").originUrl, listed),
+    ).resolves.toBe(false);
+
+    const access = (name: string, requester: ProjectRequester) =>
+      resolveProjectAccess(cfg, project(name), requester, { fresh: true });
+    await expect(access("site", listed)).resolves.toBe("public");
+    await expect(access("site", { ...guest, projects: "*" })).resolves.toBe("public");
+    await expect(access("openclaworg", listed)).resolves.toBe("granted");
+    await expect(access("openclaworg", guest)).resolves.toBeUndefined();
+    // Unknown visibility never upgrades a grant to the public direct-checkout path.
+    await expect(access("handbook", { ...guest, projects: "*" })).resolves.toBe("granted");
+    await expect(access("openclaworg", maintainer)).resolves.toBe("full");
+    await expect(
+      resolveProjectAccess(cfg, { id: "workspace:main", source: "workspace" }, guest),
+    ).resolves.toBe("full");
+    fetchImpl.mockClear();
+    await expect(filterProjectsForRequester(cfg, projects, maintainer)).resolves.toEqual(projects);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -126,21 +166,43 @@ describe("project access", () => {
             scopes: ["operator.sessions.write"],
             sessions: { others: "view" },
             agents: ["main"],
+            projects: ["openclaworg"],
           },
         },
       };
       const roleCfg = { gateway: { roles } } as OpenClawConfig;
-      expect(resolveRunProjectRequester(roleCfg, { profileId: profile.id })).toMatchObject(guest);
-      // The admitted operator's effective scopes (membership caps included) win over roles.
+      expect(resolveRunProjectRequester(roleCfg, { profileId: profile.id })).toEqual({
+        ...guest,
+        projects: ["openclaworg"],
+      });
+      // Removing the grant from the live role denies the creator's next spawn.
+      const revoked = structuredClone(roles);
+      delete (revoked.definitions.guest as { projects?: unknown }).projects;
+      expect(
+        resolveRunProjectRequester({ gateway: { roles: revoked } } as OpenClawConfig, {
+          profileId: profile.id,
+        }),
+      ).toEqual(guest);
+      // The admitted operator's effective scopes (membership caps included) and
+      // prepared role grant win over the creator's live role.
       expect(
         resolveRunProjectRequester(cfg, {
           profileId: profile.id,
-          operatorScopes: ["operator.sessions.write"],
+          operatorAuthority: { scopes: ["operator.sessions.write"], rolePolicy: { projects: "*" } },
         }),
-      ).toMatchObject(guest);
+      ).toEqual({ ...guest, projects: "*" });
       expect(
-        resolveRunProjectRequester(roleCfg, { profileId: profile.id, operatorScopes: [] }),
+        resolveRunProjectRequester(roleCfg, {
+          profileId: profile.id,
+          operatorAuthority: { scopes: [] },
+        }),
       ).toEqual({ kind: "operator", scopes: [] });
+      // Full-access runs never carry a grant.
+      expect(
+        resolveRunProjectRequester(cfg, {
+          operatorAuthority: { scopes: ["operator.write"], rolePolicy: { projects: "*" } },
+        }),
+      ).toEqual(maintainer);
       // Owner, cron and unlinked runs carry no role and stay Gateway-internal.
       expect(resolveRunProjectRequester(roleCfg, {})).toEqual({ kind: "internal" });
       expect(resolveRunProjectRequester(cfg, { profileId: profile.id })).toEqual({

@@ -18,7 +18,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -136,10 +136,15 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   }
   const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (parent.entry.projectId) {
+    const { actor } = requester.snapshot;
     const project = await resolveRequesterProject(
       getConfig(),
       parent.entry.projectId,
-      { kind: "operator", scopes: requester.snapshot.scopes },
+      projectRequesterForProfile(
+        getConfig(),
+        requester.snapshot.scopes,
+        actor.kind === "operator" ? actor.profileId : undefined,
+      ),
       { fresh: true },
     );
     const [projectRoot, repository] = await Promise.all([

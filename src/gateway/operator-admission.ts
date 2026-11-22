@@ -534,6 +534,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
             sessionAccessCap: role.sessions.others,
             sandboxRequired: role.sandbox === "required",
             agents: role.agents,
+            projects: role.projects,
             accessPrograms: role.accessPrograms,
           }
         : live?.rolePolicy,

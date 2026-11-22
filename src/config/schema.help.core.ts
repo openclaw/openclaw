@@ -242,6 +242,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.projects":
+    'Registered projects this role may discover and open in addition to public GitHub repositories: set "*" for every registered project or list project IDs. Callers with operator.write already reach every project. Sessions and spawns reach a project granted only this way through an isolated managed worktree. Unknown IDs are ignored; folder browsing, repository URLs, and remote search stay unchanged.',
   "gateway.roles.definitions.*.workerProfiles":
     "Cloud worker profiles this role may explicitly dispatch its own sessions to. Omitted or empty denies cloud dispatch; administrators retain access. Setup and moves to cloud profiles remain administrator-only.",
   "gateway.roles.definitions.*.accessPolicyPlugin":

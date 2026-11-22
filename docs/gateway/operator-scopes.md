@@ -444,6 +444,40 @@ separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
 
+<a id="project-grants" />
+
+Set a role's optional `projects` to registry project IDs, or `"*"` for every
+registered project, to share private repositories with a role that lacks
+`operator.write`. Granted projects are added to the public-repository access
+described under [Method scope is only the first gate](#method-scope-is-only-the-first-gate);
+omitting the field keeps that behavior unchanged, and callers with
+`operator.write` already reach every project. A granted project appears in
+`projects.list` and can be opened with `sessions.create`, native background
+spawns, and inherited child checkouts. When the grant is the only reason a
+caller can use a project, the Gateway always creates an isolated managed
+worktree, even if the request asks for the current checkout. Grants do not
+extend folder browsing, `cwd`, `projectGitUrl`, or `projects.searchRemote`.
+Unknown or removed project IDs are ignored. Removing a grant denies new
+sessions, spawns, and inherited checkouts; existing checkouts are kept.
+Agent-workspace projects remain governed by `agents`.
+
+```json5
+{
+  gateway: {
+    roles: {
+      definitions: {
+        guest: {
+          sessions: { others: "invited" },
+          agents: ["roboclaw"],
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
+          projects: ["handbook"], // or "*" for every registered project
+        },
+      },
+    },
+  },
+}
+```
+
 ### Session approvals
 
 When access comes from a session invitation (`sessions.others: "invited"` plus
@@ -892,10 +926,12 @@ dispatch so authorization failures have one standard structured response:
   `projectGitUrl` (clone or reuse a repository by URL with the Gateway's GitHub
   identity) requires `operator.write`.
 - Callers without `operator.write` (for example the `guest` and `contributor`
-  roles) only see and open agent-workspace projects and registry projects whose
-  origin is a public GitHub repository on the configured host. GitHub
-  `private` and Enterprise `internal` repositories, non-GitHub origins, and
-  failed or rate-limited visibility lookups are hidden. This applies to
+  roles) only see and open agent-workspace projects, registry projects whose
+  origin is a public GitHub repository on the configured host, and registry
+  projects granted by their current role's `projects` field (see
+  [Project grants](#project-grants)). Other GitHub `private` and Enterprise
+  `internal` repositories, non-GitHub origins, and failed or rate-limited
+  visibility lookups are hidden. This applies to
   `projects.list` (projects, recents; the default repository is write-only),
   `projects.checkoutOptions`, project skills in `commands.list`,
   `sessions.create` with `projectId`, native background spawns with
@@ -960,6 +996,7 @@ Project RPCs use these scopes:
 | `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
 | `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
 | `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.rename`                      | `operator.admin`. Renames a registered or cloned project; agent-workspace projects are rejected.                                                                                                              |
 | `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
 
 `repositoryIdentity` describes only an already discoverable project, not a clone

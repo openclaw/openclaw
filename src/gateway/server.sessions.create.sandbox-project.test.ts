@@ -256,3 +256,104 @@ test.each(["all", "off"] as const)(
     }
   },
 );
+
+test("role project grants open private projects only in isolated worktrees", async () => {
+  const root = tempDirs.make("openclaw-session-project-grant-");
+  const workspace = await initializeRepository(root, "workspace");
+  const privateRepo = await initializeRepository(root, "private");
+  const publicRepo = await initializeRepository(root, "public");
+  await publishOrigin(privateRepo, "openclaw/grant-private");
+  await publishOrigin(publicRepo, "openclaw/grant-public");
+  stubRepositoryVisibility({
+    "openclaw/grant-private": "private",
+    "openclaw/grant-public": "public",
+  });
+  testState.agentConfig = { workspace, sandbox: { mode: "off" } };
+  await createSessionStoreDir();
+  const privateProject = await registerProjectRegistry({ path: privateRepo, name: "private" });
+  const publicProject = await registerProjectRegistry({ path: publicRepo, name: "public" });
+  const profile = ensureProfileForEmail("project-grant@example.test");
+  const client = identifiedClient(profile.id);
+  client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
+  const baseCfg = getRuntimeConfig();
+  const makeConfig = (projects?: "*" | string[]) => ({
+    ...baseCfg,
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            scopes: ["operator.sessions.read" as const, "operator.sessions.write" as const],
+            agents: ["main"],
+            sessions: { others: "none" as const },
+            ...(projects ? { projects } : {}),
+          },
+        },
+      },
+    },
+  });
+  // Each config edit is a new Gateway publication with its own session projection.
+  let context!: ReturnType<typeof createDirectChatContext>;
+  const useConfig = async (projects?: "*" | string[]) => {
+    const cfg = makeConfig(projects);
+    const next = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    next.readPreparedGatewayModelCatalog = async () => {
+      const catalog = await next.loadGatewayModelCatalogSnapshot();
+      return { entries: catalog.entries, routeVariants: catalog.routeVariants };
+    };
+    await initializeSessionReadContext(next);
+    context = next;
+  };
+  await useConfig();
+  const request = async (method: string, params: Record<string, unknown>) => {
+    const respond = vi.fn();
+    const req = { type: "req" as const, id: method, method, params };
+    await handleGatewayRequest({ req, client, context, respond, isWebchatConnect: () => false });
+    expect(respond).toHaveBeenCalledOnce();
+    return respond.mock.calls[0]!;
+  };
+  const listed = async () => {
+    const [ok, result, error] = await request("projects.list", {});
+    expect(ok, JSON.stringify(error)).toBe(true);
+    return (result as { projects: { id: string }[] }).projects.map((entry) => entry.id);
+  };
+  const create = (projectId: string) => request("sessions.create", { agentId: "main", projectId });
+  const unknown = [
+    false,
+    undefined,
+    { code: "INVALID_REQUEST", message: `unknown project id: ${privateProject.id}` },
+  ];
+
+  // Without a grant the public fallback is unchanged, including its direct checkout.
+  expect(await listed()).toEqual(expect.arrayContaining([publicProject.id]));
+  expect(await listed()).not.toContain(privateProject.id);
+  expect(await create(privateProject.id)).toEqual(unknown);
+  const [publicOk, publicSession, publicError] = await create(publicProject.id);
+  expect(publicOk, JSON.stringify(publicError)).toBe(true);
+  expect(publicSession).not.toHaveProperty("worktree");
+
+  for (const projects of [[privateProject.id, "removed-project"], "*"] as const) {
+    await useConfig(typeof projects === "string" ? projects : [...projects]);
+    expect(await listed()).toEqual(expect.arrayContaining([privateProject.id, publicProject.id]));
+    expect(
+      await request("projects.checkoutOptions", { agentId: "main", projectId: privateProject.id }),
+    ).toEqual([true, { current: false, worktree: true }, undefined]);
+    // The client did not ask for a worktree; a grant-only project still gets one.
+    const [ok, result, error] = await create(privateProject.id);
+    expect(ok, JSON.stringify(error)).toBe(true);
+    const { key, worktree } = expectDefined(result, "granted session") as {
+      key: string;
+      worktree: { id: string; path: string };
+    };
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toMatchObject({
+      id: worktree.id,
+      repoRoot: privateRepo,
+    });
+    expect(worktree.path).not.toBe(privateRepo);
+  }
+
+  // Revocation applies to the next source handoff.
+  await useConfig();
+  expect(await create(privateProject.id)).toEqual(unknown);
+  expect(await listed()).not.toContain(privateProject.id);
+});
