@@ -200,7 +200,7 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
       "gateway install failure fixture",
     );
     vi.mocked(update.runCommandWithTimeout).mockImplementation((argv, options) =>
-      argv[1] === entrypoint && argv[2] === "gateway" && argv[3] === "install"
+      assert.isCliCommand(argv, entrypoint, "gateway", "install")
         ? runFailure(argv, options)
         : runPrevious(argv, options),
     );
@@ -334,11 +334,11 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
       );
       vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) => {
         const result = await runPrevious(argv, options);
-        if (argv[1] === entrypoint && argv[2] === "gateway" && result.code === 0) {
-          if (argv[3] === "install") {
+        if (assert.isCliCommand(argv, entrypoint, "gateway") && result.code === 0) {
+          if (assert.isGatewayCommand(argv, "install")) {
             primeServiceCommand([argv[0], entrypoint, "gateway", "run"]);
           }
-          if (argv[3] === "restart") {
+          if (assert.isGatewayCommand(argv, "restart")) {
             mockGatewayHealth(VERSION, "updated-gateway", "fixture-original-build");
           }
         }

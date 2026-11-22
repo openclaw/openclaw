@@ -561,8 +561,13 @@ describe("update-cli", () => {
         );
         vi.mocked(runCommand).mockImplementation(async (argv, options) => {
           const result = await runFixtureCommand(argv, options);
-          if (result.code === 0 && argv[2] === "gateway" && argv[3] === "install") {
-            primeServiceCommand([argv[0], expectDefined(argv[1], "entrypoint"), "gateway", "run"]);
+          if (result.code === 0 && check.isGatewayCommand(argv, "install")) {
+            primeServiceCommand([
+              argv[0],
+              expectDefined(argv[check.compilerArgs.length + 1], "entrypoint"),
+              "gateway",
+              "run",
+            ]);
           }
           return result;
         });
@@ -754,11 +759,11 @@ describe("update-cli", () => {
       );
       vi.mocked(runCommand).mockImplementation(async (argv, options) => {
         const result = await runFixtureCommand(argv, options);
-        if (result.code === 0 && argv[1] === entrypoint && argv[2] === "gateway") {
-          if (argv[3] === "install") {
+        if (result.code === 0 && check.isCliCommand(argv, entrypoint, "gateway")) {
+          if (check.isGatewayCommand(argv, "install")) {
             primeServiceCommand([argv[0], entrypoint, "gateway", "run"]);
           }
-          if (argv[3] === "restart") {
+          if (check.isGatewayCommand(argv, "restart")) {
             mockGatewayHealth("1.0.0", "updated-gateway", "fixture-original-build");
           }
         }
