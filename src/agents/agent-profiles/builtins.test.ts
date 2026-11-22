@@ -43,6 +43,7 @@ describe("built-in Agent Profile resources", () => {
     const workspaceContext = extension?.prompt?.workspaceContext;
 
     expect(extension?.toolProfile).toBe("compact");
+    expect(extension?.contextSerialization).toBe("compact");
     expect(workspaceContext?.totalMaxChars).toBeGreaterThan(0);
     for (const section of Object.values(workspaceContext?.sections ?? {})) {
       expect(section.maxChars).toBeLessThanOrEqual(workspaceContext?.totalMaxChars ?? 0);

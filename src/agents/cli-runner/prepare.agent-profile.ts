@@ -3,6 +3,7 @@ import type { ModelSizeClass } from "../../config/types.models.js";
 import { resolveAgentProfile } from "../agent-profiles.js";
 import { prepareAgentProfileWorkspaceContext } from "../agent-profiles/workspace-context.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import { resolveContextSerialization } from "../context-serialization/resolve.js";
 import { cliBackendLog } from "./log.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -62,6 +63,7 @@ export async function prepareCliAgentProfileContext(args: {
       id: resolvedProfile.profile.id,
       selectionSource: resolvedProfile.selectionSource,
     },
+    contextSerialization: resolveContextSerialization({ resolvedProfile }),
     bootstrapFiles: profileContext?.bootstrapFiles ?? resolvedBootstrap.bootstrapFiles,
     bootstrapSourceFiles: profileContext?.sourceFiles ?? resolvedBootstrap.bootstrapFiles,
     resolvedContextFiles: profileContext?.contextFiles ?? resolvedBootstrap.contextFiles,

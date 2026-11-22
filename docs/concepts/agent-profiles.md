@@ -30,6 +30,7 @@ values select OpenClaw runtime behavior:
 spec:
   common: {}
   openclaw.ai:
+    contextSerialization: compact
     toolProfile: compact
 ```
 
@@ -39,10 +40,10 @@ OpenClaw extension resolution remain separate.
 
 ## Built-in profiles
 
-| Profile          | Parent          | Initial behavior                                                 |
-| ---------------- | --------------- | ---------------------------------------------------------------- |
-| `openclaw/base`  | none            | Standard OpenClaw behavior and fallback                          |
-| `openclaw/small` | `openclaw/base` | Composed prompt with bounded workspace context and compact tools |
+| Profile          | Parent          | Initial behavior                                                                         |
+| ---------------- | --------------- | ---------------------------------------------------------------------------------------- |
+| `openclaw/base`  | none            | Standard OpenClaw behavior and fallback                                                  |
+| `openclaw/small` | `openclaw/base` | Composed prompt with bounded workspace context, compact tools, and compact serialization |
 
 ## Selection
 
@@ -124,6 +125,11 @@ Turn on size-based selection by default and pin one agent:
 }
 ```
 
+The selected profile owns context serialization. To keep the previous
+representation, select `openclaw/base` (or leave `agentProfileId` unset); a custom
+profile sets `contextSerialization` in its `openclaw.ai` extension. There is no
+separate `contextSerialization` key in agent configuration.
+
 ## Small profile behavior
 
 `openclaw/small` uses the normal OpenClaw prompt composer. It does not replace
@@ -163,11 +169,23 @@ workers on different versions keep working.
 The profile keeps `exec` directly visible. Normal tool policy, sandboxing, and
 exec approvals still apply.
 
+The profile selects `contextSerialization: "compact"` from its `openclaw.ai`
+section. Compact serialization removes active-session copies from channel history
+only when their durable message IDs prove that they are duplicates. It keeps unmatched backlog, ambiguous entries,
+speaker attribution, reply and thread facts, mentions, delivery facts, tool
+calls, and tool results. It also replaces the verbose current-turn metadata
+wrapper with a short block. Delivery and room-event instructions stay
+instructions, and the compact facts and history stay quoted data. Select `openclaw/base` to keep the previous
+representation.
+
 ## Diagnostics
 
 `/context detail` and `/context json` include the selected profile id and
 selection source in the stored system-prompt report. They also show the direct
-tool schemas used for the request. Detailed context reports show the resolved workspace-context budget and per-section
+tool schemas used for the request. Detailed context reports show the context
+serialization value and source, default and serialized character counts,
+durable-ID removal counts, and provider input tokens when the provider reports
+them. They also show the resolved workspace-context budget and per-section
 allocation or truncation status. Reports do not include private message or
 workspace-file content.
 

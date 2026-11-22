@@ -73,8 +73,8 @@ Managed local models automatically use structured [Tool Search](/tools/tool-sear
 unless you have explicitly configured it. Optional capabilities remain available.
 Their schemas load as needed, reducing the input the model must process before
 replying. Setup does not enable lean mode. Select
-`agents.defaults.agentProfileId: "openclaw/small"` when you want bounded
-workspace context and a smaller capability set. Normal chats still include your
+`agents.defaults.agentProfileId: "openclaw/small"` when you want lean context
+serialization and a smaller capability set. Normal chats still include your
 agent's instructions. On CPU-only hosts, the first reply can take
 several minutes even after setup verification succeeds.
 

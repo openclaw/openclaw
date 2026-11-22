@@ -346,7 +346,7 @@ Setup's connection check sends a short prompt without tools, so it can pass on a
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Check Tool Search** if both checks pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `agents.defaults.agentProfileId` unset or set it to `openclaw/base` so optional tools remain available. To restrict optional tools and bound the workspace context, select `agents.defaults.agentProfileId: "openclaw/small"`. See [Agent Profiles](/concepts/agent-profiles). Check the server's actual context allocation and memory use as well.
+3. **Check Tool Search** if both checks pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `agents.defaults.agentProfileId` unset or set it to `openclaw/base` so optional tools remain available. To restrict optional tools and use lean context serialization, select `agents.defaults.agentProfileId: "openclaw/small"`. See [Agent Profiles](/concepts/agent-profiles). Check the server's actual context allocation and memory use as well.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
@@ -404,7 +404,7 @@ smaller output, then start a new turn.
 
 ### Compact tool surface for small local models
 
-Local inference normally uses [Tool Search](/tools/tool-search) to defer schemas while preserving capabilities. When a small model still misbehaves on full agent turns, select the `openclaw/small` [Agent Profile](/concepts/agent-profiles) for it. The profile narrows the tool surface and bounds the workspace context. The retired `experimental.localModelLean` key is no longer read; `openclaw doctor --fix` migrates it to an Agent Profile selector.
+Local inference normally uses [Tool Search](/tools/tool-search) to defer schemas while preserving capabilities. When a small model still misbehaves on full agent turns, select the `openclaw/small` [Agent Profile](/concepts/agent-profiles) for it. The profile narrows the tool surface and uses compact context serialization. The retired `experimental.localModelLean` key is no longer read; `openclaw doctor --fix` migrates it to an Agent Profile selector.
 
 <a id="why-these-tools" /><a id="when-to-turn-it-on" /><a id="when-to-leave-it-off" /><a id="enable" />
 

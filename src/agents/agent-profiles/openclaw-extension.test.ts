@@ -15,19 +15,28 @@ function profile(params: { name: string; extension?: unknown }): AgentProfileRes
 }
 
 describe("OpenClaw Agent Profile extension", () => {
-  it("inherits the tool profile from a parent that sets it", () => {
+  it("uses scalar replacement and lets default reset inherited compact mode", () => {
     const resolved = resolveOpenClawAgentProfileExtension([
       {
         id: "openclaw/parent",
-        resource: profile({ name: "parent", extension: { toolProfile: "compact" } }),
+        resource: profile({
+          name: "parent",
+          extension: { contextSerialization: "compact", toolProfile: "compact" },
+        }),
       },
       {
         id: "openclaw/child",
-        resource: profile({ name: "child", extension: {} }),
+        resource: profile({
+          name: "child",
+          extension: { contextSerialization: "default" },
+        }),
       },
     ]);
 
-    expect(resolved).toEqual({ toolProfile: "compact" });
+    expect(resolved).toEqual({
+      contextSerialization: "default",
+      toolProfile: "compact",
+    });
   });
 
   it("deeply inherits workspace context sections", () => {
@@ -109,7 +118,7 @@ describe("OpenClaw Agent Profile extension", () => {
           id: "openclaw/invalid",
           resource: profile({
             name: "invalid",
-            extension: { toolProfile: "compact", contextPosture: "compact" },
+            extension: { contextSerialization: "compact", contextPosture: "compact" },
           }),
         },
       ]),

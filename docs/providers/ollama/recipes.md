@@ -178,7 +178,7 @@ Replace model IDs with exact names from `ollama list` or
     Local Ollama models automatically use structured [Tool Search](/tools/tool-search)
     when `tools.toolSearch` is unset. This keeps optional capabilities available
     while loading their schemas only when needed. Select `openclaw/small` when you
-    also want bounded workspace context and a smaller capability set.
+    also want lean context serialization and a smaller capability set.
     App, interactive CLI, and non-interactive setup use a 32,768-token runtime
     context, or the model's native window if smaller. The advertised native window
     is retained separately; known cloud routes keep their hosted context.

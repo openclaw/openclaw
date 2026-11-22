@@ -6,6 +6,7 @@ import {
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
+import { registerCompactInboundContextCases } from "./get-reply-run.compact-context.test-support.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
@@ -19,6 +20,7 @@ export function registerSystemEventAdmissionCases({
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
+  registerCompactInboundContextCases({ runPrepared, requireRunReplyAgentCall });
   async function useRealDrain() {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",

@@ -1448,6 +1448,7 @@ async function prepareCliRunContextWithinReadFence(
       const current = buildCliCurrentPrompt(params, reusableCliSession, {
         ...sessionPromptContext,
         privateContext: executionTarget.kind === "plugin",
+        serialization: profiled.contextSerialization,
       });
       ({
         prompt: preparedPrompt,

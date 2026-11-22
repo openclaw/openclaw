@@ -165,6 +165,30 @@ describe("prepareCliRunContext agent profiles", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([
+    {
+      name: "the selected small profile",
+      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+    },
+  ] satisfies Array<{ name: string; config: OpenClawConfig }>)(
+    "uses compact current-turn context from $name",
+    async ({ config }) => {
+      const context = await fixture.prepare({
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        transcriptPrompt: "latest ask",
+        currentInboundContext: {
+          text: "Verbose current-turn context",
+          compactText: "Compact current-turn context",
+        },
+        config,
+      });
+
+      expect(context.params.prompt).toContain("Compact current-turn context\n\nlatest ask");
+    },
+  );
+
   it("applies the selected profile workspace budget to CLI system prompts", async () => {
     const { dir } = fixture.session;
     const agentsPath = path.join(dir, "AGENTS.md");
@@ -316,6 +340,35 @@ describe("prepareCliRunContext agent profiles", () => {
     expect(context.systemPromptReport.workspaceContext?.totalMaxChars).toBe(2_000);
   });
 
+  it("uses compact current-turn context from model-size profile selection", async () => {
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "test-model",
+          name: "Test Small Model",
+          provider: "test-cli",
+          modelSizeClass: "small",
+        },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "test-cli",
+      model: "test-model",
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      transcriptPrompt: "latest ask",
+      currentInboundContext: {
+        text: "Verbose current-turn context",
+        compactText: "Compact current-turn context",
+      },
+      config: { agents: { defaults: { agentProfileId: "auto" } } },
+    });
+
+    expect(context.params.prompt).toContain("Compact current-turn context\n\nlatest ask");
+  });
+
   it.each([
     {
       label: "8B total parameters",
@@ -383,5 +436,38 @@ describe("prepareCliRunContext agent profiles", () => {
       id: "openclaw/base",
       selectionSource: "fallback",
     });
+  });
+
+  it("soft-resumes content drift and surfaces a per-turn drift note", async () => {
+    const { dir } = fixture.session;
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:test",
+      currentInboundContext: {
+        text: "Verbose conversation info: ⟦openclaw:ctx⟧\nchannel=telegram",
+        compactText: "Compact conversation info: channel=telegram",
+      },
+      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+      extraSystemPrompt: "new stable prompt",
+      extraSystemPromptStatic: "new stable prompt",
+      cliSessionBinding: {
+        sessionId: "cli-session",
+        extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+        cwdHash: hashCliSessionText(dir),
+      },
+    });
+
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(context.openClawHistoryPrompt).toBeUndefined();
+    expect(context.params.prompt).toContain(
+      "OpenClaw resumed this CLI session after prompt content changed.",
+    );
+    expect(context.params.prompt).toContain("changed=system-prompt");
+    expect(context.params.prompt).toContain("Compact conversation info: channel=telegram");
+    expect(context.params.prompt).not.toContain("Verbose conversation info");
+    expect(context.params.prompt).toContain("latest ask");
   });
 });
