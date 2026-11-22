@@ -494,10 +494,35 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
   return normalized === "off" || normalized === "none";
 }
 
-function resolveDeepSeekV4ReasoningEffort(
+function resolveLegacyDeepSeekV4ReasoningEffort(
   thinkingLevel: DeepSeekV4ThinkingLevel,
 ): DeepSeekV4ReasoningEffort {
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+}
+
+function hasExplicitDeepSeekV4ReasoningEfforts(model: Parameters<StreamFn>[0]): boolean {
+  const supported = asOptionalObjectRecord(model.compat)?.supportedReasoningEfforts;
+  return Array.isArray(supported) && supported.length > 0;
+}
+
+function resolveDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+  model: Parameters<StreamFn>[0],
+): string {
+  if (!hasExplicitDeepSeekV4ReasoningEfforts(model)) {
+    return resolveLegacyDeepSeekV4ReasoningEffort(thinkingLevel);
+  }
+  return (
+    resolveOpenAIReasoningEffortForModel({
+      model,
+      effort: thinkingLevel ?? "high",
+      fallbackMap: resolveOpenAIReasoningEffortMap({
+        provider: model.provider,
+        id: model.id,
+        compat: model.compat,
+      }),
+    }) ?? resolveLegacyDeepSeekV4ReasoningEffort(thinkingLevel)
+  );
 }
 
 /** Normalizes assistant reasoning replay shared by OpenAI-compatible provider families. */
@@ -555,7 +580,6 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
     return undefined;
   }
   const underlying = params.baseStreamFn;
-  const resolveReasoningEffort = params.resolveReasoningEffort ?? resolveDeepSeekV4ReasoningEffort;
   return (model, context, options) => {
     if (!params.shouldPatchModel(model)) {
       return underlying(model, context, options);
@@ -572,7 +596,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveReasoningEffort(thinkingLevel);
+      payload.reasoning_effort = params.resolveReasoningEffort
+        ? params.resolveReasoningEffort(thinkingLevel)
+        : resolveDeepSeekV4ReasoningEffort(thinkingLevel, model);
       normalizeOpenAICompatibleReasoningReplay(payload, {
         thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
