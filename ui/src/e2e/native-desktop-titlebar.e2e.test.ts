@@ -293,8 +293,15 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
 }
 
 // Linux and Windows publish the same caption width, so one platform covers both.
+// The dock opens at its 320px minimum so the title and actions share the narrowest header.
 async function keepsHomeActionsClearOfCaption(page: Page) {
   await installWindowChrome(page, "linux");
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "openclaw.custodian.panel.v1",
+      JSON.stringify({ dock: "right", width: 320 }),
+    ),
+  );
   // Home opens the side dock from a conversation, and stays disabled until the
   // Gateway advertises chat history.
   const sessionKey = "agent:main:work";
@@ -317,11 +324,18 @@ async function keepsHomeActionsClearOfCaption(page: Page) {
   const actions = page.locator(".assistant-panel--right .assistant-panel-actions button");
   const caption = page.locator(".openclaw-window-controls");
   await Promise.all([actions.first().waitFor(), caption.waitFor()]);
-  const captionLeft = (await caption.boundingBox())!.x;
+  const captionBox = (await caption.boundingBox())!;
+  const titleRight = await page
+    .locator(".assistant-panel--right .assistant-panel-title > *")
+    .evaluateAll((items) => Math.max(...items.map((item) => item.getBoundingClientRect().right)));
+  expect(titleRight).toBeLessThanOrEqual((await actions.first().boundingBox())!.x);
   for (const action of await actions.all()) {
     const box = (await action.boundingBox())!;
     const label = `${await action.getAttribute("aria-label")}`;
-    expect(box.x + box.width, label).toBeLessThanOrEqual(captionLeft);
+    expect(
+      box.y >= captionBox.y + captionBox.height || box.x + box.width <= captionBox.x,
+      label,
+    ).toBe(true);
     // A trial click fails when a caption button receives the pointer instead.
     await action.click({ trial: true });
   }

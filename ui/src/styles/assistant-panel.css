@@ -8,8 +8,6 @@ openclaw-assistant-panel {
 .assistant-panel {
   position: fixed;
   display: flex;
-  min-width: 0;
-  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
@@ -31,11 +29,18 @@ openclaw-assistant-panel {
   left: var(--shell-nav-width, 0);
 }
 
-/* Desktop webviews draw caption buttons over the window's top-right corner,
-   where these header actions sit. Only the desktop shell publishes the width. */
+/* Linux and Windows desktop shells draw caption buttons over the window's
+   top-right corner; start below that strip so the header keeps its full width.
+   The shell publishes a zero controls width on macOS and in fullscreen, plain
+   browsers publish neither variable, and a mobile topbar already clears it. */
 .assistant-panel--right {
-  --rail-header-padding-end: calc(var(--openclaw-native-window-controls-width, 0px) + 8px);
-  top: var(--shell-topbar-height, 0);
+  top: max(
+    var(--shell-topbar-height, 0px),
+    min(
+      var(--openclaw-native-window-controls-width, 0px),
+      var(--openclaw-native-titlebar-height, 0px)
+    )
+  );
 }
 
 .assistant-panel-resizer {
