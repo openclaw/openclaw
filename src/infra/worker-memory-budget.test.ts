@@ -1,8 +1,8 @@
 import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
+import { createWorkerMemoryBudget } from "./worker-memory-budget-ledger.js";
 import {
-  createWorkerMemoryBudget,
   getWorkerMemoryBudgetSnapshot,
   initializeWorkerMemoryBudget,
 } from "./worker-memory-budget.js";
@@ -93,7 +93,7 @@ describe("worker memory budget", () => {
   });
 
   it.each([
-    [true, 0],
+    [true, 90 * MiB],
     [false, 38 * MiB],
   ])(
     "charges a floor slot only when the shared host does not claim it (claimed=%s)",
@@ -113,7 +113,17 @@ describe("worker memory budget", () => {
     budget.registerPool({}, transcriptUrl, 2);
     expect(budget.snapshot().floorBytes).toBe(38 * MiB);
     options.hosted = (url) => url === transcriptUrl.href;
-    expect(budget.snapshot().floorBytes).toBe(0);
+    expect(budget.snapshot().floorBytes).toBe(90 * MiB);
+  });
+
+  it("reserves a pending host before admitting dedicated growth and reconciles its census", () => {
+    const { budget, live } = setup({ usageMiB: 800, hosted: () => true });
+    const pool = budget.registerPool({}, transcriptUrl, 2);
+    expect(budget.snapshot()).toMatchObject({ floorBytes: 90 * MiB, pendingBytes: 90 * MiB });
+    expect(pool.admitGrowth()).toBe(false);
+    live.direct.set("shared-worker-host.worker.js", 1);
+    expect(budget.snapshot().pendingBytes).toBe(0);
+    expect(pool.admitGrowth()).toBe(true);
   });
 
   it("reserves direct family floors once seen, minus carriers the shared host claims", () => {
@@ -122,7 +132,19 @@ describe("worker memory budget", () => {
     // Two agent carriers plus shared state, one running.
     expect(unhosted).toMatchObject({ floorBytes: 3 * 61 * MiB, pendingBytes: 2 * 61 * MiB });
     const hosted = setup({ usageMiB: 0, live: { direct }, hosted: () => true }).budget.snapshot();
-    expect(hosted).toMatchObject({ floorBytes: 61 * MiB, pendingBytes: 0 });
+    expect(hosted).toMatchObject({ floorBytes: (61 + 90) * MiB, pendingBytes: 90 * MiB });
+  });
+
+  it("reserves a pending host when only direct SQLite carrier floors are discounted", () => {
+    const { budget, live } = setup({
+      usageMiB: 780,
+      live: { direct: new Map([["sqlite-store.worker.js", 1]]) },
+      hosted: () => true,
+    });
+    const pool = budget.registerPool({}, new URL("file:///runtime/unhosted.worker.js"), 2, false);
+    live.pools.set(1, 1);
+    expect(budget.snapshot().pendingBytes).toBe(90 * MiB);
+    expect(pool.admitGrowth()).toBe(false);
   });
 
   it("reports floors that alone exceed the budget and then admits no growth", () => {

@@ -212,9 +212,7 @@ export function getWorkerPoolId(pool: object): number {
 /** Visit live native workers, including pending retirement. */
 export function forEachTrackedWorker(visit: (script: string, poolId?: number) => void): void {
   pruneExitedWorkers();
-  for (const source of trackedWorkers.workers.values()) {
-    visit(source.script, source.poolId);
-  }
+  trackedWorkers.workers.forEach((source) => visit(source.script, source.poolId));
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
