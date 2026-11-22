@@ -177,25 +177,23 @@ own provider request (system prompt, tool definitions, prompt-cache key,
 thinking setting and history) and appends its own prompt, so the provider serves
 the session's cached prefix:
 
-- While the session's run is live, the fork replays that run's last prepared
-  request byte for byte, then appends its own items. Rebuilt history can differ
-  from what the parent sent (runtime-context order, rewritten tool-call IDs);
-  the replay keeps the fork on the parent's bytes.
-- After the run settles, the fork rebuilds the request from the transcript with
-  the session's pinned system prompt and tool definitions.
-- The fork sends its rebuilt request instead of the replay when the parent sent
-  an item the rebuilt context lacks, the parent request is a continuation that
-  carries only its delta, the fork may run a tool the parent request never
-  listed, or the fork may run tools and the parent request lists a
-  provider-hosted tool.
+- The fork rebuilds its request from the transcript with the session's pinned
+  system prompt and tool definitions. That rebuilt request extends what the
+  session sent, so a fork of a live run and a fork of a settled run both read the
+  session's cached prefix.
+- While the session's run is live on the same model, the fork also uses that
+  run's prompt-cache key.
 
 Every tool the session lists stays in the request; the fork runs only the tools
 it was given. A call to any other tool returns a normal result such as
 `exec is not available in this background run.` A tool-free fork also sets tool
 choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
-APIs keep the parent's tool choice; a tool-free fork whose request carries a
-provider-hosted tool on those APIs fails before it is sent.
+Completions and Anthropic Messages, so provider-hosted tools cannot run; it
+lists the session's hosted tools (for example web search) like the session
+does. A fork that runs tools lists provider-hosted search only when it was given
+`web_search`, because the provider runs hosted tools before the fork's tool gate.
+Other APIs keep the parent's tool choice; a tool-free fork whose request carries
+a provider-hosted tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because
@@ -224,7 +222,7 @@ through that CLI, so the fork stays within the plan. The CLI starts a fresh
 session with the conversation as context, so the session's prompt cache is not
 reused, and only the fork's own tools are available to it. A fork that grants
 the plugin's own tools or sets `maxTokens` cannot run on the CLI and uses the
-direct provider route instead. API-key sessions keep the request replay above.
+direct provider route instead.
 
 Sandboxed managed-worktree forks prepare the same private workspace and selected
 working directory as an ordinary turn of the source session. The durable project
