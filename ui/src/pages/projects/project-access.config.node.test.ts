@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { normalizeConfigPatchReplacePaths } from "../../../../src/config/patch-replace-paths.js";
