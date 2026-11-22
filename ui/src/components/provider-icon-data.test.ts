@@ -19,6 +19,7 @@ describe("model provider labels", () => {
     ["acp-copilot", "GitHub Copilot CLI"],
     ["tencent-tokenhub", "Tencent TokenHub"],
     ["vllm", "vLLM"],
+    ["llmman", "llmman"],
   ])("renders provider %s as display text", (provider, label) => {
     expect(providerDisplayLabel(provider)).toBe(label);
   });
@@ -28,7 +29,8 @@ describe("model provider labels", () => {
     expect(resolveProviderIconName("llama-cpp")).toBe("llamacpp");
   });
 
-  it("gives ACP harness groups their agent's brand mark", () => {
+  it("gives ACP harness groups their agent's brand mark, and llmman its own", () => {
+    expect(hasProviderBrandIcon("llmman")).toBe(true);
     expect(hasProviderBrandIcon("acp-opencode")).toBe(true);
     expect(hasProviderBrandIcon("acp-copilot")).toBe(true);
     expect(hasProviderBrandIcon("acp-example")).toBe(false);

@@ -196,3 +196,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## llmman icon
+
+`ProviderIcon-llmman.svg` embeds the llmman manatee mark
+(https://github.com/llmmanorg/llmman/releases/download/docs-assets/llmman-mark.png,
+SHA-256 `c6036711a349dc8f8b2b4405be90b342b477dbcf4a7d95eb7d05b42702a241d5`,
+Apache-2.0), resized to 196 px wide and palette-quantized, in a square view box.
+It keeps its colors (see `ui/src/styles/components.css`). The name and mark
+remain the property of the llmman project.

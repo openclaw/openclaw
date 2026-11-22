@@ -141,7 +141,7 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 | Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `mcp-relay`, `session-share`                                 |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
-| Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |
+| Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `llmman`, `radius`, `sglang`                                    |
 | Security and migration  | `migrate-claude`, `migrate-hermes`, `mxc`, `openclaw-id-access`, `openshell`, `policy`, `visitor-access`         |
 | Audio and media         | `gradium`, `inworld`, `kie`, `senseaudio`, `talk-voice`, `tts-local-cli`, `voice-call`, `vydra`                  |
 | Utilities and reports   | `autoreview`, `parallel`, `qa-channel`, `qa-lab`, `team-reports`, `tokenjuice`                                   |
