@@ -26,6 +26,7 @@ describe("saved requester start write grant", () => {
         sessions: { others: "none" },
       },
       reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+      scheduler: { scopes: ["operator.cron"], agents: "*", sessions: { others: "none" } },
     },
   } satisfies NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
   type Start = (
@@ -133,6 +134,22 @@ describe("saved requester start write grant", () => {
         expect(continuation.authority.scopes).toEqual(["operator.read"]);
       } finally {
         continuation.release();
+      }
+    }));
+
+  it("keeps a cron-only creator's scheduled run", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("scheduler@example.test");
+      setUserProfileRole(profile.id, "scheduler");
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
+        config: { gateway: { roles } },
+        scopes: ["operator.cron"],
+      });
+      const restored = await restoreSaved(fixture);
+      try {
+        expect(restored.authority.scopes).toEqual(["operator.cron"]);
+      } finally {
+        restored.release();
       }
     }));
 

@@ -65,15 +65,19 @@ type QueuedRecoveryParams = {
 /**
  * A queued native launch reuses its original authenticated source, never profile attribution.
  * Every saved-requester start comes here. Admission only narrows scopes, so a start also needs
- * the write grant a live chat.send needs: operator.sessions.write, which write, admin and
- * own-session write satisfy. In-run continuations skip this; channel senders chat without one.
+ * operator.sessions.write (live chat.send) or operator.cron (a cron-only creator's automations).
+ * In-run continuations skip this; channel senders chat without one.
  */
 export async function restoreGatewayQueuedOperatorRecovery(
   params: QueuedRecoveryParams,
 ): Promise<RestoredGatewayOperatorAuthority> {
   const admitted = await admitQueuedSource(params);
   const { channelRecoverySource, scopes } = admitted.authority;
-  if (!channelRecoverySource && !operatorScopeSatisfied("operator.sessions.write", scopes)) {
+  if (
+    !channelRecoverySource &&
+    !operatorScopeSatisfied("operator.sessions.write", scopes) &&
+    !operatorScopeSatisfied("operator.cron", scopes)
+  ) {
     admitted.release();
     throw new GatewayOperatorRecoveryAuthorizationError(
       "Your operator role no longer allows sending messages; ask an administrator to restore access.",
