@@ -794,6 +794,10 @@ single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
 recovery actions remain visible in either mode.
 
+The palette leaves your text as typed: it turns off automatic corrections,
+capitalization, and writing suggestions. Compose still marks possible spelling
+mistakes when the browser supports it; Search does not.
+
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in
 place; the palette grows downward. Images can start a session on their own or
