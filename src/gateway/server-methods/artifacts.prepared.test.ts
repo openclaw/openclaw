@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
@@ -18,7 +19,10 @@ import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { handleManagedOutgoingMediaHttpRequest } from "../managed-image-attachments.js";
 import { createFixture } from "../managed-image-attachments.test-support.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import {
   createDispatchTestHarness,
@@ -197,7 +201,7 @@ it("admits session-only artifact readers with current session visibility and pre
   });
 });
 
-it("keeps disconnected managed reads current until session visibility changes", async () => {
+it("keeps disconnected managed reads current for session visibility and profile role changes", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
@@ -265,6 +269,9 @@ it("keeps disconnected managed reads current until session visibility changes", 
         buildRequestContext: () => context,
         getRequiredSharedGatewaySessionGeneration: generation.reader,
       });
+      const profileContext = createGatewayRequestContext(
+        makeContextParams({ clients: harness.clients }),
+      );
       const connections: AbortController[] = [];
       let requestNumber = 0;
       const request = async (
@@ -309,69 +316,80 @@ it("keeps disconnected managed reads current until session visibility changes", 
       });
       const read = (url: string) => fetch(`http://127.0.0.1:${listener.claim.port}${url}`);
       try {
-        await replaceSessionEntry(scope, { ...entry, updatedAt: 2 });
-        const connection = new AbortController();
-        connections.push(connection);
-        const client = createOperatorWsClient({
-          connId: "managed-visibility",
-          scopes: ["operator.sessions.read"],
-          socket: { close: vi.fn() },
-        });
-        client.connectionSignal = connection.signal;
-        client.authenticatedUserProfile = {
-          profileId: viewer.id,
-          displayName: "Managed reader",
-          hasAvatar: false,
-          avatarRevision: "none",
-          updatedAt: 1,
-        };
-        client.internal = { operatorRoleActor: { kind: "operator", profileId: viewer.id } };
-        client.authPolicy = captureGatewayAuthPolicy(cfg, null);
-        prepareGatewayRecipientProfile(client);
-        harness.clients.add(client);
-        const listed = (await request(client, "artifacts.list")) as {
-          artifacts: { id: string }[];
-        };
-        expect(listed.artifacts).toHaveLength(1);
-        const legacyId = listed.artifacts[0]!.id;
-        expect(legacyId).not.toMatch(/^artifact_managed_/);
-        const urls: string[] = [];
-        for (const artifactId of [`artifact_managed_image_${fixture.attachmentId}`, legacyId]) {
-          const download = (await request(client, "artifacts.download", artifactId)) as {
-            url: string;
+        for (const change of ["visibility", "profile role"] as const) {
+          await replaceSessionEntry(scope, { ...entry, updatedAt: 2 });
+          const connection = new AbortController();
+          connections.push(connection);
+          const client = createOperatorWsClient({
+            connId: `managed-${change}`,
+            scopes: ["operator.sessions.read"],
+            socket: { close: vi.fn() },
+          });
+          client.connectionSignal = connection.signal;
+          client.authenticatedUserProfile = {
+            profileId: viewer.id,
+            displayName: "Managed reader",
+            hasAvatar: false,
+            avatarRevision: "none",
+            updatedAt: 1,
           };
-          urls.push(download.url, download.url.replace("/full?", "/thumbnail?"));
-        }
-        for (const [index, url] of urls.entries()) {
-          const response = await read(url);
-          expect(response.status).toBe(200);
-          expect(response.headers.get("cache-control")).toBe("private, no-store");
-          const body = Buffer.from(await response.arrayBuffer());
-          if (index % 2 === 0) {
-            expect(body).toEqual(bytes);
-          } else {
-            expect(response.headers.get("content-type")).toBe("image/webp");
-            expect(body.byteLength).toBeGreaterThan(0);
+          client.internal = { operatorRoleActor: { kind: "operator", profileId: viewer.id } };
+          client.authPolicy = captureGatewayAuthPolicy(cfg, null);
+          prepareGatewayRecipientProfile(client);
+          harness.clients.add(client);
+          const listed = (await request(client, "artifacts.list")) as {
+            artifacts: { id: string }[];
+          };
+          expect(listed.artifacts).toHaveLength(1);
+          const legacyId = listed.artifacts[0]!.id;
+          expect(legacyId).not.toMatch(/^artifact_managed_/);
+          const urls: string[] = [];
+          for (const artifactId of [`artifact_managed_image_${fixture.attachmentId}`, legacyId]) {
+            const download = (await request(client, "artifacts.download", artifactId)) as {
+              url: string;
+            };
+            urls.push(download.url, download.url.replace("/full?", "/thumbnail?"));
           }
-        }
-        invalidateGatewayPolicyClient(client, {
-          reason: "transport-closed",
-          code: 1001,
-          message: "transport closed",
-          revokeSource: false,
-        });
-        connection.abort();
-        harness.clients.delete(client);
-        for (const url of urls) {
-          const disconnected = await read(url);
-          expect(disconnected.status).toBe(200);
-          expect((await disconnected.arrayBuffer()).byteLength).toBeGreaterThan(0);
-        }
-        await replaceSessionEntry(scope, { ...entry, visibility: "draft", updatedAt: 3 });
-        for (const url of urls) {
-          const revoked = await read(url);
-          expect(revoked.status).toBe(404);
-          expect(await revoked.text()).toBe("not found");
+          for (const [index, url] of urls.entries()) {
+            const response = await read(url);
+            expect(response.status).toBe(200);
+            expect(response.headers.get("cache-control")).toBe("private, no-store");
+            const body = Buffer.from(await response.arrayBuffer());
+            if (index % 2 === 0) {
+              expect(body).toEqual(bytes);
+            } else {
+              expect(response.headers.get("content-type")).toBe("image/webp");
+              expect(body.byteLength).toBeGreaterThan(0);
+            }
+          }
+          invalidateGatewayPolicyClient(client, {
+            reason: "transport-closed",
+            code: 1001,
+            message: "transport closed",
+            revokeSource: false,
+          });
+          connection.abort();
+          harness.clients.delete(client);
+          for (const url of urls) {
+            const disconnected = await read(url);
+            expect(disconnected.status).toBe(200);
+            expect((await disconnected.arrayBuffer()).byteLength).toBeGreaterThan(0);
+          }
+          if (change === "visibility") {
+            await replaceSessionEntry(scope, { ...entry, visibility: "draft", updatedAt: 3 });
+          } else {
+            await setCanonicalUserProfileRole(viewer.id, "denied", {
+              onCommitted: (profileId) => {
+                invalidateOperatorRolePolicy(profileId);
+                profileContext.disconnectClientsForUserProfile?.(profileId);
+              },
+            });
+          }
+          for (const url of urls) {
+            const revoked = await read(url);
+            expect(revoked.status, change).toBe(404);
+            expect(await revoked.text()).toBe("not found");
+          }
         }
       } finally {
         connections.forEach((connection) => connection.abort());

@@ -31,7 +31,10 @@ import {
   toArtifactSummary,
   resolveArtifactAvailability,
 } from "../artifacts-content.js";
-import { retainGatewayDeviceRevocation } from "../device-revocation.js";
+import {
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -338,6 +341,8 @@ async function respondManagedArtifactDownload(
   respond: RespondFn,
   matched?: ArtifactRecord,
 ): Promise<void> {
+  // A managed URL outlives this RPC; each GET is new work and admits against the issuing device.
+  const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
   const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
   using access = createArtifactRequestAccess(request, releaseDevice);
   await runArtifactSessionOperation(respond, async () => {
@@ -364,7 +369,12 @@ async function respondManagedArtifactDownload(
     const download = createManagedArtifactDownload({
       client: access.client,
       path: managed.url,
-      assertCurrent: selected.assertCurrent,
+      assertCurrent: () => {
+        if (sourceCurrent?.() === false) {
+          throw new Error("Artifact download expired");
+        }
+        selected.assertCurrent();
+      },
       release: () => {
         selected.release();
         releaseDevice?.();
@@ -572,6 +582,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     let managedUrl: { url: string; expiresAt: string } | undefined;
     if (managedSource) {
+      const sourceCurrent = readGatewayDeviceSourceAuthority(request.hasCurrentClientAuthority);
       const releaseDevice = retainGatewayDeviceRevocation(request.hasCurrentClientAuthority);
       using managedAccess = createArtifactRequestAccess(request, releaseDevice);
       const selected = await runArtifactSessionOperation(respond, () =>
@@ -588,7 +599,12 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       managedUrl = createManagedArtifactDownload({
         client,
         path: managedSource.url,
-        assertCurrent: selection.assertCurrent,
+        assertCurrent: () => {
+          if (sourceCurrent?.() === false) {
+            throw new Error("Artifact download expired");
+          }
+          selection.assertCurrent();
+        },
         release: () => {
           selection.release();
           releaseDevice?.();
