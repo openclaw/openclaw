@@ -209,7 +209,8 @@ final class DashboardBrowserPresentationView: NSView {
             let local = CGRect(
                 x: dashboardFrame.minX + rect.x - self.frame.minX,
                 y: dashboardFrame.maxY - rect.y - rect.height - self.frame.minY,
-                width: rect.width, height: rect.height)
+                width: rect.width,
+                height: rect.height)
             guard local.intersects(self.bounds) else { continue }
             if cutout.radius == 0 {
                 holes.addRect(local)
