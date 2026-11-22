@@ -56,9 +56,10 @@ function outcomeOf(error: unknown): UnlinkSendOutcome {
 
 /**
  * Creates the sender. `start` resumes delivery once per lifetime, joining an active run without
- * extending it. `flush` sends one newly committed unlink on its own request, alongside any run, and
- * resolves when that attempt ends, so older pending unlinks never delay it. `stop` cancels retries
- * and requests; a start after a stop waits for the stopped run to end, then runs anew.
+ * extending it. `flush` sends one newly committed unlink on its own request and resolves when that
+ * attempt ends, so older pending unlinks never delay it; if it must be sent again the sender's
+ * backoff takes it over. `stop` cancels retries and requests; a start after a stop waits for the
+ * stopped run to end, then runs anew.
  */
 export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   const initialDelay = params.initialDelayMs ?? PUBLICATION_RETRY_INITIAL_MS;
@@ -69,10 +70,10 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let lifetime = new AbortController();
-  // Claws a flush is sending right now; runs skip them so one statement has one request.
+  // Statements a flush is sending right now; runs skip them so one statement has one request.
   const flushing = new Set<string>();
-  // A flush that failed while a run was in flight; that run arms the retry when it ends.
-  let flushFailed = false;
+  // A flush left work to retry while a run was in flight; that run arms the retry as it ends.
+  let retryAfterRun = false;
 
   const cancelTimer = () => {
     if (timer) {
@@ -91,6 +92,18 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
       void run();
     }, delay);
     timer.unref?.();
+  };
+
+  // Arms a retry for work a flush could not deliver, unless one is already coming.
+  const retryLater = () => {
+    if (!active) {
+      return;
+    }
+    if (inflight) {
+      retryAfterRun = true;
+    } else if (!timer) {
+      schedule();
+    }
   };
 
   type Pending = NonNullable<StoredClaw["pending_unlinks"]>[number];
@@ -135,7 +148,7 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
       if (signal.aborted) {
         return false;
       }
-      if (pending.refused || flushing.has(pending.statement.body.claw_id)) {
+      if (pending.refused || flushing.has(pending.statement.sig)) {
         continue;
       }
       retry = (await sendOne(pending, signal)) || retry;
@@ -143,28 +156,18 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     return retry;
   };
 
-  // One run sends everything pending, then arms a retry if a send failed. A stopped run ends
-  // without arming anything.
-  const runOnce = async (signal: AbortSignal): Promise<void> => {
-    let retry: boolean;
+  const sendAllSafely = async (signal: AbortSignal): Promise<boolean> => {
     try {
-      retry = await sendAll(signal);
+      return await sendAll(signal);
     } catch (error) {
       params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
-      retry = true;
-    }
-    retry ||= flushFailed;
-    flushFailed = false;
-    if (!active || signal.aborted) {
-      return;
-    }
-    if (retry) {
-      schedule();
-    } else {
-      attempt = 0;
+      return true;
     }
   };
 
+  // One run sends everything pending. It decides on a retry in the same step that clears
+  // `inflight`, so a flush either sees the run and leaves the retry to it, or arms its own.
+  // A stopped run ends without arming anything.
   const run = (): Promise<void> => {
     if (!active) {
       return Promise.resolve();
@@ -174,8 +177,18 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     }
     cancelTimer();
     const signal = lifetime.signal;
-    const done = runOnce(signal).finally(() => {
+    const done = sendAllSafely(signal).then((retry) => {
       inflight = undefined;
+      const again = retry || retryAfterRun;
+      retryAfterRun = false;
+      if (!active || signal.aborted) {
+        return;
+      }
+      if (again) {
+        schedule();
+      } else {
+        attempt = 0;
+      }
     });
     inflight = { done, signal };
     return done;
@@ -194,41 +207,35 @@ export function createPendingUnlinkSender(params: PendingUnlinkParams) {
     /** Resumes delivery once per lifetime, joining active work or preserving its backoff. */
     start: resume,
     /**
-     * Sends the newly committed unlink of `clawId` now, on its own request, and resolves when that
+     * Sends the newly committed `statement` now, on its own request, and resolves when that
      * attempt ends. Other pending unlinks keep their own run and backoff.
      */
-    async flush(clawId: string): Promise<void> {
+    async flush(statement: SignedStatement<"ClawUnlink">): Promise<void> {
       const pending = params
         .current()
-        ?.pending_unlinks?.find((entry) => entry.statement.body.claw_id === clawId);
-      if (!pending || pending.refused) {
-        await resume();
+        ?.pending_unlinks?.find((entry) => entry.statement.sig === statement.sig);
+      if (!pending || pending.refused || flushing.has(statement.sig)) {
+        void resume();
         return;
       }
-      flushing.add(clawId);
+      flushing.add(statement.sig);
       void resume();
       const signal = lifetime.signal;
-      let retry: boolean;
+      let again = true;
       try {
-        retry = await sendOne(pending, signal);
+        again = (await sendOne(pending, signal)) || signal.aborted;
       } catch (error) {
         params.log.warn(`openclaw-id: pending unlink failed: ${String(error)}`);
-        retry = true;
       } finally {
-        flushing.delete(clawId);
+        flushing.delete(statement.sig);
       }
-      if (!retry || !active || signal.aborted) {
-        return;
-      }
-      if (inflight) {
-        flushFailed = true;
-      } else if (!timer) {
-        schedule();
+      if (again) {
+        retryLater();
       }
     },
     stop(): void {
       active = false;
-      flushFailed = false;
+      retryAfterRun = false;
       cancelTimer();
       lifetime.abort();
       lifetime = new AbortController();

@@ -7,7 +7,11 @@
 // Discovery when its tunnel closes usually already finds the claw unlinked. If Discovery can't
 // be reached the unlink stays pending and the pending-unlink sender delivers it later; the claw
 // is unlinked here either way. A claw no registration was ever sent for is unlinked here only.
-import type { AuthorityEvent, Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
+import type {
+  AuthorityEvent,
+  Channel,
+  SignedStatement,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 import type { OpenClawIdAuthority } from "./authority.js";
@@ -57,7 +61,7 @@ export function createServiceUnlink<Removal>(deps: {
   let sender: ReturnType<typeof createPendingUnlinkSender> | undefined;
 
   // Resumes lifecycle delivery, or sends one newly committed unlink without waiting on older ones.
-  const sendPending = async (flushClawId?: string) => {
+  const sendPending = async (flushed?: SignedStatement<"ClawUnlink">) => {
     const owner = await deps.getAuthority();
     if (!deps.enabled() || (!sender && !owner.current()?.pending_unlinks?.length)) {
       return;
@@ -73,7 +77,7 @@ export function createServiceUnlink<Removal>(deps: {
     }
     // A stop during the import leaves the sender idle.
     if (deps.enabled()) {
-      await (flushClawId ? sender.flush(flushClawId) : sender.start());
+      await (flushed ? sender.flush(flushed) : sender.start());
     }
   };
 
@@ -132,9 +136,7 @@ export function createServiceUnlink<Removal>(deps: {
           return undefined;
         }
       };
-      const sent = discoveryUrl
-        ? attempt(() => sendPending(result.unlink.body.claw_id))
-        : Promise.resolve();
+      const sent = discoveryUrl ? attempt(() => sendPending(result.unlink)) : Promise.resolve();
       const removal = await attempt(() => deps.applyEvents(result.events));
       await attempt(deps.restartRemoteAccess);
       await sent;

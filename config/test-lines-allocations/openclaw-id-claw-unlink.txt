@@ -13,4 +13,5 @@
 # preserves newly queued statements, stop/start cancellation and retry backoff.
 # A newly committed unlink is sent on its own request, so older stalled pending unlinks never
 # hold its reply.
-595
+# A flush that fails during a run, or is cut short by a stop and restart, is retried later.
+639
