@@ -311,6 +311,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectNoProviderReads();
     page.loaderPending = true;
     publishRouteData(page, createApiKeyProviderData());
+    page.routeData = { ...page.routeData!, provider: "openai" };
     await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
     expect(usageReads).toBe(0);
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);
