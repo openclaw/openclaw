@@ -183,6 +183,11 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
         tabs={sessionHubTabs("projects", (tab) => model.context.navigate(tab))}
         docsUrl={PROJECTS_DOCS_URL}
         class="sessions-hub-header"
+        actions={
+          <Show when={canAdmin()}>
+            <RegisterMenu />
+          </Show>
+        }
       />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
@@ -196,15 +201,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
               {view().error}
             </InlineAlert>
           </Show>
-          <SettingsSection
-            title={t("projectsPage.title")}
-            description={t("projectsPage.subtitle")}
-            actions={
-              <Show when={canAdmin()}>
-                <RegisterMenu />
-              </Show>
-            }
-          >
+          <SettingsSection>
             <div class="data-table-search projects-search">
               <input
                 type="search"
@@ -435,11 +432,7 @@ function ProjectDetails(props: {
                               ariaLabel={entry().role}
                               checked={entry().enabled}
                               disabled={entry().reason !== null || !props.view().canEditAccess}
-                              saving={
-                                props.view().pendingAccess?.role === entry().role ||
-                                (props.view().operation !== null &&
-                                  props.view().operation !== "access")
-                              }
+                              saving={props.view().operation !== null}
                               onChange={(enabled) =>
                                 void props.model.setRoleAccess(entry().role, props.project, enabled)
                               }
@@ -452,6 +445,7 @@ function ProjectDetails(props: {
                 )}
               </Show>
             </Show>
+            <p class="muted projects-detail__note">{t("projectsPage.accessPublicNote")}</p>
             <p class="muted projects-detail__note">{t("projectsPage.accessWorktreeNote")}</p>
           </section>
         </div>

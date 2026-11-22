@@ -4,6 +4,8 @@ import type {
   ProjectsAddResult,
   ProjectsListResult,
   ProjectsRegisterResult,
+  ProjectsRenameParams,
+  ProjectsRenameResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -21,9 +23,6 @@ import { PlaceBrowserState } from "../new-session/place-browser-state.ts";
 import { roleProjectsPatch } from "./project-access.ts";
 
 registerSessionOrganizationEnglish();
-
-/** Local shape of `projects.rename` until the shared protocol type is available here. */
-type ProjectsRenameResult = { project: ProjectRecord };
 
 export type ProjectsOperation = "register" | "clone" | "rename" | "remove" | "access";
 
@@ -129,9 +128,10 @@ export class ProjectsModel {
     return canCallGatewayMethod(this.context.gateway.snapshot, "projects.add", "operator.write");
   }
 
-  async load(options: { preserveError?: boolean } = {}) {
+  /** `replace` retires an in-flight read that may predate a change this page just made. */
+  async load(options: { preserveError?: boolean; replace?: boolean } = {}) {
     const scope = this.gateway.capture();
-    if (!scope || this.listRequest.pending) {
+    if (!scope || (this.listRequest.pending && !options.replace)) {
       return;
     }
     if (!options.preserveError) {
@@ -173,7 +173,7 @@ export class ProjectsModel {
     if (changed) {
       // New Session reads the shared catalog; retire it so the change shows there too.
       void projectsForGateway(this.context.gateway).refresh(true);
-      await this.load({ preserveError: true });
+      await this.load({ preserveError: true, replace: true });
     }
   }
 
@@ -222,93 +222,101 @@ export class ProjectsModel {
     }
   }
 
-  async cloneFromGitHub() {
-    const scope = this.admit("clone");
+  /**
+   * Runs an admitted dialog-driven operation. Dialog preparation and the request share
+   * one lifecycle, so any failure is shown and the page leaves its busy state.
+   */
+  private async run(
+    operation: ProjectsOperation,
+    task: (scope: GatewayConnectionScope) => Promise<boolean>,
+  ) {
+    const scope = this.admit(operation);
     if (!scope) {
-      return;
-    }
-    let cloned: ProjectsAddResult | undefined;
-    await showInputDialog({
-      title: t("projectsPage.cloneTitle"),
-      label: t("projectsPage.cloneLabel"),
-      submitLabel: t("projectsPage.cloneSubmit"),
-      requireValue: true,
-      gateway: this.context.gateway,
-      canSubmit: () => this.gateway.isCurrent(scope),
-      submit: async (gitUrl) => {
-        try {
-          cloned = await scope.client.request<ProjectsAddResult>("projects.add", { gitUrl });
-          return null;
-        } catch (error) {
-          return formatUiError(error);
-        }
-      },
-    });
-    if (cloned && this.gateway.isCurrent(scope)) {
-      this.update({ selectedId: cloned.id });
-    }
-    await this.settle(scope, Boolean(cloned));
-  }
-
-  async rename(project: ProjectRecord) {
-    const scope = this.admit("rename");
-    if (!scope) {
-      return;
-    }
-    let renamed = false;
-    await showInputDialog({
-      title: t("projectsPage.renameTitle"),
-      label: t("projectsPage.renameLabel"),
-      defaultValue: project.displayName,
-      submitLabel: t("projectsPage.rename"),
-      requireValue: true,
-      requireChange: true,
-      gateway: this.context.gateway,
-      canSubmit: () => this.gateway.isCurrent(scope),
-      submit: async (name) => {
-        try {
-          await scope.client.request<ProjectsRenameResult>("projects.rename", {
-            projectId: project.id,
-            name,
-          });
-          renamed = true;
-          return null;
-        } catch (error) {
-          return formatUiError(error);
-        }
-      },
-    });
-    await this.settle(scope, renamed);
-  }
-
-  async remove(project: ProjectRecord) {
-    const scope = this.admit("remove");
-    if (!scope) {
-      return;
-    }
-    const title = t("projectsPage.removeTitle", { name: project.displayName });
-    const choice =
-      project.source === "cloned"
-        ? await showConfirmChoiceDialog({
-            title,
-            message: t("projectsPage.removeClonedBody"),
-            confirmLabel: t("projectsPage.remove"),
-            alternativeLabel: t("projectsPage.removeDeleteCheckout"),
-            danger: true,
-          })
-        : (await showConfirmDialog({
-              title,
-              message: t("projectsPage.removeBody"),
-              confirmLabel: t("projectsPage.remove"),
-              danger: true,
-            }))
-          ? "confirm"
-          : null;
-    if (!choice || !this.gateway.isCurrent(scope)) {
-      await this.settle(scope, false);
       return;
     }
     try {
+      await this.settle(scope, await task(scope));
+    } catch (error) {
+      await this.settle(scope, false, error);
+    }
+  }
+
+  cloneFromGitHub() {
+    return this.run("clone", async (scope) => {
+      let cloned: ProjectsAddResult | undefined;
+      await showInputDialog({
+        title: t("projectsPage.cloneTitle"),
+        label: t("projectsPage.cloneLabel"),
+        submitLabel: t("projectsPage.cloneSubmit"),
+        requireValue: true,
+        gateway: this.context.gateway,
+        canSubmit: () => this.gateway.isCurrent(scope),
+        submit: async (gitUrl) => {
+          try {
+            cloned = await scope.client.request<ProjectsAddResult>("projects.add", { gitUrl });
+            return null;
+          } catch (error) {
+            return formatUiError(error);
+          }
+        },
+      });
+      if (cloned && this.gateway.isCurrent(scope)) {
+        this.update({ selectedId: cloned.id });
+      }
+      return Boolean(cloned);
+    });
+  }
+
+  rename(project: ProjectRecord) {
+    return this.run("rename", async (scope) => {
+      let renamed = false;
+      await showInputDialog({
+        title: t("projectsPage.renameTitle"),
+        label: t("projectsPage.renameLabel"),
+        defaultValue: project.displayName,
+        submitLabel: t("projectsPage.rename"),
+        requireValue: true,
+        requireChange: true,
+        gateway: this.context.gateway,
+        canSubmit: () => this.gateway.isCurrent(scope),
+        submit: async (name) => {
+          try {
+            const params: ProjectsRenameParams = { projectId: project.id, name };
+            await scope.client.request<ProjectsRenameResult>("projects.rename", params);
+            renamed = true;
+            return null;
+          } catch (error) {
+            return formatUiError(error);
+          }
+        },
+      });
+      return renamed;
+    });
+  }
+
+  remove(project: ProjectRecord) {
+    return this.run("remove", async (scope) => {
+      const title = t("projectsPage.removeTitle", { name: project.displayName });
+      const choice =
+        project.source === "cloned"
+          ? await showConfirmChoiceDialog({
+              title,
+              message: t("projectsPage.removeClonedBody"),
+              confirmLabel: t("projectsPage.remove"),
+              alternativeLabel: t("projectsPage.removeDeleteCheckout"),
+              danger: true,
+            })
+          : (await showConfirmDialog({
+                title,
+                message: t("projectsPage.removeBody"),
+                confirmLabel: t("projectsPage.remove"),
+                danger: true,
+              }))
+            ? "confirm"
+            : null;
+      if (!choice || !this.gateway.isCurrent(scope)) {
+        return false;
+      }
       // The Gateway refuses to delete a checkout that sessions or worktrees still reference.
       await scope.client.request("projects.remove", {
         id: project.id,
@@ -317,10 +325,8 @@ export class ProjectsModel {
       if (this.gateway.isCurrent(scope)) {
         this.update({ selectedId: null });
       }
-      await this.settle(scope, true);
-    } catch (error) {
-      await this.settle(scope, false, error);
-    }
+      return true;
+    });
   }
 
   async setRoleAccess(role: string, project: ProjectRecord, enabled: boolean) {

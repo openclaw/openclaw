@@ -104,6 +104,8 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Projects", level: 1 }).waitFor();
       const tabs = page.getByRole("tablist", { name: "Session sections" }).getByRole("tab");
       expect(await tabs.allTextContents()).toEqual(["Sessions", "Projects", "Worktrees"]);
+      // The hub header names the page; the table section adds no second heading.
+      expect(await page.locator(".settings-section__heading").count()).toBe(0);
       const site = page.locator("tbody tr", { hasText: "openclaw/site" });
       await expect.poll(() => site.textContent()).toContain("contractor");
       await capture(page, "projects-table.png");

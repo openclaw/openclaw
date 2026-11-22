@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmChoiceDialog } from "../../components/confirm-dialog.ts";
@@ -57,6 +58,7 @@ const ROLES = {
     scopes: ["operator.sessions.write"],
     projects: ["site"],
   },
+  guest: { sessions: { others: "none" }, agents: "*", scopes: ["operator.sessions.write"] },
   operator: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
   viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
 };
@@ -92,6 +94,7 @@ function createProjectsPage(
     lastError: null as string | null,
   };
   const patches: ConfigPatchOptions[] = [];
+  let patchGate: Promise<void> = Promise.resolve();
   const runtimeConfig = {
     state,
     canPatch: true,
@@ -103,6 +106,7 @@ function createProjectsPage(
           config: Record<string, unknown>,
         ) => { options: ConfigPatchOptions } | { error: string },
       ) => {
+        await patchGate;
         const built = build(sourceConfig);
         if ("error" in built) {
           state.lastError = built.error;
@@ -151,6 +155,9 @@ function createProjectsPage(
     element,
     patches,
     runtimeConfig,
+    holdPatches(gate: Promise<void>) {
+      patchGate = gate;
+    },
     button: (label: string, root?: ParentNode) =>
       buttons(root).find((button) => button.textContent?.trim() === label),
     rowText: (id: string) =>
@@ -194,7 +201,7 @@ describe("ProjectsPage", () => {
       "docsGit checkout · cloned/srv/openclaw/projects/docsadminoperator",
     );
     expect(page.rowText("main")).toBe(
-      "mainAgent workspace/home/openclaw/.openclaw/workspaceadmincontractoroperator",
+      "mainAgent workspace/home/openclaw/.openclaw/workspaceadmincontractorguestoperator",
     );
     const search = page.element.querySelector<HTMLInputElement>('input[type="search"]')!;
     search.value = "openclaw/site";
@@ -212,7 +219,6 @@ describe("ProjectsPage", () => {
     const page = createProjectsPage(listRequest());
     await page.ready();
     await openDetails(page, "docs");
-    expect(page.dialog()!.textContent).toContain("Restricted roles always get a new worktree.");
     expect(page.switchFor("admin")).toMatchObject({ checked: true, disabled: true });
     expect(page.switchFor("operator")).toMatchObject({ checked: true, disabled: true });
     expect(page.switchFor("viewer")).toMatchObject({ checked: false, disabled: true });
@@ -227,6 +233,42 @@ describe("ProjectsPage", () => {
     });
     expect(page.patches[0]).not.toHaveProperty("replacePaths");
     await waitForSolid(() => expect(page.model.operation).toBeNull());
+  });
+
+  it("holds every role switch while one share saves, keeping focus available", async () => {
+    const page = createProjectsPage(listRequest());
+    await page.ready();
+    await openDetails(page, "docs");
+    const saving = createDeferred();
+    page.holdPatches(saving.promise);
+    const guest = page.switchFor("guest");
+    expect(guest).toMatchObject({ checked: false, disabled: false });
+    page.switchFor("contractor").click();
+    await waitForSolid(() => expect(page.model.operation).toBe("access"));
+    for (const role of ["contractor", "guest"]) {
+      expect(page.switchFor(role).getAttribute("aria-disabled"), role).toBe("true");
+    }
+    guest.click();
+    flush();
+    expect(guest.checked).toBe(false);
+    expect(page.runtimeConfig.patchFromSnapshot).toHaveBeenCalledOnce();
+    saving.resolve();
+    await waitForSolid(() => expect(page.model.operation).toBeNull());
+    expect(page.switchFor("guest").getAttribute("aria-disabled")).toBeNull();
+    expect(page.patches).toHaveLength(1);
+  });
+
+  it("presents switches as explicit shares beside the public repository fallback", async () => {
+    const page = createProjectsPage(listRequest());
+    await page.ready();
+    await openDetails(page, "site");
+    const text = page.dialog()!.textContent!;
+    expect(text).toContain("Shared with roles");
+    expect(text).toContain("Roles without write access can also use public GitHub repositories.");
+    expect(text).toContain(
+      "Roles that can use this project only through this share always get a new worktree.",
+    );
+    expect(page.switchFor("guest")).toMatchObject({ checked: false, disabled: false });
   });
 
   it("disables role switches when the Gateway configuration is read-only", async () => {
@@ -273,6 +315,58 @@ describe("ProjectsPage", () => {
       expect(request.mock.calls.filter(([method]) => method === "projects.list")).toHaveLength(2),
     );
     expect(vi.mocked(projectsForGateway).mock.results[0]?.value.refresh).toHaveBeenCalledWith(true);
+  });
+
+  it("rereads the list after a change even while an older read is still pending", async () => {
+    const held = createDeferred<{ projects: ProjectRecord[] }>();
+    let renamed = false;
+    let lists = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "projects.rename") {
+        renamed = true;
+        return { ...SITE, displayName: "Website" };
+      }
+      if (method !== "projects.list") {
+        return {};
+      }
+      lists += 1;
+      if (lists === 2) {
+        return held.promise;
+      }
+      return { projects: [renamed ? { ...SITE, displayName: "Website" } : SITE, DOCS] };
+    });
+    vi.mocked(showInputDialog).mockImplementation(async (options) =>
+      (await options.submit?.("Website")) === null ? "Website" : null,
+    );
+    const page = createProjectsPage(request);
+    await page.ready();
+    void page.model.load();
+    await waitForSolid(() => expect(lists).toBe(2));
+    await openDetails(page, "site");
+    page.button("Rename", page.dialog()!)!.click();
+    await waitForSolid(() => expect(lists).toBe(3));
+    await waitForSolid(() =>
+      expect(page.model.records.map((project) => project.displayName)).toContain("Website"),
+    );
+    held.resolve({ projects: [SITE, DOCS] });
+    await Promise.resolve();
+    flush();
+    expect(page.model.records.map((project) => project.displayName)).toContain("Website");
+  });
+
+  it("releases the page when a dialog fails to open", async () => {
+    vi.mocked(showInputDialog).mockRejectedValue(new Error("Dialog unavailable"));
+    const page = createProjectsPage(listRequest());
+    await page.ready();
+    await openDetails(page, "site");
+    page.button("Rename", page.dialog()!)!.click();
+    await waitForSolid(() =>
+      expect(page.dialog()!.querySelector('[role="alert"]')?.textContent).toContain(
+        "Dialog unavailable",
+      ),
+    );
+    expect(page.model.operation).toBeNull();
+    expect(page.button("Rename", page.dialog()!)!.disabled).toBe(false);
   });
 
   it("surfaces the Gateway refusal to delete a referenced clone", async () => {

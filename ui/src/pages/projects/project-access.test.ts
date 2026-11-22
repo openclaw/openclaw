@@ -10,6 +10,7 @@ const config = {
         operator: { agents: "*", scopes: ["operator.read", "operator.write"] },
         contractor: { agents: ["main"], scopes: ["operator.sessions.write"], projects: ["site"] },
         partner: { agents: "*", scopes: ["operator.sessions.write"], projects: "*" },
+        guest: { agents: "*", scopes: ["operator.sessions.write"] },
         admin: { agents: "*", scopes: ["operator.admin"] },
       },
     },
@@ -42,6 +43,7 @@ describe("project role access", () => {
     expect(accessByRole(site)).toEqual({
       admin: [true, "admin"],
       contractor: [true, null],
+      guest: [false, null],
       operator: [true, "write"],
       partner: [true, "all"],
       viewer: [false, "no-sessions"],
@@ -53,6 +55,7 @@ describe("project role access", () => {
     expect(accessByRole(workspace)).toEqual({
       admin: [true, "admin"],
       contractor: [true, "agents"],
+      guest: [true, "agents"],
       operator: [true, "agents"],
       partner: [true, "agents"],
       viewer: [false, "agents"],
@@ -78,6 +81,12 @@ describe("project role access", () => {
         note: "projects: unshare site with role contractor",
         replacePaths: ["gateway.roles.definitions.contractor.projects"],
       },
+    });
+  });
+
+  it("creates the projects field for a role without one", () => {
+    expect(roleProjectsPatch(config, "guest", "site", true)).toMatchObject({
+      options: { raw: { gateway: { roles: { definitions: { guest: { projects: ["site"] } } } } } },
     });
   });
 

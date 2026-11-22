@@ -1,22 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatConfigPatchPath } from "../../../../src/config/patch-replace-paths.js";
+import type { GatewayOperatorRoleDefinition } from "../../../../src/config/types.gateway.js";
 import { operatorScopeSatisfied } from "../../../../src/shared/operator-scope-compat.js";
 import type { ConfigPatchOptions } from "../../lib/config/config-gateway-operations.ts";
 
 const ROLE_DEFINITIONS_PATH = "gateway.roles.definitions";
 
-/** One `gateway.roles.definitions` entry, as far as project access reads it. */
-export type ConfiguredRole = {
+/** One `gateway.roles.definitions` entry, as far as project sharing reads it. */
+export type ConfiguredRole = Pick<GatewayOperatorRoleDefinition, "agents" | "projects"> & {
   name: string;
   scopes: readonly string[];
-  agents: "*" | readonly string[];
-  projects?: "*" | readonly string[];
 };
 
 /**
- * Why a role's access is fixed. `null` means the project ID in the role's
- * `projects` list decides it, so an admin can switch it.
+ * Why a role's share is fixed. `null` means the project ID in the role's
+ * `projects` list decides it, so an admin can switch it. A role without a share
+ * may still use public GitHub repositories through the Gateway's fallback; these
+ * values describe explicit shares and full access, not that fallback.
  */
 export type RoleAccessReason = "admin" | "write" | "all" | "no-sessions" | "agents" | null;
 
@@ -59,7 +60,7 @@ export function readConfiguredRoles(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Presentation of the Gateway's project access policy; the Gateway still decides each request. */
+/** Explicit shares and full access per role; the Gateway still decides each request. */
 export function roleProjectAccess(role: ConfiguredRole, project: ProjectRecord): RoleProjectAccess {
   const allows = (scope: string) => operatorScopeSatisfied(scope, role.scopes);
   const access = (enabled: boolean, reason: RoleAccessReason) => ({
