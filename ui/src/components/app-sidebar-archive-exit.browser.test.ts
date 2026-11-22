@@ -74,16 +74,16 @@ it.each([
       }
       expect(scroller.scrollTop).toBeGreaterThan(0);
       const viewport = scroller.getBoundingClientRect();
-      const row = rows.findLast(
+      const clippedRow = rows.findLast(
         (candidate) => candidate.getBoundingClientRect().bottom <= viewport.top,
       );
-      const next = rows.find((candidate) => {
+      const visibleAnchor = rows.find((candidate) => {
         const bounds = candidate.getBoundingClientRect();
         return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
       });
-      expect(row).toBeDefined();
-      expect(next).toBeDefined();
-      return { row: row!, next: next! };
+      expect(clippedRow).toBeDefined();
+      expect(visibleAnchor).toBeDefined();
+      return { row: clippedRow!, next: visibleAnchor! };
     });
     const archivedKey = row.dataset.sessionKey!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
