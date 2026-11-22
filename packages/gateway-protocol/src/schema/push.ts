@@ -14,6 +14,7 @@ const ApnsEnvironmentSchema = Type.String({ enum: ["sandbox", "production"] });
 
 export const PushTestParamsSchema = closedObject({
   nodeId: NonEmptyString,
+  sessionKey: Type.Optional(NonEmptyString),
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   environment: Type.Optional(ApnsEnvironmentSchema),
