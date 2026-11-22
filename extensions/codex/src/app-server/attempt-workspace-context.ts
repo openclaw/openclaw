@@ -109,10 +109,13 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     });
     // A native-owned thread runs the model of its binding, which can differ from the attempt's.
     const nativeModelRef = params.params.expectedSessionRuntimeOwnership?.modelRef;
+    const sizeMetadata = resolveCodexWorkspaceModelSize(params.params, nativeModelRef);
     const prepared = await prepareAgentWorkspaceContext({
       scope: "full",
       modelProvider: nativeModelRef?.provider ?? params.params.provider,
       modelId: nativeModelRef?.model ?? params.params.modelId,
+      modelSizeClass: sizeMetadata.modelSizeClass,
+      modelParameterCount: sizeMetadata.parameterCount,
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
       sessionKey: params.sessionKey,
@@ -196,6 +199,37 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         : undefined,
     };
   }
+}
+
+/** Keeps the attempt's size metadata for its own model; otherwise reads the bound model's configured row. */
+function resolveCodexWorkspaceModelSize(
+  attempt: EmbeddedRunAttemptParams,
+  nativeModelRef: { provider: string; model: string } | undefined,
+): {
+  modelSizeClass?: NonNullable<EmbeddedRunAttemptParams["model"]>["modelSizeClass"];
+  parameterCount?: number;
+} {
+  if (
+    !nativeModelRef ||
+    (normalizeLowercaseStringOrEmpty(nativeModelRef.provider) ===
+      normalizeLowercaseStringOrEmpty(attempt.provider) &&
+      nativeModelRef.model === attempt.modelId)
+  ) {
+    return {
+      modelSizeClass: attempt.model?.modelSizeClass,
+      parameterCount: attempt.model?.parameterCount,
+    };
+  }
+  const providers = attempt.config?.models?.providers ?? {};
+  const providerKey = Object.keys(providers).find(
+    (key) =>
+      normalizeLowercaseStringOrEmpty(key) ===
+      normalizeLowercaseStringOrEmpty(nativeModelRef.provider),
+  );
+  const bound = providerKey
+    ? providers[providerKey]?.models?.find((model) => model.id === nativeModelRef.model)
+    : undefined;
+  return { modelSizeClass: bound?.modelSizeClass, parameterCount: bound?.parameterCount };
 }
 
 function renderCodexWorkspaceBootstrapPromptContext(

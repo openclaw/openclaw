@@ -1,6 +1,8 @@
 import path from "node:path";
+import type { ModelSizeClass } from "../../config/types.models.js";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
 import { resolveAgentProfile } from "../agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../agent-profiles/model-size-class.js";
 import { prepareAgentProfileWorkspaceContext } from "../agent-profiles/workspace-context.js";
 import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
 import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
@@ -22,6 +24,9 @@ export type AgentWorkspaceContextParams = Parameters<typeof resolveBootstrapFile
   /** Model the turn actually runs (after fallback); selects the Agent Profile budget. */
   modelProvider?: string;
   modelId?: string;
+  modelSizeClass?: ModelSizeClass;
+  /** Route-matched total parameter count; selects the size class when none is configured. */
+  modelParameterCount?: number;
   memoryToolRouted?: boolean;
   memoryTools?: {
     /** Complete policy-admitted tool set available to the active memory prompt builder. */
@@ -50,8 +55,18 @@ export type AgentWorkspaceContext = {
   memoryRecallInstructions?: string;
 };
 
-function shouldApplyAgentProfile(params: { modelProvider?: string; modelId?: string }): boolean {
-  return Boolean(params.modelProvider || params.modelId);
+function shouldApplyAgentProfile(params: {
+  modelProvider?: string;
+  modelId?: string;
+  modelSizeClass?: ModelSizeClass;
+  modelParameterCount?: number;
+}): boolean {
+  return Boolean(
+    params.modelProvider ||
+    params.modelId ||
+    params.modelSizeClass ||
+    params.modelParameterCount !== undefined,
+  );
 }
 
 /** Prepares Gateway workspace facts; the harness owns their native carriers and lifetime. */
@@ -88,6 +103,10 @@ export async function prepareAgentWorkspaceContext(
           config: params.config,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
+          modelSizeClass: resolveProfileModelSizeClass({
+            modelSizeClass: params.modelSizeClass,
+            parameterCount: params.modelParameterCount,
+          }),
         }),
         bootstrapFiles: budgetFiles,
         config: params.config,

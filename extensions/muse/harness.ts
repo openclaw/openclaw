@@ -324,6 +324,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             const bootstrap = await resolveBootstrapContextForRun({
               modelProvider: params.provider,
               modelId: params.modelId,
+              modelSizeClass: params.model?.modelSizeClass,
+              modelParameterCount: params.model?.parameterCount,
               workspaceDir: params.workspaceDir,
               config: params.config,
               sessionKey: params.sessionKey,

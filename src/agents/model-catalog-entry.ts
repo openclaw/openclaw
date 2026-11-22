@@ -50,6 +50,7 @@ export function modelCatalogRowToEntry(
       : {}),
     ...(row.contextWindowDefault ? { contextWindowDefault: row.contextWindowDefault } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(row.modelSizeClass ? { modelSizeClass: row.modelSizeClass } : {}),
     ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
     ...(row.family ? { family: row.family } : {}),
     reasoning: row.reasoning,
@@ -190,6 +191,7 @@ export function configuredModelCatalogEntry(params: {
     ...(baseUrl ? { baseUrl } : {}),
     contextWindow,
     contextTokens,
+    ...(model.modelSizeClass ? { modelSizeClass: model.modelSizeClass } : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(family ? { family } : {}),
     ...((model.inference ?? routed?.inference)

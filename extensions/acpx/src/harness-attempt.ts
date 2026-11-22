@@ -175,6 +175,8 @@ export async function runAcpHarnessAttempt(params: {
       ? await resolveBootstrapContextForRun({
           modelProvider: input.provider,
           modelId: input.modelId,
+          modelSizeClass: input.model?.modelSizeClass,
+          modelParameterCount: input.model?.parameterCount,
           workspaceDir: input.workspaceDir,
           config: input.config,
           sessionKey,

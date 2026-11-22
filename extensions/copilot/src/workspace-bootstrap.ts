@@ -36,6 +36,8 @@ export async function loadCopilotWorkspaceInstructions(params: {
     const bootstrapContext = await resolveBootstrapContextForRun({
       modelProvider: attempt.provider,
       modelId: attempt.modelId,
+      modelSizeClass: attempt.model?.modelSizeClass,
+      modelParameterCount: attempt.model?.parameterCount,
       workspaceDir,
       config: attempt.config,
       sessionKey: readNonBlankString((attempt as { sessionKey?: unknown }).sessionKey),

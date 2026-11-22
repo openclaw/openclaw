@@ -8,8 +8,13 @@ import { buildAgentsApiInstructions } from "./agentsapi-prompt.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function instructionsFor(
-  model: { provider: string; modelId: string },
-  options: { profile?: "openclaw/base" | "openclaw/small" } = {},
+  model: {
+    provider: string;
+    modelId: string;
+    modelSizeClass?: "small";
+    parameterCount?: number;
+  },
+  options: { sizeSelection?: boolean } = {},
 ) {
   const workspace = await fs.realpath(tempDirs.make("agentsapi-profile-"));
   await fs.writeFile(path.join(workspace, "AGENTS.md"), "Q".repeat(12_000));
@@ -22,12 +27,13 @@ async function instructionsFor(
       agents: {
         defaults: {
           workspace,
-          ...(options.profile ? { agentProfileId: options.profile } : {}),
+          ...(options.sizeSelection === false ? {} : { agentProfileId: "auto" as const }),
         },
       },
     },
     provider: model.provider,
     modelId: model.modelId,
+    model: { modelSizeClass: model.modelSizeClass, parameterCount: model.parameterCount },
   } as unknown as Attempt;
   return buildAgentsApiInstructions(attempt, [], {
     type: "self_hosted",
@@ -38,25 +44,39 @@ async function instructionsFor(
 const countQ = (text: string) => text.split("Q").length - 1;
 
 describe("buildAgentsApiInstructions Agent Profile", () => {
-  it("caps workspace instructions when the small profile is selected", async () => {
-    const instructions = await instructionsFor(
-      { provider: "llama-cpp", modelId: "local-8b" },
-      { profile: "openclaw/small" },
-    );
+  it("caps workspace instructions for an attempt model of the small size class", async () => {
+    const instructions = await instructionsFor({
+      provider: "llama-cpp",
+      modelId: "local-8b",
+      modelSizeClass: "small",
+    });
     expect(countQ(instructions)).toBeGreaterThan(0);
     expect(countQ(instructions)).toBeLessThanOrEqual(7_500);
   });
 
-  it("keeps the full AGENTS.md when the base profile is selected", async () => {
+  it("caps workspace instructions for an attempt model that reports only a parameter count", async () => {
+    const instructions = await instructionsFor({
+      provider: "ollama",
+      modelId: "custom-8b",
+      parameterCount: 8_190_735_360,
+    });
+    expect(countQ(instructions)).toBeGreaterThan(0);
+    expect(countQ(instructions)).toBeLessThanOrEqual(7_500);
+  });
+
+  it("keeps the full AGENTS.md for a small model while size selection is off", async () => {
     const instructions = await instructionsFor(
-      { provider: "llama-cpp", modelId: "local-8b" },
-      { profile: "openclaw/base" },
+      { provider: "llama-cpp", modelId: "local-8b", modelSizeClass: "small" },
+      { sizeSelection: false },
     );
     expect(countQ(instructions)).toBeGreaterThan(7_500);
   });
 
-  it("keeps the full AGENTS.md when no profile is configured", async () => {
-    const instructions = await instructionsFor({ provider: "llama-cpp", modelId: "local-8b" });
+  it("keeps the full AGENTS.md for an attempt model without a size class", async () => {
+    const instructions = await instructionsFor({
+      provider: "anthropic",
+      modelId: "claude-opus-4-1",
+    });
     expect(countQ(instructions)).toBeGreaterThan(7_500);
   });
 });

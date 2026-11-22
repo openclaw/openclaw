@@ -80,6 +80,8 @@ export async function buildAgentsApiInstructions(
     scope: "full",
     modelProvider: params.provider,
     modelId: params.modelId,
+    modelSizeClass: params.model?.modelSizeClass,
+    modelParameterCount: params.model?.parameterCount,
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
