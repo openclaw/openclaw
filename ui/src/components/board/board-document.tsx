@@ -30,7 +30,7 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { IconButton } from "../solid/icon-button.tsx";
+import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board-document.css";
 import { BoardView } from "./board-view.tsx";
@@ -430,13 +430,14 @@ function BoardDocumentContent(
   return (
     <main class="board-document" aria-label={t("board.label")}>
       {props.onDocumentClose ? (
-        <IconButton
-          class="board-document__close"
-          icon="x"
-          label={t("dashboardDocument.close")}
-          tooltip={false}
+        <button
+          class="btn btn--ghost board-document__close"
+          type="button"
           onClick={() => props.onDocumentClose?.()}
-        />
+        >
+          <Icon name="x" />
+          {t("dashboardDocument.close")}
+        </button>
       ) : null}
       <div class="board-document__content">
         <Show when={state().kind === "loading"}>
