@@ -16,7 +16,7 @@ import type { ConversationRef } from "../../../infra/outbound/session-binding-se
 import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue.records.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { normalizeAccountId } from "../../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import {
@@ -227,6 +227,19 @@ function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext 
   return normalizeDeliveryContext(rest);
 }
 
+/**
+ * A session key is an internal address, never a chat target. A stored route can carry one as
+ * `to` next to an external channel; trusting it makes the channel reject the completion.
+ */
+function dropSessionKeyTarget(context?: DeliveryContext): DeliveryContext | undefined {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.to || classifySessionKeyShape(normalized.to) !== "agent") {
+    return normalized;
+  }
+  const { to: _to, threadId: _threadId, ...rest } = normalized;
+  return normalizeDeliveryContext(rest);
+}
+
 /** Resolve normalized session and external completion origins once for every delivery path. */
 export function resolveCompletionDeliveryOrigins(params: {
   expectsCompletionMessage: boolean;
@@ -234,8 +247,8 @@ export function resolveCompletionDeliveryOrigins(params: {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }) {
-  const directOrigin = normalizeDeliveryContext(params.directOrigin);
-  const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
+  const directOrigin = dropSessionKeyTarget(params.directOrigin);
+  const requesterSessionOrigin = dropSessionKeyTarget(params.requesterSessionOrigin);
   const completionFallbackOrigin = mergeAnnounceDeliveryContext(
     directOrigin,
     requesterSessionOrigin,
@@ -245,7 +258,7 @@ export function resolveCompletionDeliveryOrigins(params: {
     requesterSessionOrigin,
     effectiveDirectOrigin: params.expectsCompletionMessage
       ? mergeAnnounceDeliveryContext(
-          stripNonDeliverableChannel(params.completionDirectOrigin),
+          stripNonDeliverableChannel(dropSessionKeyTarget(params.completionDirectOrigin)),
           completionFallbackOrigin,
         )
       : directOrigin,

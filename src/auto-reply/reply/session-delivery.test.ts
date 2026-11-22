@@ -63,6 +63,36 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
   });
 });
 
+describe("internal turns on a channel-only external route (#203484)", () => {
+  it.each([false, true])(
+    "keeps the session key out of the Telegram target (inter-session: %s)",
+    (isInterSession) => {
+      // A route stored with a channel but no target must not adopt the WebChat turn's
+      // session-key address; that pair makes every later completion fail at Telegram.
+      expect(
+        resolveSessionDeliveryRoute({
+          originatingChannelRaw: "webchat",
+          originatingToRaw: "agent:main:build",
+          persistedLastChannel: "telegram",
+          sessionKey: "agent:main:build",
+          isInterSession,
+        }),
+      ).toEqual({ channel: "telegram", to: undefined });
+    },
+  );
+
+  it("still takes the target from an external turn on that route", () => {
+    expect(
+      resolveSessionDeliveryRoute({
+        originatingChannelRaw: "telegram",
+        originatingToRaw: "telegram:12345",
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:main:build",
+      }),
+    ).toEqual({ channel: "telegram", to: "telegram:12345" });
+  });
+});
+
 describe("session delivery direct-session routing overrides", () => {
   it.each(["agent:main:direct:user-1", "agent:main:telegram:account-a:direct:123456:topic:ops"])(
     "preserves persisted external route when webchat accesses channel-peer session %s (fixes #47745)",
