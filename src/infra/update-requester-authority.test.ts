@@ -318,13 +318,13 @@ it.each(["owner check", "identity preparation"] as const)(
     vi.mocked(ensureCliPluginRegistryLoaded).mockImplementationOnce(async () => {
       await getUpdateRunForProgressAsync(run.runId, { env });
     });
-    const helper = await import("../cli/daemon-cli/lifecycle-context.js");
+    const helper = await import("../cli/daemon-cli.js");
     if (entry === "owner check") {
       expect(await helper.isManagedUpdateRequesterOwner(requester)).toBe(true);
     } else {
-      expect((await helper.prepareManagedUpdateRequesterIdentity(requester)).requester).toEqual(
-        requester,
-      );
+      expect(
+        (await helper.prepareManagedUpdateHelperRequesterIdentity(requester)).requester,
+      ).toEqual(requester);
     }
     const exclusive = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
     try {

@@ -29,8 +29,8 @@ export const runDaemonStatus = status((runtime) => runtime.runDaemonStatus);
 export const isManagedUpdateRequesterOwner = lifecycleContext(
   (runtime) => runtime.isManagedUpdateRequesterOwner,
 );
-export const prepareManagedUpdateRequesterIdentity = lifecycleContext(
-  (runtime) => runtime.prepareManagedUpdateRequesterIdentity,
+export const prepareManagedUpdateHelperRequesterIdentity = lifecycleContext(
+  (runtime) => runtime.prepareManagedUpdateHelperRequesterIdentity,
 );
 export const waitForGatewayUpdateRecovery = lifecycleContext(
   (runtime) => runtime.waitForGatewayUpdateRecovery,
