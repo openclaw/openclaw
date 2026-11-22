@@ -218,6 +218,7 @@
   --theme-chip-ink: #fff;
 
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: var(--space-2);
   min-width: 0;
   padding: 0;
@@ -312,12 +313,10 @@
 }
 
 .settings-theme-card__label {
-  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .settings-theme-card--active .settings-theme-card__label {
