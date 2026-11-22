@@ -105,6 +105,9 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       ? resolveProviderAuthRecovery(reason)
       : undefined;
   };
+  // A model check that failed after a finished sign-in is a warning, not a failed sign-in.
+  const errorTone = () =>
+    props.state.phase === "error" && props.state.signedIn ? "warning" : "danger";
   return (
     <Show when={displayPhase() !== "idle"}>
       <openclaw-modal-dialog
@@ -201,12 +204,16 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     <Show
                       when={props.mode === "auth" && state().phase === "error"}
                       fallback={
-                        <InlineAlert tone="danger" role="alert">
+                        <InlineAlert tone={errorTone()} role="alert">
                           {state().message}
                         </InlineAlert>
                       }
                     >
-                      <InlineAlert tone="danger" class="model-setup-wizard__error" role="alert">
+                      <InlineAlert
+                        tone={errorTone()}
+                        class="model-setup-wizard__error"
+                        role="alert"
+                      >
                         <p class="model-setup-wizard__error-text">{state().message}</p>
                         <Show when={recovery() === "wait" || recovery() === "admin"}>
                           <p class="model-setup-wizard__error-text">

@@ -82,7 +82,8 @@ type ModelSetupWizardPhase =
     }
   | { phase: "done" }
   | { phase: "cancelled"; message: string }
-  | { phase: "error"; message: string; reason?: string };
+  // signedIn: a provider sign-in finished; only the model check that followed failed.
+  | { phase: "error"; message: string; reason?: string; signedIn?: true };
 
 // authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
 export type ModelSetupWizardState = ModelSetupWizardPhase & {
