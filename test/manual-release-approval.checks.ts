@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -135,12 +135,12 @@ it.each([
 
 it("recomputes complete delta including generated files and detects caller count or anchor mismatches", () => {
   const h = history();
-  const candidate = h.commit("generated.txt", "generated\n".repeat(50000));
+  const candidate = h.commit("generated.txt", "generated\n".repeat(10000));
   const value = {
     ...request(candidate, h.anchor),
-    delta: { commits: 1, added: 50000, deleted: 0 },
+    delta: { commits: 1, added: 10000, deleted: 0 },
   };
-  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 50000, deleted: 0 });
+  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 10000, deleted: 0 });
   expect(() => eligibility(h.root, { ...value, delta: { ...value.delta, added: 1 } })).toThrow(
     "Publisher-computed delta",
   );
@@ -151,23 +151,49 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
-it("counts deletions, accepts 50000 total lines and rejects 50001", () => {
+it("counts deletions, accepts 10000 total lines and rejects 10001", () => {
   const h = history();
-  const anchor = h.commit("generated.txt", "old\n".repeat(25000));
-  const candidate = h.commit("generated.txt", "new\n".repeat(25000));
+  const anchor = h.commit("generated.txt", "old\n".repeat(5000));
+  const candidate = h.commit("generated.txt", "new\n".repeat(5000));
   expect(
     eligibility(h.root, {
       ...request(candidate, anchor),
-      delta: { commits: 1, added: 25000, deleted: 25000 },
+      delta: { commits: 1, added: 5000, deleted: 5000 },
     }),
-  ).toEqual({ commits: 1, added: 25000, deleted: 25000 });
-  const excessive = h.commit("generated.txt", "new\n".repeat(25001));
+  ).toEqual({ commits: 1, added: 5000, deleted: 5000 });
+  const excessive = h.commit("generated.txt", "new\n".repeat(5001));
   expect(() =>
     eligibility(h.root, {
       ...request(excessive, anchor),
-      delta: { commits: 2, added: 25001, deleted: 25000 },
+      delta: { commits: 2, added: 5001, deleted: 5000 },
     }),
-  ).toThrow("at most 50000");
+  ).toThrow("at most 10000");
+});
+
+it("excludes only package manifests and known lockfiles from LOC, including nested paths", () => {
+  const h = history();
+  mkdirSync(join(h.root, "nested"));
+  for (const file of [
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+  ]) {
+    h.commit(`nested/${file}`, "dependency\n".repeat(10001));
+  }
+  const candidate = h.commit("package-helper.ts", "source\n".repeat(10000));
+  const value = {
+    ...request(candidate, h.anchor),
+    delta: { commits: 8, added: 10000, deleted: 0 },
+  };
+  expect(eligibility(h.root, value)).toEqual(value.delta);
+  const excessive = h.commit("package.json.backup", "still counted\n");
+  expect(() => eligibility(h.root, { ...value, candidateSha: excessive })).toThrow("at most 10000");
+  const binary = h.commit("nested/bun.lockb", Buffer.from([0, 1, 2]));
+  expect(() => eligibility(h.root, { ...value, candidateSha: binary })).toThrow("binary change");
 });
 
 it("counts every commit since the validated anchor, not since the last fast-track", () => {

@@ -6,6 +6,16 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs
 
 export const FAST_TRACK_POLICY = "approved-fast-track-v1";
 export const FAST_TRACK_ACTION = "Approve skipping release validation";
+// Excluded from LOC only. Commits, blob integrity and unmeasurable-change checks still apply.
+const packageFiles = new Set([
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+]);
 const sha = z.string().regex(/^[a-f0-9]{40}$/u);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const id = z.string().regex(/^[1-9][0-9]{0,19}$/u);
@@ -276,9 +286,12 @@ export function collectFastTrackEligibility(input: {
     .split("\0")
     .filter(Boolean);
   for (const entry of stats) {
-    const match = /^([0-9]+)\t([0-9]+)\t/su.exec(entry);
+    const match = /^([0-9]+)\t([0-9]+)\t(.*)$/su.exec(entry);
     if (!match) {
       throw new Error("Fast-track delta contains a binary or unmeasurable change.");
+    }
+    if (packageFiles.has(match[3]?.split("/").at(-1) ?? "")) {
+      continue;
     }
     added += Number(match[1]);
     deleted += Number(match[2]);
@@ -287,10 +300,10 @@ export function collectFastTrackEligibility(input: {
     !Number.isSafeInteger(commits) ||
     !Number.isSafeInteger(added + deleted) ||
     commits > 10 ||
-    added + deleted > 50000
+    added + deleted > 10000
   ) {
     throw new Error(
-      "Fast-track requires at most 10 commits and at most 50000 added/deleted lines.",
+      "Fast-track requires at most 10 commits and at most 10000 added/deleted lines.",
     );
   }
   if (

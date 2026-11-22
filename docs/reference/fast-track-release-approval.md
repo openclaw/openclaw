@@ -63,9 +63,12 @@ Persist the exact packet with release evidence; a digest alone is not approval.
 
 ## Policies retained for review
 
-- `approved-fast-track-v1`: **at most 10 commits AND 50,000 total added/deleted
-  lines** since a published, fully validated ancestor. Count generated files and
-  dependency lockfiles. Reject binary, submodule and otherwise unmeasurable
+- `approved-fast-track-v1`: **at most 10 commits AND 10,000 total added/deleted
+  lines** since a published, fully validated ancestor. Exclude only files named
+  `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`,
+  `yarn.lock`, `bun.lock` or `bun.lockb` at any depth from LOC. All commits still
+  count, including dependency-only commits. Count other generated files. Blob
+  integrity checks still cover excluded files. Reject binary, submodule and otherwise unmeasurable
   changes or shallow history. A previous fast-track cannot reset the baseline.
   The Git-backed helper recomputes the delta; a typed reference assertion is not
   authenticated evidence.
