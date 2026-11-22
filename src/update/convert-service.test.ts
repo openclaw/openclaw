@@ -1,6 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type * as RuntimePinState from "../daemon/runtime-pin-state.js";
 import type * as ServiceLayout from "../daemon/service-layout.js";
+import type * as ServiceReconciliation from "../daemon/service-reconciliation.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import type * as Service from "../daemon/service.js";
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
@@ -9,10 +12,12 @@ const mocks = vi.hoisted(() => ({
   reconcile: vi.fn(),
   pin: { pin: undefined },
 }));
-vi.mock("../daemon/service.js", () => ({
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof Service>()),
   resolveGatewayService: () => ({ readCommand: mocks.readCommand, stage: mocks.stage }),
 }));
-vi.mock("../daemon/runtime-pin-state.js", () => ({
+vi.mock("../daemon/runtime-pin-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RuntimePinState>()),
   withDaemonRuntimePinMigration: async (_env: unknown, run: () => unknown) => run(),
   readDaemonRuntimePinForInstall: () => mocks.pin,
 }));
@@ -20,7 +25,8 @@ vi.mock("../daemon/service-layout.js", async (original) => ({
   ...(await original<typeof ServiceLayout>()),
   gatewayServiceCommandMatchesRoot: mocks.matches,
 }));
-vi.mock("../daemon/service-reconciliation.js", () => ({
+vi.mock("../daemon/service-reconciliation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ServiceReconciliation>()),
   reconcileGatewayServiceDefinition: mocks.reconcile,
 }));
 import { stageReleaseService } from "./convert-service.js";

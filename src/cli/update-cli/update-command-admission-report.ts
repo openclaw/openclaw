@@ -63,6 +63,11 @@ export async function assertReleaseUpdateAdmission(
       ),
     );
   }
+  if (params.opts.reapplyLocalOverrides) {
+    throw new Error(
+      "--reapply-local-overrides is not supported by prepared-release updates. Save your local dist edits, update without this flag, then reapply the overrides by hand. See https://docs.openclaw.ai/install/updating#local-packaged-code-overrides",
+    );
+  }
 }
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */

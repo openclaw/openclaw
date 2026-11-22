@@ -270,7 +270,7 @@ if (args[0] === 'pack') {
 });
 
 describe("package release conversion", () => {
-  it.each([true, false])("publishes a Git target with release support %s", async (releaseAware) => {
+  it.each([true, false])("admits a Git target with release support %s", async (releaseAware) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const target = await repository(false, ">=1", releaseAware);
     try {
@@ -283,22 +283,22 @@ describe("package release conversion", () => {
         channel: "dev",
         node,
       });
-      expect(outcome.status).toBe(releaseAware ? "pending" : "published");
+      expect(outcome.status).toBe(releaseAware ? "pending" : "failed");
       if (releaseAware) {
         expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
       } else {
-        expect((await getUpdateRunAsync(run.runId))?.steps).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ step: "legacy-target", status: "completed" }),
-          ]),
-        );
-        expect((await getUpdateRunAsync(run.runId))?.status).toBe("succeeded");
+        expect(outcome).toMatchObject({
+          reason: "release-updates-unsupported",
+          message: expect.stringContaining(`git checkout ${target.sha}`),
+        });
+        expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
         expect(await readTrial()).toBeNull();
-        if (outcome.status === "published") {
-          expect(await fs.realpath(path.join(resolvePrefix(), "openclaw"))).toBe(
-            outcome.releaseRoot,
-          );
-        }
+        await expect(fs.stat(path.join(resolvePrefix(), "releases"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          fs.stat(path.join(target.checkout, ".openclaw-launcher")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
       }
     } finally {
       await closeOpenClawStateDatabaseAsync();
@@ -463,18 +463,18 @@ else if (args[0] === 'pack') {
         node,
       });
       if (!releaseAware) {
-        expect(outcome).toMatchObject({ status: "published", target: { version: "2026.11.21" } });
+        expect(outcome).toMatchObject({
+          status: "failed",
+          reason: "release-updates-unsupported",
+          message: expect.stringContaining("npm i -g"),
+        });
         expect(await readTrial(prefix)).toBeNull();
-        if (outcome.status === "published") {
-          expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(outcome.releaseRoot);
-        }
-        expect((await getUpdateRunAsync(run.runId))?.status).toBe("succeeded");
-        expect((await getUpdateRunAsync(run.runId))?.steps).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ step: "legacy-target", status: "completed" }),
-          ]),
-        );
-        expect(serviceConversion.stageReleaseService).toHaveBeenCalledOnce();
+        expect(await listUpdateRunsAsync()).toMatchObject([{ runId: run.runId, status: "failed" }]);
+        expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+        await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
         return;
       }
       expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });

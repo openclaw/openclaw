@@ -48,7 +48,6 @@ export type InstallKind = { kind: ReleaseKind; checkout?: string };
 
 export type UpdateRunOutcome =
   | { status: "pending"; target: { version: string }; releaseRoot: string }
-  | { status: "published"; target: { version: string }; releaseRoot: string }
   | { status: "current"; version: string; pluginsChanged: boolean }
   | { status: "failed"; reason: string; message: string };
 
@@ -244,6 +243,12 @@ export async function prepareUpdate(params: {
     if (!checked.ok) {
       return await fail(checked.reason, checked.message);
     }
+    if (target.kind === "git" && !releaseAwareGit) {
+      return await fail(
+        "release-updates-unsupported",
+        `This commit predates release updates. To install it manually, run: cd ${JSON.stringify(target.checkout)} && git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
+      );
+    }
     staging = await allocateStaging({ kind: install.kind }, prefix);
     const onStep = async (name: string) => {
       await recordUpdateRunStepAsync(
@@ -279,25 +284,27 @@ export async function prepareUpdate(params: {
       );
     }
     await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
-    // Older targets use the same release layout, but cannot complete a readiness trial.
-    // Command failures are never a compatibility signal.
-    const modules =
-      target.kind === "package" ? await fs.readdir(path.join(prepared.releaseRoot, "dist")) : [];
-    const releaseAware =
-      target.kind === "git"
-        ? releaseAwareGit
-        : ["check-release", "gateway-trial"].every((name) =>
-            modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
-          );
-    if (releaseAware) {
-      const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
-      if (!verdict.ok) {
+    // Missing modules identify an unsupported old target; command failures never bypass checks.
+    if (target.kind === "package") {
+      const modules = await fs.readdir(path.join(prepared.releaseRoot, "dist"));
+      if (
+        !["check-release", "gateway-trial"].every((name) =>
+          modules.some((file) => new RegExp(`^${name}(?:-[\\w-]+)?\\.m?js$`).test(file)),
+        )
+      ) {
         return await fail(
-          "release-check-failed",
-          `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
-          verdict.detail,
+          "release-updates-unsupported",
+          `This version predates release updates. To install it manually, run: npm i -g ${JSON.stringify(`openclaw@${target.version}`)}. The current version is still running.`,
         );
       }
+    }
+    const verdict = await runCheckRelease(prepared.releaseRoot, node, env);
+    if (!verdict.ok) {
+      return await fail(
+        "release-check-failed",
+        `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
+        verdict.detail,
+      );
     }
     const releaseRoot = await publishStaging(staging);
     staging = undefined;
@@ -354,30 +361,6 @@ export async function prepareUpdate(params: {
       timeoutMs: Math.max(1, deadline - Date.now()),
       acceptCapabilities: params.acceptCapabilities,
     });
-    if (!releaseAware) {
-      await recordUpdateRunStepAsync(
-        params.runId,
-        {
-          step: "legacy-target",
-          status: "completed",
-          detail: "This version predates release updates and has no automatic rollback.",
-        },
-        { env },
-      );
-      await switchLink(path.relative(prefix, releaseRoot), prefix);
-      await finishUpdateRunAsync(
-        params.runId,
-        {
-          status: "succeeded",
-          after: {
-            version: prepared.version,
-            ...(prepared.buildId ? { buildId: prepared.buildId } : {}),
-          },
-        },
-        { env },
-      );
-      return { status: "published", target: { version: prepared.version }, releaseRoot };
-    }
     await createTrialPending(
       {
         runId: params.runId,

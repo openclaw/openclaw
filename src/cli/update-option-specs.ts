@@ -23,7 +23,7 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
   [
     "--reapply-local-overrides",
-    "Replay trusted packaged dist edits with the existing in-place updater when the target baseline is unchanged",
+    "Compatibility option; prepared releases require saving and manually reapplying local dist edits",
     false,
   ],
   ["--accept-capabilities", "Accept widened plugin capabilities", false],

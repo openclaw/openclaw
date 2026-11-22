@@ -114,16 +114,15 @@ describe("update-cli", () => {
     );
   });
 
-  it("keeps explicit local packaged-code replay at its mutable owner", async () => {
+  it("refuses local packaged-code replay before release preparation with manual recovery guidance", async () => {
     await mockPackageInstallAtCaseDir();
-    const resolveLegacyTarget = vi
-      .spyOn(legacyTarget, "resolveUpdateCommandTarget")
-      .mockResolvedValue(undefined);
     const runRelease = vi.spyOn(release, "runReleaseUpdateCli").mockResolvedValue(undefined);
 
-    await updateCommand({ yes: true, reapplyLocalOverrides: true });
+    await expect(updateCommand({ yes: true, reapplyLocalOverrides: true })).rejects.toThrow(
+      "update without this flag, then reapply the overrides by hand",
+    );
 
-    expect(resolveLegacyTarget).toHaveBeenCalledOnce();
+    expect(packageInstallCommandCall()).toBeUndefined();
     expect(runRelease).not.toHaveBeenCalled();
   });
 

@@ -113,8 +113,7 @@ async function updateCommandWithRuntime(
   if (
     ((prepared.installKind === "package" && !switchesToGit) ||
       (prepared.installKind === "git" && staysGit)) &&
-    !inputOpts.dryRun &&
-    !inputOpts.reapplyLocalOverrides
+    !inputOpts.dryRun
   ) {
     await assertReleaseUpdateAdmission({
       root: prepared.discoveredRoot,

@@ -111,9 +111,7 @@ export async function runAutoUpdateCommand(
     if (outcome.status === "failed") {
       return failure(outcome.reason, outcome.message);
     }
-    if (outcome.status === "pending") {
-      await recordUpdateRunPhase(params.runId, "restarting");
-    }
+    await recordUpdateRunPhase(params.runId, "restarting");
     scheduleGatewayRestart({ reason: "update.auto" });
     return { status: "handoff" };
   }

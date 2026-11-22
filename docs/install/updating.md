@@ -20,11 +20,10 @@ Git installs build a detached worktree; package installs download and extract th
 package outside `node_modules`, then install its production dependencies.
 The new release checks its own configuration and plugin surfaces with
 `update check-release` and maintains plugins with `update plugins`.
-Targets from before the release-update commands and launcher readiness contract
-still prepare beside the serving installation, but switch directly without
-automatic rollback. The update history records this limitation.
-Explicit `--reapply-local-overrides` uses the existing in-place updater so trusted
-packaged-code edits retain their existing replay behavior.
+Targets that predate the release-update commands and launcher readiness contract
+are refused without changing the serving release. The error gives an exact manual
+install command. Targets supporting older database schemas are refused by the
+existing schema compatibility check before release preparation.
 
 A resident launcher selects the pending release when the Gateway next starts.
 The Gateway migrates state at boot and confirms that it is ready. If the new
@@ -88,6 +87,15 @@ Before upgrading, follow the [preflight checklist](/install/updating/rollback-an
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
+
+## Local packaged-code overrides
+
+Prepared-release updates currently refuse `--reapply-local-overrides` instead of
+silently discarding trusted local `dist` edits or using a second activation path.
+Save your edits outside the installation, run `openclaw update` without the flag,
+then reapply the overrides by hand to the selected release. Keep the saved edits
+until you have verified the updated Gateway; automatic rollback restores the
+previous release, not manual edits made to the new one.
 
 ## Update implementation contract
 

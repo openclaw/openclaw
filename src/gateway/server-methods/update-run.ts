@@ -238,11 +238,9 @@ async function runUpdateInBackground(
     if (outcome.status === "current" && outcome.pluginsChanged) {
       scheduleGatewayRestart(restart);
     }
-    if (outcome.status === "pending" || outcome.status === "published") {
-      if (outcome.status === "pending") {
-        await recordUpdateRunPhaseAsync(runId, "restarting");
-      }
-      // Published older targets restart directly; prepared releases enter the launcher's trial.
+    if (outcome.status === "pending") {
+      await recordUpdateRunPhaseAsync(runId, "restarting");
+      // A process-replacing reason: the next process starts through the release launcher.
       scheduleGatewayRestart(restart);
     }
   } catch (error) {
