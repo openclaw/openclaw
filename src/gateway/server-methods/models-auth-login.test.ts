@@ -408,7 +408,7 @@ describe("models.authLogin ownership", () => {
     session.cancel();
   });
 
-  it("keeps a sign-in across a socket loss until a later starter replaces it", async () => {
+  it("keeps a sign-in across a socket loss; another owner replaces it only while nobody reads it", async () => {
     const h = harness();
     void mockLogin(async (options) => {
       await options.prompter.text({ message: "Address of the page your browser opened" });
@@ -417,22 +417,29 @@ describe("models.authLogin ownership", () => {
     const step = await h.next();
     h.controller.abort();
     expect(session.getStatus()).toBe("running");
-    // The same operator comes back on a new socket and reads the same step.
+    // The user comes back on a new socket and reads the same step.
+    const returning = new AbortController();
     const returned: GatewayClient = {
       ...h.client,
       connId: "returned",
-      connectionSignal: new AbortController().signal,
+      connectionSignal: returning.signal,
     };
     const resumed = await h.invoke("wizard.next", { sessionId: "login" }, returned);
     expectReply(resumed, { step: expect.objectContaining({ id: step.step?.id }) });
-    // Nobody watches the first socket any more, so a new sign-in is not refused.
+    // Someone is watching the sign-in again, so another operator stays busy.
+    const other: GatewayClient = { ...h.client, connId: "other" };
+    const start = () =>
+      h.invoke(
+        "models.authLogin",
+        { sessionId: "replacement", authChoice: "fixture/fixture-device" },
+        other,
+      );
+    expectRejected(await start(), { details: { code: "SETUP_ADMISSION_BUSY" } });
+    expect(session.getStatus()).toBe("running");
+    // Once that socket closes too, nobody watches it: a new sign-in is not refused.
+    returning.abort();
     void mockLogin(() => undefined);
-    const replacement = await h.invoke(
-      "models.authLogin",
-      { sessionId: "replacement", authChoice: "fixture/fixture-device" },
-      returned,
-    );
-    expectReply(replacement, { sessionId: "replacement", status: "running" });
+    expectReply(await start(), { sessionId: "replacement", status: "running" });
     await whenAdmittedWizardSessionSettled(session);
     expect(session.getStatus()).toBe("cancelled");
   });

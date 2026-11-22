@@ -1,5 +1,6 @@
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { WizardSession } from "../../wizard/session.js";
+import { isWizardSessionUnwatched, noteWizardReader } from "../server-wizard-sessions.js";
 import {
   createAdmittedWizardSession,
   startGatewayWizard,
@@ -25,11 +26,10 @@ type SetupActivation = Pick<
 >;
 type AuthWizardRequest = {
   ownerKey: string;
-  /** The starting connection. Once it closes, nobody watches this sign-in. */
-  starter: GatewayRequestOptions["client"];
   sessionId: string;
   pending: boolean;
   session: Promise<WizardSession | undefined>;
+  started?: WizardSession;
 };
 const authWizardRequests = new WeakMap<
   GatewayRequestContext["wizardSessions"],
@@ -38,8 +38,9 @@ const authWizardRequests = new WeakMap<
 
 /**
  * A provider sign-in outlives its socket, so the user can come back to it. A new
- * sign-in replaces it when it is the same owner's or its starting connection is
- * gone; otherwise an abandoned tab would hold setup admission until its timeout.
+ * sign-in replaces it when it is the same owner's, or when the connection that last
+ * started or read it is gone; otherwise an abandoned tab would hold setup admission
+ * until its timeout.
  */
 export async function admitProviderSignIn(
   params: {
@@ -57,7 +58,8 @@ export async function admitProviderSignIn(
   if (
     previous &&
     (previous.pending ||
-      (previous.ownerKey !== ownerKey && previous.starter?.connectionSignal?.aborted !== true))
+      (previous.ownerKey !== ownerKey &&
+        !(previous.started && isWizardSessionUnwatched(previous.started))))
   ) {
     return undefined;
   }
@@ -80,7 +82,6 @@ export async function admitProviderSignIn(
   }
   const request: AuthWizardRequest = {
     ownerKey,
-    starter: params.starter,
     sessionId: params.sessionId,
     pending: true,
     session: createAdmittedWizardSession(createSession),
@@ -94,6 +95,8 @@ export async function admitProviderSignIn(
   try {
     const session = await request.session;
     if (session) {
+      request.started = session;
+      noteWizardReader(session, params.starter);
       void whenAdmittedWizardSessionSettled(session).then(release, release);
     } else {
       release();
