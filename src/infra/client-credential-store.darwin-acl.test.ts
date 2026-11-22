@@ -17,7 +17,7 @@ afterEach(() => vi.restoreAllMocks());
 const cases: [DarwinAclInspection, string][] = [
   [
     { kind: "unknown", reason: "helper-unavailable" },
-    "Client credential ACL inspection is unavailable.",
+    "Check that the Node runtime starting the Gateway can load the native ACL helper.",
   ],
   [
     { kind: "present", inheritsToFiles: false, inheritsToDirectories: false },

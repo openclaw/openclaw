@@ -79,7 +79,7 @@ function assertPrivateAcl(pathname: string): void {
   const acl = inspectDarwinAcl(pathname);
   if (acl.kind === "unknown") {
     throw new Error(
-      "Client credential ACL inspection is unavailable. Private permissions could not be verified.",
+      "Client credential ACL inspection is unavailable. Check that the Node runtime starting the Gateway can load the native ACL helper.",
     );
   }
   if (acl.kind !== "none") {
