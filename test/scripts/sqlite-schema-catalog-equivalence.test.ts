@@ -92,8 +92,10 @@ describe("generated SQLite schema catalogs", () => {
     // derived hash, stranding real databases on the previous layout.
     const predecessor40 = getOpenClawStatePredecessorSchema(40);
     expect(predecessor40).not.toContain("requested_by_profile_id");
+    // Continuation (karmaterminal): the v40 schema of the preceding build (16541aa5a8), which also
+    // carries the continuation tables; upstream's own v40 hashes to fcbb0021….
     expect(createHash("sha256").update(predecessor40).digest("hex")).toBe(
-      "fcbb00212b86de19fc5fa0f04654883e4714871ea6417f63645a97c1c9e9457f",
+      "e44990102d313dc828cc00df8516fc48ed88e22220a360590cda900c8b56fe35",
     );
     expect(readGeneratedSqliteCatalog(predecessor40)).toBeDefined();
     const predecessor39 = getOpenClawStatePredecessorSchema(39);
