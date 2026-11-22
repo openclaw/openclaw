@@ -32,6 +32,54 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage usage convergence", () => {
+  it("refreshes only expired provider usage on activation and retains the displayed plan", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    const harness = createHarness("main");
+    const replacement = deferred<unknown>();
+    const request = harness.request.getMockImplementation()!;
+    harness.request.mockImplementation((method, ...args) =>
+      method === "usage.status" ? replacement.promise : request(method, ...args),
+    );
+    const plans = (plan: string) => ({
+      updatedAt: Date.now(),
+      providers: [{ provider: "openai", displayName: "OpenAI", plan, windows: [] }],
+    });
+    const page = createPage(harness.context);
+    mountPage(page);
+    const loadedAt = Date.now();
+    publishRouteData(page, {
+      ...createApiKeyProviderData(),
+      updatedAt: loadedAt,
+      providerUsage: plans("Original"),
+    });
+    const plan = () => page.querySelector(".provider-row__plan")?.textContent;
+    await waitForSolid(() => expect(plan()).toBe("Original"));
+    expect(requestCount(harness.request, "usage.status")).toBe(0);
+    harness.request.mockClear();
+
+    const activate = () => window.dispatchEvent(new Event("focus"));
+    vi.setSystemTime(loadedAt + 300_000 - 1);
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+
+    vi.setSystemTime(loadedAt + 300_000);
+    visibility.mockReturnValue("hidden");
+    activate();
+    expect(harness.request).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    activate();
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+    expect(plan()).toBe("Original");
+
+    replacement.resolve(plans("Updated"));
+    await waitForSolid(() => expect(plan()).toBe("Updated"));
+    activate();
+    expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
+  });
+
   it("keeps account quotas during config saves and refreshes them from the page", async () => {
     const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
       createHarness("main");

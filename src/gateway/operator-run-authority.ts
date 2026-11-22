@@ -618,6 +618,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmissionCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
+      clientId: client.internal?.syntheticClient ? undefined : client.connect.client.id,
       recoverySnapshot,
       recoverySnapshotUnavailableReason,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),

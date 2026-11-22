@@ -818,8 +818,12 @@ ownership, restarts through the service owner, and verifies normal readiness.
 Successful recovery completes with a warning and retains package backups for
 `openclaw update repair`. Failed startup reports its concrete error and directs
 you to `openclaw update repair` and `openclaw gateway status --deep`.
-Only named data risks, such as unsettled Doctor writers or unverified migrated
-state, instruct you to keep the Gateway stopped.
+A named data risk, such as unverified migrated state, is reported as unverified:
+the report states whether the Gateway is running or stopped and which version is
+installed, and names `openclaw update repair`, which checks the state before it
+starts the Gateway (see
+[Recorded data risk](/cli/update/repair-and-recovery#recorded-data-risk)).
+Unsettled Doctor writers still require you to stop the recorded processes first.
 
 On Windows, recovery re-enables the Scheduled Task before starting the Gateway
 and retains that recovery handle until final readiness verification completes.
@@ -2030,6 +2034,8 @@ the update keeps the new package and exits 0. It records a
 `package-backup-retention` warning that names the link and any launcher backups
 or database snapshots left beside it, because cleanup stops at the link.
 Historical package backups from earlier updates also wait for a later update.
+A database snapshot left this way is removed by update cleanup after a later
+update is verified successful.
 The link still names your checkout, which the updater does not modify. After
 checking the installation, remove the link itself and not what it names: use
 `rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a

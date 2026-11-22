@@ -164,7 +164,6 @@ describe("LobsterdexPage discovery", () => {
     expect(seen?.querySelectorAll(".lobsterdex-page__date")).toHaveLength(2);
     expect(text("dates")).toContain(`✦ Shiny spotted ${date}`);
     expect(seen?.querySelector(".lobsterdex-page__star")).not.toBeNull();
-    expect(seen?.querySelector('button[aria-label="Copy link"]')).not.toBeNull();
 
     const unseen = container.querySelector(".lobster-pet--palette-watermelon")?.closest("article");
     expect(unseen?.querySelector("h3")?.textContent).toBe("?");

@@ -1,12 +1,16 @@
 // A client-selected publisher must reach the outbound ClawHub request unchanged (#117633).
-// Only HTTP is faked; search, the Gateway handlers, and the detail client are real.
+// Search, the Gateway handlers, and the detail client are real.
 
+import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsDetailResultSchema } from "../../../packages/gateway-protocol/src/schema/skill-detail.js";
+import { SkillsSearchResultSchema } from "../../../packages/gateway-protocol/src/schema/skills-search.js";
+import { respondJson } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveClawHubCatalogIconUrl } from "../../plugins/catalog-icon-registry.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -128,6 +132,57 @@ function fakeClawHub(input: string): Response {
 const callSkillsHandler = (method: string, params: Record<string, unknown>) =>
   callGatewayHandler(skillsHandlers, method, params);
 
+it("preserves ranked identities and their optional categories from the trending HTTP feed", async ({
+  onTestFinished,
+}) => {
+  const reads: string[] = [];
+  const external = `skills-sh:acme/tools/${SLUG}`;
+  const categories = ["communication", "productivity"];
+  const item = { slug: SLUG, displayName: "Email" };
+  const items = [
+    { ...item, source: "skills-sh", install: { kind: "skills-sh", reference: external } },
+    { ...item, source: "clawhub", publisher: { handle: "acme" }, categories },
+  ];
+  const fixture = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        reads.push(`${req.method} ${req.url}`);
+        respondJson(res, { items, nextCursor: "next:page" });
+      }),
+  });
+  onTestFinished(async () => {
+    vi.unstubAllEnvs();
+    try {
+      await fixture.releaseListener();
+    } finally {
+      await fixture.claim.release();
+    }
+  });
+  const registry = `http://127.0.0.1:${fixture.claim.port}`;
+  vi.stubEnv("OPENCLAW_CLAWHUB_URL", registry);
+  vi.stubEnv("CLAWHUB_TOKEN", "synthetic-fixture-token");
+  const { ok, response, error } = await callSkillsHandler("skills.search", {});
+  expect(error).toBeUndefined();
+  expect(ok).toBe(true);
+  expect(reads).toEqual(["GET /api/v1/trending?kind=skills&limit=20"]);
+  expect(response).toEqual({
+    nextCursor: "next:page",
+    results: [
+      {
+        ...item,
+        registry,
+        score: 0,
+        installRef: external,
+        installOnly: true,
+        trustState: "not-scanned-by-clawhub",
+      },
+      { ...item, registry, score: 0, ownerHandle: "acme", installRef: `@acme/${SLUG}`, categories },
+    ],
+  });
+  expect(Value.Check(SkillsSearchResultSchema, response)).toBe(true);
+});
+
 describe("ClawHub publisher identity across skills.search and skills.detail", () => {
   beforeEach(() => {
     requestedUrls = [];
@@ -173,6 +228,98 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
       expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
     },
   );
+
+  it("browses a category by cursor and searches within the same registry category", async () => {
+    const category = {
+      slug: "communication",
+      label: "Communication",
+      description: "Communicate",
+      icon: "mail",
+    };
+    const cursor = "page:+/=";
+    const reads: URL[] = [];
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example");
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      reads.push(url);
+      if (url.pathname === "/api/v1/skills/-/categories") {
+        return Response.json({ categories: [category] });
+      }
+      if (url.pathname === "/api/v1/skills") {
+        return Response.json({
+          items: PUBLISHERS.map((ownerHandle) => ({
+            ownerHandle,
+            slug: SLUG,
+            displayName: "Email",
+            summary: null,
+            updatedAt: 123,
+            latestVersion: { version: "1.2.0" },
+          })),
+          nextCursor: url.searchParams.has("cursor") ? null : cursor,
+        });
+      }
+      if (url.pathname === "/api/v1/search") {
+        return Response.json(searchPayload());
+      }
+      throw new Error(`Unexpected route: ${url}`);
+    });
+    expect((await callSkillsHandler("skills.categories", {})).response).toEqual({
+      categories: [category],
+    });
+    const browse = { category: category.slug, limit: 2 };
+    const first = await callSkillsHandler("skills.search", browse);
+    expect(first.response).toMatchObject({
+      results: PUBLISHERS.map((owner) => ({ installRef: `@${owner}/${SLUG}`, version: "1.2.0" })),
+      nextCursor: cursor,
+    });
+    const last = await callSkillsHandler("skills.search", { ...browse, cursor });
+    expect(last.ok).toBe(true);
+    expect(last.response).not.toHaveProperty("nextCursor");
+    const search = await callSkillsHandler("skills.search", { ...browse, query: "email" });
+    expect(search.ok).toBe(true);
+    expect(
+      reads
+        .filter((url) => url.pathname !== "/api/v1/skills/-/categories")
+        .map((url) => [url.pathname, Object.fromEntries(url.searchParams)]),
+    ).toEqual([
+      ["/api/v1/skills", { category: category.slug, limit: "2" }],
+      ["/api/v1/skills", { category: category.slug, limit: "2", cursor }],
+      ["/api/v1/search", { category: category.slug, limit: "2", q: "email" }],
+    ]);
+  });
+
+  it("treats missing optional taxonomy as unavailable for filtering, not an unfiltered page", async () => {
+    const fetch = vi.fn(async (input: string | URL) =>
+      new URL(input).pathname === "/api/v1/skills/-/categories"
+        ? new Response("Not found", { status: 404 })
+        : Response.json({ items: [], nextCursor: "unfiltered" }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    expect((await callSkillsHandler("skills.categories", {})).response).toEqual({ categories: [] });
+    expect((await callSkillsHandler("skills.search", { category: "development" })).ok).toBe(false);
+    expect(fetch.mock.calls.map(([input]) => new URL(input).pathname)).toEqual([
+      "/api/v1/skills/-/categories",
+      "/api/v1/skills/-/categories",
+    ]);
+  });
+
+  it("rejects a cursor for text search before contacting ClawHub", async () => {
+    const { ok, error } = await callSkillsHandler("skills.search", {
+      query: "email",
+      cursor: "page",
+    });
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(requestedUrls).toEqual([]);
+  });
+
+  it("reports taxonomy access errors instead of claiming there are no categories", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example");
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Access denied", { status: 403 }));
+    const { ok, error } = await callSkillsHandler("skills.categories", {});
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: "UNAVAILABLE", message: expect.stringContaining("403") });
+  });
 
   it("reads the selected release card and scan without relabeling latest requirements", async () => {
     const { ok, response, error } = await callSkillsHandler("skills.detail", {
